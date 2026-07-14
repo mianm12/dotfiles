@@ -1,0 +1,62 @@
+# 本项目同时存放 Go CLI 源码与 dotfiles 内容，因此规则应尽量精确，
+# 避免把 modules/ 下需要分发的配置误判为生成物。
+# 若倾向白名单模板，参考社区模板：
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+
+# ── 构建与发布产物 ──
+/bin/
+/dist/
+/dot
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# ── 测试与覆盖率产物 ──
+## go test -c 编译出的测试二进制
+*.test
+*.out
+/coverage.*
+*.coverprofile
+/profile.cov
+
+# ── Go 模块与工作区 ──
+## 取消下一行注释以忽略 vendor 目录
+# /vendor/
+/go.work
+/go.work.sum
+
+# ── 本机配置与敏感内容 ──
+## 仅忽略以 .local 结尾的文件；*.local.template 是应当入库的 scaffold
+*.local
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# ── 编辑器 / IDE ──
+## 仅忽略本项目自身的 IDE 配置，不影响 modules/**/.vscode/
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# ── macOS ──
+## 通用设置
+.DS_Store
+.AppleDouble
+.LSOverride
+## 桌面自定义图标文件（名称以控制字符结尾）
+Icon[[:cntrl:]]
+## 资源分叉（resource fork）
+._*
+## 卷根目录下可能出现的文件和目录
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
