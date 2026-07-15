@@ -1,10 +1,11 @@
-# dot — 个人 dotfiles 管理工具 · 设计文档集(v1.2)
+# dot — 个人 dotfiles 管理工具 · 设计文档集(v1.3,实现前冻结版)
 
 `dot` 是一个单人使用的 dotfiles 管理 CLI,采用「symlink 为主、模板生成为辅」的混合模型。
 CLI 源码与配置内容同仓库存放,通过 GitHub Releases 分发二进制,通过 git 同步配置。
 
-> **v1.2 是最后一轮纸面迭代。** 三轮审查的问题已从架构分叉收敛到规格自洽性,设计趋于
-> 稳定;后续问题由 M1 的表驱动测试(它是决策表的可执行形态)在实现中收敛,不再推演文档。
+> **v1.3 为实现前冻结版。** 四轮审查的问题已从架构分叉收敛到规格自洽性、再到边角语义,
+> 本轮(kind 迁移、add 原子性、锁重入等)合入后冻结;后续问题由 M1 的表驱动测试
+> (决策表的可执行形态)在实现中收敛,不再推演文档。
 
 ## 文档目录
 
@@ -14,7 +15,7 @@ CLI 源码与配置内容同仓库存放,通过 GitHub Releases 分发二进制,
 | 02 | [architecture.md](02-architecture.md) | 组件划分、仓库布局、路径与锁边界、pipeline、核心类型 | 动手写代码前 |
 | 03 | [manifest-spec.md](03-manifest-spec.md) | 两级 manifest 字段、两阶段加载、ignore 语义、**路径合法性** | 实现 `internal/manifest` 时 |
 | 04 | [cli-spec.md](04-cli-spec.md) | 全部命令、flag(含 `--adopt`)、退出码、输出格式 | 实现 `internal/cli` 时 |
-| 05 | [apply-engine.md](05-apply-engine.md) | owned 谓词、决策表、**收敛式 prune**、Precond 全量复核、add | 实现 planner/executor 时 |
+| 05 | [apply-engine.md](05-apply-engine.md) | owned 谓词、决策表、**kind 迁移**、收敛式 prune、Precond 全量复核、add | 实现 planner/executor 时 |
 | 06 | [templates.md](06-templates.md) | 双模板语义、变量命名空间、fail-fast 渲染、drift 展示 | 实现 `internal/tmpl` 时 |
 | 07 | [bootstrap-and-release.md](07-bootstrap-and-release.md) | bootstrap.sh、版本铰链、兼容矩阵、同步与锁 | 搭发布流水线时 |
 | 08 | [testing.md](08-testing.md) | 幂等契约、--home 全隔离、决策表/集成/golden 测试 | 与功能开发同步 |
@@ -33,7 +34,18 @@ CLI 源码与配置内容同仓库存放,通过 GitHub Releases 分发二进制,
 (symlink 自动、普通文件显式 `--adopt`)自愈。新机器由带校验的 `bootstrap.sh` 完成二进制安装、
 仓库克隆并移交 `dot init`。
 
-## v1.2 修订摘要(相对 v1.1)
+## v1.3 修订摘要(相对 v1.2)
+
+1. **kind 迁移规则**(05 §3.4,ADR-27):堵住「`.tmpl → .template` 切换后旧 rendered 记账导致未来 prune 误删用户蓝本」的路径。三原则:所有权只能被证据延续;迁入 scaffold = 释放所有权(metadata-only,永远安全);迁出 scaffold = 等同无记录。owned link → managed 的自动迁移让「`git mv foo foo.tmpl` 模板化既有配置」无感完成。
+2. **Action 补全**:`DesiredKind` 扩展到全部创建/替换动作(BackupReplace 靠它得知备份后建什么);新增 `LinkDest`(planner 侧规范化、executor 逐字写入)与 `NextEntry`(动作成功后才提交的记账,机械保证「迁移只在成功后落账」);`Adopt` 泛化为 state-only 记账动作(补录 / 迁移 / 元数据刷新)。
+3. **add 加固**:只接受普通文件;换链改为「临时链 + 原子 rename」,失败时原文件必然完好;仓库副本保留 mode(含可执行位);**`--activate` 砍掉**(ADR-28,CLI 从此不写任何 manifest,报错并打印待手动添加的行)。
+4. **BackupReplace 分型语义**(ADR-29):普通文件 copy+hash;symlink 备份链接本身(不跟随);目录/特殊文件即使 `--force` 也拒绝;备份目录 RFC3339Nano + 随机后缀、排他创建。
+5. **锁可重入边界**:进程内只取锁一次,init/update 内部编排走 `applyLocked()`,消除 flock 同进程双重获取的自锁隐患。
+6. **M1 范围矛盾消解**:managed 相关输入(`.tmpl`、`kind="managed"`、`add --template`、`apply --adopt`)在 M1 构建**硬错误**,绝不静默按普通链接处理。
+7. **退出码细化**:优先级 1 > 3 > 2 > 0;拒绝孤儿确认或存在 deferred prune(无 conflict 时)→ 退出码 2。
+8. **已知限制入册**(01 §4):state 丢失后 scaffold「用户有意删除」的记忆(S2)随之丢失,重跑会再生成一次蓝本——零破坏,接受。
+
+## v1.2 修订摘要(相对 v1.1,存档)
 
 1. **收敛式 prune**:任一 conflict / error / Precond 失配 / 用户拒绝确认 → 本次**全部** prune 延迟(plan 层标记 `deferred`,diff/dry-run 如实展示);`--force` 成功消解 conflict 视为收敛。取代 v1.1「error 跳、conflict 不跳」的双轨规则,改名场景不再可能"新旧皆无"(ADR-20)。
 2. **收养不对称**:symlink 收养保持自动(证据无歧义、最坏零损失);普通文件收养降级为显式 `apply --adopt`,默认仅提示——内容巧合不构成所有权(ADR-21)。

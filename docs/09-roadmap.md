@@ -5,7 +5,7 @@
 每个里程碑收口的标准是同一句话:**当天起可以(继续)作为唯一的 dotfiles 工具日常使用**。
 避免「憋大招式 v1.0」——个人项目最大的风险不是设计不好,而是写一半失去动力。
 
-> v1.2 起不再做纸面迭代:`planner/decide` 的表驱动测试就是决策表的可执行形态,
+> v1.3 为实现前冻结版:`planner/decide` 的表驱动测试就是决策表的可执行形态,
 > 由它担任后续审查员;剩余问题在实现中修比在文档上推演便宜。
 
 ### M1 · 可用且安全的 stow 替代(目标:第 1–3 周)
@@ -13,8 +13,8 @@
 | 范围 | 说明 |
 |---|---|
 | 命令 | `init` `apply` `diff` `status` `add` `version` |
-| 引擎 | 文件级 symlink、**owned() 词法谓词 + link_dest 存证**、conflict 三态(含 L4 改指)、`--force → BackupReplace`、prune(双作用域 + 整模块确认 + **收敛门控/deferred**)、**收养不对称(symlink 自动 / `--adopt`)**、全局不变量校验、创建先于 prune、**Precond 全量复核**、flock 锁、**state 三态 fail-closed** |
-| 模板 | **仅 scaffold**(`.template`),渲染 fail-fast;managed 留到 M2,决策表按本文档预留 |
+| 引擎 | 文件级 symlink、**owned() 词法谓词 + link_dest 存证**、conflict 三态(含 L4 改指)、`--force → BackupReplace`(**分型语义 + 排他备份**)、prune(双作用域 + 整模块确认 + **收敛门控/deferred**)、symlink 自动收养、**kind 迁移**(scaffold 相关行)、全局不变量校验、创建先于 prune、**Precond 全量复核**、NextEntry 落账、flock 锁(**单次获取**)、**state 三态 fail-closed** |
+| 模板 | **仅 scaffold**(`.template`),渲染 fail-fast;**managed 相关输入硬错误**:`.tmpl`、`kind="managed"`、`add --template`、`apply --adopt` 在 M1 明确报错,绝不静默按 link 处理(M 表与迁移表 managed 行随 M2 落地) |
 | hooks | run_once 最小实现(字符串形态,指纹 = 单脚本元组编码);`hooks/` 保留目录;不受收敛门控 |
 | manifest | 两级结构、profiles、os 过滤、`[target]` 双形态、ignore(优先级 + 停止管理)、**路径合法性校验**、两阶段加载(requires 预读 + 严格解码) |
 | 基建 | state.json(link_dest)、`--home` 全隔离(含 hook 子进程环境)、bootstrap.sh(校验 + 原子安装)、goreleaser 首发 |
@@ -29,7 +29,7 @@
 
 | 范围 | 说明 |
 |---|---|
-| managed 模板 | `.tmpl` 渲染、drift 检测(hash + mode)、`diff -v`(实际 vs 本次渲染)、`[data]` 声明 + init 收集、`from_env` |
+| managed 模板 | `.tmpl` 渲染、drift 检测(hash + mode)、`diff -v`(实际 vs 本次渲染)、`apply --adopt`、`add --template`、kind 迁移 managed 行、`[data]` 声明 + init 收集、`from_env` |
 | 同步 | `update`(自 pull 持锁)、`self-update`、`git` 透传 |
 | hooks | `watch` 依赖文件(表形态 + 组合元组指纹) |
 | 辅助 | `doctor` 全量(manifest lint、模板静态扫描、`git ls-files '*.local'`、权限与 state 三态巡检)、`edit`、`state rebuild` |
@@ -57,6 +57,9 @@
 | **`observed` 第三类 state 条目** | 永久砍 | 收养不对称(ADR-21)以一个 flag 达成同等安全,免去第三种持久化语义 |
 | **`Entry.mode` 字段与 chmod 动作** | 永久砍 | ADR-26,mode 漂移经复用 Render 修正 |
 | **`Error` ActionKind** | 永久砍 | 渲染 fail-fast(ADR-24)后无存在必要 |
+| **`add --activate`(CLI 写 manifest)** | 永久砍 | ADR-28;保格式 TOML 编辑脆弱、重序列化丢注释;报错 + 打印待添加行即可 |
+| **add 目录/递归收编** | 永久砍 | 逐文件 add 已够用;递归移动 + 批量换链的失败模式复杂 |
+| **目录/特殊文件的 BackupReplace** | 永久砍 | ADR-29;要求手工移走一次,换执行器简单可证 |
 | 钥匙串/密码管理器集成 | 永久砍 | `*.local` 四道机制已覆盖;真需要加密再用 age(M3 可选) |
 | 并发执行支持 | 永久砍 | ADR-19,flock 防事故即可 |
 | watch/守护进程 | 永久砍 | 显式触发是特性不是缺陷 |
@@ -76,6 +79,7 @@
 | 改名/移动丢配置 | 创建先于 prune + 收敛门控(ADR-13/20);集成场景 5 锁定 |
 | 死链清不掉(v1.1 缺陷) | owned 词法化(ADR-22);集成场景 6 防回归 |
 | 用户文件被误收养后误删(v1.1 缺陷) | 收养不对称(ADR-21);集成场景 4b 锁定 |
+| kind 切换后误删(v1.2 缺陷) | 迁移三原则(ADR-27):迁入 scaffold 即释放所有权;集成场景 20 防回归 |
 | 第三方进程与 apply 竞态 | Precond 全量复核(ADR-23);残余微秒窗口已在威胁模型明文接受 |
 | macOS 系统更新改变 `~/Library` 行为 | 该区域仅经 `[target]` 显式使用;plist 永不托管(GUI 偏好走 defaults hook) |
 | state 损坏/版本过新 | fail-closed(ADR-25)防毁尸灭迹;手动 mv 恢复路径 + 收养重建;`state rebuild` [M2] |
@@ -86,6 +90,7 @@
 `paths`(Display/Within/创建侧 normalize)→ `manifest`(两阶段加载 + 路径合法性)→
 `planner/decide` 决策表(**表驱动测试先于实现——它就是可执行的规格**)→
 `planner/validate` 不变量 → `fsutil` + `state`(三态 + flock + link_dest)→
-`executor`(阶段顺序 + Precond 全量复核 + 收敛门控)→ `apply/diff` 串通 →
-prune + 收养(含 `--adopt`)→ `add`(三模式)→ scaffold(fail-fast 渲染)→
+`executor`(阶段顺序 + Precond 全量复核 + 收敛门控 + NextEntry 落账)→ `apply/diff`
+串通 → prune + 收养 + kind 迁移(scaffold 相关行)→ `add`(link/scaffold 两模式,
+原子换链)→ scaffold(fail-fast 渲染)→
 run_once 最小实现 → `init` + bootstrap.sh → goreleaser。每步保持 `go test ./...` 绿灯。

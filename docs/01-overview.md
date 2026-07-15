@@ -13,8 +13,9 @@ Go 练手项目。
 2. 混合模型:默认 symlink(双向、直觉),模板文件才 generate(单向、可参数化)。
 3. 支持 macOS 与 Linux 的路径/内容差异,不靠复制粘贴两份配置。
 4. 私有内容(密钥、公司配置)通过 `*.local` 约定留在本机,并以多道机制保证永不入库。
-5. `apply` 严格幂等、可 dry-run;一切破坏性动作以所有权谓词为前置、一切 target mutation
-   以 Precond 复核为前置;**清理仅在创建收敛后进行**——部分失败的最坏结果是「新旧并存」,
+5. `apply` 严格幂等、可 dry-run;**自动**破坏性动作以所有权谓词为前置(强制替换走
+   独立公式:显式 `--force` ∧ 备份成功 ∧ Precond),一切 target mutation 以 Precond
+   复核为前置;**清理仅在创建收敛后进行**——部分失败的最坏结果是「新旧并存」,
    永远不是「新旧皆无」。
 6. CLI 与配置同仓库,但版本解耦:配置更新走 `git pull`,二进制走 Releases,
    以 `requires` + 严格解码双重铰链保证兼容安全。
@@ -53,6 +54,7 @@ Go 练手项目。
 | rename 覆盖路径上 Precond 复核后的微秒竞态窗口 | 复核已把窗口从秒级缩到微秒级;CreateLink 路径借 EEXIST 完全消除 | 彻底消除需 renameat2 级手段,超出定位(ADR-23) |
 | 断电级持久化(不做父目录 fsync) | state 写入本身原子;收养规则重跑自愈 | state 是可重建的缓存性质数据 |
 | hook 副作用成功、指纹落盘前崩溃 → 重跑 | 语义定为 at-least-once,要求脚本自我幂等 | brew bundle / defaults write 天然幂等,要求不苛刻 |
+| state 丢失后,scaffold「用户有意删除」的记忆(S2)随之丢失,重跑会再生成一次蓝本 | 收养规则可重建其余记录;scaffold 记忆无处重建 | 后果仅是多出一个蓝本文件,零破坏 |
 
 ## 5. 术语表
 
@@ -74,7 +76,7 @@ Go 练手项目。
 | **deferred prune** | 因未收敛而延迟的清理动作:在计划中标记展示、本次不执行 |
 | **drift** | 实际文件系统状态偏离产物应有状态(managed 产物被手改、链接被改指等) |
 | **孤儿(orphan)** | state 清单中存在、但已不在本次 desired state 中的条目 |
-| **收养(adopt)** | 磁盘对象与 desired 一致但 state 无记录时补录 state;symlink 自动,普通文件需显式 `--adopt`(ADR-21) |
+| **收养(adopt)** | state-only 记账动作:补录(磁盘对象与 desired 一致但无记录;symlink 自动、普通文件需 `--adopt`,ADR-21)、kind 迁移记账(ADR-27)与元数据刷新均由它承载,不触碰文件系统 |
 | **mutation 动作** | 改变文件系统的动作:create-link / render / scaffold / backup-replace / prune(执行) |
 
 ## 6. 关键决策记录(ADR)
@@ -107,6 +109,9 @@ Go 练手项目。
 | ADR-24 | 模板渲染 **fail-fast**:plan 全量渲染,任一失败整体退出 | 单文件降级、其余继续(v1.1) | 与「executor 只消费 Action」自洽(无需 Error 动作);渲染失败即配置 bug,不该半套上线 |
 | ADR-25 | state **fail-closed**:损坏/版本过新拒绝 mutation;缺失 = 合法全新 | 一律降级为无历史模式(v1.1) | 无历史模式跑完会覆盖损坏文件、毁尸灭迹;「版本过新」在有 self-update 的系统里真实存在(回滚二进制后) |
 | ADR-26 | mode 漂移经**复用 Render**(reason="mode")修正 | Entry.mode + chmod 动作 | 重写同样字节顺带落权限,省一个 ActionKind 和一个 state 字段;symlink 权限不管 |
+| ADR-27 | **kind 迁移三原则**:所有权只能被证据延续,不能被类型切换凭空创造;迁入 scaffold = 释放所有权(metadata-only,永远安全);迁出 scaffold = 等同无记录 | 无迁移规则(v1.2) | v1.2 下 `.tmpl → .template` 切换后旧 rendered 记账仍在,未来 prune 会按旧 hash 误删已属用户的 scaffold 产物,违反 ADR-12 |
+| ADR-28 | **CLI 不写任何 manifest**:砍掉 `add --activate`,改为报错并打印待手动添加的行 | 保格式 TOML 编辑 / 整文件重序列化 | 重序列化丢注释与排版;保格式编辑脆弱;新建模块是低频操作,一次手动编辑可接受 |
+| ADR-29 | **BackupReplace 仅限普通文件与 symlink**;目录/特殊文件即使 `--force` 也拒绝,要求手工移走 | 递归备份目录 | 目录递归备份+替换的失败模式复杂;一次手工操作换取执行器的简单可证 |
 
 ## 7. 与现有工具的能力对照
 

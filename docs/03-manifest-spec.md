@@ -56,8 +56,9 @@ from_env = "GITHUB_USER"    # 渲染期绝不读环境(ADR-17)
    "unassigned"),但**不能被 apply/add 直接操作**(ADR-18,04 号文档 §4.2/§4.5)。
 4. `[data]` 用户键**必须以小写字母开头**(与大写开头的内建变量形成强制命名空间,
    06 号文档 §3),违反即解码错误。
-5. `[profiles]` 的列表是**顶层 manifest 中唯一会被 CLI 写入的位置**:`dot add --activate`
-   会向当前 profile 追加模块名(04 号文档 §4.5)。
+5. **CLI 不写任何 manifest**(ADR-28):`dot add` 遇到目标模块 ∉ 当前 profile 时报错,
+   并打印需手动添加进 `[profiles]` 的确切行,而非代为修改——保格式 TOML 编辑脆弱、
+   整文件重序列化丢注释与排版,均不值得为低频操作引入。
 
 ## 3. 模块 manifest 完整字段
 

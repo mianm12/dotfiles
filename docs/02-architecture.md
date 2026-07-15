@@ -56,6 +56,9 @@ dotfiles/                        # 单仓库:CLI 源码 + 配置内容
 **锁边界**:mutation 命令(`apply` `add` `init` `update`)持锁;`update` 自 `git pull`
 起即持锁(pull 改仓库、planner 读仓库,读写同锁);`diff` / `status` / `doctor` 只读
 **不取锁**——state 经原子 rename 写入,只读方看到的永远是完整的旧版或新版,无撕裂。
+**锁不可重入,进程内只获取一次**:cli 层顶层命令取锁,内部编排(init/update 调 apply)
+调用假定已持锁的 `applyLocked()`,引擎入口自身不取锁——flock 对同进程的新 fd 会阻塞,
+双重获取即实现级自锁。
 
 优先级:命令行 flag > 环境变量 > 机器配置 > 内置默认。全部路径解析收敛在
 `internal/paths` 一处,并支持隐藏全局 flag `--home <dir>` 将 `~` 与上表全部路径整体重定向
@@ -143,18 +146,22 @@ type Observed struct {
 
 // decide 的输出、executor 的唯一输入:执行所需信息完备,executor 不读仓库、不做渲染
 type Action struct {
-    Kind        ActionKind  // CreateLink | Render | Scaffold | BackupReplace |
-                            // Prune | Adopt | RunHook | Skip | Conflict
+    Kind        ActionKind   // CreateLink | Render | Scaffold | BackupReplace |
+                             // Prune | Adopt | RunHook | Skip | Conflict
     Module      string
-    Source      string      // 仓库内绝对路径(hook 则为脚本路径)
-    Target      string      // 落地绝对路径
-    Content     []byte      // Render/Scaffold/BackupReplace:plan 阶段已完成的渲染产物
-    Mode        fs.FileMode // 落地权限([files].mode,缺省 0644)
-    Precond     Observed    // plan 时观测;执行前复核,失配 → 降级 Conflict(ADR-23)
-    Deferred    bool        // Prune:因未收敛而延迟,仅展示不执行(ADR-20)
-    DesiredKind string      // Conflict:该 target 的期望级别(link/managed/scaffold),供展示
-    Fingerprint string      // RunHook:执行成功后写入 state 的指纹
-    Reason      string      // 供 diff/--dry-run 展示,如 "source changed"、"mode"、"adopted"
+    Source      string       // 仓库内绝对路径(hook 则为脚本路径)
+    Target      string       // 落地绝对路径
+    DesiredKind string       // 全部创建/替换动作与 Conflict 均携带:link | managed | scaffold
+                             // (BackupReplace 靠它得知备份后建什么)
+    Content     []byte       // Render/Scaffold/BackupReplace(managed/scaffold):渲染产物
+    Mode        fs.FileMode  // 落地权限([files].mode,缺省 0644)
+    LinkDest    string       // CreateLink/BackupReplace(link):将写入的确切字符串
+                             // (planner 侧完成规范化,executor 逐字写入,ADR-22)
+    Precond     Observed     // plan 时观测;执行前复核,失配 → 降级 Conflict(ADR-23)
+    NextEntry   *state.Entry // 动作成功后提交的记账;nil = 摘除该 target 条目(Prune)
+    Deferred    bool         // Prune:因未收敛而延迟,仅展示不执行(ADR-20)
+    Fingerprint string       // RunHook:执行成功后写入 state 的指纹
+    Reason      string       // 供展示:"source changed"、"mode"、"adopted"、"kind migrated"
 }
 
 // state.json 中的一条记录,详见 05 号文档 §2
@@ -169,8 +176,12 @@ type Entry struct {
 ```
 
 设计要点:**没有 `Error` 动作**——渲染失败在 pipeline ⑥ fail-fast(ADR-24),执行期
-IO 失败由 executor 记录并触发 prune 延迟,不需要在计划里为错误建模。`BackupReplace`
-由 planner 在 `--force` 下直接产出(取代对应 Conflict),executor 因此无需理解 force
-语义。hook 是 `Kind=RunHook` 的动作,携带 Fingerprint,参与统一计划展示,执行恒在最后
-阶段。中间目录创建(mkdir)不建模为 Action:executor 在文件动作前按需 `MkdirAll` 真实
-目录(ADR-3),不记 state、不参与 prune。
+IO 失败由 executor 记录并触发 prune 延迟,不需要在计划里为错误建模。**`Adopt` 泛化为
+state-only 记账动作**:补录、kind 迁移记账(05 号文档 §3.4)、元数据刷新都由它承载,
+不触碰文件系统。**记账经 `NextEntry` 随动作提交**:executor 在动作成功后原样落账、
+失败不落——「迁移只在动作成功后提交」由此机械保证,executor 不需要理解任何记账逻辑。
+`BackupReplace` 由 planner 在 `--force` 下直接产出(取代对应 Conflict,DesiredKind
+告知备份后建什么),executor 因此无需理解 force 语义。hook 是 `Kind=RunHook` 的动作,
+携带 Fingerprint,参与统一计划展示,执行恒在最后阶段。中间目录创建(mkdir)不建模为
+Action:executor 在文件动作前按需 `MkdirAll` 真实目录(ADR-3),不记 state、不参与
+prune。

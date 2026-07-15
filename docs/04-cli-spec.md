@@ -32,6 +32,10 @@ dot <command> [flags] [args]
 | 2 | `diff` / `status` 发现差异或 drift(供脚本判断) |
 | 3 | 存在 conflict,需要用户决策 |
 
+同一次运行满足多个条件时按 **1 > 3 > 2 > 0** 取最高优先级。`apply` 中「用户拒绝整模块
+孤儿确认」或「存在 deferred prune 而无 conflict」以退出码 2 结束——工作未完成,与
+`diff` 的「有差异」语义一致。
+
 ## 4. 命令规范
 
 ### 4.1 `dot init`
@@ -62,7 +66,7 @@ Flag:`--profile <name>`、`--set key=value`(可重复)、`--yes` 支持无人值
 |---|---|
 | `-n / --dry-run` | 只打印计划,不落盘(含 state),退出码规则同 `diff` |
 | `--force` | conflict 项由 planner 直接产出 `BackupReplace`(备份后覆盖/重渲染/重建) |
-| `--adopt` | 允许收养「内容与渲染结果一致但无 state 记录」的**普通文件**(05 号文档 M3c);symlink 收养始终自动,不需此 flag |
+| `--adopt` [M2] | 允许收养「内容与渲染结果一致但无 state 记录」的**普通文件**(05 号文档 M3c,managed 专属);symlink 收养始终自动,不需此 flag。M1 构建给出硬错误 |
 | `--prune` / `--no-prune` | 是否计划 prune 阶段,默认 `--prune` |
 | `-y / --yes` | 跳过交互确认(目前唯一确认点:整模块级孤儿清理) |
 
@@ -75,7 +79,7 @@ Flag:`--profile <name>`、`--set key=value`(可重复)、`--yes` 支持无人值
 - 存在 conflict 且无 `--force` 时,其余创建动作照常执行,conflict 项汇总列出,
   退出码 3(部分成功优于全盘卡死,幂等保证重跑无害)。
 - prune 集合中出现**整模块级孤儿**(典型于 profile 切换)→ 打印汇总并要求确认(y/N),
-  `--yes` 跳过;拒绝 = 本次全部 prune 延迟。
+  `--yes` 跳过;拒绝 = 本次全部 prune 延迟,并以退出码 2 结束(工作未完成)。
 - 计划为空(仅 skip)时输出 `Already up to date.`。
 
 ### 4.3 `dot diff`
@@ -105,22 +109,24 @@ UNASSIGNED MODULES (1)
 无异常输出 `Clean.`,退出码 0;有 DRIFT/PENDING 退出码 2。state 损坏或版本过新时,
 status 不崩溃而是报告该事实(fail-closed 诊断入口,05 号文档 §2)。
 
-### 4.5 `dot add [-m <module>] [--activate] [--template|--scaffold] <path>...`
+### 4.5 `dot add [-m <module>] [--template|--scaffold] <path>...`
 
 把 `$HOME` 中已有文件收编入库。反向映射与模块推断算法见 05 号文档 §9。要点:
 
+- **只接受普通文件**:目录、symlink、特殊文件一律拒绝(目录请逐文件 add 或手工搬移)。
 - **硬拒绝 `*.local` 路径**(06 号文档 §2)。
 - 推断唯一命中 → 直接归入;多命中或零命中 → 退出码 3,提示加 `-m`。`-m` 必须满足
   模块名合法性(03 号文档 §6);指向不存在的模块时创建目录(提示)。
-- **目标模块 ∉ 当前 profile → 报错**(ADR-18);`--activate` 自动将模块名追加进当前
-  profile 列表(CLI 唯一的 manifest 写入点)并提示 commit。
-- **默认(link)**:文件移入仓库,原位替换为 symlink,登记 `kind=symlink` 并存证
-  `link_dest`。
-- **`--template`**:仓库侧存为 `.tmpl`;**原文件留在原位作为产物**,登记
-  `kind=rendered`(hash = 当前内容)。随后用户把机器相关值替换为 `{{ .var }}`,
-  渲染结果与原文件一致则下次 apply 自然 skip,闭环。入库后打印替换提醒。
+- **目标模块 ∉ 当前 profile → 报错**,并打印需手动添加进 `[profiles]` 的确切行
+  (ADR-18/28,CLI 不代改 manifest);编辑后重跑即可。
+- **默认(link)**:copy 入仓库(保留 mode,含可执行位)→ 校验副本 hash → 目标同目录
+  建临时 symlink → **原子 rename 覆盖原文件**——rename 前原文件未动,换链失败时必然
+  完好;登记 `kind=symlink` + `link_dest`。
+- **`--template`** [M2]:仓库侧存为 `.tmpl`;**原文件留在原位作为产物**,登记
+  `kind=rendered`(hash = 当前内容)。随后用户把机器相关值替换为 `{{ .var }}`,渲染
+  一致则下次 apply 自然 skip,闭环。M1 构建给出硬错误。
 - **`--scaffold`**:仓库侧存为 `.template`;原文件保留为产物,登记 `kind=scaffold`。
-- `--dry-run` 支持;copy 校验后再删原(仅 link 情形删原),规避 rename 跨设备陷阱。
+- `--dry-run` 支持。
 
 ### 4.6 `dot doctor`
 
