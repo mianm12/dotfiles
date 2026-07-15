@@ -21,7 +21,8 @@ dot <command> [flags] [args]
 | `--no-color` | 关闭彩色输出(pipe 时自动关闭) |
 
 错误 → 退出码的映射集中于 `cli.Execute` 一处;深层包只返回语义化错误。
-锁边界:mutation 命令持锁;`diff` / `status` / `doctor` 只读不取锁(02 号文档 §2)。
+锁边界:mutation 命令(含 [M2] 的 `state rebuild`、`edit`)持锁;`diff` / `status` /
+`doctor` 只读不取锁(02 号文档 §2)。
 
 ## 3. 退出码(全命令统一)
 
@@ -46,7 +47,8 @@ dot <command> [flags] [args]
 2. requires 检查(宽松预读)。
 3. 交互选择 profile(列出顶层 `[profiles]` 键)。
 4. 按顶层 `[data]` 声明逐项询问变量(有 default 或 `from_env` [M2] 命中时回车即接受)。
-5. 写入 `~/.config/dot/config.toml`(权限 0600)。
+5. **原子写入机器配置**:与现有配置内存合并并校验 → 临时文件(0600)→ `Sync` →
+   原子 rename;任一步失败**保留旧配置不变**。
 6. 询问「立即 apply?」,默认 yes。
 
 Flag:`--profile <name>`、`--set key=value`(可重复)、`--yes` 支持无人值守:
@@ -65,7 +67,7 @@ Flag:`--profile <name>`、`--set key=value`(可重复)、`--yes` 支持无人值
 | flag | 行为 |
 |---|---|
 | `-n / --dry-run` | 只打印计划,不落盘(含 state),退出码规则同 `diff` |
-| `--force` | conflict 项由 planner 直接产出 `BackupReplace`(备份后覆盖/重渲染/重建) |
+| `--force` | conflict 项由 planner 直接产出 `BackupReplace`(备份后覆盖/重渲染/重建;目录/特殊文件除外,ADR-29) |
 | `--adopt` [M2] | 允许收养「内容与渲染结果一致但无 state 记录」的**普通文件**(05 号文档 M3c,managed 专属);symlink 收养始终自动,不需此 flag。M1 构建给出硬错误 |
 | `--prune` / `--no-prune` | 是否计划 prune 阶段,默认 `--prune` |
 | `-y / --yes` | 跳过交互确认(目前唯一确认点:整模块级孤儿清理) |
@@ -106,50 +108,63 @@ UNASSIGNED MODULES (1)
   experimental-nvim             not referenced by any profile
 ```
 
-无异常输出 `Clean.`,退出码 0;有 DRIFT/PENDING 退出码 2。state 损坏或版本过新时,
-status 不崩溃而是报告该事实(fail-closed 诊断入口,05 号文档 §2)。
+无异常输出 `Clean.`,退出码 0;有 DRIFT/PENDING 退出码 2。state 损坏、版本过新或
+语义校验失败时,status 不崩溃而是报告该事实(fail-closed 诊断入口,05 号文档 §2)。
 
-### 4.5 `dot add [-m <module>] [--template|--scaffold] <path>...`
+### 4.5 `dot add [-m <module>] [--template|--scaffold] [--dry-run] <path>...`
 
 把 `$HOME` 中已有文件收编入库。反向映射与模块推断算法见 05 号文档 §9。要点:
 
 - **只接受普通文件**:目录、symlink、特殊文件一律拒绝(目录请逐文件 add 或手工搬移)。
-- **仓库侧预检**(任何 mutation 之前):仓库目标已存在(含 `.tmpl`/`.template` 后缀
-  变体)一律拒绝、绝不覆盖;多路径输入先全部预检(复用 target 唯一性/后缀碰撞校验),
-  任一失败则全部不执行;仓库副本 `O_EXCL` 排他创建;rename 换链前按快照复核原文件
-  未被修改(05 号文档 §9)。
+- **预检 = 完整解析链模拟**(ADR-30):任何写入前,把新 source 虚拟加入模块文件树
+  跑 `resolve + enumerate + ignore`,要求恰好产生一个 desired entry 且其 target ==
+  输入路径、kind 符合模式;命中内置忽略 / `hooks/` / ignore pattern → 拒绝并指出规则。
+  仓库目标已存在(含 `.tmpl`/`.template` 后缀变体)一律拒绝、绝不覆盖;多路径输入先
+  全部预检(复用 target 唯一性校验),任一失败则全部不执行。
 - **硬拒绝 `*.local` 路径**(06 号文档 §2)。
 - 推断唯一命中 → 直接归入;多命中或零命中 → 退出码 3,提示加 `-m`。`-m` 必须满足
-  模块名合法性(03 号文档 §6);指向不存在的模块时创建目录(提示)。
+  模块名合法性(03 号文档 §6);**指向不存在的模块 → 报错**(不自动创建目录——新
+  目录必然 ∉ profile,自动创建与 profile 校验自相矛盾),打印两步指引:
+  `mkdir -p modules/<m>` + 将 `"<m>"` 加入 `[profiles]` 对应列表。
 - **目标模块 ∉ 当前 profile → 报错**,并打印需手动添加进 `[profiles]` 的确切行
   (ADR-18/28,CLI 不代改 manifest);编辑后重跑即可。
-- **默认(link)**:copy 入仓库(保留 mode,含可执行位)→ 校验副本 hash → 目标同目录
-  建临时 symlink → **原子 rename 覆盖原文件**——rename 前原文件未动,换链失败时必然
-  完好;登记 `kind=symlink` + `link_dest`。
+- **默认(link)**:copy 入仓库(`O_EXCL` 排他创建,保留 mode 含可执行位)→ `Sync` →
+  hash 校验 → 目标同目录建临时 symlink → rename 前复核原文件 → **原子 rename 覆盖
+  原文件**。任一步失败:自动清理本次仓库副本与临时链,原文件必然完好,整体无副作用
+  可直接重试。登记 `kind=symlink` + `link_dest`。
 - **`--template`** [M2]:仓库侧存为 `.tmpl`;**原文件留在原位作为产物**,登记
   `kind=rendered`(hash = 当前内容)。随后用户把机器相关值替换为 `{{ .var }}`,渲染
   一致则下次 apply 自然 skip,闭环。M1 构建给出硬错误。
 - **`--scaffold`**:仓库侧存为 `.template`;原文件保留为产物,登记 `kind=scaffold`。
-- `--dry-run` 支持。
+- `--dry-run` 打印预检结论与将执行的动作。
 
 ### 4.6 `dot doctor`
 
 环境与配置自检,**严格只读、无锁**。检查项:二进制是否在 PATH、仓库存在且为 git 仓库、
-manifest 静态校验(03 号文档 §7,宽松模式报告未知键)、**路径合法性**(03 号文档 §6)、
-target 全局唯一性、模板静态扫描(未声明变量)、**state 三态诊断**(缺失/正常/损坏/
-版本过新,后两者给出手动恢复指引)、state 记录的链接死链或被改指、机器配置与 state
-目录权限(0600/0700)、`git ls-files '*.local'` 非空即警告、当前 OS 是否受支持。
+manifest 静态校验(03 号文档 §7,宽松模式报告未知键)、路径合法性、`[target]` 缺当前
+GOOS、target 全局唯一性、模板静态扫描(未声明变量)、**state 三态与语义校验诊断**
+(缺失/正常/损坏/版本过新/字段残缺,后三者给出手动恢复指引)、state 记录的链接死链或
+被改指、机器配置与 state 目录权限(0600/0700)、**已跟踪的 `*.local`**(交互模式警告;
+`--manifest-only` 判为错误,ADR-32)、当前 OS 是否受支持。
+
 `--manifest-only` 供 CI;**M1 提供该最小子集**(manifest 静态校验 + 路径合法性 +
-target 唯一性,CI 自 lint 依赖它),完整检查集随 M2。
+target 唯一性 + 已跟踪 `*.local`,CI 自 lint 依赖它),完整检查集随 M2。
 
 ### 4.7 `dot update`
 
-配置侧更新,**自 `git pull` 起持锁**(pull 改仓库、apply 读仓库,读写同锁):
-`git pull --ff-only`(仓库脏时报错,提示先 `dot git status`)→ requires 检查(不满足 →
-报错提示 `dot self-update`,不执行 apply)→ `apply`。`--no-apply` 只拉取。
+配置侧更新,**自持锁起序贯执行**(锁 → 洁净检查 → pull → requires → apply):
 
-拉取到的新 hook **不做单独确认**(威胁模型出界,01 号文档 §4):计划输出中 `run-hook`
-动词可见;想先审查就 `dot update --no-apply` 后 `dot diff`,再手动 `dot apply`。
+1. 取锁。
+2. **仓库洁净检查**:`git status --porcelain` 必须完全为空(**含未跟踪文件**)——
+   `--ff-only` 遇到不冲突的本地修改或未跟踪文件仍会成功,随后 apply 会读到新旧混合的
+   仓库内容;非空即报错,提示先 `dot git status` 处理。
+3. `git pull --ff-only`(分叉即报错,把决策还给用户走 `dot git`)。
+4. requires 检查(不满足 → 报错提示 `dot self-update`,不执行 apply)。
+5. `apply`(复用已持有的锁,`applyLocked()`)。
+
+`--no-apply` 在第 3 步后停止。拉取到的新 hook **不做单独确认**(01 §4 威胁模型):
+计划输出中 `run-hook` 动词可见;想先审查就 `dot update --no-apply` 后 `dot diff`,
+再手动 `dot apply`。
 
 ### 4.8 `dot self-update`
 
@@ -168,14 +183,14 @@ target 唯一性,CI 自 lint 依赖它),完整检查集随 M2。
 
 ### 4.11 `dot state rebuild` [M2]
 
-从文件系统反推重建 state:对当前 profile 的 desired 逐项观测,一致者收养(含普通文件,
-等价于带 `--adopt` 的全量收养)。M1 的手动恢复路径:`mv state.json state.json.bak`
-把「损坏」显式转化为「缺失」后重新 apply。
+**持锁**。从文件系统反推重建 state:对当前 profile 的 desired 逐项观测,一致者收养
+(含普通文件,等价于带 `--adopt` 的全量收养)。M1 的手动恢复路径:
+`mv state.json state.json.bak` 把「损坏」显式转化为「缺失」后重新 apply。
 
 ### 4.12 `dot edit <target-path>` [M2]
 
-打开 `$EDITOR` 编辑给定落地路径对应的**源文件**(symlink 直接就是源;rendered 反查
-state 找到 `.tmpl` 源),模板保存后自动 re-render 该文件。
+**持锁**。打开 `$EDITOR` 编辑给定落地路径对应的**源文件**(symlink 直接就是源;
+rendered 反查 state 找到 `.tmpl` 源),模板保存后自动 re-render 该文件。
 
 ## 5. 输出与日志约定
 

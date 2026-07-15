@@ -83,14 +83,16 @@ Homebrew/软件(那是 `macos` 模块 `hooks/setup.sh` 的职责)、不改 shell
 
 | 情形 | 发布侧 | 消费侧(其他机器) |
 |---|---|---|
-| 只改配置 | `dot git commit && dot git push` | `dot update`(pull → requires → apply) |
+| 只改配置 | `dot git commit && dot git push` | `dot update`(洁净检查 → pull → requires → apply) |
 | 只改 CLI | push 代码,打 tag 发 Release | `dot self-update`(配置无需动) |
 | 都改且配置依赖新 CLI | 同一 PR:代码 + 配置 + 提升 requires;先发 Release 再 push main | `dot update` 被 requires 拦下 → `dot self-update` → 再 `dot update` |
 
-`dot update` 细节:**自 `git pull --ff-only` 起持锁**(pull 改仓库、apply 读仓库,
-读写同锁;本地脏/分叉即报错,把决策还给用户走 `dot git`);拉取后先 requires 检查再
-apply,顺序不可反。拉取到的新 hook 不做单独确认(01 §4 威胁模型出界);想审查:
-`dot update --no-apply` → `dot diff`(run-hook 动作可见)→ 手动 `dot apply`。
+`dot update` 细节:**自持锁起序贯执行**——取锁 → **洁净检查**(`git status
+--porcelain` 必须完全为空,含未跟踪文件;`--ff-only` 遇到不冲突的本地修改仍会成功,
+随后 apply 会读到新旧混合的仓库,故必须前置硬检查;非空报错提示走 `dot git`)→
+`git pull --ff-only`(分叉即报错)→ requires 检查 → apply(复用锁)。顺序不可变。
+拉取到的新 hook 不做单独确认(01 §4 威胁模型出界);想审查:`dot update --no-apply`
+→ `dot diff`(run-hook 动作可见)→ 手动 `dot apply`。
 `dot self-update` 细节:GitHub API 查 latest → 比对自身版本 → 下载 + `checksums.txt`
 校验 → 同目录临时文件 → rename 覆盖自身(POSIX 下替换运行中二进制安全)。
 
@@ -101,7 +103,8 @@ apply,顺序不可反。拉取到的新 hook 不做单独确认(01 §4 威胁模
 
 ## 7. 仓库公开性与安全边界
 
-仓库可以公开:配置本身无密级,私密内容由 `*.local` 四道机制(06 号文档 §2)隔离在
-机器本地,敏感落地面(机器配置 0600、state/backup 0700)已收紧权限。设计上**不把
-「私有仓库」当作任何安全边界**。bootstrap 与 self-update 均经 checksums 校验(防传输
-损坏);签名验证(cosign/minisign)属于供应链防御,已在威胁模型出界侧,列 M3 可选。
+仓库可以公开:配置本身无密级,私密内容由 `*.local` 四道纵深(06 号文档 §2,ADR-32)
+压低误入库风险,敏感落地面(机器配置 0600、state/backup 目录 0700)已收紧权限。
+设计上**不把「私有仓库」当作任何安全边界**。bootstrap 与 self-update 均经 checksums
+校验(防传输损坏);签名验证(cosign/minisign)属于供应链防御,已在威胁模型出界侧,
+列 M3 可选。
