@@ -11,7 +11,7 @@
 
 职责严格限定三步,可通过
 `curl -fsSL https://raw.githubusercontent.com/<user>/dotfiles/main/bootstrap.sh | sh` 执行。
-**下载必经 checksum 校验,安装必须原子**(临时目录验完、再经 bin 目录内同目录 rename 入位):
+**下载必经 checksum 校验,安装必须原子**(临时目录验完、经 bin 目录内同目录 rename 入位):
 
 ```sh
 #!/bin/sh
@@ -49,8 +49,7 @@ exec "$BIN_DIR/dot" init
 
 明确不做的事:不从源码编译(裸机无 Go 工具链,这正是发 Release 的原因)、不装
 Homebrew/软件(那是 `macos` 模块 `hooks/setup.sh` 的职责)、不改 shell rc(PATH 提示由
-`dot doctor` 给出)。硬依赖仅 `curl` + `git` + `tar` + `shasum|sha256sum`,均为 macOS
-与主流发行版默认可用或首次使用时由系统引导安装。
+`dot doctor` 给出)。硬依赖仅 `curl` + `git` + `tar` + `shasum|sha256sum`。
 
 ## 3. 版本策略
 
@@ -58,25 +57,25 @@ Homebrew/软件(那是 `macos` 模块 `hooks/setup.sh` 的职责)、不改 shell
   `darwin/arm64`、`darwin/amd64`、`linux/amd64`、`linux/arm64`,产出 tar.gz +
   `checksums.txt`。版本号经 `-ldflags "-X main.version=…"` 注入。
 - **本地开发构建**(`go run` / 未注入 ldflags)version 为 `dev`:requires 检查放行 +
-  打印警告,否则开发期间每条命令都会被自己的 requires 拦住。
+  打印警告。
 - 配置「版本」即 git commit,无独立编号。
 - `requires`(顶层 manifest):声明**本套配置需要的最低 CLI 版本**,仅 `>=x.y.z` 语法
-  (ADR-11)。维护纪律:**当某次配置改动用到了新版 CLI 的能力,同一个 commit 里必须
-  提升 requires**——这是唯一需要人肉自觉的点,写进 README;遗忘时由严格解码兜底(见 §4)。
+  (ADR-11)。维护纪律:**配置改动一旦用到新版 CLI 的能力,同一 commit 必须提升
+  requires**——唯一需要人肉自觉的点,写进 README;遗忘时由严格解码兜底(§4)。
 
 ## 4. 兼容性矩阵与铰链行为
 
 | 场景 | 行为 |
 |---|---|
-| 新 CLI + 旧配置 | 必须可用(manifest 向后兼容原则,03 号文档 §7) |
+| 新 CLI + 旧配置 | 必须可用(manifest 向后兼容原则,03 号文档 §8) |
 | 旧 CLI + 新配置,requires 满足且无未知键 | 正常工作 |
 | 旧 CLI + 新配置,requires 不满足 | pipeline 第②步(宽松预读)即拒绝,提示 `dot self-update`;`self-update`、`git`、`version`、`doctor` 不受拦截 |
-| 旧 CLI + 新配置,**requires 忘记提升**但含未知字段 | 严格解码(第③步)拒绝 mutation 命令——失效安全的第二道防线;`doctor` 宽松模式可诊断出未知键 |
+| 旧 CLI + 新配置,**requires 忘记提升**但含未知字段 | 严格解码(第③步)拒绝 mutation 命令——失效安全的第二道防线;`doctor` 宽松模式可诊断 |
+| **回滚二进制后 state 版本过新** | mutation 命令 fail closed(ADR-25,05 号文档 §2);提示升级 CLI 或手动处理 state |
 | 本地开发构建(version=dev) | requires 放行 + 警告 |
 
-两道防线的分工:`requires` 是**作者显式声明**的兼容界线,报错信息精确(「需要 ≥0.4.0,
-当前 0.3.2」);严格解码是**机械兜底**,牺牲报错友好度换取「绝不带着不理解的字段去
-prune」的安全底线。
+两道防线的分工:`requires` 是**作者显式声明**的兼容界线,报错信息精确;严格解码是
+**机械兜底**,牺牲报错友好度换取「绝不带着不理解的字段去 prune」的安全底线。
 
 ## 5. 日常同步流程
 
@@ -86,23 +85,23 @@ prune」的安全底线。
 |---|---|---|
 | 只改配置 | `dot git commit && dot git push` | `dot update`(pull → requires → apply) |
 | 只改 CLI | push 代码,打 tag 发 Release | `dot self-update`(配置无需动) |
-| 都改且配置依赖新 CLI | 同一 PR:代码 + 配置 + 提升 requires;先发 Release 再 push main | `dot update` 被 requires 拦下 → 按提示 `dot self-update` → 再 `dot update` |
+| 都改且配置依赖新 CLI | 同一 PR:代码 + 配置 + 提升 requires;先发 Release 再 push main | `dot update` 被 requires 拦下 → `dot self-update` → 再 `dot update` |
 
-`dot update` 细节:`git pull --ff-only`(本地脏/分叉即报错,把决策还给用户走 `dot git`);
-拉取后先 requires 检查再 apply,顺序不可反。`dot self-update` 细节:GitHub API 查
-latest → 比对自身版本 → 下载 + `checksums.txt` 校验 → 写同目录临时文件 → rename 覆盖
-自身(POSIX 下替换运行中的二进制安全)。
+`dot update` 细节:**自 `git pull --ff-only` 起持锁**(pull 改仓库、apply 读仓库,
+读写同锁;本地脏/分叉即报错,把决策还给用户走 `dot git`);拉取后先 requires 检查再
+apply,顺序不可反。拉取到的新 hook 不做单独确认(01 §4 威胁模型出界);想审查:
+`dot update --no-apply` → `dot diff`(run-hook 动作可见)→ 手动 `dot apply`。
+`dot self-update` 细节:GitHub API 查 latest → 比对自身版本 → 下载 + `checksums.txt`
+校验 → 同目录临时文件 → rename 覆盖自身(POSIX 下替换运行中二进制安全)。
 
 ## 6. git 透传
 
 `dot git <args...>` = `git -C <repo-dir> <args...>` 的直接 exec(继承 stdio,退出码
-透传)。不包装任何语义、不解析输出——保留 git 的全部能力与既有肌肉记忆,同时免去记忆
-仓库藏在哪个角落。唯一增强:仓库目录不存在时,给出走 bootstrap 的提示而非 git 原生报错。
+透传)。不包装任何语义。唯一增强:仓库目录不存在时给出走 bootstrap 的提示。
 
 ## 7. 仓库公开性与安全边界
 
 仓库可以公开:配置本身无密级,私密内容由 `*.local` 四道机制(06 号文档 §2)隔离在
 机器本地,敏感落地面(机器配置 0600、state/backup 0700)已收紧权限。设计上**不把
-「私有仓库」当作任何安全边界**:即使将来转私有,密钥依然不入库。bootstrap 与
-self-update 均经 checksums 校验;更进一步的签名验证(cosign/minisign)列为 M3 可选项,
-单人场景优先级低。
+「私有仓库」当作任何安全边界**。bootstrap 与 self-update 均经 checksums 校验(防传输
+损坏);签名验证(cosign/minisign)属于供应链防御,已在威胁模型出界侧,列 M3 可选。

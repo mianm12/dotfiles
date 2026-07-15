@@ -21,14 +21,15 @@ dot <command> [flags] [args]
 | `--no-color` | 关闭彩色输出(pipe 时自动关闭) |
 
 错误 → 退出码的映射集中于 `cli.Execute` 一处;深层包只返回语义化错误。
+锁边界:mutation 命令持锁;`diff` / `status` / `doctor` 只读不取锁(02 号文档 §2)。
 
 ## 3. 退出码(全命令统一)
 
 | 码 | 含义 |
 |---|---|
 | 0 | 成功;对 `diff` / `status` 表示「无差异 / 无异常」 |
-| 1 | 运行错误(IO 失败、manifest 非法、requires 不满足、不变量校验失败、锁被占用…) |
-| 2 | `diff` / `status` 发现差异或 drift(供脚本判断,类比 `git diff --exit-code`) |
+| 1 | 运行错误(IO 失败、manifest 非法、requires 不满足、不变量校验失败、锁被占用、state fail-closed…) |
+| 2 | `diff` / `status` 发现差异或 drift(供脚本判断) |
 | 3 | 存在 conflict,需要用户决策 |
 
 ## 4. 命令规范
@@ -51,39 +52,41 @@ Flag:`--profile <name>`、`--set key=value`(可重复)、`--yes` 支持无人值
 
 核心命令,pipeline 见 02 号文档 §4。**prune 作用域随调用形态变化**:
 
-- **无参数(全量)**:应用当前 profile 全部模块;prune 候选 = **全部** state 条目中
-  不在 desired 的(profile 是本机应有状态的完整声明,退出 profile 的模块被清理)。
-- **指定模块(部分)**:仅应用给定模块;prune 候选 = **仅 `entry.module ∈ 请求集`** 的
-  孤儿条目,其他模块的 state 在本次运行中不可见、不可删。
+- **无参数(全量)**:应用当前 profile 全部模块;prune 候选 = 全部 state 条目中
+  不在 desired 的。
+- **指定模块(部分)**:仅应用给定模块;prune 候选 = 仅 `entry.module ∈ 请求集` 的
+  孤儿条目。
 - 请求的模块 **∉ 当前 profile → 报错**(ADR-18),提示将其加入 profile 后重试。
 
 | flag | 行为 |
 |---|---|
 | `-n / --dry-run` | 只打印计划,不落盘(含 state),退出码规则同 `diff` |
-| `--force` | conflict 项:备份原文件后覆盖/重渲染/重建(备份至 state 目录) |
-| `--prune` / `--no-prune` | 是否执行 prune 阶段,默认 `--prune` |
-| `-y / --yes` | 跳过交互确认(目前唯一确认点:整模块级孤儿清理,见下) |
+| `--force` | conflict 项由 planner 直接产出 `BackupReplace`(备份后覆盖/重渲染/重建) |
+| `--adopt` | 允许收养「内容与渲染结果一致但无 state 记录」的**普通文件**(05 号文档 M3c);symlink 收养始终自动,不需此 flag |
+| `--prune` / `--no-prune` | 是否计划 prune 阶段,默认 `--prune` |
+| `-y / --yes` | 跳过交互确认(目前唯一确认点:整模块级孤儿清理) |
 
 行为要点:
 
-- 执行顺序 `mkdir → 创建/收养 → prune → hooks`(ADR-13);**本次运行发生过 error
-  (IO/渲染失败)则跳过 prune** 并提示修复后重跑;conflict 不触发跳过(它是预期中的
-  用户决策态)。
-- 存在 conflict 且无 `--force` 时,其余动作照常执行,conflict 项汇总列出,退出码 3
-  (部分成功优于全盘卡死,幂等保证重跑无害)。
-- prune 集合中出现**整模块级孤儿**(某模块全部条目待删,典型于 profile 切换)→ 打印
-  汇总并要求确认(y/N),`--yes` 跳过。防 `--profile` 打错字引发批量删链。
+- 执行顺序 `mkdir → 创建/收养 → prune → hooks`(ADR-13);**prune 仅在创建阶段完全
+  收敛后执行**(ADR-20):plan 中存在 conflict、执行中出现 error 或 Precond 失配、
+  或用户拒绝整模块确认,任一发生 → 本次**全部** prune 转为 deferred(输出中标注,
+  不执行),提示消解后重跑。hooks 不受收敛门控(05 号文档 §8)。
+- 存在 conflict 且无 `--force` 时,其余创建动作照常执行,conflict 项汇总列出,
+  退出码 3(部分成功优于全盘卡死,幂等保证重跑无害)。
+- prune 集合中出现**整模块级孤儿**(典型于 profile 切换)→ 打印汇总并要求确认(y/N),
+  `--yes` 跳过;拒绝 = 本次全部 prune 延迟。
 - 计划为空(仅 skip)时输出 `Already up to date.`。
 
 ### 4.3 `dot diff`
 
-执行 pipeline ①–⑨ 后打印计划,永不写盘(含 state;Adopt 动作仅展示)。`-v` 时:
-「将重渲染」与「drift」条目均展示 **实际文件 vs 本次渲染结果** 的 unified diff
-——即回答「apply(--force)会把磁盘改成什么样」(06 号文档 §5)。
+执行 pipeline ②–⑨ 后打印计划,**无锁**、永不写盘(Adopt 与 deferred Prune 如实展示,
+可收养的普通文件标注 `adoptable, rerun apply --adopt`)。`-v` 时:「将重渲染」与
+「drift」条目均展示 **实际文件 vs 本次渲染结果** 的 unified diff(06 号文档 §5)。
 
 ### 4.4 `dot status`
 
-面向「巡检」而非「预览」,分节输出:
+面向「巡检」而非「预览」,无锁只读,分节输出:
 
 ```
 Profile: mac (12 modules, 87 files managed)
@@ -99,57 +102,64 @@ UNASSIGNED MODULES (1)
   experimental-nvim             not referenced by any profile
 ```
 
-无异常输出 `Clean.`,退出码 0;有 DRIFT/PENDING 退出码 2。
+无异常输出 `Clean.`,退出码 0;有 DRIFT/PENDING 退出码 2。state 损坏或版本过新时,
+status 不崩溃而是报告该事实(fail-closed 诊断入口,05 号文档 §2)。
 
 ### 4.5 `dot add [-m <module>] [--activate] [--template|--scaffold] <path>...`
 
-把 `$HOME` 中已有文件收编入库并原位替换为 symlink。反向映射与模块推断算法见
-05 号文档 §9。要点:
+把 `$HOME` 中已有文件收编入库。反向映射与模块推断算法见 05 号文档 §9。要点:
 
-- **硬拒绝 `*.local` 路径**:该约定的意义就是不入库(06 号文档 §2),报错并说明。
-- 推断唯一命中 → 直接归入该模块;多命中或零命中 → 退出码 3,提示加 `-m`。
-- `-m` 指向不存在的模块时创建模块目录(打印提示)。
-- **目标模块 ∉ 当前 profile → 报错**(否则条目将被下次全量 apply 当孤儿清理,ADR-18);
-  `--activate` 则自动将模块名追加进当前 profile 的列表(顶层 dot.toml,CLI 唯一的
-  manifest 写入点)并提示 commit。
-- `--template`:入库为 `.tmpl`(managed),入库后打印「请手动将机器相关值替换为
-  {{ .var }}」提醒;`--scaffold` 入库为 `.template`,保留原文件为产物并登记 state,不建链。
-- `--dry-run` 支持;移动文件 + 建链两步整体失败回滚(先 copy 校验后删原,规避 rename
-  跨设备陷阱)。
+- **硬拒绝 `*.local` 路径**(06 号文档 §2)。
+- 推断唯一命中 → 直接归入;多命中或零命中 → 退出码 3,提示加 `-m`。`-m` 必须满足
+  模块名合法性(03 号文档 §6);指向不存在的模块时创建目录(提示)。
+- **目标模块 ∉ 当前 profile → 报错**(ADR-18);`--activate` 自动将模块名追加进当前
+  profile 列表(CLI 唯一的 manifest 写入点)并提示 commit。
+- **默认(link)**:文件移入仓库,原位替换为 symlink,登记 `kind=symlink` 并存证
+  `link_dest`。
+- **`--template`**:仓库侧存为 `.tmpl`;**原文件留在原位作为产物**,登记
+  `kind=rendered`(hash = 当前内容)。随后用户把机器相关值替换为 `{{ .var }}`,
+  渲染结果与原文件一致则下次 apply 自然 skip,闭环。入库后打印替换提醒。
+- **`--scaffold`**:仓库侧存为 `.template`;原文件保留为产物,登记 `kind=scaffold`。
+- `--dry-run` 支持;copy 校验后再删原(仅 link 情形删原),规避 rename 跨设备陷阱。
 
 ### 4.6 `dot doctor`
 
-环境与配置自检,**严格只读**。检查项:二进制是否在 PATH、仓库存在且为 git 仓库、
-manifest 静态校验(03 号文档 §6,宽松模式报告未知键)、target 全局唯一性、模板静态扫描
-(未声明变量)、state.json 可解析、state 记录的链接是否死链/被改指、机器配置与 state
-目录权限(0600/0700)、**`git ls-files '*.local'` 非空即警告**(私有文件已被 git 跟踪)、
-当前 OS 是否受支持。`--manifest-only` 供 CI。
+环境与配置自检,**严格只读、无锁**。检查项:二进制是否在 PATH、仓库存在且为 git 仓库、
+manifest 静态校验(03 号文档 §7,宽松模式报告未知键)、**路径合法性**(03 号文档 §6)、
+target 全局唯一性、模板静态扫描(未声明变量)、**state 三态诊断**(缺失/正常/损坏/
+版本过新,后两者给出手动恢复指引)、state 记录的链接死链或被改指、机器配置与 state
+目录权限(0600/0700)、`git ls-files '*.local'` 非空即警告、当前 OS 是否受支持。
+`--manifest-only` 供 CI。
 
 ### 4.7 `dot update`
 
-配置侧更新:`git pull --ff-only`(仓库脏时报错,提示先 `dot git status`)→ requires
-检查(不满足 → 报错提示 `dot self-update`,**不执行 apply**)→ `apply`。
-`--no-apply` 只拉取。
+配置侧更新,**自 `git pull` 起持锁**(pull 改仓库、apply 读仓库,读写同锁):
+`git pull --ff-only`(仓库脏时报错,提示先 `dot git status`)→ requires 检查(不满足 →
+报错提示 `dot self-update`,不执行 apply)→ `apply`。`--no-apply` 只拉取。
+
+拉取到的新 hook **不做单独确认**(威胁模型出界,01 号文档 §4):计划输出中 `run-hook`
+动词可见;想先审查就 `dot update --no-apply` 后 `dot diff`,再手动 `dot apply`。
 
 ### 4.8 `dot self-update`
 
 二进制侧更新:查询 GitHub Releases latest → 版本比对 → 下载对应 GOOS/GOARCH 资产至
-临时文件 → 校验 checksums.txt → 原子替换自身。`--tag v0.4.0` 指定版本。详见 07 号文档。
+临时文件 → 校验 checksums.txt → 同目录 rename 原子替换自身。`--tag v0.4.0` 指定版本。
 
 ### 4.9 `dot git [args...]`
 
 透传:等价于 `git -C <repo-dir> <args...>` 直接 exec(继承 stdio,退出码透传)。
-不包装任何语义。唯一增强:仓库目录不存在时给出走 bootstrap 的提示。
+唯一增强:仓库目录不存在时给出走 bootstrap 的提示。
 
 ### 4.10 `dot version`
 
 输出 CLI 版本、commit、构建时间,以及当前仓库顶层 `requires` 与满足情况
-(本地开发构建显示 `dev` 并注明 requires 检查处于放行状态)。
+(`dev` 构建注明 requires 检查处于放行状态)。
 
 ### 4.11 `dot state rebuild` [M2]
 
-从文件系统反推重建 state:对当前 profile 的 desired 逐项观测,一致者收养。由于 apply
-自带收养规则(05 号文档 §3),本命令仅用于 state 全毁且想一次性重建的场景,优先级低。
+从文件系统反推重建 state:对当前 profile 的 desired 逐项观测,一致者收养(含普通文件,
+等价于带 `--adopt` 的全量收养)。M1 的手动恢复路径:`mv state.json state.json.bak`
+把「损坏」显式转化为「缺失」后重新 apply。
 
 ### 4.12 `dot edit <target-path>` [M2]
 
@@ -159,7 +169,8 @@ state 找到 `.tmpl` 源),模板保存后自动 re-render 该文件。
 ## 5. 输出与日志约定
 
 - 计划行格式:`<verb>  <target>  (<reason>)`,verb ∈ `link | render | scaffold | adopt |
-  prune | backup+replace | run-hook | skip | CONFLICT`。verb 左对齐彩色,`skip` 仅 `-v` 显示。
+  backup+replace | prune | prune (deferred) | run-hook | skip | CONFLICT`。
+  verb 左对齐彩色,`skip` 仅 `-v` 显示。
 - 人类输出走 stdout;错误与警告走 stderr;为脚本消费预留 `--json` [M3]。
-- 所有会写文件系统的命令开头打印一行上下文:`repo=… profile=… os=darwin`,事后排查全靠它。
+- 所有会写文件系统的命令开头打印一行上下文:`repo=… profile=… os=darwin`。
 - 输出顺序确定性:模块、文件、prune 条目均排序后输出(golden 测试依赖此性质)。
