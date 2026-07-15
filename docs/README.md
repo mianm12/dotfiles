@@ -1,17 +1,17 @@
-# dot — 个人 dotfiles 管理工具 · 设计文档集(v1.3,实现前冻结版)
+# dot — 个人 dotfiles 管理工具 · 设计文档集(v1.4,冻结修订)
 
 `dot` 是一个单人使用的 dotfiles 管理 CLI,采用「symlink 为主、模板生成为辅」的混合模型。
 CLI 源码与配置内容同仓库存放,通过 GitHub Releases 分发二进制,通过 git 同步配置。
 
-> **v1.3 为实现前冻结版。** 四轮审查的问题已从架构分叉收敛到规格自洽性、再到边角语义,
-> 本轮(kind 迁移、add 原子性、锁重入等)合入后冻结;后续问题由 M1 的表驱动测试
-> (决策表的可执行形态)在实现中收敛,不再推演文档。
+> **v1.4 为冻结修订(final)。** 本轮审查已缩至一个真实缺陷(迁移借旧账收养)与一组
+> 记账/预检契约澄清,无架构级问题——这是设计收敛完成的信号。此后一切问题由
+> M1 的表驱动测试(决策表的可执行形态)在实现中收敛,文档不再迭代。
 
 ## 文档目录
 
 | 编号 | 文档 | 内容 | 读者时机 |
 |---|---|---|---|
-| 01 | [overview.md](01-overview.md) | 目标、非目标、**威胁模型**、术语表、ADR(26 条) | 先读,建立共同语言 |
+| 01 | [overview.md](01-overview.md) | 目标、非目标、**威胁模型**、术语表、ADR(29 条) | 先读,建立共同语言 |
 | 02 | [architecture.md](02-architecture.md) | 组件划分、仓库布局、路径与锁边界、pipeline、核心类型 | 动手写代码前 |
 | 03 | [manifest-spec.md](03-manifest-spec.md) | 两级 manifest 字段、两阶段加载、ignore 语义、**路径合法性** | 实现 `internal/manifest` 时 |
 | 04 | [cli-spec.md](04-cli-spec.md) | 全部命令、flag(含 `--adopt`)、退出码、输出格式 | 实现 `internal/cli` 时 |
@@ -29,12 +29,22 @@ CLI 源码与配置内容同仓库存放,通过 GitHub Releases 分发二进制,
 `dot apply` 经「严格解码 → 枚举 → 全量渲染(fail-fast)→ 观测 → 纯决策 → 不变量校验 → 执行」
 产生并执行动作:文件级 symlink 为默认;`.tmpl` 每次渲染(managed),`.template` 仅首次生成
 (scaffold);私有内容以 `*.local` 约定留在本机。安全内核由四件事构成:**创建先于清理**且
-**prune 仅在创建阶段完全收敛后执行**;一切破坏性动作以**所有权谓词**(symlink 按 state 存证的
-`link_dest` 词法比较)为前置;**全部 target mutation 执行前复核 Precond**;崩溃后由收养规则
+**prune 仅在创建阶段完全收敛后执行**;自动破坏性动作以**所有权谓词**(symlink 按 state 存证的
+`link_dest` 词法比较)为前置,强制替换走独立公式(`--force` ∧ 备份成功 ∧ Precond);**全部
+target mutation 执行前复核 Precond**;崩溃后由收养规则
 (symlink 自动、普通文件显式 `--adopt`)自愈。新机器由带校验的 `bootstrap.sh` 完成二进制安装、
 仓库克隆并移交 `dot init`。
 
-## v1.3 修订摘要(相对 v1.2)
+## v1.4 修订摘要(相对 v1.3,冻结修订)
+
+1. **迁移统一分派规则**(05 §3.4):旧证据不成立(或旧 kind 为 scaffold)时,以 **`entry=nil` 进入新 kind 决策表**——旧记录不得提供任何所有权证据,堵住「用户换上的同内容普通文件被 M3a 借旧账自动收养、日后误删」的路径(ADR-21 回归);同一规则自然修正一组边界:rendered→link 遇精确期望链接按 L2 收养、目标缺失按 L1/S3 创建、link→scaffold 缺失时按 S3 生成。
+2. **元数据刷新通则**:决策为 skip 而 entry 的 module/source/link_dest 与现值不符 → Adopt(reason="metadata");覆盖 L3 重链后崩溃的 link_dest 自愈、scaffold 跨模块移动等,M3a 与 L2 成为其特例。
+3. **add 仓库侧预检**:仓库目标已存在(含 `.tmpl`/`.template` 后缀变体)一律拒绝、绝不覆盖(state 丢失时仓库文件是唯一真相);副本 `O_EXCL` 排他创建;rename 换链前按快照复核原文件 hash/mode,失配则中止并保留原文件;多路径输入先全部预检再逐项执行。
+4. **StateOp 三态**(Keep | Upsert | Delete)取代「NextEntry==nil 即删除」:Delete 仅随成功 Prune,Keep 动作(Skip/Conflict/RunHook/deferred)在类型上不可能误删记账。
+5. **类型系统收口**:ObservedKind 增补 `Special`;备份改为**保留原文件 mode**(目录 0700 即保护边界,不再丢可执行位);desired kind(link/managed/scaffold)与 Entry.Kind(symlink/rendered/scaffold)双词汇表强类型化 + 单一映射函数,禁止字符串直比。
+6. **措辞与勘误**:「一切破坏性动作要求 owned」统一为「自动破坏性动作」(README / 05 §3.1 / 05 §7);ADR 计数 26→29;备份路径 RFC3339Nano + 随机后缀同步进 02;M1 补最小 `dot doctor --manifest-only`(CI 自 lint 依赖它)。
+
+## v1.3 修订摘要(相对 v1.2,存档)
 
 1. **kind 迁移规则**(05 §3.4,ADR-27):堵住「`.tmpl → .template` 切换后旧 rendered 记账导致未来 prune 误删用户蓝本」的路径。三原则:所有权只能被证据延续;迁入 scaffold = 释放所有权(metadata-only,永远安全);迁出 scaffold = 等同无记录。owned link → managed 的自动迁移让「`git mv foo foo.tmpl` 模板化既有配置」无感完成。
 2. **Action 补全**:`DesiredKind` 扩展到全部创建/替换动作(BackupReplace 靠它得知备份后建什么);新增 `LinkDest`(planner 侧规范化、executor 逐字写入)与 `NextEntry`(动作成功后才提交的记账,机械保证「迁移只在成功后落账」);`Adopt` 泛化为 state-only 记账动作(补录 / 迁移 / 元数据刷新)。

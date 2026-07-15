@@ -12,7 +12,7 @@
 
 | 范围 | 说明 |
 |---|---|
-| 命令 | `init` `apply` `diff` `status` `add` `version` |
+| 命令 | `init` `apply` `diff` `status` `add` `version`、`doctor --manifest-only`(最小子集:manifest 静态校验 + 路径合法性 + target 唯一性,CI 自 lint 依赖);完整 doctor 随 M2 |
 | 引擎 | 文件级 symlink、**owned() 词法谓词 + link_dest 存证**、conflict 三态(含 L4 改指)、`--force → BackupReplace`(**分型语义 + 排他备份**)、prune(双作用域 + 整模块确认 + **收敛门控/deferred**)、symlink 自动收养、**kind 迁移**(scaffold 相关行)、全局不变量校验、创建先于 prune、**Precond 全量复核**、NextEntry 落账、flock 锁(**单次获取**)、**state 三态 fail-closed** |
 | 模板 | **仅 scaffold**(`.template`),渲染 fail-fast;**managed 相关输入硬错误**:`.tmpl`、`kind="managed"`、`add --template`、`apply --adopt` 在 M1 明确报错,绝不静默按 link 处理(M 表与迁移表 managed 行随 M2 落地) |
 | hooks | run_once 最小实现(字符串形态,指纹 = 单脚本元组编码);`hooks/` 保留目录;不受收敛门控 |

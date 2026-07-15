@@ -51,7 +51,7 @@ dotfiles/                        # 单仓库:CLI 源码 + 配置内容
 | `~/.local/state/dot/` | state 目录 | **0700** | 随 `--home` 联动 |
 | `~/.local/state/dot/state.json` | state 清单 | 0600 | 同上 |
 | `~/.local/state/dot/lock` | 单实例 flock 锁文件(ADR-19) | 0600 | 同上 |
-| `~/.local/state/dot/backup/<RFC3339>/…` | 覆盖前备份 | **目录 0700 / 文件 0600** | 同上 |
+| `~/.local/state/dot/backup/<RFC3339Nano-rand>/…` | 覆盖前备份(`O_EXCL` 排他创建) | **目录 0700 / 文件保留原 mode** | 同上 |
 
 **锁边界**:mutation 命令(`apply` `add` `init` `update`)持锁;`update` 自 `git pull`
 起即持锁(pull 改仓库、planner 读仓库,读写同锁);`diff` / `status` / `doctor` 只读
@@ -138,7 +138,7 @@ internal/
 ```go
 // scan 的输出:target 现势的不可变快照
 type Observed struct {
-    Kind     ObservedKind // Missing | Symlink | RegularFile | Dir
+    Kind     ObservedKind // Missing | Symlink | RegularFile | Dir | Special(fifo/socket/设备)
     LinkDest string       // Kind==Symlink 时,Readlink 原始值(不解析)
     Hash     string       // Kind==RegularFile 且条目需比对时的 sha256
     Mode     fs.FileMode  // Kind==RegularFile 时的权限(mode 漂移检测,ADR-26)
@@ -158,7 +158,9 @@ type Action struct {
     LinkDest    string       // CreateLink/BackupReplace(link):将写入的确切字符串
                              // (planner 侧完成规范化,executor 逐字写入,ADR-22)
     Precond     Observed     // plan 时观测;执行前复核,失配 → 降级 Conflict(ADR-23)
-    NextEntry   *state.Entry // 动作成功后提交的记账;nil = 摘除该 target 条目(Prune)
+    StateOp     StateOp      // Keep | Upsert | Delete:动作成功后对该 target 记账的处置
+                             // Delete 仅随 Prune;Keep 为 Skip/Conflict/RunHook/deferred 缺省
+    NextEntry   *state.Entry // StateOp==Upsert 时要提交的记账
     Deferred    bool         // Prune:因未收敛而延迟,仅展示不执行(ADR-20)
     Fingerprint string       // RunHook:执行成功后写入 state 的指纹
     Reason      string       // 供展示:"source changed"、"mode"、"adopted"、"kind migrated"
@@ -178,8 +180,12 @@ type Entry struct {
 设计要点:**没有 `Error` 动作**——渲染失败在 pipeline ⑥ fail-fast(ADR-24),执行期
 IO 失败由 executor 记录并触发 prune 延迟,不需要在计划里为错误建模。**`Adopt` 泛化为
 state-only 记账动作**:补录、kind 迁移记账(05 号文档 §3.4)、元数据刷新都由它承载,
-不触碰文件系统。**记账经 `NextEntry` 随动作提交**:executor 在动作成功后原样落账、
-失败不落——「迁移只在动作成功后提交」由此机械保证,executor 不需要理解任何记账逻辑。
+不触碰文件系统。**记账经 `StateOp` + `NextEntry` 随动作提交**:Upsert 落账、Delete
+摘除(仅随成功的 Prune)、Keep 不触碰(Skip/Conflict/RunHook/deferred Prune 的缺省)
+——executor 在动作成功后机械执行、失败不动 state,「迁移只在成功后提交」与「绝不误删
+记账」由类型保证。**kind 双词汇表**:desired kind(link | managed | scaffold)描述
+意图,`Entry.Kind`(symlink | rendered | scaffold)描述产物,对应关系 link↔symlink、
+managed↔rendered;实现必须用两个强类型枚举 + 单一映射函数,禁止跨词汇表的字符串直比。
 `BackupReplace` 由 planner 在 `--force` 下直接产出(取代对应 Conflict,DesiredKind
 告知备份后建什么),executor 因此无需理解 force 语义。hook 是 `Kind=RunHook` 的动作,
 携带 Fingerprint,参与统一计划展示,执行恒在最后阶段。中间目录创建(mkdir)不建模为
