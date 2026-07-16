@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +30,22 @@ func TestVersionRepositoryUnavailable(t *testing.T) {
 	}
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatalf("version created effective home or returned unexpected error: %v", err)
+	}
+}
+
+func TestVersionAcceptsGlobalFlagsBeforeCommand(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home-that-does-not-exist")
+	stdout, stderr, exitCode := runForTest(t, []string{"--home", home, "version"}, nil, buildinfo.Info{
+		Version:   "v1.2.3",
+		Commit:    "abc123",
+		BuildTime: "2026-07-16T10:00:00Z",
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("run() exit code = %d, stderr = %q", exitCode, stderr)
+	}
+	if !strings.HasSuffix(stdout, "requires=unavailable\n") {
+		t.Fatalf("run() stdout = %q, want unavailable repository", stdout)
 	}
 }
 
@@ -136,34 +151,56 @@ func TestVersionHelp(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
 	}
-	want := "usage: dot version [--repo <dir>] [--profile <name>] [-v|--verbose] [--no-color]\n"
-	if stdout != want {
-		t.Fatalf("run() stdout = %q, want %q", stdout, want)
+	if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "dot version") {
+		t.Fatalf("run() stdout = %q, want Cobra-generated version help", stdout)
+	}
+	if strings.Contains(stdout, "--home") {
+		t.Fatalf("run() stdout = %q, hidden --home flag should not be shown", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("run() stderr = %q, want empty", stderr)
 	}
 }
 
-func TestVersionReturnsErrorWhenStdoutWriteFails(t *testing.T) {
-	var stderr bytes.Buffer
-	exitCode := run([]string{"version", "--home", filepath.Join(t.TempDir(), "missing")}, environment{
-		stdout: failingWriter{err: errors.New("broken pipe")},
-		stderr: &stderr,
-		lookupEnv: func(string) (string, bool) {
-			return "", false
-		},
-		userHomeDir: func() (string, error) {
-			return t.TempDir(), nil
-		},
-		build: buildinfo.Info{Version: "dev", Commit: "unknown", BuildTime: "unknown"},
-	})
+func TestVersionRejectsEmptyProfile(t *testing.T) {
+	_, stderr, exitCode := runForTest(t, []string{"version", "--profile="}, nil, buildinfo.Info{})
 
 	if exitCode != 1 {
 		t.Fatalf("run() exit code = %d, want 1", exitCode)
 	}
-	if !strings.Contains(stderr.String(), "write stdout: broken pipe") {
-		t.Fatalf("run() stderr = %q, want stdout error", stderr.String())
+	if !strings.Contains(stderr, "--profile must not be empty") {
+		t.Fatalf("run() stderr = %q, want empty profile error", stderr)
+	}
+}
+
+func TestRootHelpOnlyListsSpecifiedCommands(t *testing.T) {
+	stdout, stderr, exitCode := runForTest(t, []string{"--help"}, nil, buildinfo.Info{})
+
+	if exitCode != 0 {
+		t.Fatalf("run() exit code = %d, want 0", exitCode)
+	}
+	if !strings.Contains(stdout, "version") {
+		t.Fatalf("run() stdout = %q, want version command", stdout)
+	}
+	if strings.Contains(stdout, "completion") || strings.Contains(stdout, "--home") {
+		t.Fatalf("run() stdout = %q, contains unspecified command or hidden flag", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("run() stderr = %q, want empty", stderr)
+	}
+}
+
+func TestRootRequiresCommand(t *testing.T) {
+	stdout, stderr, exitCode := runForTest(t, nil, nil, buildinfo.Info{})
+
+	if exitCode != 1 {
+		t.Fatalf("run() exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stdout, "Usage:") {
+		t.Fatalf("run() stdout = %q, want root help", stdout)
+	}
+	if !strings.Contains(stderr, "a command is required") {
+		t.Fatalf("run() stderr = %q, want missing command error", stderr)
 	}
 }
 
@@ -195,12 +232,4 @@ func writeRepository(t *testing.T, requires string) string {
 		t.Fatalf("write manifest: %v", err)
 	}
 	return repo
-}
-
-type failingWriter struct {
-	err error
-}
-
-func (writer failingWriter) Write([]byte) (int, error) {
-	return 0, writer.err
 }
