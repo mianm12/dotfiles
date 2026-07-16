@@ -26,13 +26,17 @@ func Load(path string) (Machine, bool, error) {
 		}
 		return Machine{}, false, fmt.Errorf("open machine config %q: %w", path, err)
 	}
-	defer file.Close()
 
 	var machine Machine
 	decoder := toml.NewDecoder(file)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&machine); err != nil {
-		return Machine{}, false, fmt.Errorf("decode machine config %q: %w", path, err)
+	decodeErr := decoder.Decode(&machine)
+	closeErr := file.Close()
+	if decodeErr != nil {
+		return Machine{}, false, fmt.Errorf("decode machine config %q: %w", path, decodeErr)
+	}
+	if closeErr != nil {
+		return Machine{}, false, fmt.Errorf("close machine config %q after reading: %w", path, closeErr)
 	}
 	if machine.Profile == "" {
 		return Machine{}, false, fmt.Errorf("machine config %q: profile must be a non-empty string", path)

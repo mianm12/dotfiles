@@ -44,13 +44,17 @@ func ReadRequirement(repo string) (Requirement, error) {
 	if err != nil {
 		return Requirement{}, fmt.Errorf("open manifest %q: %w", manifestPath, err)
 	}
-	defer file.Close()
 
 	var document struct {
 		Requires *string `toml:"requires"`
 	}
-	if err := toml.NewDecoder(file).Decode(&document); err != nil {
-		return Requirement{}, fmt.Errorf("decode manifest %q for requires: %w", manifestPath, err)
+	decodeErr := toml.NewDecoder(file).Decode(&document)
+	closeErr := file.Close()
+	if decodeErr != nil {
+		return Requirement{}, fmt.Errorf("decode manifest %q for requires: %w", manifestPath, decodeErr)
+	}
+	if closeErr != nil {
+		return Requirement{}, fmt.Errorf("close manifest %q after reading: %w", manifestPath, closeErr)
 	}
 	if document.Requires == nil {
 		return Requirement{}, fmt.Errorf("manifest %q: required top-level requires is missing", manifestPath)

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +145,28 @@ func TestVersionHelp(t *testing.T) {
 	}
 }
 
+func TestVersionReturnsErrorWhenStdoutWriteFails(t *testing.T) {
+	var stderr bytes.Buffer
+	exitCode := run([]string{"version", "--home", filepath.Join(t.TempDir(), "missing")}, environment{
+		stdout: failingWriter{err: errors.New("broken pipe")},
+		stderr: &stderr,
+		lookupEnv: func(string) (string, bool) {
+			return "", false
+		},
+		userHomeDir: func() (string, error) {
+			return t.TempDir(), nil
+		},
+		build: buildinfo.Info{Version: "dev", Commit: "unknown", BuildTime: "unknown"},
+	})
+
+	if exitCode != 1 {
+		t.Fatalf("run() exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "write stdout: broken pipe") {
+		t.Fatalf("run() stderr = %q, want stdout error", stderr.String())
+	}
+}
+
 func runForTest(t *testing.T, args []string, variables map[string]string, build buildinfo.Info) (string, string, int) {
 	t.Helper()
 	var stdout bytes.Buffer
@@ -172,4 +195,12 @@ func writeRepository(t *testing.T, requires string) string {
 		t.Fatalf("write manifest: %v", err)
 	}
 	return repo
+}
+
+type failingWriter struct {
+	err error
+}
+
+func (writer failingWriter) Write([]byte) (int, error) {
+	return 0, writer.err
 }

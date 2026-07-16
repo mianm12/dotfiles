@@ -21,6 +21,48 @@ type environment struct {
 	build       buildinfo.Info
 }
 
+type outputWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (output *outputWriter) printf(format string, arguments ...any) {
+	if output.err != nil {
+		return
+	}
+	_, output.err = fmt.Fprintf(output.writer, format, arguments...)
+}
+
+func (output *outputWriter) println(arguments ...any) {
+	if output.err != nil {
+		return
+	}
+	_, output.err = fmt.Fprintln(output.writer, arguments...)
+}
+
+type commandOutput struct {
+	stdout outputWriter
+	stderr outputWriter
+}
+
+func newCommandOutput(stdout, stderr io.Writer) *commandOutput {
+	return &commandOutput{
+		stdout: outputWriter{writer: stdout},
+		stderr: outputWriter{writer: stderr},
+	}
+}
+
+func (output *commandOutput) exitCode(code int) int {
+	if output.stdout.err != nil {
+		output.stderr.printf("error: write stdout: %v\n", output.stdout.err)
+		return 1
+	}
+	if output.stderr.err != nil {
+		return 1
+	}
+	return code
+}
+
 type versionOptions struct {
 	home       string
 	homeSet    bool
@@ -42,30 +84,31 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 func run(args []string, env environment) int {
+	output := newCommandOutput(env.stdout, env.stderr)
 	if len(args) == 0 {
-		writeUsage(env.stderr)
-		return 1
+		writeUsage(&output.stderr)
+		return output.exitCode(1)
 	}
 
 	switch args[0] {
 	case "version":
-		options, help, err := parseVersionOptions(args[1:], env.stdout)
+		options, help, err := parseVersionOptions(args[1:], &output.stdout)
 		if help {
-			return 0
+			return output.exitCode(0)
 		}
 		if err != nil {
-			fmt.Fprintf(env.stderr, "error: %v\n", err)
-			return 1
+			output.stderr.printf("error: %v\n", err)
+			return output.exitCode(1)
 		}
-		return runVersion(options, env)
+		return runVersion(options, env, output)
 	default:
-		fmt.Fprintf(env.stderr, "error: unknown command %q\n", args[0])
-		writeUsage(env.stderr)
-		return 1
+		output.stderr.printf("error: unknown command %q\n", args[0])
+		writeUsage(&output.stderr)
+		return output.exitCode(1)
 	}
 }
 
-func parseVersionOptions(args []string, output io.Writer) (versionOptions, bool, error) {
+func parseVersionOptions(args []string, output *outputWriter) (versionOptions, bool, error) {
 	var options versionOptions
 	var verbose bool
 	var noColor bool
@@ -106,73 +149,73 @@ func parseVersionOptions(args []string, output io.Writer) (versionOptions, bool,
 	return options, false, nil
 }
 
-func runVersion(options versionOptions, env environment) int {
-	fmt.Fprintf(env.stdout, "version=%s\n", env.build.Version)
-	fmt.Fprintf(env.stdout, "commit=%s\n", env.build.Commit)
-	fmt.Fprintf(env.stdout, "build_time=%s\n", env.build.BuildTime)
+func runVersion(options versionOptions, env environment, output *commandOutput) int {
+	output.stdout.printf("version=%s\n", env.build.Version)
+	output.stdout.printf("commit=%s\n", env.build.Commit)
+	output.stdout.printf("build_time=%s\n", env.build.BuildTime)
 
 	home, err := paths.EffectiveHome(options.home, options.homeSet, env.userHomeDir)
 	if err != nil {
-		return reportVersionError(env, err)
+		return reportVersionError(output, err)
 	}
 	configPath, err := paths.Config(home, env.lookupEnv)
 	if err != nil {
-		return reportVersionError(env, err)
+		return reportVersionError(output, err)
 	}
 	machine, exists, err := config.Load(configPath)
 	if err != nil {
-		return reportVersionError(env, err)
+		return reportVersionError(output, err)
 	}
 	if exists && machine.Repo != nil {
 		if _, err := paths.ResolveControlPath(*machine.Repo, home); err != nil {
-			return reportVersionError(env, fmt.Errorf("machine config repo: %w", err))
+			return reportVersionError(output, fmt.Errorf("machine config repo: %w", err))
 		}
 	}
 
 	repo, err := paths.Repository(home, options.repo, options.repoSet, env.lookupEnv, machine.Repo)
 	if err != nil {
-		return reportVersionError(env, err)
+		return reportVersionError(output, err)
 	}
 	requirement, err := manifest.ReadRequirement(repo)
 	if errors.Is(err, manifest.ErrRepositoryUnavailable) {
-		fmt.Fprintln(env.stdout, "requires=unavailable")
-		return 0
+		output.stdout.println("requires=unavailable")
+		return output.exitCode(0)
 	}
 	if err != nil {
-		return reportVersionError(env, err)
+		return reportVersionError(output, err)
 	}
 
-	fmt.Fprintf(env.stdout, "requires=%s\n", requirement.Raw)
+	output.stdout.printf("requires=%s\n", requirement.Raw)
 	satisfied, development, err := manifest.Satisfies(env.build.Version, requirement)
 	if err != nil {
-		fmt.Fprintln(env.stdout, "satisfied=error")
-		fmt.Fprintf(env.stderr, "error: %v\n", err)
-		return 1
+		output.stdout.println("satisfied=error")
+		output.stderr.printf("error: %v\n", err)
+		return output.exitCode(1)
 	}
-	fmt.Fprintf(env.stdout, "satisfied=%t\n", satisfied)
+	output.stdout.printf("satisfied=%t\n", satisfied)
 	if development {
-		fmt.Fprintln(env.stdout, "compatibility=development-build")
-		fmt.Fprintln(env.stderr, "warning: development build skipped the requires version comparison")
-		return 0
+		output.stdout.println("compatibility=development-build")
+		output.stderr.println("warning: development build skipped the requires version comparison")
+		return output.exitCode(0)
 	}
 	if !satisfied {
-		fmt.Fprintf(env.stderr, "error: CLI %s does not satisfy %s; run dot self-update\n", env.build.Version, requirement.Raw)
-		return 1
+		output.stderr.printf("error: CLI %s does not satisfy %s; run dot self-update\n", env.build.Version, requirement.Raw)
+		return output.exitCode(1)
 	}
-	return 0
+	return output.exitCode(0)
 }
 
-func reportVersionError(env environment, err error) int {
-	fmt.Fprintln(env.stdout, "requires=error")
-	fmt.Fprintf(env.stderr, "error: %v\n", err)
-	return 1
+func reportVersionError(output *commandOutput, err error) int {
+	output.stdout.println("requires=error")
+	output.stderr.printf("error: %v\n", err)
+	return output.exitCode(1)
 }
 
-func writeUsage(output io.Writer) {
-	fmt.Fprintln(output, "usage: dot <command> [flags] [args]")
-	fmt.Fprintln(output, "commands: version")
+func writeUsage(output *outputWriter) {
+	output.println("usage: dot <command> [flags] [args]")
+	output.println("commands: version")
 }
 
-func writeVersionUsage(output io.Writer) {
-	fmt.Fprintln(output, "usage: dot version [--repo <dir>] [--profile <name>] [-v|--verbose] [--no-color]")
+func writeVersionUsage(output *outputWriter) {
+	output.println("usage: dot version [--repo <dir>] [--profile <name>] [-v|--verbose] [--no-color]")
 }
