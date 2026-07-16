@@ -1,3 +1,4 @@
+// Package paths 根据 flag、环境变量和机器配置解析 dot 的 control-plane 路径。
 package paths
 
 import (
@@ -6,13 +7,13 @@ import (
 	"strings"
 )
 
-// ConfigEnvironment and RepoEnvironment name the supported path override variables.
+// ConfigEnvironment 和 RepoEnvironment 是支持覆盖 control-plane 路径的环境变量名。
 const (
 	ConfigEnvironment = "DOT_CONFIG"
 	RepoEnvironment   = "DOT_REPO"
 )
 
-// EffectiveHome resolves the home used by all dot paths.
+// EffectiveHome 解析所有 dot 路径共同使用的 HOME；无论来源，结果都必须是非空绝对路径。
 func EffectiveHome(override string, overrideSet bool, userHomeDir func() (string, error)) (string, error) {
 	if overrideSet {
 		if override == "" || !filepath.IsAbs(override) {
@@ -31,7 +32,8 @@ func EffectiveHome(override string, overrideSet bool, userHomeDir func() (string
 	return filepath.Clean(home), nil
 }
 
-// ResolveControlPath resolves one user-provided control-plane path.
+// ResolveControlPath 将用户提供的 control-plane 路径解析为绝对路径。
+// 仅接受绝对路径、~ 或 ~/ 前缀。
 func ResolveControlPath(value, home string) (string, error) {
 	if value == "" {
 		return "", fmt.Errorf("path must not be empty")
@@ -51,7 +53,7 @@ func ResolveControlPath(value, home string) (string, error) {
 	}
 }
 
-// Config returns the effective machine configuration path.
+// Config 返回生效的机器配置路径，DOT_CONFIG 优先于默认路径。
 func Config(home string, lookupEnv func(string) (string, bool)) (string, error) {
 	if value, ok := lookupEnv(ConfigEnvironment); ok {
 		path, err := ResolveControlPath(value, home)
@@ -63,7 +65,7 @@ func Config(home string, lookupEnv func(string) (string, bool)) (string, error) 
 	return filepath.Join(home, ".config", "dot", "config.toml"), nil
 }
 
-// Repository returns the effective repository path using the documented priority order.
+// Repository 按 --repo、DOT_REPO、机器配置、默认值的顺序返回生效仓库路径。
 func Repository(
 	home string,
 	flagValue string,

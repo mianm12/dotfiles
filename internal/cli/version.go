@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// versionOptions 同时保留值和 flag 是否显式出现，以区分“未提供”与“显式空值”。
 type versionOptions struct {
 	home    string
 	homeSet bool
@@ -34,6 +35,7 @@ func newVersionCommand(env environment, global *globalOptions) *cobra.Command {
 }
 
 func runVersion(command *cobra.Command, options versionOptions, env environment) error {
+	// 先输出构建信息，使后续配置或 compatibility 检查失败时仍能识别当前二进制。
 	command.Printf("version=%s\n", env.build.Version)
 	command.Printf("commit=%s\n", env.build.Commit)
 	command.Printf("build_time=%s\n", env.build.BuildTime)
@@ -50,6 +52,7 @@ func runVersion(command *cobra.Command, options versionOptions, env environment)
 	if err != nil {
 		return reportVersionError(command, err)
 	}
+	// 即使 --repo 或 DOT_REPO 会覆盖 machine.Repo，也先验证持久化值，避免损坏配置被静默掩盖。
 	if exists && machine.Repo != nil {
 		if _, err := paths.ResolveControlPath(*machine.Repo, home); err != nil {
 			return reportVersionError(command, fmt.Errorf("machine config repo: %w", err))
@@ -62,6 +65,7 @@ func runVersion(command *cobra.Command, options versionOptions, env environment)
 	}
 	requirement, err := manifest.ReadRequirement(repo)
 	if errors.Is(err, manifest.ErrRepositoryUnavailable) {
+		// 尚未安装仓库时仍允许 version 成功，并明确报告 requires 不可用。
 		command.Println("requires=unavailable")
 		return nil
 	}

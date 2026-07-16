@@ -1,3 +1,4 @@
+// Package cli 使用 Cobra 组装 dot 命令，并将执行结果映射为进程退出码。
 package cli
 
 import (
@@ -10,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// environment 集中保存 CLI 的外部依赖，便于测试替换 I/O、环境变量、HOME 和构建元数据。
 type environment struct {
 	stdout      io.Writer
 	stderr      io.Writer
@@ -26,7 +28,7 @@ type globalOptions struct {
 	noColor bool
 }
 
-// Run executes dot and returns its process exit code.
+// Run 执行 dot 并返回进程退出码。
 func Run(args []string, stdout, stderr io.Writer) int {
 	return run(args, environment{
 		stdout:      stdout,
@@ -56,6 +58,7 @@ func run(args []string, env environment) int {
 
 func newRootCommand(env environment) (*cobra.Command, error) {
 	var options globalOptions
+	// 禁用 Cobra 自动错误和 usage 输出，由命令与 run 按统一格式处理。
 	root := &cobra.Command{
 		Use:           "dot",
 		Short:         "Manage a personal dotfiles repository",
@@ -74,6 +77,7 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 			return nil
 		},
 	}
+	// completion 尚未进入公开命令规范，因此禁用 Cobra 自动生成的子命令。
 	root.CompletionOptions.DisableDefaultCmd = true
 
 	flags := root.PersistentFlags()
@@ -82,6 +86,7 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 	flags.StringVar(&options.profile, "profile", "", "override the configured profile")
 	flags.BoolVarP(&options.verbose, "verbose", "v", false, "enable verbose output")
 	flags.BoolVar(&options.noColor, "no-color", false, "disable colored output")
+	// --home 是测试专用的隔离入口，不在常规帮助中展示。
 	if err := flags.MarkHidden("home"); err != nil {
 		return nil, err
 	}

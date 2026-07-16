@@ -1,3 +1,4 @@
+// Package main 提供 dot CLI 的进程入口。
 package main
 
 import (

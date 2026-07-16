@@ -1,3 +1,4 @@
+// Package manifest 负责仓库 manifest 的 requires 预读与版本兼容性校验。
 package manifest
 
 import (
@@ -12,21 +13,23 @@ import (
 )
 
 var (
-	// ErrRepositoryUnavailable means the configured repository has not been installed.
+	// ErrRepositoryUnavailable 表示配置的仓库尚未安装。
 	ErrRepositoryUnavailable = errors.New("repository unavailable")
 	requirementPattern       = regexp.MustCompile(`^>=([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 	releasePattern           = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 )
 
-// Requirement is a validated minimum CLI version constraint.
+// Requirement 表示已校验的最低 CLI 版本约束。
 type Requirement struct {
+	// Raw 保留用户声明的原始约束，用于稳定输出和错误信息。
 	Raw     string
 	minimum numericVersion
 }
 
+// numericVersion 以规范化的十进制字符串保存三段版本，避免整数转换溢出。
 type numericVersion [3]string
 
-// ReadRequirement performs the permissive top-level requires pre-read.
+// ReadRequirement 对顶层 requires 做宽松预读，不执行完整 manifest 校验。
 func ReadRequirement(repo string) (Requirement, error) {
 	info, err := os.Stat(repo)
 	if err != nil {
@@ -45,9 +48,11 @@ func ReadRequirement(repo string) (Requirement, error) {
 		return Requirement{}, fmt.Errorf("open manifest %q: %w", manifestPath, err)
 	}
 
+	// version 命令只依赖 requires；其他字段留给完整 manifest loader 校验。
 	var document struct {
 		Requires *string `toml:"requires"`
 	}
+	// 不使用 defer，以便报告 Close 错误；Decode 与 Close 均失败时优先返回 Decode 错误。
 	decodeErr := toml.NewDecoder(file).Decode(&document)
 	closeErr := file.Close()
 	if decodeErr != nil {
@@ -63,7 +68,7 @@ func ReadRequirement(repo string) (Requirement, error) {
 	return ParseRequirement(*document.Requires)
 }
 
-// ParseRequirement validates the only supported constraint syntax.
+// ParseRequirement 校验当前唯一支持的 >=MAJOR.MINOR.PATCH 约束语法。
 func ParseRequirement(raw string) (Requirement, error) {
 	match := requirementPattern.FindStringSubmatch(raw)
 	if match == nil {
@@ -75,7 +80,7 @@ func ParseRequirement(raw string) (Requirement, error) {
 	}, nil
 }
 
-// Satisfies reports compatibility. Development builds skip only the version comparison.
+// Satisfies 判断 CLI 是否满足 requirement；dev 构建只跳过版本大小比较。
 func Satisfies(cliVersion string, requirement Requirement) (satisfied, development bool, err error) {
 	if cliVersion == "dev" {
 		return true, true, nil
@@ -97,6 +102,7 @@ func normalize(component string) string {
 	return component
 }
 
+// compare 先比较位数再按字典序比较，使规范化十进制字符串保持任意精度整数的顺序。
 func compare(left, right numericVersion) int {
 	for index := range left {
 		if len(left[index]) < len(right[index]) {
