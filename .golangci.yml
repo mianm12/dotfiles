@@ -1,18 +1,31 @@
 version: "2"
 
 linters:
-  default: none
+  default: standard # 默认启用的 linters 集合
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
+    - errorlint # 检查错误包装、比较和类型断言
+    - misspell # 拼写错误
+    - nilerr # 检查错误分支误返回 nil
+    - nilnesserr # 检查错误分支误返回已知为 nil 的错误值
+    - nolintlint # 约束 nolint 指令的写法
+    - revive # 风格检查，golint 的继任者
+  settings:
+    revive:
+      rules:
+        - name: exported # 强制导出的标识符写文档注释
+    nolintlint:
+      require-explanation: true # nolint 必须说明原因
+      require-specific: true # nolint 必须指定被抑制的 linter
 
 formatters:
   enable:
-    - gofmt
+    - gofumpt # 比 gofmt 更严格的格式化
+    - goimports # 整理 import 分组
 
 issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
+  max-issues-per-linter: 0 # 不限制单个 linter 的问题数量
+  max-same-issues: 0 # 不限制相同问题的报告数量
+
+run:
+  timeout: 5m # 防止 lint 异常长时间运行
+  modules-download-mode: readonly # 禁止 lint 修改模块文件

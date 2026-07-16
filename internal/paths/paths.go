@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// ConfigEnvironment and RepoEnvironment name the supported path override variables.
 const (
 	ConfigEnvironment = "DOT_CONFIG"
 	RepoEnvironment   = "DOT_REPO"
