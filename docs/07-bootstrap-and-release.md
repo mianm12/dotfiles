@@ -9,54 +9,29 @@
 
 ## 2. bootstrap.sh
 
-职责严格限定三步,可通过
-`curl -fsSL https://raw.githubusercontent.com/<user>/dotfiles/main/bootstrap.sh | sh` 执行。
-**下载必经 checksum 校验,安装必须原子**(临时目录验完、经 bin 目录内同目录 rename 入位):
+职责严格限定为“安装受校验的 CLI → 准备仓库 → 移交 init”,并支持通过
+`curl -fsSL https://raw.githubusercontent.com/<user>/dotfiles/main/bootstrap.sh | sh` 调用。
+脚本本身是实现文件,本文不复制其源码;它必须满足:
 
-```sh
-#!/bin/sh
-set -eu
-REPO="you/dotfiles"
-BIN_DIR="$HOME/.local/bin"
-REPO_DIR="${DOT_REPO:-$HOME/.local/share/dot/repo}"
-BASE="https://github.com/$REPO/releases/latest/download"
+1. 只接受明确支持的 GOOS/GOARCH,无法映射时在下载前报错。
+2. 下载目标资产与发布的 checksums,精确选择对应条目并在解包、安装前完成校验;
+   缺少条目、校验工具或校验失败都必须停止。
+3. 下载、解包和验证发生在临时位置;新二进制完整可用后才在安装目录原子替换旧版本。
+   任一步失败不得破坏已安装的可用二进制。
+4. 仓库目录不存在时 clone;已存在且是 git 仓库时复用;已存在但不是预期 git 仓库时
+   明确失败,不得覆盖目录内容。
+5. 成功后调用 `dot init` 并透传其结果,由 CLI 接管 profile、机器配置和 apply。
 
-# 1. 探测平台,下载 + 校验 + 原子安装二进制
-os=$(uname -s | tr '[:upper:]' '[:lower:]')          # darwin | linux
-arch=$(uname -m); [ "$arch" = x86_64 ] && arch=amd64; [ "$arch" = aarch64 ] && arch=arm64
-asset="dot_${os}_${arch}.tar.gz"
-
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-curl -fsSL -o "$tmp/$asset"         "$BASE/$asset"
-curl -fsSL -o "$tmp/checksums.txt"  "$BASE/checksums.txt"
-( cd "$tmp"
-  if command -v sha256sum >/dev/null 2>&1; then
-    grep " $asset\$" checksums.txt | sha256sum -c -
-  else
-    grep " $asset\$" checksums.txt | shasum -a 256 -c -
-  fi )
-tar -xzf "$tmp/$asset" -C "$tmp" dot
-mkdir -p "$BIN_DIR"
-install -m 0755 "$tmp/dot" "$BIN_DIR/.dot.new"   # 先落同目录临时名
-mv -f "$BIN_DIR/.dot.new" "$BIN_DIR/dot"          # 同目录 rename,原子入位
-
-# 2. 克隆配置仓库(已存在则跳过)
-[ -d "$REPO_DIR/.git" ] || git clone "https://github.com/$REPO.git" "$REPO_DIR"
-
-# 3. 移交 CLI
-exec "$BIN_DIR/dot" init
-```
-
-明确不做的事:不从源码编译(裸机无 Go 工具链,这正是发 Release 的原因)、不装
-Homebrew/软件(那是 `macos` 模块 `hooks/setup.sh` 的职责)、不改 shell rc(PATH 提示由
-`dot doctor` 给出)。硬依赖仅 `curl` + `git` + `tar` + `shasum|sha256sum`。
+脚本不得从源码编译、安装 Homebrew/软件或修改 shell rc。运行前应检查并准确报告缺失依赖;
+基线依赖为 POSIX `sh`、`curl`、`git`、`tar`、可用的 SHA-256 校验工具及常规 POSIX
+文件工具。是否使用 `install` 等便利命令由实现决定,不得成为未声明的隐式依赖。
 
 ## 3. 版本策略
 
-- CLI 版本:semver `vMAJOR.MINOR.PATCH` git tag;`goreleaser` 于 tag push 时交叉编译
-  `darwin/arm64`、`darwin/amd64`、`linux/amd64`、`linux/arm64`,产出 tar.gz +
-  `checksums.txt`。版本号经 `-ldflags "-X main.version=…"` 注入。
-- **本地开发构建**(`go run` / 未注入 ldflags)version 为 `dev`:requires 检查放行 +
+- CLI 版本:semver `vMAJOR.MINOR.PATCH` git tag;tag 发布必须提供
+  `darwin/arm64`、`darwin/amd64`、`linux/amd64`、`linux/arm64` 的 tar.gz 资产与
+  `checksums.txt`,并让二进制报告对应版本和构建元数据。具体发布工具不属于规范。
+- **本地开发构建**(没有发布版本元数据)version 为 `dev`:requires 检查放行 +
   打印警告。
 - 配置「版本」即 git commit,无独立编号。
 - `requires`(顶层 manifest):声明**本套配置需要的最低 CLI 版本**,仅 `>=x.y.z` 语法
@@ -69,8 +44,8 @@ Homebrew/软件(那是 `macos` 模块 `hooks/setup.sh` 的职责)、不改 shell
 |---|---|
 | 新 CLI + 旧配置 | 必须可用(manifest 向后兼容原则,03 号文档 §8) |
 | 旧 CLI + 新配置,requires 满足且无未知键 | 正常工作 |
-| 旧 CLI + 新配置,requires 不满足 | pipeline 第②步(宽松预读)即拒绝,提示 `dot self-update`;`self-update`、`git`、`version`、`doctor` 不受拦截 |
-| 旧 CLI + 新配置,**requires 忘记提升**但含未知字段 | 严格解码(第③步)拒绝 mutation 命令——失效安全的第二道防线;`doctor` 宽松模式可诊断 |
+| 旧 CLI + 新配置,requires 不满足 | pipeline 第②步(宽松预读)即拒绝,提示 `dot self-update`;`self-update`、`git`、`version`、`doctor` 不受拦截。若由 update 拉入,仓库不自动回滚(ADR-34) |
+| 旧 CLI + 新配置,**requires 忘记提升**但含未知字段 | 严格解码(第③步)拒绝 mutation 命令——失效安全的第二道防线;`doctor` 宽松模式可诊断;update 已完成的 pull 不回滚 |
 | **回滚二进制后 state 版本过新** | mutation 命令 fail closed(ADR-25,05 号文档 §2);提示升级 CLI 或手动处理 state |
 | 本地开发构建(version=dev) | requires 放行 + 警告 |
 
@@ -87,23 +62,28 @@ Homebrew/软件(那是 `macos` 模块 `hooks/setup.sh` 的职责)、不改 shell
 | 只改 CLI | push 代码,打 tag 发 Release | `dot self-update`(配置无需动) |
 | 都改且配置依赖新 CLI | 同一 PR:代码 + 配置 + 提升 requires;先发 Release 再 push main | `dot update` 被 requires 拦下 → `dot self-update` → 再 `dot update` |
 
-`dot update` 细节:**自持锁起序贯执行**——取锁 → **洁净检查**(`git status
---porcelain` 必须完全为空,含未跟踪文件;`--ff-only` 遇到不冲突的本地修改仍会成功,
-随后 apply 会读到新旧混合的仓库,故必须前置硬检查;非空报错提示走 `dot git`)→
-`git pull --ff-only`(分叉即报错)→ requires 检查 → apply(复用锁)。顺序不可变。
-拉取到的新 hook 不做单独确认(01 §4 威胁模型出界);想审查:`dot update --no-apply`
-→ `dot diff`(run-hook 动作可见)→ 手动 `dot apply`。
-`dot self-update` 细节:GitHub API 查 latest → 比对自身版本 → 下载 + `checksums.txt`
-校验 → 同目录临时文件 → rename 覆盖自身(POSIX 下替换运行中二进制安全)。
+`dot update` 细节:**自持锁起序贯执行**——取锁 → **洁净检查**(working tree 与 index
+必须完全为空,含未跟踪文件;`--ff-only` 遇到不冲突的本地内容仍可能成功,随后 apply
+会读到新旧混合的仓库,故必须前置硬检查;非空报错提示走 `dot git`)→
+记录旧 commit → `git pull --ff-only`(分叉即报错)→ requires 检查 → apply(复用锁)。
+顺序不可变。更新是原地 fast-forward:link 内容会随 pull 立即变化,失败时仓库不自动回滚,
+必须报告新旧 commit 与人工恢复指引(ADR-34)。`--no-apply` 在 pull 后停止,不进入后续
+requires/apply/hooks,也不是 link 内容的隔离预览;它仍可配合 `dot diff` 审查尚未执行的
+动作。拉取到的新 hook 不做单独确认
+(01 §4 威胁模型出界)。
+`dot self-update` 必须解析 latest 或用户指定版本,在安装前完成资产校验,且只以原子替换
+交接完整的新二进制;失败时旧二进制保持可用。下载、暂存和替换机制由实现决定。
 
 ## 6. git 透传
 
-`dot git <args...>` = `git -C <repo-dir> <args...>` 的直接 exec(继承 stdio,退出码
-透传)。不包装任何语义。唯一增强:仓库目录不存在时给出走 bootstrap 的提示。
+`dot git <args...>` 先取得与 mutation 共用的锁,再执行 `git -C <repo-dir> <args...>`;
+不解析子命令或 alias,继承 stdio,Git 启动后透传其退出码。锁获取等 dot 自身错误仍使用
+统一退出码 1。仓库目录不存在时给出走 bootstrap 的提示。直接调用外部 Git 不受锁保护,
+mutation 期间并发修改仓库属于 01 号文档 §4 的已接受第三方竞态。
 
 ## 7. 仓库公开性与安全边界
 
-仓库可以公开:配置本身无密级,私密内容由 `*.local` 四道纵深(06 号文档 §2,ADR-32)
+仓库可以公开:配置本身无密级,私密内容由 `*.local` 多层纵深(06 号文档 §2,ADR-32)
 压低误入库风险,敏感落地面(机器配置 0600、state/backup 目录 0700)已收紧权限。
 设计上**不把「私有仓库」当作任何安全边界**。bootstrap 与 self-update 均经 checksums
 校验(防传输损坏);签名验证(cosign/minisign)属于供应链防御,已在威胁模型出界侧,

@@ -4,10 +4,6 @@
 
 ```
 dotfiles/                        # 单仓库:CLI 源码 + 配置内容
-├── go.mod
-├── cmd/
-│   └── dot/main.go              # 薄入口:os.Exit(cli.Execute(...))
-├── internal/                    # 见 §5
 ├── bootstrap.sh                 # 带校验的引导脚本,见 07 号文档
 ├── dot.toml                     # 顶层 manifest,见 03 号文档
 ├── docs/                        # 本设计文档集
@@ -35,6 +31,8 @@ dotfiles/                        # 单仓库:CLI 源码 + 配置内容
             └── Brewfile         # 由 setup.sh 消费;经 watch 参与指纹 [M2]
 ```
 
+CLI 源码也位于此仓库,但其目录与内部包划分不属于配置仓库契约。
+
 两条目录约定:**模块目录内部即 target 相对路径**——`modules/zsh/.config/zsh/.zshrc` 在
 `target = "~"` 下落地为 `~/.config/zsh/.zshrc`;**模块顶层 `hooks/` 是保留目录**——存放
 脚本与其数据文件,内置忽略,绝不被链接。Brewfile 放模块内而非仓库根,维持「模块自包含」。
@@ -50,24 +48,33 @@ dotfiles/                        # 单仓库:CLI 源码 + 配置内容
 | `~/.config/dot/config.toml` | 机器配置(不入库) | **0600** | `DOT_CONFIG` |
 | `~/.local/state/dot/` | state 目录 | **0700** | 随 `--home` 联动 |
 | `~/.local/state/dot/state.json` | state 清单 | 0600 | 同上 |
-| `~/.local/state/dot/lock` | 单实例 flock 锁文件(ADR-19) | 0600 | 同上 |
-| `~/.local/state/dot/backup/<RFC3339Nano-rand>/…` | 覆盖前备份(`O_EXCL` 排他创建) | **目录 0700 / 文件保留原 mode** | 同上 |
+| `~/.local/state/dot/lock` | 单实例锁文件(ADR-19) | 0600 | 同上 |
+| `~/.local/state/dot/backup/<RFC3339Nano-rand>/…` | 覆盖前备份(新路径不得覆盖既有备份) | **目录 0700 / 文件保留原 mode** | 同上 |
 
 **锁边界**:mutation 命令(`apply` `add` `init` `update`,以及 [M2] 的
-`state rebuild`、`edit`)持锁;`update` 自 `git pull` 起即持锁(pull 改仓库、planner
-读仓库,读写同锁);`diff` / `status` / `doctor` 只读**不取锁**——state 经原子 rename
-写入,只读方看到的永远是完整的旧版或新版,无撕裂。**锁不可重入,进程内只获取一次**:
-cli 层顶层命令取锁,内部编排(init/update 调 apply)调用假定已持锁的 `applyLocked()`,
-引擎入口自身不取锁——flock 对同进程的新 fd 会阻塞,双重获取即实现级自锁。
+`state rebuild`、`edit`)与全部 `dot git` 调用持锁;`update` 在仓库洁净检查前取锁,
+覆盖随后 pull 与 apply;
+`diff` / `status` / `doctor` 只读**不取锁**——state 经原子替换写入,只读方看到的
+永远是完整的旧版或新版,无撕裂。一次 mutation 的完整周期必须处于同一锁所有权下;
+update → apply 等嵌套流程必须复用该所有权且不能自锁。锁原语和函数边界由实现决定。
 
-优先级:命令行 flag > 环境变量 > 机器配置 > 内置默认。全部路径解析收敛在
-`internal/paths` 一处,并支持隐藏全局 flag `--home <dir>` 将 `~` 与上表全部路径整体重定向
-——这是集成测试的地基(08 号文档)。`paths` 同时是 **hook 子进程环境的唯一来源**:executor
-启动 hook 时由 `paths` 提供 `HOME`、`XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_DATA_HOME`
-覆盖注入,生产与测试走同一条代码路径。生产代码不允许绕过 `paths` 直接展开 `~`;`paths`
-额外提供 `Display(abs) string`(转回 `~/` 形态)与 `Within(path, root) bool`(祖先判定,
-禁止散落的字符串前缀比较)两个原语。规范化(`EvalSymlinks` 等)只发生在**创建侧**:写入
-link_dest 之前做一次,之后的一切所有权比较都是字节比较(ADR-22)。
+优先级:命令行 flag > 环境变量 > 机器配置 > 内置默认。全部路径解析必须收敛在同一职责
+边界,并支持隐藏全局 flag `--home <dir>` 将 `~`、状态路径和 hook 子进程环境整体重定向。
+该边界必须统一提供路径展示、祖先/重叠判断和创建侧规范化能力,禁止各组件自行做字符串
+前缀判断。写入 link_dest 前完成一次创建侧规范化,之后所有权比较只使用存证字符串
+(ADR-22);helper 名与系统调用属于实现细节。
+
+**target 身份(ADR-35)** 与展示字符串分离:唯一性、state 查找、desired/orphan 差集及
+祖先/重叠判断必须尊重目标文件系统对路径名的等价语义,但不同 hard link 路径仍是不同
+target。两个 desired 路径若具有同一 target 身份,必须在 mutation 前作为碰撞整体拒绝;
+单个历史 state key 若只是当前 desired 的别名,
+必须作为同一条目迁移记账,不得同时进入 orphan。多个 state key 指向同一 target 属 state
+语义损坏并 fail closed。如何识别大小写、Unicode 与尚不存在的叶子由实现决定。
+
+**控制面路径边界(ADR-33)**:根据本次运行的有效参数解析 repo、机器配置、state/backup
+和已安装二进制位置。任何 desired target、state target 或 `dot add` 输入与这些路径重叠
+(位于其内、等于它或会覆盖其祖先)都必须在 mutation 前整体拒绝。manifest/plan 校验、
+state 加载和 add 必须复用同一 target 身份与边界定义,不得分别维护例外列表。
 
 ## 3. 机器配置文件(不入库)
 
@@ -82,118 +89,77 @@ machine = "work-mbp"
 ```
 
 三层各司其职:**顶层 manifest 定义「有哪些组合」,机器配置选择「我是谁」,模块 manifest
-描述「我自己怎么装」。** init 重写该文件时:内存合并并校验 → 临时文件写入(0600)→
-`Sync` → 原子 rename;任一步失败保留旧配置(04 号文档 §4.1)。
+描述「我自己怎么装」。** init 更新该文件时必须严格读取旧配置,保留本次未指定的
+profile/repo/data,对合并结果整体校验后原子替换;未知顶层字段或旧文件损坏时拒绝重写,
+任一步失败保留旧配置(04 号文档 §4.1)。临时文件协议由实现负责满足这一性质。
 
 ## 4. apply pipeline
 
 ```
- ①  lock      获取 flock;失败 → 报错「另一 dot 进程运行中」
+ ①  lock      获取进程间排他锁;失败 → 报错「另一 dot 进程运行中」
  ②  requires  宽松预读顶层 manifest 仅取 requires → 版本检查
               (不满足 → 提示 self-update 退出;version=dev 放行 + 警告)
  ③  load      严格解码全部 manifest:未知键即错(ADR-16;doctor 例外走宽松模式)
               state 加载:缺失 = 全新;损坏/版本过新/语义校验失败 = fail closed(ADR-25)
- ④  resolve   profile → 模块集合(@ 展开、os 过滤、环/悬空检测、[target] 缺 GOOS 报错)
-              部分 apply:校验 请求模块 ⊆ profile(ADR-18)
- ⑤  enumerate 遍历模块文件树:hooks/ 保留目录、路径合法性、ignore 规则过滤,
-              定级 link | managed | scaffold(优先级见 03 号文档 §3)
- ⑥  render    全部模板 parse + 渲染,fail-fast:任一失败整体退出,不进入执行(ADR-24)
- ⑦  scan      观测每个 target 的现势 → Observed 快照(唯一读 target 的阶段)
- ⑧  decide    纯函数:desired × observed × state → []Action(05 号文档 §3 决策表)
-              存在 Conflict → 全部 Prune 标记 deferred(ADR-20,plan 层完成)
- ⑨  validate  全局不变量:target 唯一性、前缀冲突(05 号文档 §5)
-              + StateOp×Kind 合法组合断言(§6)
+ ④  resolve   profile → 完整模块集合(@ 展开、os 过滤、环/悬空检测、[target] 缺 GOOS 报错)
+              部分 apply:校验 请求模块 ⊆ profile,仅缩小动作/prune 作用域(ADR-18)
+ ⑤  enumerate 得到完整 profile 的结构性 desired 供路径全局校验;请求作用域内条目进入动作计划
+              遍历时应用 hooks/ 保留目录、路径合法性、ignore 与 kind 定级规则
+ ⑥  render    动作作用域内全部模板 parse + 渲染,fail-fast:任一失败整体退出(ADR-24)
+ ⑦  scan      观测每个 target 的现势,形成计划所用快照
+ ⑧  decide    按 desired × observed × state 和 05 号文档 §3 决策表生成动作计划
+              存在 conflict → 全部 prune 标记 deferred(ADR-20,plan 层完成)
+ ⑨  validate  对完整 effective profile 校验 target 身份唯一、祖先冲突、控制面路径隔离
+              + 对动作作用域校验状态处置语义一致(05 号文档 §5、本文 §6)
               违反 → 整体拒绝,一个动作都不执行,exit 1
  ⑩  execute   mkdir → create-link/render/scaffold/backup-replace/adopt
               → prune(仅收敛时;执行中出现 error 或 Precond 失配 → 全部转 deferred)
               → hooks(不受收敛门控,见 05 号文档 §8)
-              每个 target mutation 执行前复核 Precond(ADR-23)
- ⑪  persist   state 原子落盘,释放锁
+              每个 target mutation 在不可逆提交前最终复核 Precond(ADR-23)
+ ⑪  persist   提交成功动作对应的 state 变化,原子落盘,释放锁
 ```
 
-`dot diff` = ②–⑨ 后打印计划(无锁、不执行、不写 state;Adopt 与 deferred Prune 均如实
-展示);`dot apply --dry-run` 同理但取锁。**scan 与 decide 的拆分是可测试性的关键**:
-scan 是唯一做 target IO 的一段,把现实世界快照成值;decide 是决策表的直译纯函数,
-单测直接喂内存构造的三元组、断言 `[]Action`,不碰磁盘。
+`dot diff` = ②–⑨ 后打印计划(无锁、不执行、不写 state;adopt 与 deferred prune 均如实
+展示);`dot apply --dry-run` 同理但取锁。计划必须基于明确的 target 快照;执行阶段只可为
+最终 Precond 复核重新观测,不得借复核改变决策或补充未计划的动作。函数拆分由实现决定。
 
-## 5. Go 包结构
+## 5. 组件职责边界
 
-```
-internal/
-├── cli/          # cobra 命令定义 + 编排;每次 Execute 现建命令树(无包级单例)
-├── paths/        # 全部路径解析、--home 重定向、hook 子进程环境、Display/Within
-├── manifest/     # 两阶段加载(宽松预读/严格解码)、合并、profile 展开、路径合法性
-├── planner/      # enumerate / render / scan / decide / validate;decide 与 validate 为纯函数
-├── executor/     # 消费 []Action:symlink/原子写/备份/prune/hook 子进程;Precond 复核
-├── state/        # state.json 读写(三态 + 语义校验)、flock、条目 CRUD、hash
-├── tmpl/         # text/template 封装:变量注入、函数表、命名空间校验
-├── gitx/         # git 子进程透传与仓库操作(pull、status --porcelain、ls-files)
-└── fsutil/       # 原子写、备份复制、链接判定等底层原语
-```
+下表规定职责,不规定 Go package 或函数名:
 
-依赖方向自上而下单向:`cli → {manifest, planner, executor, state, tmpl, gitx} → {paths, fsutil}`。
-`planner` 不 import `executor`;两者通过 `Action` 值类型通信。错误 → 退出码的映射集中在
-`cli.Execute` 一处,深层包只返回带语义标记的错误。
+| 组件职责 | 必须保证 |
+|---|---|
+| CLI 编排 | 解析参数、获取一次锁、组合命令流程、统一映射退出码(`dot git` 的 Git 进程退出码透传除外) |
+| 路径边界 | 解析有效路径、判断祖先/重叠、实施 HOME 与控制面边界、生成 hook 环境 |
+| Manifest | 两阶段加载、合并、profile 展开、输入与路径校验 |
+| 计划职责 | 枚举、渲染、观测并按决策表产生完整计划;不修改 target |
+| 执行职责 | 只执行已决定的动作;不得重新解释 manifest 或绕过最终前提复核 |
+| State | 校验、读取与原子提交 state;状态文件损坏时 fail closed |
+| Template | 以显式输入完成确定性渲染 |
+| Git/发布 | 透传 git 或执行文档规定的同步、更新协议 |
 
-## 6. 核心类型(强类型,禁止字符串直比)
+计划与执行职责之间必须通过自包含的动作计划通信;具体内部类型可由实现选择。
+文件动作所需内容应在计划阶段准备完毕,hook 执行是读取仓库脚本的明确例外。深层组件
+返回语义化错误,CLI 负责用户输出与退出码。
 
-```go
-// 三个独立枚举;EntryKind/DesiredKind 的 JSON/展示序列化为字符串
-type DesiredKind uint8 // KindLink | KindManaged | KindScaffold        —— 描述意图
-type EntryKind   uint8 // EntrySymlink | EntryRendered | EntryScaffold —— 描述产物
-type StateOp     uint8 // OpKeep | OpUpsert | OpDelete
-// 对应关系 link↔symlink、managed↔rendered,经单一映射函数 entryKindFor(DesiredKind)
+## 6. 动作与状态转换契约
 
-// scan 的输出:target 现势的不可变快照
-type Observed struct {
-    Kind     ObservedKind // Missing | Symlink | RegularFile | Dir | Special(fifo/socket/设备)
-    LinkDest string       // Kind==Symlink 时,Readlink 原始值(不解析)
-    Hash     string       // Kind==RegularFile 且条目需比对时的 sha256
-    Mode     fs.FileMode  // Kind==RegularFile 时的权限(mode 漂移检测,ADR-26)
-}
+计划阶段必须区分 target 的缺失、symlink、普通文件、目录和特殊文件,并保留决策与最终
+复核所需的链接目标、内容摘要和权限。每个动作必须包含执行所需信息、观测前提和成功后的
+状态处置;执行阶段不得靠再次读取 manifest 补齐语义。
 
-// decide 的输出、executor 的唯一输入:执行所需信息完备,executor 不读仓库、不做渲染
-type Action struct {
-    Kind        ActionKind   // CreateLink | Render | Scaffold | BackupReplace |
-                             // Prune | Adopt | RunHook | Skip | Conflict
-    Module      string
-    Source      string       // 仓库内绝对路径(hook 则为脚本路径)
-    Target      string       // 落地绝对路径
-    DesiredKind DesiredKind  // 全部创建/替换动作与 Conflict 均携带
-                             // (BackupReplace 靠它得知备份后建什么)
-    Content     []byte       // Render/Scaffold/BackupReplace(managed/scaffold):渲染产物
-    Mode        fs.FileMode  // 落地权限([files].mode,缺省 0644)
-    LinkDest    string       // CreateLink/BackupReplace(link):将写入的确切字符串
-                             // (planner 侧完成规范化,executor 逐字写入,ADR-22)
-    Precond     Observed     // plan 时观测;执行前复核,失配 → 降级 Conflict(ADR-23)
-    StateOp     StateOp      // 动作成功后对该 target 记账的处置
-    NextEntry   *state.Entry // StateOp==OpUpsert 时要提交的记账
-    Deferred    bool         // Prune:因未收敛而延迟,仅展示不执行(ADR-20)
-    Fingerprint string       // RunHook:执行成功后写入 state 的指纹
-    Reason      string       // 供展示:"source changed"、"mode"、"adopted"、"kind migrated"
-}
+| 动作结果 | state 条目处置 |
+|---|---|
+| create-link / render / scaffold / backup-replace 成功 | 写入与实际新产物一致的条目 |
+| adopt 成功 | 只写入或刷新条目,不触碰 target;scaffold 补录不建立所有权 |
+| 活动 prune 成功(包括只摘除非 owned/scaffold 记录) | 删除对应条目 |
+| skip / conflict / deferred prune | 保留原条目不变 |
+| 文件动作失败或最终前提失配 | 保留原条目不变;本次 prune 延迟 |
+| run-hook 成功 | 文件条目不变;提交新的 run_once 指纹 |
+| run-hook 失败 | 文件条目与旧指纹均不变 |
 
-// state.json 中的一条记录,详见 05 号文档 §2
-type Entry struct {
-    Module    string    `json:"module"`
-    Kind      EntryKind `json:"kind"`                // symlink | rendered | scaffold
-    Source    string    `json:"source"`              // 相对仓库根
-    Hash      string    `json:"hash,omitempty"`      // rendered:上次产物 sha256
-    LinkDest  string    `json:"link_dest,omitempty"` // symlink:创建时写入的确切字符串(ADR-22)
-    AppliedAt time.Time `json:"applied_at"`
-}
-```
-
-**StateOp × Kind 合法组合**(planner 出口断言、executor 防御式复检,违规即程序 bug,
-直接报错终止):`OpDelete` ⇔ `Prune`;`OpUpsert` ⇒ `NextEntry != nil`,适用于
-CreateLink/Render/Scaffold/BackupReplace/Adopt;`Skip`/`Conflict`/`RunHook`/deferred
-Prune ⇒ `OpKeep`。
-
-其余设计要点:**没有 `Error` 动作**——渲染失败在 pipeline ⑥ fail-fast(ADR-24),执行期
-IO 失败由 executor 记录并触发 prune 延迟。**`Adopt` 泛化为 state-only 记账动作**:补录、
-kind 迁移记账(05 号文档 §3.4)、元数据刷新都由它承载。**记账经 StateOp + NextEntry 随
-动作提交**:executor 在动作成功后机械执行、失败不动 state——「迁移只在成功后提交」与
-「绝不误删记账」由类型保证。`BackupReplace` 由 planner 在 `--force` 下直接产出(取代对应
-Conflict),executor 无需理解 force 语义。hook 是 `Kind=RunHook` 的动作,携带
-Fingerprint,参与统一计划展示,执行恒在最后阶段。中间目录创建(mkdir)不建模为 Action:
-executor 在文件动作前按需 `MkdirAll` 真实目录(ADR-3),不记 state、不参与 prune。
+上述矩阵是规范;是否用枚举、构造器或运行时断言实现由代码决定。desired kind
+(`link | managed | scaffold`)描述意图,state kind(`symlink | rendered | scaffold`)
+描述产物,实现必须避免混用,但不限定内部类型。执行中已有动作成功而后续动作失败时,
+必须提交可提交的成功结果;若 state 本身落盘失败,不得回滚已越过提交点的数据,而由
+05 号文档规定的收养规则在重跑时收敛。
