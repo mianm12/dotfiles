@@ -4,13 +4,13 @@ package manifest
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/ghstlnx/dotfiles/internal/buildinfo"
+	"github.com/ghstlnx/dotfiles/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -42,7 +42,7 @@ type numericVersion [3]string
 func ReadRequirement(repo string) (Requirement, error) {
 	info, err := os.Stat(repo)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+		if paths.IsMissing(repo, err) {
 			return Requirement{}, ErrRepositoryUnavailable
 		}
 		return Requirement{}, fmt.Errorf("inspect repository %q: %w", repo, err)

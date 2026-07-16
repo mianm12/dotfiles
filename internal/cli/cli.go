@@ -43,15 +43,16 @@ func run(args []string, env environment) int {
 		_, _ = fmt.Fprintf(env.stderr, "error: initialize CLI: %v\n", err)
 		return exitError
 	}
+	output := newCommandOutput(env.stdout, env.stderr)
 	root.SetArgs(args)
-	root.SetOut(env.stdout)
-	root.SetErr(env.stderr)
+	root.SetOut(&output.stdout)
+	root.SetErr(&output.stderr)
 
 	if err := root.Execute(); err != nil {
 		root.PrintErrf("error: %v\n", err)
-		return exitError
+		return output.finish(exitError)
 	}
-	return exitOK
+	return output.finish(exitOK)
 }
 
 func newRootCommand(env environment) (*cobra.Command, error) {

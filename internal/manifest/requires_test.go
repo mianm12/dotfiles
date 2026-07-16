@@ -39,6 +39,22 @@ func TestReadRequirement_RepositoryUnavailable(t *testing.T) {
 	}
 }
 
+func TestReadRequirement_RejectsDanglingRepositorySymlink(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.Symlink(filepath.Join(root, "missing"), repo); err != nil {
+		t.Fatalf("os.Symlink(%q) error = %v", repo, err)
+	}
+
+	_, err := ReadRequirement(repo)
+	if err == nil {
+		t.Fatal("ReadRequirement() error = nil, want dangling symlink error")
+	}
+	if errors.Is(err, ErrRepositoryUnavailable) {
+		t.Fatalf("ReadRequirement() error = %v, want read error", err)
+	}
+}
+
 func TestReadRequirement_RejectsInvalidManifest(t *testing.T) {
 	tests := []struct {
 		name    string

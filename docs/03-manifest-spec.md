@@ -263,7 +263,8 @@ profile 级校验,仓库级语法、引用和模块局部检查仍覆盖全部 m
 加载协议:
 
 1. **宽松预读**:只读取必填的顶层 `requires` → 校验语法并比较版本。不满足时提示
-   `dot self-update`;`version=dev`(本地开发构建)仅放行版本比较并警告。
+   `dot self-update`;`version=dev`(本地开发构建)仅放行版本比较并输出不影响退出码的
+   compatibility notice。
 2. **严格解码**:凡命令或阶段需要解释 manifest 以生成 desired、计划或新 state,都必须在
    requires 通过后完整解码全部 manifest;任何未知字段或非法值使该阶段停止。
 3. **诊断例外**:`doctor` 不因 requires 不满足而提前停止,以诊断模式报告未知键及其他

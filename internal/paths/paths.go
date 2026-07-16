@@ -1,4 +1,4 @@
-// Package paths 根据 flag、环境变量和机器配置解析 dot 的 control-plane 路径。
+// Package paths 解析 dot 的 control-plane 路径，并区分正常缺失与不可忽略的路径错误。
 package paths
 
 import (
@@ -33,7 +33,7 @@ func EffectiveHome(override string, overrideSet bool, userHomeDir func() (string
 }
 
 // ResolveControlPath 将用户提供的 control-plane 路径解析为绝对路径。
-// 仅接受绝对路径、~ 或 ~/ 前缀。
+// 仅接受绝对路径、~ 或 ~/ 前缀；home 必须是 EffectiveHome 的结果。
 func ResolveControlPath(value, home string) (string, error) {
 	if value == "" {
 		return "", fmt.Errorf("path must not be empty")
@@ -54,6 +54,7 @@ func ResolveControlPath(value, home string) (string, error) {
 }
 
 // Config 返回生效的机器配置路径，DOT_CONFIG 优先于默认路径。
+// home 必须是 EffectiveHome 的结果。
 func Config(home string, lookupEnv func(string) (string, bool)) (string, error) {
 	if value, ok := lookupEnv(ConfigEnvironment); ok {
 		path, err := ResolveControlPath(value, home)
@@ -66,6 +67,7 @@ func Config(home string, lookupEnv func(string) (string, bool)) (string, error) 
 }
 
 // Repository 按 --repo、DOT_REPO、机器配置、默认值的顺序返回生效仓库路径。
+// home 必须是 EffectiveHome 的结果。
 func Repository(
 	home string,
 	flagValue string,

@@ -19,6 +19,19 @@ func TestLoad_MissingConfig(t *testing.T) {
 	}
 }
 
+func TestLoad_RejectsDanglingConfigSymlink(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.toml")
+	if err := os.Symlink(filepath.Join(root, "missing.toml"), path); err != nil {
+		t.Fatalf("os.Symlink(%q) error = %v", path, err)
+	}
+
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want dangling symlink error")
+	}
+}
+
 func TestLoad_ValidConfig(t *testing.T) {
 	path := writeConfig(t, `
 profile = "mac"

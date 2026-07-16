@@ -59,7 +59,7 @@
 | update/锁 | 工作区或 index 不洁净(含普通未跟踪文件)、或 fast-forward 将覆盖 ignored-untracked 路径时在工作树改变前失败;不会被更新触碰的 ignored 文件不阻塞;mutation 与 `dot git` 互斥,只读命令不因锁阻塞;Git 启动后退出码透传;pull 后失败保留新仓库并报告新旧 commit/恢复指引;`--no-apply` 不校验拉取后 manifest、不伪装成 link 隔离预览 |
 | hook | cwd、环境覆盖、首次/内容变化/执行方式变化/失败重试、at-least-once、模块字节序与数组声明顺序、前项失败停止后项且保留此前成功指纹、profile 移除再恢复同指纹不重跑,以及 conflict 下仍执行符合规范;部分 apply 不运行或更新未请求模块 hook |
 | 恢复/编辑 [M2] | rebuild 备份并报告旧 state 路径;无可信证据时 link 精确匹配才收养,rendered 即使内容/mode 匹配也只报 adoptable;合法旧 orphan 与祖先暂不可达 entry 原样保留待处理,安全部分仍可提交并退出 2;L3/M5/跨 kind target mutation 证据不得丢;合法旧任意 kind 面对当前 scaffold 缺失时按迁移规则记账且不渲染,其中仍 owned 的旧 symlink→scaffold 保留旧证据直到正常 apply 转换;版本过新仍拒绝。edit 各 kind 行为、编辑器缺失/非零、完整 profile 校验、managed 单条决策和不执行 prune/hooks 均符合 §4.12 |
-| status/doctor/version | status 对 drift/orphan 退出 2、UNASSIGNED 单独不影响 0、非法 state/manifest 退出 1 且不报 Clean;diff 对同一被改指链接按计划 conflict 退出 3;manifest-only 不读 config/state并按当前 GOOS 逐 profile 校验,profile 间不合并;M1 裸 doctor 拒绝;doctor error/warning 分别映射 1/2;version 始终报告 binary,并覆盖 repo 缺失、requires 满足/不满足/非法分支 |
+| status/doctor/version | status 对 drift/orphan 退出 2、UNASSIGNED 单独不影响 0、非法 state/manifest 退出 1 且不报 Clean;diff 对同一被改指链接按计划 conflict 退出 3;manifest-only 不读 config/state并按当前 GOOS 逐 profile 校验,profile 间不合并;M1 裸 doctor 拒绝;doctor error/warning 分别映射 1/2;version 始终报告 binary,并覆盖 repo 缺失、requires 满足/不满足/非法分支及 dev compatibility notice 不改变退出码 |
 
 如何制造中断、替换目标或模拟落盘失败由测试实现决定。重要的是覆盖每个提交点的前后两侧,
 而不是把某个 helper 的调用顺序固化成公共接口。

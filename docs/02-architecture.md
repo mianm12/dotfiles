@@ -135,7 +135,7 @@ init 更新该文件时必须严格读取旧配置,保留本次未指定的 prof
 ```
  ①  lock      获取进程间排他锁;失败 → 报错「另一 dot 进程运行中」
  ②  requires  宽松预读顶层 manifest 仅取必填 requires → 语法与版本检查
-              (不满足 → 提示 self-update 退出;version=dev 仅放行版本比较 + 警告)
+              (不满足 → 提示 self-update 退出;version=dev 仅放行版本比较 + 不影响退出码的 compatibility notice)
  ③  load      严格解码全部 manifest 与机器配置:未知键/非法类型即错
               (ADR-16;doctor 例外走诊断模式)
               state 加载:缺失 = 全新;损坏/版本过新/语义校验失败 = fail closed(ADR-25)

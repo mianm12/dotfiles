@@ -56,6 +56,26 @@ func TestVersion_AcceptsGlobalFlagsBeforeCommand(t *testing.T) {
 	}
 }
 
+func TestVersion_SatisfiedRequirement(t *testing.T) {
+	repo := writeRepository(t, ">=1.2.0")
+	stdout, stderr, exitCode := runForTest(t, []string{"version", "--repo", repo}, nil, buildinfo.Info{
+		Version:   "v1.2.3",
+		Commit:    "abc123",
+		BuildTime: "2026-07-16T10:00:00Z",
+	})
+
+	if exitCode != 0 {
+		t.Errorf("run() exit code = %d, want 0", exitCode)
+	}
+	wantStdout := "version=v1.2.3\ncommit=abc123\nbuild_time=2026-07-16T10:00:00Z\nrequires=>=1.2.0\nsatisfied=true\n"
+	if stdout != wantStdout {
+		t.Errorf("run() stdout = %q, want %q", stdout, wantStdout)
+	}
+	if stderr != "" {
+		t.Errorf("run() stderr = %q, want empty", stderr)
+	}
+}
+
 func TestVersion_DevelopmentBuild(t *testing.T) {
 	repo := writeRepository(t, ">=999.0.0")
 	stdout, stderr, exitCode := runForTest(t, []string{"version", "--repo", repo}, nil, buildinfo.Info{
@@ -67,13 +87,62 @@ func TestVersion_DevelopmentBuild(t *testing.T) {
 	if exitCode != 0 {
 		t.Errorf("run() exit code = %d, want 0", exitCode)
 	}
-	wantStdout := "requires=>=999.0.0\nsatisfied=true\ncompatibility=development-build\n"
-	if !strings.Contains(stdout, wantStdout) {
-		t.Errorf("run() stdout = %q, want substring %q", stdout, wantStdout)
+	wantStdout := "version=dev\ncommit=unknown\nbuild_time=unknown\nrequires=>=999.0.0\nsatisfied=true\ncompatibility=development-build\n"
+	if stdout != wantStdout {
+		t.Errorf("run() stdout = %q, want %q", stdout, wantStdout)
 	}
-	wantStderr := "warning: development build"
-	if !strings.Contains(stderr, wantStderr) {
-		t.Errorf("run() stderr = %q, want substring %q", stderr, wantStderr)
+	wantStderr := "notice: development build skipped the requires version comparison\n"
+	if stderr != wantStderr {
+		t.Errorf("run() stderr = %q, want %q", stderr, wantStderr)
+	}
+}
+
+func TestVersion_ExitsWithErrorWhenStdoutWriteFails(t *testing.T) {
+	var stderr bytes.Buffer
+	home := filepath.Join(t.TempDir(), "missing-home")
+	exitCode := run([]string{"version", "--home", home}, environment{
+		stdout: failingWriter{err: errors.New("broken pipe")},
+		stderr: &stderr,
+		lookupEnv: func(string) (string, bool) {
+			return "", false
+		},
+		userHomeDir: func() (string, error) {
+			return home, nil
+		},
+		build: buildinfo.Info{Version: "dev", Commit: "unknown", BuildTime: "unknown"},
+	})
+
+	if exitCode != 1 {
+		t.Errorf("run() exit code = %d, want 1", exitCode)
+	}
+	wantStderr := "write stdout: broken pipe"
+	if !strings.Contains(stderr.String(), wantStderr) {
+		t.Errorf("run() stderr = %q, want substring %q", stderr.String(), wantStderr)
+	}
+}
+
+func TestVersion_ExitsWithErrorWhenStderrWriteFails(t *testing.T) {
+	repo := writeRepository(t, ">=999.0.0")
+	var stdout bytes.Buffer
+	home := t.TempDir()
+	exitCode := run([]string{"version", "--repo", repo}, environment{
+		stdout: &stdout,
+		stderr: failingWriter{err: errors.New("broken pipe")},
+		lookupEnv: func(string) (string, bool) {
+			return "", false
+		},
+		userHomeDir: func() (string, error) {
+			return home, nil
+		},
+		build: buildinfo.Info{Version: "dev", Commit: "unknown", BuildTime: "unknown"},
+	})
+
+	if exitCode != 1 {
+		t.Errorf("run() exit code = %d, want 1", exitCode)
+	}
+	wantStdout := "compatibility=development-build\n"
+	if !strings.Contains(stdout.String(), wantStdout) {
+		t.Errorf("run() stdout = %q, want substring %q", stdout.String(), wantStdout)
 	}
 }
 
@@ -169,6 +238,51 @@ func TestVersion_RejectsInvalidPathBeforeRepositoryRead(t *testing.T) {
 		t.Errorf("run() stdout = %q, want suffix %q", stdout, wantStdoutSuffix)
 	}
 	wantStderr := "DOT_CONFIG"
+	if !strings.Contains(stderr, wantStderr) {
+		t.Errorf("run() stderr = %q, want substring %q", stderr, wantStderr)
+	}
+}
+
+func TestVersion_RejectsDanglingConfigSymlink(t *testing.T) {
+	configPath := writeDanglingSymlink(t, "config.toml")
+	repo := writeRepository(t, ">=1.0.0")
+	stdout, stderr, exitCode := runForTest(
+		t,
+		[]string{"version", "--repo", repo},
+		map[string]string{"DOT_CONFIG": configPath},
+		buildinfo.Info{Version: "v1.0.0", Commit: "abc123", BuildTime: "now"},
+	)
+
+	if exitCode != 1 {
+		t.Errorf("run() exit code = %d, want 1", exitCode)
+	}
+	wantStdoutSuffix := "requires=error\n"
+	if !strings.HasSuffix(stdout, wantStdoutSuffix) {
+		t.Errorf("run() stdout = %q, want suffix %q", stdout, wantStdoutSuffix)
+	}
+	wantStderr := "open machine config"
+	if !strings.Contains(stderr, wantStderr) {
+		t.Errorf("run() stderr = %q, want substring %q", stderr, wantStderr)
+	}
+}
+
+func TestVersion_RejectsDanglingRepositorySymlink(t *testing.T) {
+	repo := writeDanglingSymlink(t, "repo")
+	stdout, stderr, exitCode := runForTest(
+		t,
+		[]string{"version", "--repo", repo},
+		nil,
+		buildinfo.Info{Version: "v1.0.0", Commit: "abc123", BuildTime: "now"},
+	)
+
+	if exitCode != 1 {
+		t.Errorf("run() exit code = %d, want 1", exitCode)
+	}
+	wantStdoutSuffix := "requires=error\n"
+	if !strings.HasSuffix(stdout, wantStdoutSuffix) {
+		t.Errorf("run() stdout = %q, want suffix %q", stdout, wantStdoutSuffix)
+	}
+	wantStderr := "inspect repository"
 	if !strings.Contains(stderr, wantStderr) {
 		t.Errorf("run() stderr = %q, want substring %q", stderr, wantStderr)
 	}
@@ -325,4 +439,22 @@ func writeRepository(t *testing.T, requires string) string {
 		t.Fatalf("os.WriteFile(%q) error = %v", manifestPath, err)
 	}
 	return repo
+}
+
+func writeDanglingSymlink(t *testing.T, name string) string {
+	t.Helper()
+	root := t.TempDir()
+	path := filepath.Join(root, name)
+	if err := os.Symlink(filepath.Join(root, "missing"), path); err != nil {
+		t.Fatalf("os.Symlink(%q) error = %v", path, err)
+	}
+	return path
+}
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
 }

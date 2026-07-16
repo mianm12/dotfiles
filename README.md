@@ -42,6 +42,6 @@ make build VERSION=v0.1.0 COMMIT=abc123 BUILD_TIME=2026-07-16T00:00:00Z
 ```
 
 `version=dev` 的开发构建仍会校验 `requires` 的存在和语法，只跳过发布版本的大小比较，并
-明确输出警告。
+输出不单独改变退出码的 development compatibility notice。
 
 分支、提交与评审约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。

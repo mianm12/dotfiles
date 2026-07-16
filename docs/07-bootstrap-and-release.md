@@ -44,7 +44,7 @@
   `darwin/arm64`、`darwin/amd64`、`linux/amd64`、`linux/arm64` 的 tar.gz 资产与
   `checksums.txt`,并让二进制报告对应版本和构建元数据。具体发布工具不属于规范。
 - **本地开发构建**(没有发布版本元数据)version 为 `dev`:只放行与合法 requires 的版本
-  比较并打印警告;缺失或非法 requires 仍是配置错误。
+  比较并输出不影响退出码的 compatibility notice;缺失或非法 requires 仍是配置错误。
 - 配置「版本」即 git commit,无独立编号。
 - `requires`(顶层 manifest):是必填字段,声明**本套配置需要的最低 CLI 版本**,仅
   `>=x.y.z` 语法
@@ -61,7 +61,7 @@
 | requires 缺失或格式非法 | 需要解释 manifest 的命令拒绝;doctor 继续诊断;version 报告错误;self-update/git 仍可运行 |
 | 旧 CLI + 新配置,**requires 忘记提升**但含未知字段 | 严格解码拒绝依赖该 manifest 的 desired/计划/state 阶段——失效安全的第二道防线;`doctor` 可诊断;update 已完成的 pull 不回滚 |
 | **回滚二进制后 state 版本过新** | 依赖旧 state 的阶段 fail closed(ADR-25,05 号文档 §2);self-update、git、update pull 与 init 配置阶段不读取 entries,只校验控制面家族,因而不受阻;后续 apply 拒绝;提示升级 CLI 或手动处理 state |
-| 本地开发构建(version=dev) | 合法 requires 的版本比较放行 + 警告 |
+| 本地开发构建(version=dev) | 合法 requires 的版本比较放行 + compatibility notice(notice 本身不改变退出码) |
 
 两道防线的分工:`requires` 是**作者显式声明**的兼容界线,报错信息精确;严格解码是
 **机械兜底**,牺牲报错友好度换取「绝不带着不理解的字段去 prune」的安全底线。

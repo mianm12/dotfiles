@@ -82,7 +82,7 @@ func runVersion(command *cobra.Command, options versionOptions, env environment)
 	command.Printf("satisfied=%t\n", satisfied)
 	if developmentBuild {
 		command.Println("compatibility=development-build")
-		command.PrintErrln("warning: development build skipped the requires version comparison")
+		command.PrintErrln("notice: development build skipped the requires version comparison")
 		return nil
 	}
 	if !satisfied {
