@@ -35,24 +35,16 @@ jobs:
           cache: true
 
       - name: Verify dependencies
-        run: |
-          go mod verify
-          go mod tidy -diff
+        run: make deps-check
 
       - name: Check formatting
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "The following files need gofmt:"
-            echo "$unformatted"
-            exit 1
-          fi
+        run: make fmt-check
 
       - name: Run static analysis
-        run: go vet ./...
+        run: make vet
 
       - name: Run tests with race detector
-        run: go test -race ./...
+        run: make test-race
 
       - name: Build CLI
-        run: go build -trimpath -o "$RUNNER_TEMP/dot" ./cmd/dot
+        run: make build BINARY="$RUNNER_TEMP/dot"

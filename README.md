@@ -17,20 +17,27 @@
 需要 Go 1.25 或更高版本。常用检查：
 
 ```sh
-gofmt -w ./cmd ./internal
-go mod tidy -diff
-go vet ./...
-go test -race ./...
-go build -trimpath -o ./bin/dot ./cmd/dot
+make build
+make test
+make check
 ```
 
 运行开发构建：
 
 ```sh
-./bin/dot version
+make version
+# 或透传其他参数
+make run ARGS='version --repo ~/src/dotfiles'
 ```
 
-开发构建报告 `version=dev`。它仍会校验 `requires` 的存在和语法，只跳过发布版本的大小
-比较，并明确输出警告。
+Makefile 自动注入当前精确 Git tag（没有则为 `dev`）、短 commit 和 UTC 构建时间，无需日常
+手工传递 `-ldflags`。发布或复现构建时可以显式覆盖，例如：
+
+```sh
+make build VERSION=v0.1.0 COMMIT=abc123 BUILD_TIME=2026-07-16T00:00:00Z
+```
+
+`version=dev` 的开发构建仍会校验 `requires` 的存在和语法，只跳过发布版本的大小比较，并
+明确输出警告。
 
 分支、提交与评审约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
