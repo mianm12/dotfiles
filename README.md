@@ -14,10 +14,13 @@
 
 ## 本地开发
 
-需要 Go 1.25 或更高版本。常用检查：
+需要 Go 1.25 或更高版本，以及 `.golangci-lint-version` 中固定版本的 golangci-lint。
+Makefile 会在格式化和静态检查前验证工具版本。常用命令：
 
 ```sh
 make build
+make fmt
+make lint
 make test
 make check
 ```

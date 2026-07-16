@@ -34,6 +34,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version-file: .golangci-lint-version
+          install-only: true
+
       - name: Verify dependencies
         run: make deps-check
 
@@ -41,7 +47,7 @@ jobs:
         run: make fmt-check
 
       - name: Run static analysis
-        run: make vet
+        run: make lint
 
       - name: Run tests with race detector
         run: make test-race
