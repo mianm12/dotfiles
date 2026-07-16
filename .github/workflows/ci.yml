@@ -37,7 +37,7 @@ jobs:
       - name: Set up golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version-file: .golangci-lint-version
+          version: latest
           install-only: true
 
       - name: Verify dependencies

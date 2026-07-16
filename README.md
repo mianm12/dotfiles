@@ -14,8 +14,8 @@
 
 ## 本地开发
 
-需要 Go 1.25 或更高版本，以及兼容当前 `.golangci.yml` 的 golangci-lint v2。本地命令使用
-已安装版本，CI 通过 `.golangci-lint-version` 固定权威版本。常用命令：
+需要 Go 1.25 或更高版本，以及兼容当前 `.golangci.yml` 的 golangci-lint。本地命令使用
+已安装版本，CI 使用 `latest`。常用命令：
 
 ```sh
 make build
