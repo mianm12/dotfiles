@@ -1,14 +1,17 @@
 name: CI
 
+# Pull Request 提前反馈，main 上的 push 验证最终集成结果。
 on:
   pull_request:
   push:
     branches:
       - main
 
+# 门禁只读取仓库内容，不授予写入权限。
 permissions:
   contents: read
 
+# 同一引用有新提交时取消旧运行，避免浪费 CI 资源和展示过期结果。
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -17,9 +20,11 @@ jobs:
   verify:
     name: Go (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        # 两个平台独立运行，尽早暴露平台相关的构建和测试差异。
         os:
           - macos-latest
           - ubuntu-latest
@@ -38,19 +43,9 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+          # action 只负责安装；实际命令统一由 Makefile 定义。
           install-only: true
 
-      - name: Verify dependencies
-        run: make tidy-check
-
-      - name: Check formatting
-        run: make fmt-check
-
-      - name: Run static analysis
-        run: make lint
-
-      - name: Run tests with race detector
-        run: make test-race
-
-      - name: Build CLI
-        run: make build BINARY="$RUNNER_TEMP/dot"
+      - name: Run project checks
+        # Makefile 是本地与 CI 的唯一门禁入口；构建产物无需保留在工作区。
+        run: make check BINARY="$RUNNER_TEMP/dot"

@@ -1,17 +1,20 @@
 SHELL := /bin/sh
 .DEFAULT_GOAL := help
 
+# 工具和输出路径允许调用方覆盖，CI 无需复制本地构建命令。
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
 BINARY ?= bin/dot
 
+# 未显式覆盖时，只有当前提交上的精确 tag 才作为版本；普通开发构建使用 dev。
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || printf 'dev')
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# 从 module path 推导 -X 的完整包名，仓库迁移后无需同步硬编码路径。
 MODULE = $(shell $(GO) list -m)
 BUILDINFO_PACKAGE = $(MODULE)/internal/buildinfo
-# 把版本信息拼成 ldflags,避免每个 target 重复写
+# 集中构造 ldflags，确保 build、run 和 version 注入相同的构建信息。
 LDFLAGS = -X '$(BUILDINFO_PACKAGE).Version=$(VERSION)' \
 	-X '$(BUILDINFO_PACKAGE).Commit=$(COMMIT)' \
 	-X '$(BUILDINFO_PACKAGE).BuildTime=$(BUILD_TIME)'
@@ -39,6 +42,7 @@ run:
 version: build
 	"$(BINARY)" version $(ARGS)
 
+# fmt 和 tidy 会修改工作区；对应的 *-check 目标只验证，不产生修复性改动。
 fmt:
 	$(GOLANGCI_LINT) fmt
 
@@ -60,4 +64,5 @@ test:
 test-race:
 	$(GO) test -race ./...
 
+# 汇总完整门禁，作为本地与 CI 的共同入口；任一失败都会立即停止。
 check: tidy-check fmt-check lint test-race build
