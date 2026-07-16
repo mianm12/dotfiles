@@ -19,7 +19,8 @@ type Machine struct {
 }
 
 // Load 读取并严格解码机器本地配置；文件不存在表示尚未初始化，是合法的空状态。
-// 第二个返回值表示配置文件是否存在。依赖运行上下文的路径校验不属于 Load 的职责。
+// err == nil 时，第二个返回值表示配置文件是否存在。
+// 依赖运行上下文的路径校验不属于 Load 的职责。
 func Load(path string) (Machine, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
