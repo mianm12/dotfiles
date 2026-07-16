@@ -45,4 +45,7 @@ make build VERSION=v0.1.0 COMMIT=abc123 BUILD_TIME=2026-07-16T00:00:00Z
 `version=dev` 的开发构建仍会校验 `requires` 的存在和语法，只跳过发布版本的大小比较，并
 输出不单独改变退出码的 development compatibility notice。
 
+配置改动一旦使用新版 CLI 能力，必须在同一 commit 提升顶层 `requires`；严格解码只是
+遗漏时的失效安全兜底，不能替代这项维护纪律。
+
 分支、提交与评审约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
