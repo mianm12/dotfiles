@@ -6,8 +6,11 @@ GO ?= go
 GOLANGCI_LINT ?= golangci-lint
 BINARY ?= bin/dot
 
-# 未显式覆盖时，只有当前提交上的精确 tag 才作为版本；普通开发构建使用 dev。
-VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || printf 'dev')
+# 未显式覆盖时，只有干净工作区中当前提交上的精确 tag 才作为版本；其他构建使用 dev。
+VERSION ?= $(shell status=$$(git status --porcelain --untracked-files=normal 2>/dev/null) \
+	&& test -z "$$status" \
+	&& git describe --tags --exact-match 2>/dev/null \
+	|| printf 'dev')
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 

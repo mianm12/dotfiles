@@ -34,8 +34,9 @@ make version
 make run ARGS='version --repo ~/src/dotfiles'
 ```
 
-Makefile 自动注入当前精确 Git tag（没有则为 `dev`）、短 commit 和 UTC 构建时间，无需日常
-手工传递 `-ldflags`。发布或复现构建时可以显式覆盖，例如：
+未显式设置 `VERSION` 时，Makefile 只在工作区干净且当前提交精确命中 Git tag 时自动注入
+该 tag；其他构建使用 `dev`。短 commit 和 UTC 构建时间仍会自动注入，无需日常手工传递
+`-ldflags`。发布或复现构建时可以显式覆盖，例如：
 
 ```sh
 make build VERSION=v0.1.0 COMMIT=abc123 BUILD_TIME=2026-07-16T00:00:00Z
