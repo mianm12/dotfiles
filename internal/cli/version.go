@@ -26,9 +26,9 @@ func newVersionCommand(env environment, global *globalOptions) *cobra.Command {
 		RunE: func(command *cobra.Command, _ []string) error {
 			return runVersion(command, versionOptions{
 				home:    global.home,
-				homeSet: command.Flags().Changed("home"),
+				homeSet: command.Flags().Changed(homeFlagName),
 				repo:    global.repo,
-				repoSet: command.Flags().Changed("repo"),
+				repoSet: command.Flags().Changed(repoFlagName),
 			}, env)
 		},
 	}

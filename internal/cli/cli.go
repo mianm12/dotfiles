@@ -11,6 +11,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	exitOK    = 0
+	exitError = 1
+)
+
 // environment 集中保存 CLI 的外部依赖，便于测试替换 I/O、环境变量、HOME 和构建元数据。
 type environment struct {
 	stdout      io.Writer
@@ -18,14 +23,6 @@ type environment struct {
 	lookupEnv   func(string) (string, bool)
 	userHomeDir func() (string, error)
 	build       buildinfo.Info
-}
-
-type globalOptions struct {
-	home    string
-	profile string
-	repo    string
-	verbose bool
-	noColor bool
 }
 
 // Run 使用不含程序名的 args 执行 dot，将命令输出写入 stdout 和 stderr，
@@ -44,7 +41,7 @@ func run(args []string, env environment) int {
 	root, err := newRootCommand(env)
 	if err != nil {
 		_, _ = fmt.Fprintf(env.stderr, "error: initialize CLI: %v\n", err)
-		return 1
+		return exitError
 	}
 	root.SetArgs(args)
 	root.SetOut(env.stdout)
@@ -52,9 +49,9 @@ func run(args []string, env environment) int {
 
 	if err := root.Execute(); err != nil {
 		root.PrintErrf("error: %v\n", err)
-		return 1
+		return exitError
 	}
-	return 0
+	return exitOK
 }
 
 func newRootCommand(env environment) (*cobra.Command, error) {
@@ -72,23 +69,13 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 			return errors.New("a command is required")
 		},
 		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
-			if command.Flags().Changed("profile") && options.profile == "" {
-				return errors.New("--profile must not be empty")
-			}
-			return nil
+			return options.validate(command)
 		},
 	}
 	// completion 尚未进入公开命令规范，因此禁用 Cobra 自动生成的子命令。
 	root.CompletionOptions.DisableDefaultCmd = true
 
-	flags := root.PersistentFlags()
-	flags.StringVar(&options.repo, "repo", "", "override the repository path")
-	flags.StringVar(&options.home, "home", "", "override the effective home")
-	flags.StringVar(&options.profile, "profile", "", "override the configured profile")
-	flags.BoolVarP(&options.verbose, "verbose", "v", false, "enable verbose output")
-	flags.BoolVar(&options.noColor, "no-color", false, "disable colored output")
-	// --home 是测试专用的隔离入口，不在常规帮助中展示。
-	if err := flags.MarkHidden("home"); err != nil {
+	if err := options.bind(root); err != nil {
 		return nil, err
 	}
 

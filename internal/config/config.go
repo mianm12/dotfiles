@@ -6,13 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"regexp"
 
+	"github.com/ghstlnx/dotfiles/internal/datakey"
 	"github.com/pelletier/go-toml/v2"
 )
-
-// dataKeyPattern 约束 [data] key 必须以小写字母开头且只含 ASCII 字母、数字和下划线。
-var dataKeyPattern = regexp.MustCompile(`^[a-z][A-Za-z0-9_]*$`)
 
 // Machine 表示机器本地配置。Repo 为 nil 表示字段缺失；非 nil 空字符串会被 Load 拒绝。
 type Machine struct {
@@ -51,7 +48,7 @@ func Load(path string) (Machine, bool, error) {
 		return Machine{}, false, fmt.Errorf("machine config %q: repo must be a non-empty string", path)
 	}
 	for key := range machine.Data {
-		if !dataKeyPattern.MatchString(key) {
+		if !datakey.Valid(key) {
 			return Machine{}, false, fmt.Errorf("machine config %q: invalid data key %q", path, key)
 		}
 	}

@@ -10,8 +10,11 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ghstlnx/dotfiles/internal/buildinfo"
 	"github.com/pelletier/go-toml/v2"
 )
+
+const filename = "dot.toml"
 
 var (
 	// ErrRepositoryUnavailable 表示配置的仓库尚未安装。
@@ -48,7 +51,7 @@ func ReadRequirement(repo string) (Requirement, error) {
 		return Requirement{}, fmt.Errorf("repository path %q is not a directory", repo)
 	}
 
-	manifestPath := filepath.Join(repo, "dot.toml")
+	manifestPath := filepath.Join(repo, filename)
 	file, err := os.Open(manifestPath)
 	if err != nil {
 		return Requirement{}, fmt.Errorf("open manifest %q: %w", manifestPath, err)
@@ -95,13 +98,17 @@ func Satisfies(cliVersion string, requirement Requirement) (satisfied, developme
 	if requirement.raw == "" || requirement.minimum == (numericVersion{}) {
 		return false, false, errors.New("invalid zero-value requirement")
 	}
-	if cliVersion == "dev" {
+	if cliVersion == buildinfo.DevelopmentVersion {
 		return true, true, nil
 	}
 
 	match := releasePattern.FindStringSubmatch(cliVersion)
 	if match == nil {
-		return false, false, fmt.Errorf("invalid CLI build version %q: want dev or vMAJOR.MINOR.PATCH", cliVersion)
+		return false, false, fmt.Errorf(
+			"invalid CLI build version %q: want %s or vMAJOR.MINOR.PATCH",
+			cliVersion,
+			buildinfo.DevelopmentVersion,
+		)
 	}
 	current := newNumericVersion(match[1], match[2], match[3])
 	return current.compare(requirement.minimum) >= 0, false, nil

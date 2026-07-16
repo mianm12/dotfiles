@@ -226,14 +226,16 @@ func TestVersion_RejectsEmptyProfile(t *testing.T) {
 	}
 }
 
-func TestRoot_HelpOnlyListsSpecifiedCommands(t *testing.T) {
+func TestRoot_HelpListsSpecifiedCommandsAndFlags(t *testing.T) {
 	stdout, stderr, exitCode := runForTest(t, []string{"--help"}, nil, buildinfo.Info{})
 
 	if exitCode != 0 {
 		t.Errorf("run() exit code = %d, want 0", exitCode)
 	}
-	if !strings.Contains(stdout, "version") {
-		t.Errorf("run() stdout = %q, want version command", stdout)
+	for _, want := range []string{"version", "--repo", "--profile", "--verbose", "--no-color"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("run() stdout = %q, want substring %q", stdout, want)
+		}
 	}
 	for _, unwanted := range []string{"completion", "--home"} {
 		if strings.Contains(stdout, unwanted) {
@@ -242,6 +244,40 @@ func TestRoot_HelpOnlyListsSpecifiedCommands(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Errorf("run() stderr = %q, want empty", stderr)
+	}
+}
+
+func TestRoot_GlobalFlags(t *testing.T) {
+	root, err := newRootCommand(environment{})
+	if err != nil {
+		t.Fatalf("newRootCommand() error = %v, want nil", err)
+	}
+
+	tests := []struct {
+		name      string
+		shorthand string
+		hidden    bool
+	}{
+		{name: "repo"},
+		{name: "home", hidden: true},
+		{name: "profile"},
+		{name: "verbose", shorthand: "v"},
+		{name: "no-color"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flag := root.PersistentFlags().Lookup(tt.name)
+			if flag == nil {
+				t.Fatalf("global flag %q is not registered", tt.name)
+			}
+			if flag.Shorthand != tt.shorthand {
+				t.Errorf("global flag %q shorthand = %q, want %q", tt.name, flag.Shorthand, tt.shorthand)
+			}
+			if flag.Hidden != tt.hidden {
+				t.Errorf("global flag %q hidden = %t, want %t", tt.name, flag.Hidden, tt.hidden)
+			}
+		})
 	}
 }
 
