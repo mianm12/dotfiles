@@ -41,7 +41,7 @@ jobs:
           install-only: true
 
       - name: Verify dependencies
-        run: make deps-check
+        run: make tidy-check
 
       - name: Check formatting
         run: make fmt-check
