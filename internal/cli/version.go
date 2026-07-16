@@ -73,20 +73,20 @@ func runVersion(command *cobra.Command, options versionOptions, env environment)
 		return reportVersionError(command, err)
 	}
 
-	command.Printf("requires=%s\n", requirement.Raw)
-	satisfied, development, err := manifest.Satisfies(env.build.Version, requirement)
+	command.Printf("requires=%s\n", requirement)
+	satisfied, developmentBuild, err := manifest.Satisfies(env.build.Version, requirement)
 	if err != nil {
 		command.Println("satisfied=error")
 		return err
 	}
 	command.Printf("satisfied=%t\n", satisfied)
-	if development {
+	if developmentBuild {
 		command.Println("compatibility=development-build")
 		command.PrintErrln("warning: development build skipped the requires version comparison")
 		return nil
 	}
 	if !satisfied {
-		return fmt.Errorf("CLI %s does not satisfy %s; run dot self-update", env.build.Version, requirement.Raw)
+		return fmt.Errorf("CLI %s does not satisfy %s; run dot self-update", env.build.Version, requirement)
 	}
 	return nil
 }

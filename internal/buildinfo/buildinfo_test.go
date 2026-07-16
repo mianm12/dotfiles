@@ -17,11 +17,11 @@ func TestCurrent(t *testing.T) {
 	BuildTime = "2026-07-16T10:00:00Z"
 
 	got := Current()
-	want := (Info{
+	want := Info{
 		Version:   "v1.2.3",
 		Commit:    "abc123",
 		BuildTime: "2026-07-16T10:00:00Z",
-	})
+	}
 	if got != want {
 		t.Fatalf("Current() = %#v, want %#v", got, want)
 	}
@@ -42,11 +42,11 @@ func TestCurrentNormalizesEmptyValues(t *testing.T) {
 	BuildTime = ""
 
 	got := Current()
-	want := (Info{
+	want := Info{
 		Version:   "dev",
 		Commit:    "unknown",
 		BuildTime: "unknown",
-	})
+	}
 	if got != want {
 		t.Fatalf("Current() = %#v, want %#v", got, want)
 	}

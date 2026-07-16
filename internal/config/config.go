@@ -2,7 +2,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"regexp"
 
@@ -24,7 +26,7 @@ type Machine struct {
 func Load(path string) (Machine, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return Machine{}, false, nil
 		}
 		return Machine{}, false, fmt.Errorf("open machine config %q: %w", path, err)

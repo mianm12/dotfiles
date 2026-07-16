@@ -4,6 +4,7 @@ package manifest
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,11 +20,16 @@ var (
 	releasePattern           = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 )
 
-// Requirement 表示已校验的最低 CLI 版本约束。
+// Requirement 表示已校验的最低 CLI 版本约束；零值无效。
+// 应通过 ParseRequirement 或 ReadRequirement 创建。
 type Requirement struct {
-	// Raw 保留用户声明的原始约束，用于稳定输出和错误信息。
-	Raw     string
+	raw     string
 	minimum numericVersion
+}
+
+// String 返回用户声明的原始约束，用于稳定输出和错误信息。
+func (r Requirement) String() string {
+	return r.raw
 }
 
 // numericVersion 以规范化的十进制字符串保存三段版本，避免整数转换溢出。
@@ -33,7 +39,7 @@ type numericVersion [3]string
 func ReadRequirement(repo string) (Requirement, error) {
 	info, err := os.Stat(repo)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return Requirement{}, ErrRepositoryUnavailable
 		}
 		return Requirement{}, fmt.Errorf("inspect repository %q: %w", repo, err)
@@ -65,7 +71,11 @@ func ReadRequirement(repo string) (Requirement, error) {
 		return Requirement{}, fmt.Errorf("manifest %q: required top-level requires is missing", manifestPath)
 	}
 
-	return ParseRequirement(*document.Requires)
+	requirement, err := ParseRequirement(*document.Requires)
+	if err != nil {
+		return Requirement{}, fmt.Errorf("manifest %q: %w", manifestPath, err)
+	}
+	return requirement, nil
 }
 
 // ParseRequirement 校验当前唯一支持的 >=MAJOR.MINOR.PATCH 约束语法。
@@ -75,13 +85,16 @@ func ParseRequirement(raw string) (Requirement, error) {
 		return Requirement{}, fmt.Errorf("invalid requires %q: want >=MAJOR.MINOR.PATCH", raw)
 	}
 	return Requirement{
-		Raw:     raw,
-		minimum: numericVersion{normalize(match[1]), normalize(match[2]), normalize(match[3])},
+		raw:     raw,
+		minimum: newNumericVersion(match[1], match[2], match[3]),
 	}, nil
 }
 
 // Satisfies 判断 CLI 是否满足 requirement；dev 构建只跳过版本大小比较。
-func Satisfies(cliVersion string, requirement Requirement) (satisfied, development bool, err error) {
+func Satisfies(cliVersion string, requirement Requirement) (satisfied, developmentBuild bool, err error) {
+	if requirement.raw == "" || requirement.minimum == (numericVersion{}) {
+		return false, false, errors.New("invalid zero-value requirement")
+	}
 	if cliVersion == "dev" {
 		return true, true, nil
 	}
@@ -90,11 +103,19 @@ func Satisfies(cliVersion string, requirement Requirement) (satisfied, developme
 	if match == nil {
 		return false, false, fmt.Errorf("invalid CLI build version %q: want dev or vMAJOR.MINOR.PATCH", cliVersion)
 	}
-	current := numericVersion{normalize(match[1]), normalize(match[2]), normalize(match[3])}
-	return compare(current, requirement.minimum) >= 0, false, nil
+	current := newNumericVersion(match[1], match[2], match[3])
+	return current.compare(requirement.minimum) >= 0, false, nil
 }
 
-func normalize(component string) string {
+func newNumericVersion(major, minor, patch string) numericVersion {
+	return numericVersion{
+		normalizeVersionComponent(major),
+		normalizeVersionComponent(minor),
+		normalizeVersionComponent(patch),
+	}
+}
+
+func normalizeVersionComponent(component string) string {
 	component = strings.TrimLeft(component, "0")
 	if component == "" {
 		return "0"
@@ -103,18 +124,18 @@ func normalize(component string) string {
 }
 
 // compare 先比较位数再按字典序比较，使规范化十进制字符串保持任意精度整数的顺序。
-func compare(left, right numericVersion) int {
-	for index := range left {
-		if len(left[index]) < len(right[index]) {
+func (v numericVersion) compare(other numericVersion) int {
+	for i := range v {
+		if len(v[i]) < len(other[i]) {
 			return -1
 		}
-		if len(left[index]) > len(right[index]) {
+		if len(v[i]) > len(other[i]) {
 			return 1
 		}
-		if left[index] < right[index] {
+		if v[i] < other[i] {
 			return -1
 		}
-		if left[index] > right[index] {
+		if v[i] > other[i] {
 			return 1
 		}
 	}

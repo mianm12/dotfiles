@@ -28,7 +28,8 @@ type globalOptions struct {
 	noColor bool
 }
 
-// Run 执行 dot 并返回进程退出码。
+// Run 使用不含程序名的 args 执行 dot，将命令输出写入 stdout 和 stderr，
+// 并返回进程退出码。
 func Run(args []string, stdout, stderr io.Writer) int {
 	return run(args, environment{
 		stdout:      stdout,

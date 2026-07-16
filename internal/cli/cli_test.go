@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +30,7 @@ func TestVersionRepositoryUnavailable(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("run() stderr = %q, want empty", stderr)
 	}
-	if _, err := os.Stat(home); !os.IsNotExist(err) {
+	if _, err := os.Stat(home); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("version created effective home or returned unexpected error: %v", err)
 	}
 }
@@ -94,9 +96,9 @@ func TestVersionRejectsInvalidMachineConfig(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 	repo := writeRepository(t, ">=1.0.0")
-	environment := map[string]string{"DOT_CONFIG": configPath}
+	envVars := map[string]string{"DOT_CONFIG": configPath}
 
-	stdout, stderr, exitCode := runForTest(t, []string{"version", "--home", home, "--repo", repo}, environment, buildinfo.Info{
+	stdout, stderr, exitCode := runForTest(t, []string{"version", "--home", home, "--repo", repo}, envVars, buildinfo.Info{
 		Version:   "v1.0.0",
 		Commit:    "abc123",
 		BuildTime: "2026-07-16T10:00:00Z",
@@ -204,7 +206,7 @@ func TestRootRequiresCommand(t *testing.T) {
 	}
 }
 
-func runForTest(t *testing.T, args []string, variables map[string]string, build buildinfo.Info) (string, string, int) {
+func runForTest(t *testing.T, args []string, envVars map[string]string, build buildinfo.Info) (string, string, int) {
 	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -213,7 +215,7 @@ func runForTest(t *testing.T, args []string, variables map[string]string, build 
 		stdout: &stdout,
 		stderr: &stderr,
 		lookupEnv: func(name string) (string, bool) {
-			value, ok := variables[name]
+			value, ok := envVars[name]
 			return value, ok
 		},
 		userHomeDir: func() (string, error) {
