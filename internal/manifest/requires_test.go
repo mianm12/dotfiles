@@ -10,33 +10,36 @@ import (
 
 func TestReadRequirement(t *testing.T) {
 	repo := t.TempDir()
+	// 宽松预读只解释 requires；未知字段留给完整 manifest loader 校验。
 	content := `
 requires = ">=0.3.0"
 
 [future]
 unknown = "allowed during pre-read"
 `
-	if err := os.WriteFile(filepath.Join(repo, "dot.toml"), []byte(content), 0o600); err != nil {
-		t.Fatalf("write manifest: %v", err)
+	manifestPath := filepath.Join(repo, "dot.toml")
+	if err := os.WriteFile(manifestPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", manifestPath, err)
 	}
 
 	got, err := ReadRequirement(repo)
 	if err != nil {
-		t.Fatalf("ReadRequirement() error = %v", err)
+		t.Fatalf("ReadRequirement() error = %v, want nil", err)
 	}
-	if got.String() != ">=0.3.0" {
-		t.Fatalf("ReadRequirement().String() = %q", got.String())
+	want := ">=0.3.0"
+	if got.String() != want {
+		t.Fatalf("ReadRequirement().String() = %q, want %q", got.String(), want)
 	}
 }
 
-func TestReadRequirementRepositoryUnavailable(t *testing.T) {
+func TestReadRequirement_RepositoryUnavailable(t *testing.T) {
 	_, err := ReadRequirement(filepath.Join(t.TempDir(), "missing"))
 	if !errors.Is(err, ErrRepositoryUnavailable) {
 		t.Fatalf("ReadRequirement() error = %v, want ErrRepositoryUnavailable", err)
 	}
 }
 
-func TestReadRequirementRejectsInvalidManifest(t *testing.T) {
+func TestReadRequirement_RejectsInvalidManifest(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
@@ -53,7 +56,7 @@ func TestReadRequirementRejectsInvalidManifest(t *testing.T) {
 			repo := t.TempDir()
 			manifestPath := filepath.Join(repo, "dot.toml")
 			if err := os.WriteFile(manifestPath, []byte(tt.content), 0o600); err != nil {
-				t.Fatalf("write manifest: %v", err)
+				t.Fatalf("os.WriteFile(%q) error = %v", manifestPath, err)
 			}
 			_, err := ReadRequirement(repo)
 			if err == nil {
@@ -79,8 +82,15 @@ func TestSatisfies(t *testing.T) {
 		{name: "equal", cli: "v1.2.3", requires: ">=1.2.3", wantSatisfied: true},
 		{name: "newer minor", cli: "v1.3.0", requires: ">=1.2.9", wantSatisfied: true},
 		{name: "older", cli: "v1.2.2", requires: ">=1.2.3"},
+		{name: "longer major component", cli: "v10.0.0", requires: ">=9.9.9", wantSatisfied: true},
+		{name: "shorter major component", cli: "v9.9.9", requires: ">=10.0.0"},
 		{name: "development", cli: "dev", requires: ">=999.0.0", wantSatisfied: true, wantDevelopmentBuild: true},
-		{name: "large components", cli: "v999999999999999999999.0.0", requires: ">=999999999999999999998.9.9", wantSatisfied: true},
+		{
+			name:          "components beyond integer range",
+			cli:           "v999999999999999999999.0.0",
+			requires:      ">=999999999999999999998.9.9",
+			wantSatisfied: true,
+		},
 		{name: "invalid build version", cli: "1.2.3", requires: ">=1.0.0", wantErr: true},
 	}
 
@@ -88,11 +98,17 @@ func TestSatisfies(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			requirement, err := ParseRequirement(tt.requires)
 			if err != nil {
-				t.Fatalf("ParseRequirement() error = %v", err)
+				t.Fatalf("ParseRequirement() error = %v, want nil", err)
 			}
 			satisfied, developmentBuild, err := Satisfies(tt.cli, requirement)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("Satisfies() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Satisfies() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Satisfies() error = %v, want nil", err)
 			}
 			if satisfied != tt.wantSatisfied || developmentBuild != tt.wantDevelopmentBuild {
 				t.Fatalf("Satisfies() = (%v, %v), want (%v, %v)", satisfied, developmentBuild, tt.wantSatisfied, tt.wantDevelopmentBuild)
@@ -101,7 +117,7 @@ func TestSatisfies(t *testing.T) {
 	}
 }
 
-func TestSatisfiesRejectsZeroRequirement(t *testing.T) {
+func TestSatisfies_RejectsZeroRequirement(t *testing.T) {
 	for _, cliVersion := range []string{"v1.2.3", "dev"} {
 		t.Run(cliVersion, func(t *testing.T) {
 			_, _, err := Satisfies(cliVersion, Requirement{})

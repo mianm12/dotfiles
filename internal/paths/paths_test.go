@@ -3,6 +3,7 @@ package paths
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -69,10 +70,11 @@ func TestResolveControlPath(t *testing.T) {
 	}
 }
 
-func TestRepositoryPriority(t *testing.T) {
+func TestRepository_SelectionPriority(t *testing.T) {
 	home := "/home/example"
 	configured := "~/configured"
 
+	// 每个用例保留可用的低优先级来源，以证明 flag > environment > config > default。
 	tests := []struct {
 		name      string
 		flagValue string
@@ -82,8 +84,22 @@ func TestRepositoryPriority(t *testing.T) {
 		config    *string
 		want      string
 	}{
-		{name: "flag", flagValue: "~/flag", flagSet: true, envValue: "~/environment", envSet: true, config: &configured, want: "/home/example/flag"},
-		{name: "environment", envValue: "~/environment", envSet: true, config: &configured, want: "/home/example/environment"},
+		{
+			name:      "flag",
+			flagValue: "~/flag",
+			flagSet:   true,
+			envValue:  "~/environment",
+			envSet:    true,
+			config:    &configured,
+			want:      "/home/example/flag",
+		},
+		{
+			name:     "environment",
+			envValue: "~/environment",
+			envSet:   true,
+			config:   &configured,
+			want:     "/home/example/environment",
+		},
 		{name: "config", config: &configured, want: "/home/example/configured"},
 		{name: "default", want: "/home/example/.local/share/dot/repo"},
 	}
@@ -92,12 +108,12 @@ func TestRepositoryPriority(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := Repository(home, tt.flagValue, tt.flagSet, func(name string) (string, bool) {
 				if name != RepoEnvironment {
-					t.Fatalf("unexpected environment lookup %q", name)
+					t.Fatalf("Repository() environment lookup = %q, want %q", name, RepoEnvironment)
 				}
 				return tt.envValue, tt.envSet
 			}, tt.config)
 			if err != nil {
-				t.Fatalf("Repository() error = %v", err)
+				t.Fatalf("Repository() error = %v, want nil", err)
 			}
 			if got != tt.want {
 				t.Fatalf("Repository() = %q, want %q", got, tt.want)
@@ -106,7 +122,87 @@ func TestRepositoryPriority(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsExplicitEmptyEnvironment(t *testing.T) {
+func TestRepository_RejectsInvalidSelectedPath(t *testing.T) {
+	home := "/home/example"
+	validConfigured := "~/configured"
+	invalidConfigured := "relative/configured"
+
+	// 较低优先级来源保持有效，以证明非法的已选来源不会被静默跳过。
+	tests := []struct {
+		name       string
+		flagValue  string
+		flagSet    bool
+		envValue   string
+		envSet     bool
+		configured *string
+		wantSource string
+	}{
+		{
+			name:       "empty flag",
+			flagSet:    true,
+			envValue:   "~/environment",
+			envSet:     true,
+			configured: &validConfigured,
+			wantSource: "--repo",
+		},
+		{name: "empty environment", envSet: true, configured: &validConfigured, wantSource: RepoEnvironment},
+		{name: "relative machine config", configured: &invalidConfigured, wantSource: "machine config repo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Repository(home, tt.flagValue, tt.flagSet, func(name string) (string, bool) {
+				if name != RepoEnvironment {
+					t.Fatalf("Repository() environment lookup = %q, want %q", name, RepoEnvironment)
+				}
+				return tt.envValue, tt.envSet
+			}, tt.configured)
+			if err == nil {
+				t.Fatal("Repository() error = nil, want invalid selected path error")
+			}
+			if !strings.Contains(err.Error(), tt.wantSource) {
+				t.Errorf("Repository() error = %q, want source %q", err, tt.wantSource)
+			}
+		})
+	}
+}
+
+func TestConfig(t *testing.T) {
+	home := "/home/example"
+	tests := []struct {
+		name     string
+		envValue string
+		envSet   bool
+		want     string
+	}{
+		{
+			name:     "environment override",
+			envValue: "~/dot/config.toml",
+			envSet:   true,
+			want:     "/home/example/dot/config.toml",
+		},
+		{name: "default", want: "/home/example/.config/dot/config.toml"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Config(home, func(name string) (string, bool) {
+				if name != ConfigEnvironment {
+					t.Fatalf("Config() environment lookup = %q, want %q", name, ConfigEnvironment)
+				}
+				return tt.envValue, tt.envSet
+			})
+			if err != nil {
+				t.Fatalf("Config() error = %v, want nil", err)
+			}
+			if got != tt.want {
+				t.Errorf("Config() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfig_RejectsExplicitEmptyEnvironment(t *testing.T) {
 	_, err := Config("/home/example", func(name string) (string, bool) {
 		return "", name == ConfigEnvironment
 	})

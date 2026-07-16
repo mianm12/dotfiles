@@ -27,7 +27,7 @@ func TestCurrent(t *testing.T) {
 	}
 }
 
-func TestCurrentNormalizesEmptyValues(t *testing.T) {
+func TestCurrent_NormalizesEmptyValues(t *testing.T) {
 	originalVersion := Version
 	originalCommit := Commit
 	originalBuildTime := BuildTime

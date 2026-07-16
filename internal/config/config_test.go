@@ -6,17 +6,20 @@ import (
 	"testing"
 )
 
-func TestLoadMissingConfig(t *testing.T) {
-	_, exists, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+func TestLoad_MissingConfig(t *testing.T) {
+	got, exists, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Load() error = %v, want nil", err)
 	}
 	if exists {
-		t.Fatal("Load() exists = true, want false")
+		t.Error("Load() exists = true, want false")
+	}
+	if got.Profile != "" || got.Repo != nil || len(got.Data) != 0 {
+		t.Errorf("Load() = %#v, want empty Machine", got)
 	}
 }
 
-func TestLoadValidConfig(t *testing.T) {
+func TestLoad_ValidConfig(t *testing.T) {
 	path := writeConfig(t, `
 profile = "mac"
 repo = "~/src/dotfiles"
@@ -28,20 +31,30 @@ machine = "work-mbp"
 
 	got, exists, err := Load(path)
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Load() error = %v, want nil", err)
 	}
 	if !exists {
-		t.Fatal("Load() exists = false, want true")
+		t.Error("Load() exists = false, want true")
 	}
-	if got.Profile != "mac" || got.Repo == nil || *got.Repo != "~/src/dotfiles" {
-		t.Fatalf("Load() = %#v", got)
+	wantProfile := "mac"
+	wantRepo := "~/src/dotfiles"
+	if got.Profile != wantProfile {
+		t.Errorf("Load().Profile = %q, want %q", got.Profile, wantProfile)
 	}
-	if got.Data["email"] != "me@example.com" || got.Data["machine"] != "work-mbp" {
-		t.Fatalf("Load() data = %#v", got.Data)
+	if got.Repo == nil {
+		t.Errorf("Load().Repo = nil, want %q", wantRepo)
+	} else if *got.Repo != wantRepo {
+		t.Errorf("Load().Repo = %q, want %q", *got.Repo, wantRepo)
+	}
+	if got.Data["email"] != "me@example.com" {
+		t.Errorf("Load().Data[%q] = %q, want %q", "email", got.Data["email"], "me@example.com")
+	}
+	if got.Data["machine"] != "work-mbp" {
+		t.Errorf("Load().Data[%q] = %q, want %q", "machine", got.Data["machine"], "work-mbp")
 	}
 }
 
-func TestLoadRejectsInvalidConfig(t *testing.T) {
+func TestLoad_RejectsInvalidConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
@@ -69,7 +82,7 @@ func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
 	}
 	return path
 }
