@@ -11,12 +11,12 @@
 
 | 范围 | 交付结果 |
 |---|---|
-| 命令 | `init` `apply` `diff` `status` `add` `version`、`doctor --manifest-only` |
+| 命令 | `init` `apply` `diff` `status` `add` `version` `self-update`、`doctor --manifest-only` |
 | 文件模型 | link + scaffold;managed 相关输入在 M1 明确报不支持,不得按 link 静默处理 |
-| 安全内核 | ownership 存证、文件系统 target 身份、完整 profile 全局校验、conflict/force、可用备份、target/source 最终 Precond、创建先于 prune、收敛门控、控制面隔离 |
-| 状态 | state 格式、严格语义校验、原子提交、link/scaffold 崩溃收养、scaffold 显式重建、单实例锁 |
-| add | link/scaffold、渲染型模式建账一致性、与 apply 同源的预检、仓库不覆盖、各模式提交边界、等价遗留 source 续跑与失败恢复 |
-| 数据 | `[data]`、机器配置与 init 变量收集;渲染期不读取环境 |
+| 安全内核 | ownership 存证、文件系统 target 身份、祖先拓扑与 hard-link 副作用隔离、完整 profile 全局校验、conflict/force、可用备份、target/source 提交时 Precond、创建先于 prune、收敛门控、控制面家族隔离 |
+| 状态 | state v1 格式、重复成员与严格语义校验、原子提交、link/scaffold 崩溃收养及二者 kind 迁移、scaffold 显式重建、单实例锁;遇到预留 rendered 条目整体 fail closed |
+| add | link/scaffold 建账一致性、与 apply 同源的预检、Git 可跟踪性、仓库不覆盖、各模式提交边界、等价遗留 source 续跑与失败恢复 |
+| 数据 | `[data]`、严格机器配置与 init 变量收集/提交前提;渲染期不读取环境 |
 | hooks | 字符串形态 run_once、保留目录、规定的 cwd/环境、at-least-once |
 | 基建 | `--home` 全隔离、受校验的 bootstrap、首个 Release 和双平台 CI |
 
@@ -26,9 +26,9 @@
 
 | 范围 | 交付结果 |
 |---|---|
-| managed | `.tmpl`、drift(hash/mode)、`diff -v`、显式 adopt、`add --template` 建账一致性、完整 kind 迁移 |
+| managed | `.tmpl`、drift(hash/mode)、`diff -v`、显式 adopt、`add --template` 建账一致性、补齐 managed/rendered kind 迁移 |
 | 数据 | `from_env` 仅在 init 快照 |
-| 同步 | update 洁净检查/pull/requires/apply、原地更新风险与 commit 恢复信息、self-update、带锁且透传退出码的 git |
+| 同步 | update 洁净检查/pull/requires/apply、原地更新风险与 commit 恢复信息、带锁且透传退出码的 git |
 | hooks | watch 依赖文件 |
 | 辅助 | 完整 doctor、无隐式 force 的 edit、允许安全部分建账的受控 state rebuild |
 
@@ -48,16 +48,19 @@
 | CLI 自动修改 manifest | 不做 | 保格式编辑和重序列化都不值得引入 |
 | add 自动建模块、递归收编目录 | 不做 | 生命周期和失败回滚过于复杂 |
 | 目录/特殊文件 backup-replace | 不做 | 手工移走换取简单可证的覆盖边界 |
+| owner/ACL/xattr/flags/时间戳的完整搬移或备份 | 不做 | 当前只承诺字节、普通权限位与链接文本;依赖丰富元数据的文件手工处理 |
+| 自动清理历史备份 | 当前不做 | 单人规模下手工清理成本低,避免清理策略本身误删唯一恢复副本 |
 | run_once 指纹包含 profile/data | 不做 | 避免无关上下文变化触发全量重跑 |
 | 并发执行、守护进程、Windows | 不做 | 不符合单人工具定位 |
-| HOME 外 target | 当前不做 | 会改变路径边界与 state 契约,需要未来单独设计而非一个放宽 flag |
+| manifest 直接声明 HOME 外 target | 当前不做 | 会改变路径边界与 state 契约,需要未来单独设计而非一个放宽 flag;既有祖先 symlink 指向外部目录属于用户文件系统拓扑,不等于开放此语法 |
 | 完整 semver、目录级链接、配置分仓 | 不纳入当前范围 | 当前收益不足以抵消复杂度 |
 
 ## 3. 实现门槛与反馈规则
 
 建议按可验证结果推进,不绑定包名:
 
-1. 先完成路径、manifest、机器配置和 state 的加载/校验,让非法输入在 mutation 前失败。
+1. 先完成路径、manifest、机器配置和 state 的加载/校验,让非法输入在依赖它的计划或
+   mutation 阶段前失败,同时保留 init 配置提交与 update pull 的明确例外。
 2. 实现纯计划与 dry-run,用决策表测试固定 ownership、迁移和 prune 语义。
 3. 实现 link/scaffold 的安全提交、状态落盘与崩溃恢复,再开放真实 apply。
 4. 加入 prune、force/backup 和 add,逐个通过提交点前后的失败测试。

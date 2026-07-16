@@ -15,7 +15,7 @@ Go 练手项目。
 4. 私有内容(密钥、公司配置)通过 `*.local` 约定留在本机,以纵深防御大幅降低入库风险。
 5. `apply` 严格幂等、可 dry-run;**自动**破坏性动作以所有权谓词为前置,强制替换必须
    显式授权且先得到可用备份;一切由 apply/add 执行的不可逆 target mutation 在提交前
-   复核观测前提,create-link 还须确认 source 仍合法;**清理仅在创建收敛后进行**——
+   必须保证观测前提仍成立,create-link 还须确认 source 仍合法;**清理仅在创建收敛后进行**——
    可恢复的部分失败不得造成「新旧皆无」。
 6. CLI 与配置同仓库,但版本解耦:配置更新走 `git pull`,二进制走 Releases,
    以 `requires` + 严格解码双重铰链保证兼容安全。
@@ -31,6 +31,9 @@ Go 练手项目。
 - **包管理器抽象层**:不封装 brew/apt 的统一接口,软件安装交给模块内 hooks 脚本
   (如 `brew bundle` 消费模块自带的 Brewfile)。
 - **配置内容的语义理解**:不解析 zshrc/vimrc 内容,只管文件级别的分发。
+- **取证级文件元数据镜像**:当前恢复范围是普通文件的字节与普通权限位,以及 symlink 的
+  原始链接文本;不承诺复制 owner、ACL、扩展属性、文件 flags 或时间戳。需要保留这些属性的
+  对象不得交给 `dot add` 搬移或 `--force` 替换。
 - **Windows 支持**。
 - **守护进程/文件监听**:所有动作由用户显式触发。
 
@@ -53,13 +56,14 @@ Go 练手项目。
 
 | 风险 | 缓解现状 | 接受理由 |
 |---|---|---|
-| 不可逆提交前最终复核后的竞态窗口 | 所有准备工作先完成,最终复核后立即提交;能使用“不覆盖”创建语义的路径直接使用 | 跨 macOS/Linux 完全消除需要平台专有原语,超出定位(ADR-23) |
+| 不可逆提交点附近仍存在极小竞态窗口 | 提交必须基于仍成立的观测前提,并尽量缩短判断与提交之间的窗口;可用时采用不覆盖语义 | 跨 macOS/Linux 完全消除需依赖平台专有原语,且对抗性第三方并发本就不在威胁模型内(ADR-23) |
 | 极端断电时最新目录项可能回滚 | 数据文件在交接前要求完成文件级持久化;普通崩溃可收养自愈,但不承诺目录元数据已同步到稳定存储 | 刚创建的 source/backup 目录项仍可能受影响,包括 add/备份;这是明确接受而非由 state 可重建掩盖的风险 |
 | hook 副作用成功、指纹落盘前崩溃 → 重跑 | 语义定为 at-least-once,要求脚本自我幂等 | brew bundle / defaults write 天然幂等,要求不苛刻 |
-| state 丢失后,scaffold「用户有意删除」的记忆(S2)随之丢失,重跑会再生成一次蓝本 | 收养规则可重建其余记录;scaffold 记忆无处重建 | 后果仅是多出一个蓝本文件,零破坏 |
-| `update` 原地 pull 会立即改变 link 的活跃 source;后续校验/apply 失败时可能留下死链 | pull 前要求仓库完全洁净;保留并报告更新前后 commit,旧内容可从 Git 历史恢复;不自动回滚 | 配置仓库本身有版本历史,风险是可恢复的暂时不可用而非不可逆数据损毁;候选仓库原子切换超出单人工具定位(ADR-34) |
+| state 丢失、损坏且没有可对应当前 scaffold 的可信旧记录时,「用户有意删除」的记忆(S2)随之丢失,重跑会再生成一次蓝本 | 合法旧 state 的受控 rebuild 会按 kind 迁移规则保留该记忆;完全失去可信记录时无处重建 | 后果仅是多出一个蓝本文件,零破坏 |
+| `update` 原地 pull 会立即改变 link 的活跃 source;后续校验/apply 失败时可能留下死链 | pull 前拒绝 tracked/index/普通 untracked 变化及会被覆盖的 ignored-untracked 路径;保留并报告更新前后 commit,旧内容可从 Git 历史恢复;不自动回滚 | 配置仓库本身有版本历史,风险是可恢复的暂时不可用而非不可逆数据损毁;候选仓库原子切换超出单人工具定位(ADR-34) |
 | mutation 期间直接使用外部 git/editor 修改仓库 | `dot git` 使用同一锁;文件计划尽量自包含;create-link 提交前复核 source | 工具不支持第三方并发仓库修改;本轮可能失败、应用较旧快照,或执行计划后被外部改动的 hook,用户须停止并发后核查并重跑 |
 | 用户以 `git add -f` 强行提交 `*.local`(ADR-32) | `.gitignore`、CLI 拒绝与 `doctor --manifest-only`/CI 等多层防护 | 故意绕过属用户自主行为,工具不对抗自己的主人 |
+| `dot add` 搬移与 `--force` 备份不保留完整平台元数据 | 明确保留普通文件字节与普通权限位、symlink 原始链接文本;force 另报告可恢复备份路径 | add/force 都是显式授权;跨 macOS/Linux 完整复制 ACL/xattr/flags/owner 的复杂度超出当前定位,含此类必要元数据的对象应手工处理 |
 
 ## 5. 术语表
 
@@ -67,12 +71,13 @@ Go 练手项目。
 |---|---|
 | **模块(module)** | `modules/` 下的一个子目录,是分发的最小单元,内部结构镜像 target 路径。贯穿代码、manifest、CLI 的统一用语 |
 | **profile** | 顶层 manifest 中定义的模块分组,支持 `@` 嵌套引用 |
-| **target** | 模块内容要落地的根目录,默认 `~` |
-| **target 身份** | 按目标文件系统的路径名等价语义得到的逻辑路径位置;大小写/Unicode 等别名身份相同,但不以 inode 把不同 hard link 路径合并(ADR-35) |
+| **target root** | 模块级 `target` 在当前 OS 下解析出的落地目录根,默认 `~` |
+| **entry target** | 单个 desired/state 文件条目的最终落地路径;未显式覆盖时由 target root 与模块相对路径组合得到 |
+| **target 身份** | entry target 在当前文件系统拓扑下对应的逻辑位置;大小写/Unicode 或既有祖先 symlink 造成的路径别名属于同一身份,但叶子 hard link 的不同路径仍是不同身份(ADR-35) |
 | **保留目录 `hooks/`** | 模块顶层的 `hooks/` 目录,存放 hook 脚本及其数据文件,内置忽略,不参与链接 |
 | **managed 模板** | `.tmpl` 后缀,每次 apply 重新渲染,产物归工具管,手改视为 drift |
 | **scaffold 模板** | `.template` 后缀,目标不存在时生成一次,之后永不覆盖,产物归用户 |
-| **`*.local` 约定** | 共享配置固定 source 同名 `.local` 文件;`.local` 本身不入库 |
+| **`*.local` 约定** | 共享配置按仓库约定自行引用同名 `.local`;CLI 不注入内容,`.local` 本身不入库 |
 | **`link_dest` 存证** | symlink 条目在 state 中记录的、创建链接时写入的确切字符串;所有权判定的唯一依据(ADR-22) |
 | **机器配置** | `~/.config/dot/config.toml`,不入库,记录本机 profile 与模板变量 |
 | **desired state** | 由 manifest + 模块文件树 + 机器配置推导出的「apply 后应有的文件系统状态」 |
@@ -84,7 +89,7 @@ Go 练手项目。
 | **收养(adopt)** | state-only 记账动作:补录(磁盘对象与 desired 一致但无记录;symlink 自动、普通文件需 `--adopt`,ADR-21)、kind 迁移记账(ADR-27)与元数据刷新均由它承载,不触碰文件系统 |
 | **mutation 动作** | 改变文件系统的动作:create-link / render / scaffold / backup-replace / prune(执行) |
 | **提交点(commit point)** | 某次操作从“可无副作用撤销”进入“必须保留新数据并依靠重跑收敛”的边界 |
-| **控制面路径** | dot 自己的有效 repo、机器配置、state/backup 与已安装二进制;不得成为 desired target 或 add 输入 |
+| **控制面家族** | dot 自己的有效 repo 树、机器配置文件、state 根及其预定子路径、已安装二进制;不同家族两两隔离,且不得成为 desired target 或 add 输入 |
 
 ## 6. 关键决策记录(ADR)
 
@@ -100,21 +105,21 @@ Go 练手项目。
 | ADR-8 | 双模板后缀:`.tmpl` / `.template` | 单后缀 + manifest 标记 | 文件名自说明;短后缀 = 高频渲染,长后缀 = 一次性蓝本 |
 | ADR-9 | 模块发现**靠目录存在**,profiles 只分组不枚举 | manifest 显式注册 | 避免「加模块改两处」双重记账 |
 | ADR-10 | state 用**单个 JSON 文件** | bolt/sqlite | 个人配置规模几百条;JSON 可 diff、可手工急救 |
-| ADR-11 | `requires` 仅支持 `>=x.y.z` | 完整 semver 约束 | 当前兼容诉求只有最低版本,不需要范围锁定 |
+| ADR-11 | 顶层 `requires` **必填**,且仅支持 `>=x.y.z` | 缺省最低版本 / 完整 semver 约束 | 兼容下限必须显式;当前诉求只有最低版本,不需要范围锁定 |
 | ADR-12 | scaffold 产物**永不自动删除** | 随模块删除清理 | scaffold 产物含用户手写内容,是用户数据不是工具产物 |
 | ADR-13 | 执行顺序**创建先于 prune** | prune 先行 | 孤儿集与创建集 target 必不相交,反转无冲突;失败最坏结果为「新旧并存」 |
-| ADR-14 | **自动**破坏性动作以 **owned() 谓词**为前置(强制替换 = --force ∧ 备份成功 ∧ 最终 Precond);安全关键内容摘要必须让偶然碰撞可忽略 | 信任 state 记录 / 弱摘要 | state 只证明「曾经创建」;现势必须复核,偶然碰撞不得成为错误的所有权证据 |
+| ADR-14 | **自动**破坏性动作以 **owned() 谓词**为前置(强制替换 = --force ∧ 备份成功 ∧ 提交时 Precond 成立);安全关键内容摘要必须让偶然碰撞可忽略 | 信任 state 记录 / 弱摘要 | state 只证明「曾经创建」;提交不能依赖已失效证据,偶然碰撞不得成为错误的所有权证据 |
 | ADR-15 | **收养与安全续跑规则**兜住崩溃窗口 | 逐动作即时落盘、WAL | 「产物已提交但未记账」或 add 仅留下等价 source 时经重跑收敛,复杂度远低于日志方案 |
-| ADR-16 | manifest **两阶段加载**:requires 宽松预读 + mutation 严格解码 | 未知键仅警告 | 带着不理解的字段去 prune 风险不可接受;严格解码是 requires 忘提升时的失效安全 |
+| ADR-16 | manifest **两阶段加载**:requires 宽松预读 + 所有解释 desired/计划/新 state 的命令严格解码;doctor 只诊断 | 按是否持锁粗分 / 未知键仅警告 | 带着不理解的字段生成计划风险不可接受;严格解码是 requires 忘提升时的失效安全 |
 | ADR-17 | 模板**不提供 `env` 函数**,环境值经 `[data].from_env` 于 init 快照 | 渲染时读环境 | 渲染只依赖显式输入,否则 plan 不可复现、drift 误报 |
 | ADR-18 | **新建/更新的 state 条目必须属于本次 effective profile**;部分 apply 只缩小动作与 prune 作用域,target/路径全局不变量仍按完整 effective profile 校验;历史条目允许作为孤儿存在 | 允许游离模块 / 局部路径校验 | 否则部分 apply 可绕过 target 撞车,或建立会被全量 apply 误清的条目 |
 | ADR-19 | mutation 命令与 `dot git` 持有覆盖完整操作周期的**单实例进程间锁**;嵌套流程复用同一锁所有权 | 无锁 / 解析 Git 子命令后选择性加锁 / 完整并发支持 | Git alias 与子命令是否写仓库不宜猜测;统一串行化简单可预测,同时避免 update 嵌套自锁;锁原语由实现选择 |
 | ADR-20 | **prune 仅在创建阶段完全收敛后执行**;任一 conflict/error/Precond 失配/拒绝确认 → 本次全部 prune 延迟(deferred) | 按错误类型分别决定是否清理 | 单一收敛条件避免改名等组合场景出现「新旧皆无」;代价仅是家务性清理推迟 |
 | ADR-21 | **收养不对称**:symlink 自动;建立 rendered 所有权的普通文件需显式 `--adopt` 且内容/mode 均已符合 desired;scaffold 的无所有权记录可自动补录 | 全自动 / 全显式 / observed 第三类条目 | 文件内容巧合不构成删除所有权;scaffold 补录只抑制未来重建,不授权覆盖或删除 |
 | ADR-22 | symlink 所有权 = 磁盘上原始链接目标与 state 存证 `link_dest` 的**词法比较** | 解析最终目标 / 尾部启发式 | 解析式判定在死链(prune 主场景)上恒失败;词法比较不要求叶子存在;仓库搬家由「记录精确匹配 ∧ 期望已变」的 state 证据驱动 |
-| ADR-23 | **全部 target mutation 在不可逆提交前做最终 Precond 复核**;对象种类与参与决策的证据必须仍等于计划快照;create-link 的 source 还必须仍是合法普通文件;准备临时产物、备份等耗时工作不得位于最终复核之后 | 仅在动作开始时复核 | 工具自己的锁管不住普通编辑器;最终复核把未防护窗口压到提交本身,失配一律降级 conflict |
+| ADR-23 | **全部 target mutation 在不可逆提交时必须仍满足计划依据的 Precond**;对象身份、种类与参与决策的证据不得在判断后悄然变化,create-link 的 source 还必须仍是合法普通文件 | 允许基于陈旧快照提交 | 工具自己的锁管不住普通编辑器;实现可用提交前复核、不覆盖原语或其他机制维持该性质,失配一律降级 conflict |
 | ADR-24 | 模板渲染 **fail-fast**:plan 渲染动作作用域内的全部模板,任一失败使本次运行整体退出 | 单文件降级、其余继续 | 执行计划保持自包含;渲染失败即配置 bug,不该半套上线 |
-| ADR-25 | state **fail-closed**:损坏 / 版本过新 / 语义校验失败拒绝普通 mutation;缺失 = 合法全新;恢复命令走单独契约 | 一律降级为无历史模式 | 无历史模式跑完会覆盖损坏文件、毁尸灭迹;语义校验防半损坏 state 误导所有权和 prune |
+| ADR-25 | state **fail-closed**:损坏 / 版本过新 / 语义校验失败时,禁止一切依赖旧 state 判断所有权、drift、adopt、prune、source 定位或写新 state 的阶段;诊断与恢复走明确例外 | 按是否持锁一律阻断 / 降级为无历史模式 | 无历史模式会毁尸灭迹并误导所有权;精确到阶段又不妨碍 init 配置提交或 update pull 等不依赖 state 的前置动作 |
 | ADR-26 | managed 产物的 mode 必须收敛到声明值;mode 漂移不改变内容所有权证据;symlink mode 不管理 | 忽略 mode 漂移 / 把 mode 纳入所有权 | 权限是产物性质但不是内容身份;具体修正手段由实现选择 |
 | ADR-27 | **kind 迁移三原则**:所有权只能被证据延续,不能被类型切换凭空创造;迁入 scaffold = 释放所有权且既有记录视为一次性生命周期已满足;迁出 scaffold = 等同无记录 | 无迁移专门规则 | 否则 `.tmpl → .template` 后旧 rendered 证据可能误删用户产物,或把用户已删除的产物意外重建 |
 | ADR-28 | **CLI 不写任何 manifest**:砍掉 `add --activate`,改为报错并打印待手动添加的行 | 保格式 TOML 编辑 / 整文件重序列化 | 重序列化丢注释与排版;保格式编辑脆弱;新建模块是低频操作,一次手动编辑可接受 |
@@ -122,9 +127,9 @@ Go 练手项目。
 | ADR-30 | **`dot add` 的候选必须按正常 apply 规则得到唯一且相同的 desired entry**;`--template`/`--scaffold` 建账前渲染字节/mode 必须匹配原文件;默认 link 以 target 替换为提交点,渲染型模式以 state 所有权/生命周期建账为提交点;所有模式的等价遗留 source 均可安全续跑 | 为 add 复制一套简化规则 / 一律拒绝已有 source | add 与 apply 语义分叉会产生下轮孤儿;state 不得引用随后被清理的 source,一次崩溃也不能永久卡死命令 |
 | ADR-31 | run_once 指纹**不含**运行上下文(profile / data) | 卷入上下文 | 切 profile 或改一个模板变量就全量重跑不可接受;hook 需要上下文时读 `DOT_*` 环境变量并自我幂等 |
 | ADR-32 | `*.local` 防护定位为**纵深**而非保证:`git add -f` 为已接受的直接绕过;CI/`--manifest-only` 将已跟踪 `*.local` 判为错误 | 宣称「永不入库」 | 工具挡不住用户对自己防护的故意绕过,诚实表述 + 机械门禁优于过强承诺 |
-| ADR-33 | **控制面路径永不参与托管**:有效 repo、机器配置、state/backup、已安装二进制与 desired/state/add 输入不得重叠 | 依赖用户不要配置错 | 这些路径互相读写形成自修改与数据泄露闭环;统一边界校验成本低且属于防误操作底线 |
+| ADR-33 | **控制面家族两两隔离且永不参与托管**:有效 repo、机器配置、state 家族、已安装二进制彼此不得重叠(state 家族内部预定层级除外);阶段实际消费的可信 desired/state/add 输入也不得与之重叠,不消费 state 的恢复动作不以解码 state 为前提 | 只隔离 target / 依赖用户不要配置错 | 控制面互相包含会形成自修改与覆盖闭环;按实际消费边界校验既防误操作,也不让损坏/新版 state 堵死升级恢复 |
 | ADR-34 | `update` 对配置仓库做**原地 fast-forward**,不承诺 link 内容的事务切换;`--no-apply` 也不隔离 pull 对 link source 的即时影响;失败时保留新仓库并提供旧 commit 恢复信息 | 候选 worktree / 版本目录原子切换 | Git 已保留旧内容,完整运行时版本切换的复杂度不符合定位;风险必须显式而不能伪装成预览 |
-| ADR-35 | **target 唯一性、state 匹配与 orphan 判定按文件系统身份而非路径字符串**;两个 desired 别名整体拒绝,单个旧 state 别名必须与当前 desired 合并而不得被 prune | 只比较规范化字符串 / 全部别名 fail closed | macOS 常见文件系统可把大小写或 Unicode 写法不同的路径视为同一逻辑位置;字符串分裂会让当前 desired 同时成为 orphan |
+| ADR-35 | **target 唯一性、state 匹配与 orphan 判定按文件系统身份而非展示字符串**;两个 desired 别名整体拒绝,单个旧 state 别名必须与当前 desired 合并;既有祖先 symlink 形成的路径别名也不得绕过该不变量;不同 hard-link 叶子路径仍是不同身份,对一个的 mutation 不得连带改变另一个 | 只比较规范化字符串 / 禁止一切祖先 symlink / 以 inode 合并 / 全部别名 fail closed | 字符串分裂会让同一位置同时成为 desired 与 orphan;禁止正常目录 symlink 不符合单人工具定位;按 inode 合并又会混淆两个独立路径的生命周期 |
 
 ## 7. 与现有工具的能力对照
 
