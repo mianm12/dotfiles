@@ -77,8 +77,9 @@ var ErrIdentityUnavailable error
 - [x] 2026-07-17：Milestone 1 完成；窄测与 `make check` 通过，完整 diff/check 无错误，
   以 `feat(paths): 建立 target 文件系统身份` 提交（`d405146`）。
 - [x] 2026-07-17：Milestone 2 完成；symlink/blocker/missing 窄测与 `make check` 通过，
-  以 `feat(paths): 解析 target 祖先拓扑` 提交。
-- [ ] Milestone 3：macOS/Linux 大小写、Unicode 与 hard-link 真实文件系统测试。
+  以 `feat(paths): 解析 target 祖先拓扑` 提交（`6195f39`）。
+- [x] 2026-07-17：Milestone 3 完成；真实文件系统 oracle、hard-link、交叉编译与
+  `make check` 通过，以 `test(paths): 覆盖平台 target 身份语义` 提交。
 - [ ] Milestone 4：完整门禁、独立复核与收口。
 
 每完成一个 milestone，立即记录日期、测试、commit SHA 和新发现；更新随该 milestone 的
@@ -271,6 +272,14 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   loop 和普通 IO 错误。
 - 2026-07-17：缺失多级尾部只有在最近现存父目录的名称语义可外推时才建立身份；本机
   macOS 的 ASCII 尾部可用，Linux/Unicode 未知语义仍按裁决返回不可用。
+- 2026-07-17：本机临时目录所在文件系统同时接受 `CaseProbe`/`caseprobe` 和 NFC/NFD
+  两种现存路径写法；resolver 均恢复为同一真实目录项。ASCII 大小写不同的缺失名称也得到
+  同一身份，非 ASCII 缺失名称明确返回 `ErrIdentityUnavailable`。
+- 2026-07-17：现存 alias 先由文件系统 lookup 取得对象，再映射回父目录真实目录项；精确
+  名称优先。若同一 inode 有多个 hard-link 目录项，仅在权威名称 key 能选出唯一项时接受，
+  因而 case alias 不会把 sibling hard link 合并。
+- 2026-07-17：darwin/amd64 与 linux/amd64 test binary 交叉编译成功；按 Goal 授权边界未
+  push，故 Linux 测试已编写但未在真实 Linux runner 执行。
 
 ## Decision Log
 
@@ -286,6 +295,8 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   名称建 key，Linux 与非 ASCII 未知语义返回 `ErrIdentityUnavailable`。
 - 2026-07-17：Milestone 2 保持 leaf 与 ancestor 两种 symlink 角色分离：leaf 目录项不跟随，
   同一路径有后续组件时作为 ancestor 跟随；因此 leaf identity 不是 resolved child 的祖先。
+- 2026-07-17：Milestone 3 对现存 path 的 case/Unicode 等价以实际 lookup 为准，不自行实现
+  Unicode fold；只有不存在名称需要平台 capability，未知时继续 fail closed。
 
 ## Outcomes & Retrospective
 

@@ -106,8 +106,12 @@ func resolveTargetParent(path string) (string, []string, error) {
 				}
 				return "", nil, fmt.Errorf("resolve target ancestor %q: %w", current, resolveErr)
 			}
+			canonical, canonicalErr := canonicalizeExistingPath(resolved)
+			if canonicalErr != nil {
+				return "", nil, fmt.Errorf("canonicalize target ancestor %q: %w", resolved, canonicalErr)
+			}
 			slices.Reverse(missing)
-			return resolved, missing, nil
+			return canonical, missing, nil
 		}
 
 		if errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
@@ -142,7 +146,11 @@ func resolveLeafName(path, resolvedParent, leaf string) (string, error) {
 
 	_, err = os.Lstat(path)
 	if err == nil {
-		return "", fmt.Errorf("%w: target %q uses an unclassified filesystem alias", ErrIdentityUnavailable, path)
+		name, resolveErr := resolveExistingEntryName(path, resolvedParent, leaf, entries)
+		if resolveErr != nil {
+			return "", fmt.Errorf("resolve existing target alias %q: %w", path, resolveErr)
+		}
+		return name, nil
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("inspect target %q: %w", path, err)
@@ -156,6 +164,72 @@ func resolveLeafName(path, resolvedParent, leaf string) (string, error) {
 		return "", fmt.Errorf("resolve missing target name %q: %w", path, err)
 	}
 	return key, nil
+}
+
+func canonicalizeExistingPath(path string) (string, error) {
+	root, components := splitAbsolutePath(path)
+	current := root
+	for _, component := range components {
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return "", fmt.Errorf("read ancestor directory %q: %w", current, err)
+		}
+		actual, err := resolveExistingEntryName(filepath.Join(current, component), current, component, entries)
+		if err != nil {
+			return "", err
+		}
+		current = filepath.Join(current, actual)
+	}
+	return current, nil
+}
+
+func resolveExistingEntryName(path, parent, requested string, entries []os.DirEntry) (string, error) {
+	for _, entry := range entries {
+		if entry.Name() == requested {
+			return requested, nil
+		}
+	}
+
+	requestedInfo, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("inspect existing path %q: %w", path, err)
+	}
+	candidates := make([]string, 0, 1)
+	for _, entry := range entries {
+		candidatePath := filepath.Join(parent, entry.Name())
+		candidateInfo, candidateErr := os.Lstat(candidatePath)
+		if candidateErr != nil {
+			return "", fmt.Errorf("inspect directory entry %q: %w", candidatePath, candidateErr)
+		}
+		if os.SameFile(requestedInfo, candidateInfo) {
+			candidates = append(candidates, entry.Name())
+		}
+	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("%w: filesystem lookup for %q has no matching directory entry", ErrIdentityUnavailable, path)
+	}
+
+	requestedKey, err := missingNameKey(parent, requested)
+	if err != nil {
+		return "", fmt.Errorf("%w: multiple hard-link entries match alias %q: %w", ErrIdentityUnavailable, path, err)
+	}
+	matchingNames := make([]string, 0, 1)
+	for _, candidate := range candidates {
+		candidateKey, keyErr := missingNameKey(parent, candidate)
+		if keyErr != nil {
+			return "", fmt.Errorf("%w: cannot classify hard-link entry %q: %w", ErrIdentityUnavailable, candidate, keyErr)
+		}
+		if candidateKey == requestedKey {
+			matchingNames = append(matchingNames, candidate)
+		}
+	}
+	if len(matchingNames) != 1 {
+		return "", fmt.Errorf("%w: alias %q matches %d hard-link directory entries", ErrIdentityUnavailable, path, len(matchingNames))
+	}
+	return matchingNames[0], nil
 }
 
 func splitAbsolutePath(path string) (string, []string) {
