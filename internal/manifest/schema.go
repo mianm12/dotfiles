@@ -430,30 +430,8 @@ func parseIgnore(path, field string, raw *rawIgnore) ([]string, error) {
 }
 
 func validateIgnorePattern(pattern string) error {
-	if pattern == "" || strings.ContainsRune(pattern, '\x00') {
-		return fmt.Errorf("ignore pattern %q must not be empty or contain NUL", pattern)
-	}
-	if strings.HasPrefix(pattern, "!") {
-		return fmt.Errorf("ignore pattern %q uses unsupported negation", pattern)
-	}
-	if strings.ContainsAny(pattern, `?[]\`) {
-		return fmt.Errorf("ignore pattern %q uses unsupported glob syntax", pattern)
-	}
-
-	trimmed := strings.TrimPrefix(pattern, "/")
-	trimmed = strings.TrimSuffix(trimmed, "/")
-	if trimmed == "" {
-		return fmt.Errorf("ignore pattern %q has no path component", pattern)
-	}
-	for _, segment := range strings.Split(trimmed, "/") {
-		if segment == "" || segment == "." || segment == ".." {
-			return fmt.Errorf("ignore pattern %q contains an invalid path segment", pattern)
-		}
-		if strings.Contains(segment, "**") && segment != "**" {
-			return fmt.Errorf("ignore pattern %q requires ** to occupy a complete path segment", pattern)
-		}
-	}
-	return nil
+	_, err := parseIgnorePattern(pattern)
+	return err
 }
 
 func normalizeModulePath(path string) (string, error) {
