@@ -84,6 +84,11 @@ func (r Repository) ProfileNames() []string {
 	return append([]string(nil), r.profileNames...)
 }
 
+// DataKeys 返回根 manifest 声明的用户 data key，结果按字节序排列。
+func (r Repository) DataKeys() []string {
+	return sortedKeys(r.manifest.data)
+}
+
 // UnassignedModules 返回未被任何 profile 引用的模块名，结果按字节序排列。
 func (r Repository) UnassignedModules() []string {
 	return append([]string(nil), r.unassigned...)

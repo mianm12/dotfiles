@@ -37,6 +37,30 @@ base = []
 	}
 }
 
+func TestRepositoryDataKeys_ReturnsStableCopy(t *testing.T) {
+	repo := writeRepositoryManifest(t, `
+requires = ">=0.3.0"
+[profiles]
+base = []
+[data.machine]
+[data.email]
+`)
+	loaded, err := Load(repo)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	want := []string{"email", "machine"}
+	first := loaded.DataKeys()
+	if !reflect.DeepEqual(first, want) {
+		t.Fatalf("DataKeys() = %v, want %v", first, want)
+	}
+	first[0] = "changed"
+	if got := loaded.DataKeys(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("mutating DataKeys result changed repository: got %v, want %v", got, want)
+	}
+}
+
 func TestLoad_MissingModulesDirectoryMeansNoModules(t *testing.T) {
 	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
 
