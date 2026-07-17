@@ -89,15 +89,18 @@ type targetSpec struct {
 	byOS   map[string]string
 }
 
-type fileKind string
+// FileKind 表示 manifest 声明或文件名推导出的 M1 文件行为。
+type FileKind string
 
 const (
-	fileKindLink     fileKind = "link"
-	fileKindScaffold fileKind = "scaffold"
+	// FileKindLink 表示 target 应链接到仓库 source。
+	FileKindLink FileKind = "link"
+	// FileKindScaffold 表示只在首次缺失时生成普通文件。
+	FileKindScaffold FileKind = "scaffold"
 )
 
 type fileSpec struct {
-	kind   fileKind
+	kind   FileKind
 	mode   *string
 	target *string
 }
@@ -282,18 +285,18 @@ func validateTargetPath(value string) error {
 }
 
 func parseFile(path, source string, raw rawFile) (fileSpec, error) {
-	kind := fileKindLink
+	kind := FileKindLink
 	if strings.HasSuffix(source, ".tmpl") {
 		kind = "managed"
 	} else if strings.HasSuffix(source, ".template") {
-		kind = fileKindScaffold
+		kind = FileKindScaffold
 	}
 	if raw.Kind != nil {
 		switch *raw.Kind {
-		case string(fileKindLink):
-			kind = fileKindLink
-		case string(fileKindScaffold):
-			kind = fileKindScaffold
+		case string(FileKindLink):
+			kind = FileKindLink
+		case string(FileKindScaffold):
+			kind = FileKindScaffold
 		case "managed":
 			return fileSpec{}, fmt.Errorf("manifest %q: files.%s kind managed requires M2", path, source)
 		default:
@@ -307,7 +310,7 @@ func parseFile(path, source string, raw rawFile) (fileSpec, error) {
 		if !modePattern.MatchString(*raw.Mode) {
 			return fileSpec{}, fmt.Errorf("manifest %q: files.%s has invalid mode %q", path, source, *raw.Mode)
 		}
-		if kind == fileKindLink {
+		if kind == FileKindLink {
 			return fileSpec{}, fmt.Errorf("manifest %q: files.%s mode is not allowed for link", path, source)
 		}
 	}

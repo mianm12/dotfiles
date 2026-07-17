@@ -116,10 +116,10 @@ run_once = ["hooks/setup.sh"]
 	if !got.target.set || got.target.value.byOS["darwin"] != "~/Library/Application Support/App" {
 		t.Errorf("target = %#v, want darwin table", got.target)
 	}
-	if got.files["settings.json.template"].kind != fileKindScaffold {
+	if got.files["settings.json.template"].kind != FileKindScaffold {
 		t.Errorf("settings kind = %q, want scaffold", got.files["settings.json.template"].kind)
 	}
-	if got.files["literal.tmpl"].kind != fileKindLink {
+	if got.files["literal.tmpl"].kind != FileKindLink {
 		t.Errorf("literal kind = %q, want link", got.files["literal.tmpl"].kind)
 	}
 	if strings.Join(got.runOnce, ",") != "hooks/setup.sh" {
