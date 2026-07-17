@@ -3,7 +3,9 @@ package manifest
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/ghstlnx/dotfiles/internal/datakey"
@@ -126,7 +128,8 @@ func decodeRootManifest(path string) (rootSpec, error) {
 		return rootSpec{}, err
 	}
 	data := make(map[string]dataSpec, len(raw.Data))
-	for key, entry := range raw.Data {
+	for _, key := range sortedKeys(raw.Data) {
+		entry := raw.Data[key]
 		if !datakey.Valid(key) {
 			return rootSpec{}, fmt.Errorf("manifest %q: invalid data key %q", path, key)
 		}
@@ -136,10 +139,15 @@ func decodeRootManifest(path string) (rootSpec, error) {
 		data[key] = dataSpec{prompt: entry.Prompt, defaultValue: entry.Default}
 	}
 
+	ignore, err := parseIgnore(path, "ignore.patterns", raw.Ignore)
+	if err != nil {
+		return rootSpec{}, err
+	}
+
 	return rootSpec{
 		requirement: requirement,
 		defaults:    defaults,
-		ignore:      cloneStrings(raw.Ignore),
+		ignore:      ignore,
 		profiles:    cloneProfiles(*raw.Profiles),
 		data:        data,
 	}, nil
@@ -160,12 +168,28 @@ func decodeModuleManifest(path string) (moduleSpec, error) {
 		return moduleSpec{}, err
 	}
 	files := make(map[string]fileSpec, len(raw.Files))
-	for source, entry := range raw.Files {
-		file, err := parseFile(path, source, entry)
+	for _, declaredSource := range sortedKeys(raw.Files) {
+		source, err := normalizeModulePath(declaredSource)
+		if err != nil {
+			return moduleSpec{}, fmt.Errorf("manifest %q: files key %q: %w", path, declaredSource, err)
+		}
+		if _, exists := files[source]; exists {
+			return moduleSpec{}, fmt.Errorf(
+				"manifest %q: files key %q duplicates normalized source %q",
+				path,
+				declaredSource,
+				source,
+			)
+		}
+		file, err := parseFile(path, source, raw.Files[declaredSource])
 		if err != nil {
 			return moduleSpec{}, err
 		}
 		files[source] = file
+	}
+	ignore, err := parseIgnore(path, "ignore.patterns", raw.Ignore)
+	if err != nil {
+		return moduleSpec{}, err
 	}
 	runOnce, err := parseRunOnce(path, raw.Hooks)
 	if err != nil {
@@ -175,7 +199,7 @@ func decodeModuleManifest(path string) (moduleSpec, error) {
 	return moduleSpec{
 		os:      osValues,
 		target:  target,
-		ignore:  cloneStrings(raw.Ignore),
+		ignore:  ignore,
 		files:   files,
 		runOnce: runOnce,
 	}, nil
@@ -250,7 +274,8 @@ func parseTarget(path, field string, raw any) (optional[targetSpec], error) {
 			return optional[targetSpec]{}, fmt.Errorf("manifest %q: %s table must contain darwin or linux", path, field)
 		}
 		byOS := make(map[string]string, len(value))
-		for goos, rawPath := range value {
+		for _, goos := range sortedKeys(value) {
+			rawPath := value[goos]
 			if goos != "darwin" && goos != "linux" {
 				return optional[targetSpec]{}, fmt.Errorf("manifest %q: %s contains unsupported OS %q", path, field, goos)
 			}
@@ -315,7 +340,7 @@ func parseFile(path, source string, raw rawFile) (fileSpec, error) {
 		}
 	}
 	if raw.Target != nil {
-		if err := validateTargetPath(*raw.Target); err != nil {
+		if err := validateEntryTargetPath(*raw.Target); err != nil {
 			return fileSpec{}, fmt.Errorf("manifest %q: files.%s.target: %w", path, source, err)
 		}
 	}
@@ -327,6 +352,7 @@ func parseRunOnce(path string, raw *rawHooks) ([]string, error) {
 		return nil, nil
 	}
 	runOnce := make([]string, 0, len(raw.RunOnce))
+	seen := make(map[string]struct{}, len(raw.RunOnce))
 	for index, entry := range raw.RunOnce {
 		script, ok := entry.(string)
 		if !ok {
@@ -338,16 +364,78 @@ func parseRunOnce(path string, raw *rawHooks) ([]string, error) {
 		if script == "" {
 			return nil, fmt.Errorf("manifest %q: hooks.run_once[%d] must not be empty", path, index)
 		}
-		runOnce = append(runOnce, script)
+		normalized, err := normalizeModulePath(script)
+		if err != nil {
+			return nil, fmt.Errorf("manifest %q: hooks.run_once[%d]: %w", path, index, err)
+		}
+		if _, exists := seen[normalized]; exists {
+			return nil, fmt.Errorf("manifest %q: hooks.run_once[%d] duplicates script %q", path, index, normalized)
+		}
+		seen[normalized] = struct{}{}
+		runOnce = append(runOnce, normalized)
 	}
 	return runOnce, nil
 }
 
-func cloneStrings(raw *rawIgnore) []string {
+func parseIgnore(path, field string, raw *rawIgnore) ([]string, error) {
 	if raw == nil {
-		return nil
+		return nil, nil
 	}
-	return append([]string(nil), raw.Patterns...)
+	patterns := append([]string(nil), raw.Patterns...)
+	for index, pattern := range patterns {
+		if err := validateIgnorePattern(pattern); err != nil {
+			return nil, fmt.Errorf("manifest %q: %s[%d]: %w", path, field, index, err)
+		}
+	}
+	return patterns, nil
+}
+
+func validateIgnorePattern(pattern string) error {
+	if pattern == "" || strings.ContainsRune(pattern, '\x00') {
+		return fmt.Errorf("ignore pattern %q must not be empty or contain NUL", pattern)
+	}
+	if strings.HasPrefix(pattern, "!") {
+		return fmt.Errorf("ignore pattern %q uses unsupported negation", pattern)
+	}
+	if strings.ContainsAny(pattern, `?[]\`) {
+		return fmt.Errorf("ignore pattern %q uses unsupported glob syntax", pattern)
+	}
+
+	trimmed := strings.TrimPrefix(pattern, "/")
+	trimmed = strings.TrimSuffix(trimmed, "/")
+	if trimmed == "" {
+		return fmt.Errorf("ignore pattern %q has no path component", pattern)
+	}
+	for _, segment := range strings.Split(trimmed, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("ignore pattern %q contains an invalid path segment", pattern)
+		}
+		if strings.Contains(segment, "**") && segment != "**" {
+			return fmt.Errorf("ignore pattern %q requires ** to occupy a complete path segment", pattern)
+		}
+	}
+	return nil
+}
+
+func normalizeModulePath(path string) (string, error) {
+	if path == "" || strings.ContainsRune(path, '\x00') || filepath.IsAbs(path) {
+		return "", fmt.Errorf("path %q must be a non-empty relative path", path)
+	}
+	normalized := filepath.Clean(path)
+	if normalized == "." || normalized == ".." || strings.HasPrefix(normalized, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q must stay within the module", path)
+	}
+	return filepath.ToSlash(normalized), nil
+}
+
+func validateEntryTargetPath(path string) error {
+	if err := validateTargetPath(path); err != nil {
+		return err
+	}
+	if path == "~" {
+		return fmt.Errorf("entry target must be a true descendant of HOME")
+	}
+	return nil
 }
 
 func cloneProfiles(raw map[string][]string) map[string][]string {
@@ -356,4 +444,13 @@ func cloneProfiles(raw map[string][]string) map[string][]string {
 		profiles[name] = append([]string(nil), members...)
 	}
 	return profiles
+}
+
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }

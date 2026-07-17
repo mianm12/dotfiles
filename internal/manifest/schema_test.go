@@ -73,6 +73,7 @@ func TestDecodeRootManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "unknown target os", content: "requires = \">=1.0.0\"\n[defaults.target]\nfreebsd = \"~\"\n[profiles]\nbase = []", want: "unsupported OS"},
 		{name: "non-string target", content: "requires = \">=1.0.0\"\n[defaults.target]\ndarwin = 1\n[profiles]\nbase = []", want: "must be a string"},
 		{name: "non-canonical target", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/a/../b\"\n[profiles]\nbase = []", want: "canonical"},
+		{name: "invalid ignore pattern", content: "requires = \">=1.0.0\"\n[ignore]\npatterns = [\"a/**b\"]\n[profiles]\nbase = []", want: "requires ** to occupy"},
 	}
 
 	for _, tt := range tests {
@@ -147,7 +148,14 @@ func TestDecodeModuleManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "implicit managed", content: "[files.\"x.tmpl\"]", want: "requires M2"},
 		{name: "invalid kind", content: "[files.x]\nkind = \"copy\"", want: "invalid kind"},
 		{name: "invalid file target", content: "[files.x]\ntarget = \"/tmp/x\"", want: "canonical"},
+		{name: "file target at home", content: "[files.x]\ntarget = \"~\"", want: "true descendant of HOME"},
+		{name: "file path escapes module", content: "[files.\"../../x\"]", want: "stay within the module"},
+		{name: "absolute file path", content: "[files.\"/tmp/x\"]", want: "relative path"},
+		{name: "duplicate normalized file path", content: "[files.x]\n[files.\"a/../x\"]", want: "duplicates normalized source"},
+		{name: "invalid ignore pattern", content: "[ignore]\npatterns = [\"foo//bar\"]", want: "invalid path segment"},
 		{name: "empty hook", content: "[hooks]\nrun_once = [\"\"]", want: "must not be empty"},
+		{name: "hook path escapes module", content: "[hooks]\nrun_once = [\"../setup.sh\"]", want: "stay within the module"},
+		{name: "duplicate normalized hook", content: "[hooks]\nrun_once = [\"setup.sh\", \"hooks/../setup.sh\"]", want: "duplicates script"},
 		{name: "inline hook", content: "[hooks]\nrun_once = [{ script = \"hooks/x\" }]", want: "requires M2"},
 		{name: "wrong hook type", content: "[hooks]\nrun_once = [1]", want: "must be a string"},
 	}
@@ -159,6 +167,57 @@ func TestDecodeModuleManifest_RejectsInvalidSchema(t *testing.T) {
 				t.Fatalf("decodeModuleManifest() error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidateIgnorePattern(t *testing.T) {
+	tests := []struct {
+		pattern string
+		valid   bool
+	}{
+		{pattern: "*.md", valid: true},
+		{pattern: "/root/file", valid: true},
+		{pattern: "cache/", valid: true},
+		{pattern: "a/**/b", valid: true},
+		{pattern: ""},
+		{pattern: "/"},
+		{pattern: "!secret"},
+		{pattern: "a?b"},
+		{pattern: "[ab]"},
+		{pattern: `a\b`},
+		{pattern: "a//b"},
+		{pattern: "a/./b"},
+		{pattern: "a/../b"},
+		{pattern: "a/**b"},
+		{pattern: "a/***/b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern, func(t *testing.T) {
+			err := validateIgnorePattern(tt.pattern)
+			if (err == nil) != tt.valid {
+				t.Fatalf("validateIgnorePattern(%q) error = %v, valid %v", tt.pattern, err, tt.valid)
+			}
+		})
+	}
+}
+
+func TestDecodeModuleManifest_NormalizesRelativePaths(t *testing.T) {
+	path := writeManifest(t, `
+[files."dir/../settings"]
+[hooks]
+run_once = ["hooks/../setup.sh"]
+`)
+
+	got, err := decodeModuleManifest(path)
+	if err != nil {
+		t.Fatalf("decodeModuleManifest() error = %v, want nil", err)
+	}
+	if _, exists := got.files["settings"]; !exists {
+		t.Errorf("files = %v, want normalized settings key", got.files)
+	}
+	if strings.Join(got.runOnce, ",") != "setup.sh" {
+		t.Errorf("runOnce = %v, want normalized setup.sh", got.runOnce)
 	}
 }
 

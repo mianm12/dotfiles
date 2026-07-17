@@ -1,4 +1,4 @@
-// Package manifest 负责仓库 manifest 的 requires 预读与版本兼容性校验。
+// Package manifest 负责仓库 manifest 的两阶段加载、profile 展开与 effective 配置解析。
 package manifest
 
 import (
