@@ -1,4 +1,5 @@
-// Package paths 解析 dot 的 control-plane 路径，并区分正常缺失与不可忽略的路径错误。
+// Package paths 解析 dot 的 control-plane 路径和 target 文件系统身份，
+// 并区分正常缺失与不可忽略的路径错误。
 package paths
 
 import (
