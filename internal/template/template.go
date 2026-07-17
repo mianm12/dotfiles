@@ -12,6 +12,8 @@ import (
 	"github.com/ghstlnx/dotfiles/internal/datakey"
 )
 
+// allowedFunctions 是配置语言的完整函数白名单。default 由本包注入，其余名称由
+// text/template 内建提供；解析后仍需检查 AST，不能把标准库默认函数都暴露出去。
 var allowedFunctions = map[string]struct{}{
 	"default": {},
 	"eq":      {},
@@ -21,6 +23,8 @@ var allowedFunctions = map[string]struct{}{
 	"not":     {},
 }
 
+// builtInVariables 与 Render 构造的 root namespace 必须保持一致；用户变量由
+// datakey.Valid 保证以小写字母开头，因此不会与这里的名称碰撞。
 var builtInVariables = map[string]struct{}{
 	"OS":       {},
 	"Arch":     {},
@@ -60,11 +64,12 @@ func Compile(name string, source []byte, declaredData []string) (*Template, erro
 	if err != nil {
 		return nil, fmt.Errorf("parse template %q: %w", name, err)
 	}
-	candidates := parsed.Templates()
-	slices.SortFunc(candidates, func(left, right *texttemplate.Template) int {
+	// Templates 不承诺返回顺序；排序后首个静态错误才不受遍历顺序影响。
+	templates := parsed.Templates()
+	slices.SortFunc(templates, func(left, right *texttemplate.Template) int {
 		return cmp.Compare(left.Name(), right.Name())
 	})
-	for _, candidate := range candidates {
+	for _, candidate := range templates {
 		if candidate.Root == nil {
 			continue
 		}
@@ -80,7 +85,8 @@ func Compile(name string, source []byte, declaredData []string) (*Template, erro
 // Render 使用显式 context 逐字节渲染模板。声明 data 缺值时拒绝渲染，不从 manifest
 // default、进程环境或其他来源补值。
 func (t *Template) Render(context Context) ([]byte, error) {
-	values := map[string]string{
+	// 不把 Context 或 Data 直接交给模板，确保运行时可见的根键与静态校验使用同一集合。
+	root := map[string]string{
 		"OS":       context.OS,
 		"Arch":     context.Arch,
 		"Hostname": context.Hostname,
@@ -92,11 +98,11 @@ func (t *Template) Render(context Context) ([]byte, error) {
 		if !exists {
 			return nil, fmt.Errorf("declared data key %q is missing from render context; rerun init", key)
 		}
-		values[key] = value
+		root[key] = value
 	}
 
 	var output bytes.Buffer
-	if err := t.parsed.Execute(&output, values); err != nil {
+	if err := t.parsed.Execute(&output, root); err != nil {
 		return nil, fmt.Errorf("render template %q: %w", t.parsed.Name(), err)
 	}
 	return output.Bytes(), nil
@@ -115,6 +121,7 @@ func compileDataKeys(dataKeys []string) (map[string]struct{}, []string, error) {
 		declared[key] = struct{}{}
 		keys = append(keys, key)
 	}
+	// keys 是独立副本；排序后固定缺值检查顺序，Template 不保留调用方切片别名。
 	slices.Sort(keys)
 	return declared, keys, nil
 }
@@ -126,6 +133,8 @@ func defaultString(fallback, value string) string {
 	return value
 }
 
+// walkNode 对已知 AST 做后序遍历，使嵌套表达式先于外层节点校验。未知节点直接报错，
+// 避免 Go 新增模板语法后无意扩大配置语言。
 func walkNode(node parse.Node, visit func(parse.Node) error) error {
 	if node == nil {
 		return nil
@@ -219,6 +228,7 @@ func validateNode(node parse.Node, declared map[string]struct{}) error {
 		if len(current.Ident) <= 1 {
 			return nil
 		}
+		// parse 将根引用 $.key 表示为 ["$", "key"]；其他多段变量都是局部别名链。
 		if current.Ident[0] != "$" || len(current.Ident) != 2 {
 			return fmt.Errorf("variable reference %q must name one root value", current.String())
 		}

@@ -96,6 +96,8 @@ func (r Repository) ValidateTemplates() error {
 	entries := make([]DesiredEntry, 0)
 	for _, name := range r.moduleNames {
 		loaded := r.modules[name]
+		// doctor 不经 Resolve，以免 profile 或 OS 过滤漏掉模板；这里只构造 source
+		// 定级需要的字段，target 与运行上下文不参与静态检查。
 		module := ResolvedModule{
 			Name:      name,
 			SourceDir: loaded.root,

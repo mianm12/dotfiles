@@ -113,6 +113,8 @@ func (p ResolvedProfile) validateRuntimeContext(context RuntimeContext) (templat
 	}, nil
 }
 
+// renderScaffolds 在副本上填充 Content，并在首个错误时返回 nil，调用方不会收到
+// 已渲染与未渲染条目混合的部分可信结果。
 func renderScaffolds(
 	entries []DesiredEntry,
 	dataKeys []string,
@@ -142,6 +144,8 @@ func renderScaffolds(
 	return rendered, nil
 }
 
+// validateScaffolds 是 doctor 的静态路径：复用 plan 前的编译入口，但不需要运行 data，
+// 也不执行模板。
 func validateScaffolds(entries []DesiredEntry, dataKeys []string) error {
 	for _, entry := range entries {
 		if entry.Kind != FileKindScaffold {
@@ -154,6 +158,8 @@ func validateScaffolds(entries []DesiredEntry, dataKeys []string) error {
 	return nil
 }
 
+// compileScaffoldTemplate 是 manifest 层连接 source 文件系统与纯模板引擎的唯一桥接点；
+// 读取完成后，parser 与 renderer 都只接收内存中的显式输入。
 func compileScaffoldTemplate(entry DesiredEntry, dataKeys []string) (*templateengine.Template, error) {
 	source, err := os.ReadFile(entry.SourcePath)
 	if err != nil {
@@ -215,6 +221,8 @@ func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry,
 	return entries, nil
 }
 
+// enumerateModuleScaffolds 复用完整 source 定级规则，确保 doctor 尊重 [files] kind 与
+// ignore 优先级，而不是只按 .template 后缀扫描。
 func enumerateModuleScaffolds(module ResolvedModule) ([]DesiredEntry, error) {
 	if err := validateResolvedModuleSource(module); err != nil {
 		return nil, err
