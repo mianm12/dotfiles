@@ -158,6 +158,26 @@ func TestEnumerateModuleSources_ValidatesReferences(t *testing.T) {
 	}
 }
 
+func TestEnumerateModuleSources_RejectsHardLinkedHookScripts(t *testing.T) {
+	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
+	writeModule(t, repo, "app", "[hooks]\nrun_once = [\"hooks/first\", \"scripts/alias\"]")
+	moduleRoot := filepath.Join(repo, "modules", "app")
+	writeSourceFile(t, moduleRoot, "hooks/first", "script")
+	alias := filepath.Join(moduleRoot, "scripts", "alias")
+	if err := os.MkdirAll(filepath.Dir(alias), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", filepath.Dir(alias), err)
+	}
+	if err := os.Link(filepath.Join(moduleRoot, "hooks", "first"), alias); err != nil {
+		t.Fatalf("os.Link(%q) error = %v", alias, err)
+	}
+
+	module := resolveOnlyModule(t, repo)
+	_, err := enumerateModuleSources(module)
+	if err == nil || !strings.Contains(err.Error(), `hook source "scripts/alias" duplicates filesystem identity of "hooks/first"`) {
+		t.Fatalf("enumerateModuleSources() error = %v, want duplicate hook identity error", err)
+	}
+}
+
 func TestEnumerateModuleSources_DoesNotWrite(t *testing.T) {
 	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
 	writeModule(t, repo, "app", "")

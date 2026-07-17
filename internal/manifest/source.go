@@ -31,7 +31,7 @@ func enumerateModuleSources(module ResolvedModule) ([]moduleSource, error) {
 		hookPaths[script] = struct{}{}
 	}
 
-	objects := make(map[string]fs.FileMode)
+	objects := make(map[string]fs.FileInfo)
 	sources := make([]moduleSource, 0)
 	if err := walkModuleTree(module, patterns, hookPaths, objects, &sources); err != nil {
 		return nil, err
@@ -49,7 +49,7 @@ func walkModuleTree(
 	module ResolvedModule,
 	patterns []ignorePattern,
 	hookPaths map[string]struct{},
-	objects map[string]fs.FileMode,
+	objects map[string]fs.FileInfo,
 	sources *[]moduleSource,
 ) error {
 	rootInfo, err := os.Lstat(module.SourceDir)
@@ -79,7 +79,7 @@ func walkModuleTree(
 			if relative != "" {
 				source = relative + "/" + entry.Name()
 			}
-			objects[source] = info.Mode()
+			objects[source] = info
 
 			switch {
 			case info.Mode()&fs.ModeSymlink != 0:
@@ -106,7 +106,7 @@ func walkModuleTree(
 	return walk(module.SourceDir, "")
 }
 
-func validateSourceReferences(module ResolvedModule, objects map[string]fs.FileMode) error {
+func validateSourceReferences(module ResolvedModule, objects map[string]fs.FileInfo) error {
 	for _, rule := range module.FileRules {
 		if err := validateSourceReference(module.Name, "files", rule.Source, objects); err != nil {
 			return err
@@ -117,14 +117,27 @@ func validateSourceReferences(module ResolvedModule, objects map[string]fs.FileM
 			return err
 		}
 	}
+	for index, script := range module.RunOnce {
+		for previous := 0; previous < index; previous++ {
+			if os.SameFile(objects[script], objects[module.RunOnce[previous]]) {
+				return fmt.Errorf(
+					"module %q hook source %q duplicates filesystem identity of %q",
+					module.Name,
+					script,
+					module.RunOnce[previous],
+				)
+			}
+		}
+	}
 	return nil
 }
 
-func validateSourceReference(module, kind, source string, objects map[string]fs.FileMode) error {
-	mode, exists := objects[source]
+func validateSourceReference(module, kind, source string, objects map[string]fs.FileInfo) error {
+	info, exists := objects[source]
 	if !exists {
 		return fmt.Errorf("module %q %s references missing source %q", module, kind, source)
 	}
+	mode := info.Mode()
 	if mode.IsDir() {
 		return fmt.Errorf("module %q %s references directory source %q", module, kind, source)
 	}
