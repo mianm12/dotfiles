@@ -105,6 +105,11 @@ var ErrIdentityUnavailable error
   分类及双 API 测试；20 次 paths 测试、两项回归 50 次重复、darwin/linux 交叉编译、
   `make check` 和独立复核通过，以 `fix(paths): 以内核校验 target 祖先可达性` 提交
   （`eba7959`）。
+- [x] 2026-07-18：再次 review 收窄 blocker/cause 契约，修复 Darwin capability 查询失败未
+  匹配 `ErrIdentityUnavailable`，并让 leaf lookup 先于目录枚举，避免 missing leaf 扫描整个
+  parent 及 exact leaf 绕过权限错误。新增两项回归，50 次重复、20 次 paths 测试、
+  darwin/linux 交叉编译及 `make check` 通过，以 `fix(paths): 收口 target 身份错误边界`
+  提交（`dcfed7f`）。
 
 每完成一个 milestone，立即记录日期、测试、commit SHA 和新发现；更新随该 milestone 的
 语义 commit 提交。
@@ -324,6 +329,12 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   target parent 本身是深链 symlink 且真实 leaf 精确存在时，原实现只 `Lstat` parent，随后
   可绕过展示路径 lookup 并返回身份。稳定复现中 `os.Stat(A/child)` 返回 `ELOOP`，resolver
   却成功，因此仅靠 walker 不能权威证明祖先可达。
+- 2026-07-18：`ErrPathBlocked` 是确认祖先阻断后的领域分类；若再 multi-wrap `ENOENT`，调用方
+  可能把悬空 ancestor 当作正常 missing。只有非 blocker 普通错误保留 cause，capability 查询
+  失败则同时保留 `ErrIdentityUnavailable` 与查询 cause。
+- 2026-07-18：leaf exact-name 快路径若在 `Lstat` 前只依赖 `ReadDir`，会让“parent 可枚举但
+  不可搜索”的 target 错误成功；missing leaf 还会无谓读取并排序整个 parent。先做 leaf
+  `Lstat` 同时恢复可达性 authority 并跳过 missing 路径的目录枚举。
 
 ## Decision Log
 
@@ -353,6 +364,9 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   恢复真实目录项名称和记录完整 trace；walker 的 255 次限制仅作自身循环保护，不猜测平台
   内核上限。`ENOENT`/`ENOTDIR`/`ELOOP` 是 traversal blocker，权限和其他普通 IO 错误继续
   保留底层 cause 且不伪装成 `ErrPathBlocked`。
+- 2026-07-18：blocker 只承诺 `ErrPathBlocked`，不同时承诺底层 errno；只读 capability 查询
+  失败属于 `ErrIdentityUnavailable`，并额外保留查询 cause。leaf 先 `Lstat`，仅在确认现存后
+  枚举 parent 以恢复真实目录项名称；不为尚未接入的 profile consumer 预建批量 resolver。
 
 ## Outcomes & Retrospective
 
@@ -368,19 +382,22 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 - 最终 review 修复：`eba7959 fix(paths): 以内核校验 target 祖先可达性`。它恢复 kernel
   authority 与 trace collection 的职责分离，并补齐 deep symlink `ELOOP` 和普通 IO cause
   的双 API 回归。
+- 再次 review 修复：`dcfed7f fix(paths): 收口 target 身份错误边界`。它明确 blocker 与普通
+  cause 的分类，保证 Darwin capability 查询失败可由 `ErrIdentityUnavailable` 识别，并将
+  leaf lookup 前置到目录枚举之前。
 - 每个 milestone 均按顺序完成失败测试、最小实现、窄测、`make check`、完整 diff/check、
   ExecPlan 更新、独立 commit 和提交后 clean 检查。
 - 最终验证通过：`git diff main...HEAD --check`、`make check`、
   `go test -count=20 ./internal/paths`，以及 darwin/amd64、linux/amd64 test binary 交叉编译；
-  deep symlink 与普通 IO 两项新增回归各重复 50 次通过。
+  deep symlink/普通 IO 及本次 capability/permission 回归均各重复 50 次通过。
 - 本机真实文件系统 oracle 接受大小写和 NFC/NFD 现存别名；resolver 返回相同身份。ASCII
   缺失名称按只读 case capability 比较，非 ASCII 缺失名称返回 `ErrIdentityUnavailable`。
 - hard-link fixture 先证明 `os.SameFile == true`，再证明不同目录项身份不同；case alias 面对
   同 inode 多候选时只映射唯一名称项。
 - 原 Milestone 4 复核无 P0–P2；后续主线程发现 leaf symlink 中间项缺口，第一轮独立复核又
   发现 chained symlink 和 `X/../real` 的 P1，两者由 `df0fe9c` 修复。最终 review 继续发现
-  内核 symlink limit 的 P1 与普通 IO cause 测试 P3，由 `eba7959` 修复；修复后独立复核无
-  P0–P3 actionable finding。
+  内核 symlink limit 的 P1 与普通 IO cause 测试 P3，由 `eba7959` 修复；再次 review 的三项
+  P3 分别以计划契约收窄、Darwin 错误分类和 leaf lookup 顺序调整由 `dcfed7f` 收口。
 - 最终 diff 涉及本 ExecPlan、`internal/paths` 实现/测试/package doc，以及 `docs/02`、
   `docs/05`、`docs/08` 对既有身份/拓扑不变量的澄清；未新增依赖，未修改 README、持久化
   格式、控制面、state、planner、mutation 或 Precond。
