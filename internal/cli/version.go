@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ghstlnx/dotfiles/internal/config"
-	"github.com/ghstlnx/dotfiles/internal/manifest"
-	"github.com/ghstlnx/dotfiles/internal/paths"
+	"github.com/mianm12/dotfiles/internal/config"
+	"github.com/mianm12/dotfiles/internal/manifest"
+	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/spf13/cobra"
 )
 

@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ghstlnx/dotfiles/internal/datakey"
+	"github.com/mianm12/dotfiles/internal/datakey"
 	"github.com/pelletier/go-toml/v2"
 )
 

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ghstlnx/dotfiles/internal/datakey"
-	"github.com/ghstlnx/dotfiles/internal/paths"
+	"github.com/mianm12/dotfiles/internal/datakey"
+	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
 

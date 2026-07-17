@@ -1,4 +1,4 @@
-module github.com/ghstlnx/dotfiles
+module github.com/mianm12/dotfiles
 
 go 1.25.0
 

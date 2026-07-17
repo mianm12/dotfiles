@@ -34,7 +34,7 @@
 | 决策表 | L1–L6、M1–M6(含 M3a–M3d)、S1a–S3、P1–P3 每一行及短路顺序 |
 | kind 迁移 | 全组合;旧证据不成立时按新 kind 无记录语义决策;迁入 scaffold 释放所有权并把既有记录视为生命周期已满足,target 缺失不重建 |
 | 状态转换 | 成功动作才写账;活动 prune 才删账;skip/conflict/deferred/失败保留旧账;hook 指纹仅成功后更新 |
-| 全局校验 | 大小写/Unicode/既有祖先 symlink 形成的 target 别名、后缀碰撞、祖先冲突、中间目录穿文件、控制面家族两两隔离及与 entry target 重叠;部分 apply 仍校验完整 effective profile |
+| 全局校验 | 大小写/Unicode/既有祖先 symlink 形成的 target 别名、后缀碰撞、解析后逻辑祖先、展示路径中间目录项穿文件、控制面家族两两隔离及与 entry target 重叠;已有目录 symlink `A` 时 desired `A`/`A/child` 冲突,但不把 `A` leaf 与直接写成 `real/child` 的路径误判为祖先;部分 apply 仍校验完整 effective profile |
 | state | v1 必填/分 kind 字段与诊断时间字段、缺失合法;任意层级重复 JSON member、解析、未知字段、版本、kind、target、module/source、证据字段异常、多个 key 指向同一 target 及未知/不合格摘要标识均 fail closed;单个历史别名与 desired 合并而不成为 orphan |
 | 模板与 hook | missingkey、变量命名空间、函数白名单、mode 口径、fail-fast;run_once 精确 schema/script/watch 去重;watch 重排不改指纹、执行方式变化会改指纹,且指纹不含 profile/data |
 
@@ -72,6 +72,12 @@
 - 大小写、Unicode 或既有祖先 symlink 写法不同但文件系统身份相同的 state/desired 必须
   合并;旧 key 不得作为 orphan 删除当前 desired。完整 profile 有别名碰撞时,部分 apply
   也必须在 mutation 前拒绝。单独存在且指向普通目录的祖先 symlink 不应被当作恶意环境拒绝。
+- 已有目录 symlink `A` 时,desired 文件 `A` 与 `A/child` 必须因中间目录项穿文件而拒绝;
+  `A` leaf 与其目标目录仍是不同身份,直接写成目标真实路径的 child 不得仅因该 symlink
+  产生伪祖先关系。
+- 递归 symlink target 展开的中间项不能遗漏:若 `A -> B -> real`,则 `B` 与 `A/child` 冲突,
+  但不与直接写成 `real/child` 的路径冲突;link target 中被 `..` 折返的既有目录也按实际
+  遍历项覆盖。
 - state 中精确 `link_dest` 可以识别并清理死链;相似路径或被改指链接不能冒充 owned。
 - rendered/symlink → scaffold 在迁移当次释放所有权;target 缺失时迁移记账但不重建;
   只有随后显式 `--force` 才能按 S2 重建。

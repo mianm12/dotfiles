@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/ghstlnx/dotfiles/internal/buildinfo"
-	"github.com/ghstlnx/dotfiles/internal/paths"
+	"github.com/mianm12/dotfiles/internal/buildinfo"
+	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
 

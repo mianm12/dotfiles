@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/ghstlnx/dotfiles/internal/buildinfo"
+	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/spf13/cobra"
 )
 

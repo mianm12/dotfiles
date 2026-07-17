@@ -33,7 +33,7 @@ help:
 		'make tidy               整理 Go 模块依赖' \
 		'make lint               运行静态分析' \
 		'make test               运行快速测试' \
-		'make check              运行与 CI 相同的完整门禁'
+		'make check              运行当前平台的完整门禁（CI 在 macOS/Linux 分别执行）'
 
 build:
 	@mkdir -p "$(dir $(BINARY))"
@@ -67,5 +67,5 @@ test:
 test-race:
 	$(GO) test -race ./...
 
-# 汇总完整门禁，作为本地与 CI 的共同入口；任一失败都会立即停止。
+# 汇总当前平台的完整门禁，作为本地与 CI 的共同入口；任一失败都会立即停止。
 check: tidy-check fmt-check lint test-race build
