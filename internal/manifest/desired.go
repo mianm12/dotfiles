@@ -142,11 +142,14 @@ func classifyDesiredSource(
 		case FileKindLink, FileKindScaffold:
 			return rule.Kind, rule.Mode, rule.TargetOverride, nil
 		default:
+			if string(rule.Kind) == managedFileKindName {
+				return "", "", "", fmt.Errorf("module %q source %q: %w", module, source, ErrManagedUnsupported)
+			}
 			return "", "", "", fmt.Errorf("module %q source %q has unsupported kind %q", module, source, rule.Kind)
 		}
 	}
 	if strings.HasSuffix(source, ".tmpl") {
-		return "", "", "", fmt.Errorf("module %q source %q resolves to managed, which requires M2", module, source)
+		return "", "", "", fmt.Errorf("module %q source %q resolves to managed: %w", module, source, ErrManagedUnsupported)
 	}
 	if strings.HasSuffix(source, ".template") {
 		return FileKindScaffold, defaultScaffoldMode, "", nil

@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,8 @@ import (
 var (
 	modePattern                 = regexp.MustCompile(`^0[0-7]{3}$`)
 	environmentReferencePattern = regexp.MustCompile(`\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+	// ErrManagedUnsupported 表示输入会产生当前 M1 不支持的 managed desired entry。
+	ErrManagedUnsupported = errors.New("managed desired entries are not supported in M1")
 )
 
 const (
@@ -377,10 +380,7 @@ func parseFileKind(path, source string, declared *string) (FileKind, error) {
 	case string(FileKindScaffold):
 		return FileKindScaffold, nil
 	case managedFileKindName:
-		if declared != nil {
-			return "", fmt.Errorf("manifest %q: files key %q: kind managed requires M2", path, source)
-		}
-		return "", fmt.Errorf("manifest %q: files key %q: resolves to managed, which requires M2", path, source)
+		return "", fmt.Errorf("manifest %q: files key %q: %w", path, source, ErrManagedUnsupported)
 	default:
 		return "", fmt.Errorf("manifest %q: files key %q: invalid kind %q", path, source, kindName)
 	}
