@@ -151,6 +151,8 @@
 ### 协作与独立复核
 
 - **分支与提交**：以 `CONTRIBUTING.md` 为准；执行相关任务前先读该文件。
+- **ExecPlan**：进行中的计划放在 `.agent/plans/active/`；目标与验证完成且复盘收口后移动到
+  `.agent/plans/completed/`。目录约定见 `.agent/plans/README.md`。
 - **规范复核**：规范主线或跨文档契约发生实质变化后应独立复核；适合时优先使用
   subagent，并提供项目定位、里程碑和文档/代码分界。主 agent 自行确认并处理意见；小型
   文字修订无需强制复核。
