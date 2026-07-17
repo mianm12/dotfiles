@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghstlnx/dotfiles/internal/buildinfo"
+	"github.com/mianm12/dotfiles/internal/buildinfo"
 )
 
 func TestVersion_RepositoryUnavailable(t *testing.T) {

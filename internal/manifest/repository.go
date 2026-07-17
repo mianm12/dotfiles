@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"slices"
 
-	"github.com/ghstlnx/dotfiles/internal/paths"
+	"github.com/mianm12/dotfiles/internal/paths"
 )
 
 var manifestNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)

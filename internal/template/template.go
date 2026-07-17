@@ -9,7 +9,7 @@ import (
 	texttemplate "text/template"
 	"text/template/parse"
 
-	"github.com/ghstlnx/dotfiles/internal/datakey"
+	"github.com/mianm12/dotfiles/internal/datakey"
 )
 
 // allowedFunctions 是配置语言的完整函数白名单。default 由本包注入，其余名称由

@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/ghstlnx/dotfiles/internal/cli"
+	"github.com/mianm12/dotfiles/internal/cli"
 )
 
 func main() {

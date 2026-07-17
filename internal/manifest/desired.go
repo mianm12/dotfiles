@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	templateengine "github.com/ghstlnx/dotfiles/internal/template"
+	templateengine "github.com/mianm12/dotfiles/internal/template"
 )
 
 // DesiredEntry 是 render、target 身份校验和 planner 消费的结构性期望值。“只读”描述
