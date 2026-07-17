@@ -2,6 +2,7 @@
 package template
 
 import (
+	"bytes"
 	"fmt"
 	texttemplate "text/template"
 	"text/template/parse"
@@ -29,6 +30,17 @@ var builtInVariables = map[string]struct{}{
 // Template 是经过函数白名单校验的模板。
 type Template struct {
 	parsed *texttemplate.Template
+}
+
+// Context 是渲染唯一可见的显式运行输入。Data 可以包含机器配置遗留键，Render 只暴露
+// 当前 manifest 声明的键。
+type Context struct {
+	OS       string
+	Arch     string
+	Hostname string
+	Profile  string
+	Home     string
+	Data     map[string]string
 }
 
 // Parse 解析 source，并拒绝 M1 配置语言未开放的函数。
@@ -63,6 +75,34 @@ func (t *Template) ValidateVariables(declaredData []string) error {
 		}
 	}
 	return nil
+}
+
+// Render 使用显式 context 逐字节渲染模板。declaredData 缺值时拒绝渲染，不从 manifest
+// default、进程环境或其他来源补值。
+func (t *Template) Render(declaredData []string, context Context) ([]byte, error) {
+	if err := t.ValidateVariables(declaredData); err != nil {
+		return nil, err
+	}
+	values := map[string]string{
+		"OS":       context.OS,
+		"Arch":     context.Arch,
+		"Hostname": context.Hostname,
+		"Profile":  context.Profile,
+		"Home":     context.Home,
+	}
+	for _, key := range declaredData {
+		value, exists := context.Data[key]
+		if !exists {
+			return nil, fmt.Errorf("declared data key %q is missing from render context; rerun init", key)
+		}
+		values[key] = value
+	}
+
+	var output bytes.Buffer
+	if err := t.parsed.Execute(&output, values); err != nil {
+		return nil, fmt.Errorf("render template %q: %w", t.parsed.Name(), err)
+	}
+	return output.Bytes(), nil
 }
 
 func defaultString(fallback, value string) string {
