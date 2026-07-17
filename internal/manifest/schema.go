@@ -469,6 +469,9 @@ func validateExplicitFiles(path string, files map[string]fileSpec, runOnce []str
 	return nil
 }
 
+// builtInIgnoreReason 集中表达不可由 [files] 覆盖的内置规则；非空返回值同时用于
+// enumerate 判定和面向 manifest 的具体错误原因。isDir 用于区分根 hooks/ 目录与
+// 同名普通文件，后者不属于保留目录。
 func builtInIgnoreReason(source string, isDir bool, hookPaths map[string]struct{}) string {
 	if source == filename {
 		return "root dot.toml"

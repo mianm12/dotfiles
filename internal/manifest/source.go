@@ -31,6 +31,8 @@ func enumerateModuleSources(module ResolvedModule) ([]moduleSource, error) {
 		hookPaths[script] = struct{}{}
 	}
 
+	// 保留包括内置/用户 ignore 在内的全部已遍历对象；显式文件与 hook 引用仍需据此
+	// 校验存在性、对象类型和文件系统身份，不能只看最终 desired sources。
 	objects := make(map[string]fs.FileInfo)
 	sources := make([]moduleSource, 0)
 	if err := walkModuleTree(module, patterns, hookPaths, objects, &sources); err != nil {
@@ -63,6 +65,8 @@ func walkModuleTree(
 		return fmt.Errorf("module %q source root %q is not a directory", module.Name, module.SourceDir)
 	}
 
+	// 不能按 ignore 对目录剪枝：[files] 可以覆盖用户 ignore，且任何层级出现 symlink
+	// 或特殊文件都必须报错，即使该路径最终不会进入 desired。
 	var walk func(directory, relative string) error
 	walk = func(directory, relative string) error {
 		entries, err := os.ReadDir(directory)
@@ -71,6 +75,7 @@ func walkModuleTree(
 		}
 		for _, entry := range entries {
 			path := filepath.Join(directory, entry.Name())
+			// 显式 Lstat 每个目录项，既不依赖 DirEntry 缓存的类型信息，也绝不跟随 symlink。
 			info, err := os.Lstat(path)
 			if err != nil {
 				return fmt.Errorf("module %q inspect source %q: %w", module.Name, path, err)
@@ -117,6 +122,8 @@ func validateSourceReferences(module ResolvedModule, objects map[string]fs.FileI
 			return err
 		}
 	}
+	// 路径规范化只能排除词法重复；所有引用已经确认是普通文件后，再用 SameFile
+	// 捕获 hard link 等不同路径指向同一文件系统对象的情况。
 	for index, script := range module.RunOnce {
 		for previous := 0; previous < index; previous++ {
 			if os.SameFile(objects[script], objects[module.RunOnce[previous]]) {

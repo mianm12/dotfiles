@@ -9,8 +9,10 @@ import (
 	"strings"
 )
 
-// DesiredEntry 是 render、target 身份校验和 planner 消费的只读结构性期望。
+// DesiredEntry 是 render、target 身份校验和 planner 消费的结构性期望值。“只读”描述
+// enumerate 的 IO 边界和下游消费约定；该类型仍是普通 Go 值，每次调用返回彼此独立的结果。
 // Source 是规范化模块相对路径，Target 是规范化 ~/ 展示路径；对应的 Path 字段是绝对路径。
+// Mode 仅对 scaffold 有效，link 的 Mode 恒为零。
 type DesiredEntry struct {
 	Module     string
 	Source     string
@@ -29,6 +31,7 @@ func (p ResolvedProfile) Enumerate(home string) ([]DesiredEntry, error) {
 	}
 	home = filepath.Clean(home)
 
+	// 不依赖 Resolve 的既有顺序，也不原地排序 receiver，保证其他合法构造方得到同样结果。
 	modules := append([]ResolvedModule(nil), p.Modules...)
 	slices.SortFunc(modules, func(left, right ResolvedModule) int {
 		if order := strings.Compare(left.Name, right.Name); order != 0 {
@@ -78,6 +81,7 @@ func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry,
 	entries := make([]DesiredEntry, 0, len(sources))
 	for _, source := range sources {
 		rule, explicit := rules[source.path]
+		// source 层已移除不可覆盖的内置 ignore；这里表达 [files] > 用户 ignore。
 		if !explicit && source.ignored {
 			continue
 		}
@@ -109,6 +113,8 @@ func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry,
 		})
 	}
 
+	// 正常 Resolve 结果中的规则都应命中普通 source；拒绝被外部修改后试图覆盖
+	// 内置 ignore 的结构，避免把无效显式声明静默丢弃。
 	for _, source := range sortedKeys(rules) {
 		if _, used := usedRules[source]; !used {
 			return nil, fmt.Errorf("module %q file rule source %q is excluded by a built-in ignore", module.Name, source)
@@ -132,6 +138,8 @@ func indexFileRules(module ResolvedModule) (map[string]ResolvedFileRule, error) 
 	return rules, nil
 }
 
+// classifyDesiredSource 只处理优先级的最后两层：[files] 显式声明和文件名后缀推断。
+// 内置 ignore 已在 source 层移除，用户 ignore 已由调用方处理。
 func classifyDesiredSource(
 	module, source string,
 	rule ResolvedFileRule,
@@ -184,6 +192,7 @@ func parseDesiredMode(module, source string, kind FileKind, raw string) (fs.File
 func desiredTarget(module ResolvedModule, source, override string) (string, error) {
 	target := override
 	if target == "" {
+		// [files].target 是完整 entry target；只有未声明时才从 source 去后缀派生。
 		derived, err := stripTemplateSuffix(source)
 		if err != nil {
 			return "", fmt.Errorf("module %q source %q: %w", module.Name, source, err)

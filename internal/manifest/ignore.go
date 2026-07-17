@@ -57,6 +57,8 @@ func (p ignorePattern) matches(path string, isDir bool) bool {
 		return false
 	}
 
+	// 逐级检查 path 的前缀，使“规则命中目录后覆盖全部后代”成为纯词法语义。
+	// 非完整前缀必然表示祖先目录；只有完整 path 才需要调用方提供 isDir。
 	for end := 1; end <= len(pathSegments); end++ {
 		candidateIsDir := end < len(pathSegments) || isDir
 		if p.directoryOnly && !candidateIsDir {
@@ -87,6 +89,8 @@ func validMatchPath(segments []string) bool {
 }
 
 func matchIgnoreSegments(pattern, path []string) bool {
+	// ** 是唯一会产生分支回溯的语法；按 pattern/path 下标记忆结果，避免多个 **
+	// 让同一状态被重复求值。
 	type position struct {
 		pattern int
 		path    int
@@ -120,6 +124,8 @@ func matchIgnoreSegments(pattern, path []string) bool {
 }
 
 func matchIgnoreSegment(pattern, value string) bool {
+	// 单段语法只有字面字节与 *。记录最近的 * 并按需扩张其匹配范围，无需递归或
+	// 分配状态表；按字节比较也有意保持大小写与 Unicode 编码的精确语义。
 	patternIndex := 0
 	valueIndex := 0
 	starIndex := -1
