@@ -3,6 +3,7 @@ package paths
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,6 +201,43 @@ func TestResolveTarget_PreservesOrdinaryIOCause(t *testing.T) {
 		t.Helper()
 		if !errors.Is(err, syscall.ENAMETOOLONG) {
 			t.Fatalf("resolver error = %v, want ENAMETOOLONG cause", err)
+		}
+		if errors.Is(err, ErrPathBlocked) {
+			t.Fatalf("resolver error = %v, must not be ErrPathBlocked", err)
+		}
+	})
+}
+
+func TestResolveTarget_PreservesLeafLookupPermissionError(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", parent, err)
+	}
+	target := filepath.Join(parent, "target")
+	if err := os.WriteFile(target, []byte("content"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", target, err)
+	}
+	if err := os.Chmod(parent, 0o400); err != nil {
+		t.Fatalf("os.Chmod(%q) error = %v", parent, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(parent, 0o700); err != nil {
+			t.Errorf("restore os.Chmod(%q) error = %v", parent, err)
+		}
+	})
+
+	if _, err := os.ReadDir(parent); err != nil {
+		t.Skipf("fixture parent cannot be enumerated without search permission: %v", err)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrPermission) {
+		t.Skipf("fixture target lookup error = %v, want permission error", err)
+	}
+
+	checkTargetResolvers(t, target, func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("resolver error = %v, want permission cause", err)
 		}
 		if errors.Is(err, ErrPathBlocked) {
 			t.Fatalf("resolver error = %v, must not be ErrPathBlocked", err)

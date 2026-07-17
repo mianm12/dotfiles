@@ -50,8 +50,10 @@ planner 和提交前 Precond 提供单一路径语义来源，但本计划不接
    该目录项位置。
 8. 第一个缺失组件后的虚拟尾部必须使用最近现存父目录可权威证明的名称语义。若大小写或
    Unicode 规则无法只读确定，返回 `ErrIdentityUnavailable`，不得生成近似身份。
-9. 权限、IO 和路径变化错误保留底层 cause；确认的阻断错误可由 `errors.Is(err,
-   ErrPathBlocked)` 判断，身份不可用可由 `ErrIdentityUnavailable` 判断。
+9. 权限以及未判定为 traversal blocker 的普通 IO 和路径变化错误保留底层 cause；确认的
+   `ENOENT`/`ENOTDIR`/`ELOOP` 祖先阻断统一由 `errors.Is(err, ErrPathBlocked)` 判断，不承诺
+   同时暴露底层 errno。身份不可用可由 `ErrIdentityUnavailable` 判断；若由只读 capability
+   查询失败触发，则同时保留查询错误 cause。
 10. 解析只允许 `Lstat`、`Stat`、`Readlink`、目录枚举和只读能力查询；不得创建 probe、目录、
     文件或其他临时对象。
 11. 同一稳定拓扑下重复解析结果相同。零值 identity/resolution 无效，不相等也不形成祖先

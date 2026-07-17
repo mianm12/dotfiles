@@ -76,23 +76,9 @@ func cleanTargetPath(path string) (string, error) {
 }
 
 func (resolver *targetResolver) resolveLeafName(path, resolvedParent, leaf string) (string, error) {
-	entries, err := resolver.readDir(resolvedParent)
-	if err != nil {
-		return "", fmt.Errorf("read target parent %q: %w", resolvedParent, err)
-	}
-	for _, entry := range entries {
-		if entry.Name() == leaf {
-			return leaf, nil
-		}
-	}
-
-	_, err = os.Lstat(path)
+	_, err := os.Lstat(path)
 	if err == nil {
-		name, resolveErr := resolver.resolveExistingEntryName(path, resolvedParent, leaf, entries)
-		if resolveErr != nil {
-			return "", fmt.Errorf("resolve existing target alias %q: %w", path, resolveErr)
-		}
-		return name, nil
+		return resolver.resolveExistingLeafName(path, resolvedParent, leaf)
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("inspect target %q: %w", path, err)
@@ -106,6 +92,24 @@ func (resolver *targetResolver) resolveLeafName(path, resolvedParent, leaf strin
 		return "", fmt.Errorf("resolve missing target name %q: %w", path, err)
 	}
 	return key, nil
+}
+
+func (resolver *targetResolver) resolveExistingLeafName(path, resolvedParent, leaf string) (string, error) {
+	entries, err := resolver.readDir(resolvedParent)
+	if err != nil {
+		return "", fmt.Errorf("read target parent %q: %w", resolvedParent, err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == leaf {
+			return leaf, nil
+		}
+	}
+
+	name, err := resolver.resolveExistingEntryName(path, resolvedParent, leaf, entries)
+	if err != nil {
+		return "", fmt.Errorf("resolve existing target alias %q: %w", path, err)
+	}
+	return name, nil
 }
 
 func (resolver *targetResolver) resolveExistingEntryName(path, parent, requested string, entries []os.DirEntry) (string, error) {
