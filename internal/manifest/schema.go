@@ -462,19 +462,19 @@ func validateExplicitFiles(path string, files map[string]fileSpec, runOnce []str
 		hookPaths[script] = struct{}{}
 	}
 	for _, source := range sortedKeys(files) {
-		if reason := builtInIgnoreReason(source, hookPaths); reason != "" {
+		if reason := builtInIgnoreReason(source, false, hookPaths); reason != "" {
 			return fmt.Errorf("manifest %q: files key %q: cannot override built-in ignore for %s", path, source, reason)
 		}
 	}
 	return nil
 }
 
-func builtInIgnoreReason(source string, hookPaths map[string]struct{}) string {
+func builtInIgnoreReason(source string, isDir bool, hookPaths map[string]struct{}) string {
 	if source == filename {
 		return "root dot.toml"
 	}
 	segments := strings.Split(source, "/")
-	if len(segments) > 1 && segments[0] == "hooks" {
+	if segments[0] == "hooks" && (len(segments) > 1 || isDir) {
 		return "root hooks directory"
 	}
 	for _, segment := range segments {
