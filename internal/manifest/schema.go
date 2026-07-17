@@ -2,7 +2,6 @@ package manifest
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -220,9 +219,9 @@ func decodeModuleManifest(path string) (moduleSpec, error) {
 
 func decodeManifestFile[T any](path string) (T, error) {
 	var zero T
-	file, err := os.Open(path)
+	file, err := openManifest(path)
 	if err != nil {
-		return zero, fmt.Errorf("open manifest %q: %w", path, err)
+		return zero, err
 	}
 	var document T
 	decoder := toml.NewDecoder(file)

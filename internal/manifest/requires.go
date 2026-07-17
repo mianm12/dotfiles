@@ -52,9 +52,9 @@ func ReadRequirement(repo string) (Requirement, error) {
 	}
 
 	manifestPath := filepath.Join(repo, filename)
-	file, err := os.Open(manifestPath)
+	file, err := openManifest(manifestPath)
 	if err != nil {
-		return Requirement{}, fmt.Errorf("open manifest %q: %w", manifestPath, err)
+		return Requirement{}, err
 	}
 
 	// version 命令只依赖 requires；其他字段留给完整 manifest loader 校验。
