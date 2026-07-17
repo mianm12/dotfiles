@@ -51,6 +51,18 @@ func TestCompile_RejectsDisallowedFunctionInNamedTemplate(t *testing.T) {
 	}
 }
 
+func TestCompile_ReportsNamedTemplateErrorsInNameOrder(t *testing.T) {
+	source := []byte(`
+{{ define "z-last" }}{{ len .value }}{{ end }}
+{{ define "a-first" }}{{ printf "%s" .value }}{{ end }}
+`)
+
+	parsed, err := Compile("root", source, []string{"value"})
+	if err == nil || !strings.Contains(err.Error(), `template "a-first": function "printf" is not allowed`) {
+		t.Fatalf("Compile() = %#v, %v; want first error by template name", parsed, err)
+	}
+}
+
 func TestCompile_RejectsSyntaxError(t *testing.T) {
 	parsed, err := Compile("broken", []byte(`{{ if }}`), nil)
 	if err == nil || !strings.Contains(err.Error(), `parse template "broken"`) {

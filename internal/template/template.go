@@ -3,6 +3,7 @@ package template
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"slices"
 	texttemplate "text/template"
@@ -59,7 +60,11 @@ func Compile(name string, source []byte, declaredData []string) (*Template, erro
 	if err != nil {
 		return nil, fmt.Errorf("parse template %q: %w", name, err)
 	}
-	for _, candidate := range parsed.Templates() {
+	candidates := parsed.Templates()
+	slices.SortFunc(candidates, func(left, right *texttemplate.Template) int {
+		return cmp.Compare(left.Name(), right.Name())
+	})
+	for _, candidate := range candidates {
 		if candidate.Root == nil {
 			continue
 		}

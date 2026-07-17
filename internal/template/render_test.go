@@ -91,6 +91,20 @@ func TestTemplateRender_DoesNotUseEnvironmentOrImplicitFallback(t *testing.T) {
 	}
 }
 
+func TestCompile_EnablesMissingKeyError(t *testing.T) {
+	compiled, err := Compile("missing-key", []byte(`{{ .email }}`), []string{"email"})
+	if err != nil {
+		t.Fatalf("Compile() error = %v, want nil", err)
+	}
+
+	// Render 会先构造完整 root map；直接执行底层模板以锁定 Compile 的引擎选项。
+	var output bytes.Buffer
+	err = compiled.parsed.Execute(&output, map[string]string{})
+	if err == nil {
+		t.Fatalf("Execute() error = %v, want missingkey error", err)
+	}
+}
+
 func TestTemplateRender_ReportsExecutionErrorWithoutContent(t *testing.T) {
 	parsed, err := Compile("invalid-call", []byte(`prefix{{ default "fallback" 1 }}suffix`), nil)
 	if err != nil {
