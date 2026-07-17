@@ -10,36 +10,47 @@ const defaultScaffoldMode = "0644"
 
 // ResolvedProfile 表示一个 profile 在指定 GOOS 上的有效 manifest 配置。
 type ResolvedProfile struct {
-	Name              string
-	Modules           []ResolvedModule
-	UnassignedModules []string
+	// Name 是被解析的 profile 名。
+	Name string
+	// Modules 是经过 OS 过滤、按模块名字节序排列的有效模块。
+	Modules []ResolvedModule
 }
 
 // ResolvedModule 表示已经应用 defaults、ignore 合并和 OS 过滤的模块配置。
 type ResolvedModule struct {
-	Name       string
-	SourceDir  string
+	// Name 是模块目录名。
+	Name string
+	// SourceDir 是模块文件树根目录。
+	SourceDir string
+	// TargetRoot 是尚未展开 HOME 的有效 target root。
 	TargetRoot string
-	Ignore     []string
-	Files      []ResolvedFile
-	RunOnce    []string
+	// Ignore 按全局、模块顺序保存去重后的有效 ignore pattern。
+	Ignore []string
+	// FileRules 是按 source 排序的显式 [files] 规则，不是枚举后的完整文件集合。
+	FileRules []ResolvedFileRule
+	// RunOnce 按 manifest 声明顺序保存规范化的 hook script 路径。
+	RunOnce []string
 }
 
-// ResolvedFile 表示模块 manifest 中一条稳定排序的显式文件声明。
-type ResolvedFile struct {
-	Source         string
-	Kind           FileKind
-	Mode           string
+// ResolvedFileRule 表示模块 manifest 中一条已经应用 M1 缺省的显式 [files] 规则。
+type ResolvedFileRule struct {
+	// Source 是规范化的模块相对路径。
+	Source string
+	// Kind 是显式覆盖或文件名后缀推导出的有效文件行为。
+	Kind FileKind
+	// Mode 是 scaffold 的有效 mode；link 不管理 mode，因此返回空字符串。
+	Mode string
+	// TargetOverride 是显式完整 entry target；未声明时返回空字符串。
 	TargetOverride string
 }
 
 // Resolve 返回 profile 在 goos 上的有效模块；goos 只接受 darwin 或 linux。
 // 返回值不展开 HOME，也不枚举模块文件树。
 func (r Repository) Resolve(profile, goos string) (ResolvedProfile, error) {
-	if goos != "darwin" && goos != "linux" {
-		return ResolvedProfile{}, fmt.Errorf("unsupported GOOS %q: want darwin or linux", goos)
+	if !isSupportedGOOS(goos) {
+		return ResolvedProfile{}, fmt.Errorf("unsupported GOOS %q: want %s or %s", goos, goosDarwin, goosLinux)
 	}
-	moduleNames, exists := r.profiles[profile]
+	moduleNames, exists := r.expandedProfiles[profile]
 	if !exists {
 		return ResolvedProfile{}, fmt.Errorf("unknown profile %q", profile)
 	}
@@ -56,14 +67,13 @@ func (r Repository) Resolve(profile, goos string) (ResolvedProfile, error) {
 		}
 	}
 	return ResolvedProfile{
-		Name:              profile,
-		Modules:           modules,
-		UnassignedModules: append([]string(nil), r.unassigned...),
+		Name:    profile,
+		Modules: modules,
 	}, nil
 }
 
 func (r Repository) resolveModule(name string, loaded loadedModule, goos string) (ResolvedModule, bool, error) {
-	operatingSystems := []string{"darwin", "linux"}
+	operatingSystems := []string{goosDarwin, goosLinux}
 	if r.manifest.defaults.os.set {
 		operatingSystems = r.manifest.defaults.os.value
 	}
@@ -86,7 +96,7 @@ func (r Repository) resolveModule(name string, loaded loadedModule, goos string)
 		return ResolvedModule{}, false, fmt.Errorf("module %q is active on %s but target table has no %s entry", name, goos, goos)
 	}
 
-	files, err := resolveFiles(name, loaded.manifest.files, targetRoot)
+	fileRules, err := resolveFileRules(name, loaded.manifest.files, targetRoot)
 	if err != nil {
 		return ResolvedModule{}, false, err
 	}
@@ -96,7 +106,7 @@ func (r Repository) resolveModule(name string, loaded loadedModule, goos string)
 		SourceDir:  loaded.root,
 		TargetRoot: targetRoot,
 		Ignore:     mergeIgnore(r.manifest.ignore, loaded.manifest.ignore),
-		Files:      files,
+		FileRules:  fileRules,
 		RunOnce:    append([]string(nil), loaded.manifest.runOnce...),
 	}, true, nil
 }
@@ -109,27 +119,27 @@ func (t targetSpec) forOS(goos string) (string, bool) {
 	return value, exists
 }
 
-func resolveFiles(module string, files map[string]fileSpec, targetRoot string) ([]ResolvedFile, error) {
-	sources := make([]string, 0, len(files))
-	for source := range files {
+func resolveFileRules(module string, rules map[string]fileSpec, targetRoot string) ([]ResolvedFileRule, error) {
+	sources := make([]string, 0, len(rules))
+	for source := range rules {
 		sources = append(sources, source)
 	}
 	slices.Sort(sources)
 
-	resolved := make([]ResolvedFile, 0, len(sources))
+	resolvedRules := make([]ResolvedFileRule, 0, len(sources))
 	for _, source := range sources {
-		file := files[source]
+		rule := rules[source]
 		mode := ""
-		if file.kind == FileKindScaffold {
+		if rule.kind == FileKindScaffold {
 			mode = defaultScaffoldMode
 		}
-		if file.mode != nil {
-			mode = *file.mode
+		if rule.mode != nil {
+			mode = *rule.mode
 		}
 		target := ""
-		if file.target != nil {
-			target = *file.target
-			if !isTargetDescendant(targetRoot, target) {
+		if rule.target != nil {
+			target = *rule.target
+			if !isLexicalTargetDescendant(targetRoot, target) {
 				return nil, fmt.Errorf(
 					"module %q file %q target %q must be a true descendant of target root %q",
 					module,
@@ -139,17 +149,19 @@ func resolveFiles(module string, files map[string]fileSpec, targetRoot string) (
 				)
 			}
 		}
-		resolved = append(resolved, ResolvedFile{
+		resolvedRules = append(resolvedRules, ResolvedFileRule{
 			Source:         source,
-			Kind:           file.kind,
+			Kind:           rule.kind,
 			Mode:           mode,
 			TargetOverride: target,
 		})
 	}
-	return resolved, nil
+	return resolvedRules, nil
 }
 
-func isTargetDescendant(root, target string) bool {
+// isLexicalTargetDescendant 只接收 validateTargetPath 校验后的 target，比较其字面层级关系。
+// 它不解析文件系统身份，不能用于 HOME 展开后的控制面或所有权边界。
+func isLexicalTargetDescendant(root, target string) bool {
 	if root == "~" {
 		return strings.HasPrefix(target, "~/")
 	}

@@ -177,14 +177,15 @@ func TestResolve_MergeMatrix(t *testing.T) {
 	}
 }
 
-func TestResolve_ReturnsStableFilesHooksAndUnassignedModules(t *testing.T) {
+func TestResolve_ReturnsStableFileRulesAndHooks(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
 requires = ">=0.3.0"
 [profiles]
 base = ["app"]
 `)
-	writeModule(t, repo, "unused", "")
 	writeModule(t, repo, "app", `
+[ignore]
+patterns = ["*.bak"]
 [files."z.template"]
 [files.a]
 kind = "link"
@@ -210,23 +211,24 @@ run_once = ["hooks/z", "hooks/a"]
 	if !reflect.DeepEqual(second, first) {
 		t.Fatalf("repeated Resolve() = %#v, want %#v", second, first)
 	}
-	wantFiles := []ResolvedFile{
+	wantFileRules := []ResolvedFileRule{
 		{Source: "a", Kind: FileKindLink, TargetOverride: "~/.config/app/a"},
 		{Source: "b.template", Kind: FileKindScaffold, Mode: "0600"},
 		{Source: "z.template", Kind: FileKindScaffold, Mode: "0644"},
 	}
-	if !reflect.DeepEqual(first.Modules[0].Files, wantFiles) {
-		t.Errorf("Files = %#v, want %#v", first.Modules[0].Files, wantFiles)
+	if !reflect.DeepEqual(first.Modules[0].FileRules, wantFileRules) {
+		t.Errorf("FileRules = %#v, want %#v", first.Modules[0].FileRules, wantFileRules)
 	}
 	if !reflect.DeepEqual(first.Modules[0].RunOnce, []string{"hooks/z", "hooks/a"}) {
 		t.Errorf("RunOnce = %v, want declaration order", first.Modules[0].RunOnce)
 	}
-	if !reflect.DeepEqual(first.UnassignedModules, []string{"unused"}) {
-		t.Errorf("UnassignedModules = %v, want [unused]", first.UnassignedModules)
+	if !reflect.DeepEqual(first.Modules[0].Ignore, []string{"*.bak"}) {
+		t.Errorf("Ignore = %v, want [*.bak]", first.Modules[0].Ignore)
 	}
 
-	first.Modules[0].Files[0].Source = "changed"
-	first.UnassignedModules[0] = "changed"
+	first.Modules[0].FileRules[0].Source = "changed"
+	first.Modules[0].Ignore[0] = "changed"
+	first.Modules[0].RunOnce[0] = "changed"
 	third, err := loaded.Resolve("base", "darwin")
 	if err != nil {
 		t.Fatalf("Resolve() third error = %v, want nil", err)
@@ -277,7 +279,7 @@ func TestResolve_ValidatesFileTargetWithinEffectiveRoot(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v, want nil", err)
 			}
-			if got := resolved.Modules[0].Files[0].TargetOverride; got != tt.fileTarget {
+			if got := resolved.Modules[0].FileRules[0].TargetOverride; got != tt.fileTarget {
 				t.Errorf("TargetOverride = %q, want %q", got, tt.fileTarget)
 			}
 		})

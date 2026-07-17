@@ -17,6 +17,11 @@ var (
 	environmentReferencePattern = regexp.MustCompile(`\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
 )
 
+const (
+	goosDarwin = "darwin"
+	goosLinux  = "linux"
+)
+
 type optional[T any] struct {
 	value T
 	set   bool
@@ -64,11 +69,11 @@ type rawHooks struct {
 }
 
 type rootSpec struct {
-	requirement Requirement
-	defaults    defaultsSpec
-	ignore      []string
-	profiles    map[string][]string
-	data        map[string]dataSpec
+	requirement      Requirement
+	defaults         defaultsSpec
+	ignore           []string
+	declaredProfiles map[string][]string
+	data             map[string]dataSpec
 }
 
 type defaultsSpec struct {
@@ -102,6 +107,8 @@ const (
 	FileKindLink FileKind = "link"
 	// FileKindScaffold 表示只在首次缺失时生成普通文件。
 	FileKindScaffold FileKind = "scaffold"
+
+	managedFileKindName = "managed"
 )
 
 type fileSpec struct {
@@ -148,11 +155,11 @@ func decodeRootManifest(path string) (rootSpec, error) {
 	}
 
 	return rootSpec{
-		requirement: requirement,
-		defaults:    defaults,
-		ignore:      ignore,
-		profiles:    cloneProfiles(*raw.Profiles),
-		data:        data,
+		requirement:      requirement,
+		defaults:         defaults,
+		ignore:           ignore,
+		declaredProfiles: cloneProfiles(*raw.Profiles),
+		data:             data,
 	}, nil
 }
 
@@ -253,7 +260,7 @@ func parseOS(path, field string, raw *[]string) (optional[[]string], error) {
 	seen := make(map[string]struct{}, len(*raw))
 	values := make([]string, 0, len(*raw))
 	for _, value := range *raw {
-		if value != "darwin" && value != "linux" {
+		if !isSupportedGOOS(value) {
 			return optional[[]string]{}, fmt.Errorf("manifest %q: %s contains unsupported OS %q", path, field, value)
 		}
 		if _, exists := seen[value]; exists {
@@ -277,12 +284,18 @@ func parseTarget(path, field string, raw any) (optional[targetSpec], error) {
 		return optional[targetSpec]{value: targetSpec{common: &value}, set: true}, nil
 	case map[string]any:
 		if len(value) == 0 {
-			return optional[targetSpec]{}, fmt.Errorf("manifest %q: %s table must contain darwin or linux", path, field)
+			return optional[targetSpec]{}, fmt.Errorf(
+				"manifest %q: %s table must contain %s or %s",
+				path,
+				field,
+				goosDarwin,
+				goosLinux,
+			)
 		}
 		byOS := make(map[string]string, len(value))
 		for _, goos := range sortedKeys(value) {
 			rawPath := value[goos]
-			if goos != "darwin" && goos != "linux" {
+			if !isSupportedGOOS(goos) {
 				return optional[targetSpec]{}, fmt.Errorf("manifest %q: %s contains unsupported OS %q", path, field, goos)
 			}
 			targetPath, ok := rawPath.(string)
@@ -298,6 +311,10 @@ func parseTarget(path, field string, raw any) (optional[targetSpec], error) {
 	default:
 		return optional[targetSpec]{}, fmt.Errorf("manifest %q: %s must be a string or OS table", path, field)
 	}
+}
+
+func isSupportedGOOS(value string) bool {
+	return value == goosDarwin || value == goosLinux
 }
 
 func validateTargetPath(value string) error {
@@ -317,41 +334,51 @@ func validateTargetPath(value string) error {
 }
 
 func parseFile(path, source string, raw rawFile) (fileSpec, error) {
-	kind := FileKindLink
-	if strings.HasSuffix(source, ".tmpl") {
-		kind = "managed"
-	} else if strings.HasSuffix(source, ".template") {
-		kind = FileKindScaffold
-	}
-	if raw.Kind != nil {
-		switch *raw.Kind {
-		case string(FileKindLink):
-			kind = FileKindLink
-		case string(FileKindScaffold):
-			kind = FileKindScaffold
-		case "managed":
-			return fileSpec{}, fmt.Errorf("manifest %q: files.%s kind managed requires M2", path, source)
-		default:
-			return fileSpec{}, fmt.Errorf("manifest %q: files.%s has invalid kind %q", path, source, *raw.Kind)
-		}
-	}
-	if kind == "managed" {
-		return fileSpec{}, fmt.Errorf("manifest %q: files.%s resolves to managed, which requires M2", path, source)
+	kind, err := parseFileKind(path, source, raw.Kind)
+	if err != nil {
+		return fileSpec{}, err
 	}
 	if raw.Mode != nil {
 		if !modePattern.MatchString(*raw.Mode) {
-			return fileSpec{}, fmt.Errorf("manifest %q: files.%s has invalid mode %q", path, source, *raw.Mode)
+			return fileSpec{}, fmt.Errorf("manifest %q: files key %q: invalid mode %q", path, source, *raw.Mode)
 		}
 		if kind == FileKindLink {
-			return fileSpec{}, fmt.Errorf("manifest %q: files.%s mode is not allowed for link", path, source)
+			return fileSpec{}, fmt.Errorf("manifest %q: files key %q: mode is not allowed for link", path, source)
 		}
 	}
 	if raw.Target != nil {
 		if err := validateEntryTargetPath(*raw.Target); err != nil {
-			return fileSpec{}, fmt.Errorf("manifest %q: files.%s.target: %w", path, source, err)
+			return fileSpec{}, fmt.Errorf("manifest %q: files key %q: target: %w", path, source, err)
 		}
 	}
 	return fileSpec{kind: kind, mode: raw.Mode, target: raw.Target}, nil
+}
+
+func parseFileKind(path, source string, declared *string) (FileKind, error) {
+	kindName := string(FileKindLink)
+	switch {
+	case strings.HasSuffix(source, ".tmpl"):
+		kindName = managedFileKindName
+	case strings.HasSuffix(source, ".template"):
+		kindName = string(FileKindScaffold)
+	}
+	if declared != nil {
+		kindName = *declared
+	}
+
+	switch kindName {
+	case string(FileKindLink):
+		return FileKindLink, nil
+	case string(FileKindScaffold):
+		return FileKindScaffold, nil
+	case managedFileKindName:
+		if declared != nil {
+			return "", fmt.Errorf("manifest %q: files key %q: kind managed requires M2", path, source)
+		}
+		return "", fmt.Errorf("manifest %q: files key %q: resolves to managed, which requires M2", path, source)
+	default:
+		return "", fmt.Errorf("manifest %q: files key %q: invalid kind %q", path, source, kindName)
+	}
 }
 
 func parseRunOnce(path string, raw *rawHooks) ([]string, error) {
@@ -452,7 +479,7 @@ func validateExplicitFiles(path string, files map[string]fileSpec, runOnce []str
 	}
 	for _, source := range sortedKeys(files) {
 		if reason := builtInIgnoreReason(source, hookPaths); reason != "" {
-			return fmt.Errorf("manifest %q: files.%s cannot override built-in ignore for %s", path, source, reason)
+			return fmt.Errorf("manifest %q: files key %q: cannot override built-in ignore for %s", path, source, reason)
 		}
 	}
 	return nil

@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,8 +43,8 @@ default = "me@example.com"
 	if strings.Join(got.ignore, ",") != "README.md" {
 		t.Errorf("ignore = %v, want [README.md]", got.ignore)
 	}
-	if strings.Join(got.profiles["base"], ",") != "zsh" {
-		t.Errorf("profiles.base = %v, want [zsh]", got.profiles["base"])
+	if strings.Join(got.declaredProfiles["base"], ",") != "zsh" {
+		t.Errorf("declaredProfiles.base = %v, want [zsh]", got.declaredProfiles["base"])
 	}
 	if got.data["email"].defaultValue == nil || *got.data["email"].defaultValue != "me@example.com" {
 		t.Errorf("data.email.default = %#v, want me@example.com", got.data["email"].defaultValue)
@@ -146,6 +147,34 @@ run_once = ["hooks/setup.sh"]
 	}
 }
 
+func TestDecodeModuleManifest_FileKindMatrix(t *testing.T) {
+	tests := []struct {
+		name        string
+		source      string
+		declaration string
+		want        FileKind
+	}{
+		{name: "suffixless implicit link", source: "settings", want: FileKindLink},
+		{name: "suffixless explicit scaffold", source: "settings", declaration: `kind = "scaffold"`, want: FileKindScaffold},
+		{name: "tmpl explicit scaffold", source: "settings.tmpl", declaration: `kind = "scaffold"`, want: FileKindScaffold},
+		{name: "tmpl explicit link", source: "settings.tmpl", declaration: `kind = "link"`, want: FileKindLink},
+		{name: "template implicit scaffold", source: "settings.template", want: FileKindScaffold},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := fmt.Sprintf("[files.%q]\n%s\n", tt.source, tt.declaration)
+			got, err := decodeModuleManifest(writeManifest(t, content))
+			if err != nil {
+				t.Fatalf("decodeModuleManifest() error = %v, want nil", err)
+			}
+			if got.files[tt.source].kind != tt.want {
+				t.Errorf("kind = %q, want %q", got.files[tt.source].kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestDecodeModuleManifest_RejectsInvalidSchema(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -164,6 +193,7 @@ func TestDecodeModuleManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "ignore patterns wrong type", content: "[ignore]\npatterns = \"*.tmp\"", want: "cannot decode"},
 		{name: "mode wrong type", content: "[files.x]\nmode = 420", want: "cannot decode"},
 		{name: "invalid mode", content: "[files.\"x.template\"]\nmode = \"644\"", want: "invalid mode"},
+		{name: "file key is quoted in errors", content: "[files.\".config/app.template\"]\nmode = \"644\"", want: `files key ".config/app.template"`},
 		{name: "mode on link", content: "[files.x]\nmode = \"0644\"", want: "not allowed for link"},
 		{name: "kind wrong type", content: "[files.x]\nkind = true", want: "cannot decode"},
 		{name: "managed kind", content: "[files.x]\nkind = \"managed\"", want: "requires M2"},

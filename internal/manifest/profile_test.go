@@ -28,12 +28,17 @@ empty = []
 		t.Errorf("ProfileNames() = %v, want %v", got.ProfileNames(), wantProfiles)
 	}
 	wantMac := []string{"git", "karabiner", "nvim", "zsh"}
-	if !reflect.DeepEqual(got.profiles["mac"], wantMac) {
-		t.Errorf("expanded mac = %v, want %v", got.profiles["mac"], wantMac)
+	if !reflect.DeepEqual(got.expandedProfiles["mac"], wantMac) {
+		t.Errorf("expanded mac = %v, want %v", got.expandedProfiles["mac"], wantMac)
 	}
 	wantUnassigned := []string{"tmux"}
 	if !reflect.DeepEqual(got.UnassignedModules(), wantUnassigned) {
 		t.Errorf("UnassignedModules() = %v, want %v", got.UnassignedModules(), wantUnassigned)
+	}
+	unassigned := got.UnassignedModules()
+	unassigned[0] = "changed"
+	if !reflect.DeepEqual(got.UnassignedModules(), wantUnassigned) {
+		t.Errorf("mutating UnassignedModules result changed repository: got %v, want %v", got.UnassignedModules(), wantUnassigned)
 	}
 }
 
@@ -55,8 +60,8 @@ top = ["@left", "@right"]
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
 	want := []string{"git", "nvim", "zsh"}
-	if !reflect.DeepEqual(got.profiles["top"], want) {
-		t.Errorf("expanded top = %v, want diamond de-duplicated %v", got.profiles["top"], want)
+	if !reflect.DeepEqual(got.expandedProfiles["top"], want) {
+		t.Errorf("expanded top = %v, want diamond de-duplicated %v", got.expandedProfiles["top"], want)
 	}
 }
 
@@ -115,8 +120,8 @@ func TestLoad_ProfileResultsAreStable(t *testing.T) {
 		if !reflect.DeepEqual(loaded.ProfileNames(), first.ProfileNames()) {
 			t.Errorf("ProfileNames() = %v, want %v", loaded.ProfileNames(), first.ProfileNames())
 		}
-		if !reflect.DeepEqual(loaded.profiles, first.profiles) {
-			t.Errorf("profiles = %v, want %v", loaded.profiles, first.profiles)
+		if !reflect.DeepEqual(loaded.expandedProfiles, first.expandedProfiles) {
+			t.Errorf("expandedProfiles = %v, want %v", loaded.expandedProfiles, first.expandedProfiles)
 		}
 		if !reflect.DeepEqual(loaded.UnassignedModules(), first.UnassignedModules()) {
 			t.Errorf("UnassignedModules() = %v, want %v", loaded.UnassignedModules(), first.UnassignedModules())
