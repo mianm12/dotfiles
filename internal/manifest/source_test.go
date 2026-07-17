@@ -40,11 +40,11 @@ run_once = ["scripts/setup.sh"]
 		t.Fatalf("Resolve() error = %v, want nil", err)
 	}
 
-	first, err := enumerateModuleSources(resolved.Modules[0])
+	first, err := enumerateModuleSources(resolved.modules[0])
 	if err != nil {
 		t.Fatalf("enumerateModuleSources() error = %v, want nil", err)
 	}
-	second, err := enumerateModuleSources(resolved.Modules[0])
+	second, err := enumerateModuleSources(resolved.modules[0])
 	if err != nil {
 		t.Fatalf("enumerateModuleSources() second error = %v, want nil", err)
 	}
@@ -204,10 +204,10 @@ func resolveOnlyModule(t *testing.T, repo string) ResolvedModule {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v, want nil", err)
 	}
-	if len(resolved.Modules) != 1 {
-		t.Fatalf("Resolve().Modules = %v, want one module", resolved.Modules)
+	if len(resolved.modules) != 1 {
+		t.Fatalf("Resolve() modules = %v, want one module", resolved.modules)
 	}
-	return resolved.Modules[0]
+	return resolved.modules[0]
 }
 
 func writeSourceFile(t *testing.T, moduleRoot, relative, content string) {

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestParse_AllowsM1FunctionsAndNativeActions(t *testing.T) {
+func TestCompile_AllowsM1FunctionsNativeActionsAndVariables(t *testing.T) {
 	source := []byte(`
 {{ define "choice" }}{{ if and (eq .OS "darwin") (not (ne .Arch "arm64")) }}{{ default "fallback" .email }}{{ else }}other{{ end }}{{ end }}
 {{ template "choice" . }}
@@ -13,12 +13,12 @@ func TestParse_AllowsM1FunctionsAndNativeActions(t *testing.T) {
 {{ if or true false }}allowed{{ end }}
 `)
 
-	if _, err := Parse("allowed", source); err != nil {
-		t.Fatalf("Parse() error = %v, want nil", err)
+	if _, err := Compile("allowed", source, []string{"email", "items"}); err != nil {
+		t.Fatalf("Compile() error = %v, want nil", err)
 	}
 }
 
-func TestParse_RejectsFunctionsOutsideWhitelist(t *testing.T) {
+func TestCompile_RejectsFunctionsOutsideWhitelist(t *testing.T) {
 	functions := []string{
 		"printf", "print", "println",
 		"len", "index", "slice", "call",
@@ -29,49 +29,36 @@ func TestParse_RejectsFunctionsOutsideWhitelist(t *testing.T) {
 	for _, function := range functions {
 		t.Run(function, func(t *testing.T) {
 			source := []byte("{{ " + function + " .value }}")
-			parsed, err := Parse("rejected", source)
+			parsed, err := Compile("rejected", source, []string{"value"})
 			if err == nil {
-				t.Fatalf("Parse() = %#v, nil; want function rejection", parsed)
+				t.Fatalf("Compile() = %#v, nil; want function rejection", parsed)
 			}
 		})
 	}
 }
 
-func TestParse_RejectsDisallowedFunctionInsideChain(t *testing.T) {
-	parsed, err := Parse("chain", []byte(`{{ (printf "%s" "value").Missing }}`))
+func TestCompile_RejectsDisallowedFunctionInsideChain(t *testing.T) {
+	parsed, err := Compile("chain", []byte(`{{ (printf "%s" "value").Missing }}`), nil)
 	if err == nil || !strings.Contains(err.Error(), `function "printf" is not allowed`) {
-		t.Fatalf("Parse() = %#v, %v; want nested printf rejection", parsed, err)
+		t.Fatalf("Compile() = %#v, %v; want nested printf rejection", parsed, err)
 	}
 }
 
-func TestParse_RejectsDisallowedFunctionInNamedTemplate(t *testing.T) {
-	parsed, err := Parse("root", []byte(`{{ define "hidden" }}{{ len .value }}{{ end }}`))
+func TestCompile_RejectsDisallowedFunctionInNamedTemplate(t *testing.T) {
+	parsed, err := Compile("root", []byte(`{{ define "hidden" }}{{ len .value }}{{ end }}`), []string{"value"})
 	if err == nil || !strings.Contains(err.Error(), `function "len" is not allowed`) {
-		t.Fatalf("Parse() = %#v, %v; want len rejection", parsed, err)
+		t.Fatalf("Compile() = %#v, %v; want len rejection", parsed, err)
 	}
 }
 
-func TestParse_RejectsSyntaxError(t *testing.T) {
-	parsed, err := Parse("broken", []byte(`{{ if }}`))
+func TestCompile_RejectsSyntaxError(t *testing.T) {
+	parsed, err := Compile("broken", []byte(`{{ if }}`), nil)
 	if err == nil || !strings.Contains(err.Error(), `parse template "broken"`) {
-		t.Fatalf("Parse() = %#v, %v; want parse error", parsed, err)
+		t.Fatalf("Compile() = %#v, %v; want parse error", parsed, err)
 	}
 }
 
-func TestTemplateValidateVariables_AllowsBuiltInsDeclaredDataAndLocals(t *testing.T) {
-	parsed, err := Parse("valid", []byte(`
-{{ .OS }} {{ .Arch }} {{ .Hostname }} {{ .Profile }} {{ $.Home }}
-{{ $email := .email }}{{ $email }}
-`))
-	if err != nil {
-		t.Fatalf("Parse() error = %v, want nil", err)
-	}
-	if err := parsed.ValidateVariables([]string{"email"}); err != nil {
-		t.Fatalf("ValidateVariables() error = %v, want nil", err)
-	}
-}
-
-func TestTemplateValidateVariables_RejectsInvalidReferences(t *testing.T) {
+func TestCompile_RejectsInvalidReferences(t *testing.T) {
 	tests := []struct {
 		name     string
 		source   string
@@ -89,24 +76,17 @@ func TestTemplateValidateVariables_RejectsInvalidReferences(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parsed, err := Parse("invalid", []byte(tt.source))
-			if err != nil {
-				t.Fatalf("Parse() error = %v, want nil", err)
-			}
-			err = parsed.ValidateVariables(tt.declared)
+			parsed, err := Compile("invalid", []byte(tt.source), tt.declared)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("ValidateVariables() error = %v, want containing %q", err, tt.want)
+				t.Fatalf("Compile() = %#v, %v; want error containing %q", parsed, err, tt.want)
 			}
 		})
 	}
 }
 
-func TestTemplateValidateVariables_RejectsInvalidDeclaredKey(t *testing.T) {
-	parsed, err := Parse("valid", []byte("literal"))
-	if err != nil {
-		t.Fatalf("Parse() error = %v, want nil", err)
-	}
-	if err := parsed.ValidateVariables([]string{"Upper"}); err == nil {
-		t.Fatal("ValidateVariables() error = nil, want invalid declared key error")
+func TestCompile_RejectsInvalidDeclaredKey(t *testing.T) {
+	parsed, err := Compile("valid", []byte("literal"), []string{"Upper"})
+	if err == nil {
+		t.Fatalf("Compile() = %#v, nil; want invalid declared key error", parsed)
 	}
 }

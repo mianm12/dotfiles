@@ -52,22 +52,9 @@ func (p ResolvedProfile) Enumerate(context RuntimeContext) ([]DesiredEntry, erro
 	return renderScaffolds(entries, p.dataKeys, renderContext)
 }
 
-// ValidateTemplates 为 doctor 等静态消费者检查 scaffold 的语法、函数与变量引用。
-// 它不需要运行 data，也不渲染模板或读取 target。
-func (p ResolvedProfile) ValidateTemplates() error {
-	if !isSupportedGOOS(p.goos) {
-		return fmt.Errorf("resolved profile has unsupported GOOS %q", p.goos)
-	}
-	entries, err := p.enumerateStructure(string(filepath.Separator))
-	if err != nil {
-		return err
-	}
-	return validateScaffolds(entries, p.dataKeys)
-}
-
 func (p ResolvedProfile) enumerateStructure(home string) ([]DesiredEntry, error) {
-	// 不依赖 Resolve 的既有顺序，也不原地排序 receiver，保证其他合法构造方得到同样结果。
-	modules := append([]ResolvedModule(nil), p.Modules...)
+	// 不依赖 Resolve 的既有顺序，也不原地排序 receiver，保持值语义和稳定结果。
+	modules := append([]ResolvedModule(nil), p.modules...)
 	slices.SortFunc(modules, func(left, right ResolvedModule) int {
 		if order := strings.Compare(left.Name, right.Name); order != 0 {
 			return order
@@ -103,11 +90,11 @@ func (p ResolvedProfile) validateRuntimeContext(context RuntimeContext) (templat
 			p.goos,
 		)
 	}
-	if context.Profile != p.Name {
+	if context.Profile != p.name {
 		return templateengine.Context{}, fmt.Errorf(
 			"runtime profile %q does not match resolved profile %q",
 			context.Profile,
-			p.Name,
+			p.name,
 		)
 	}
 	if context.Arch != "arm64" && context.Arch != "amd64" {
@@ -137,11 +124,11 @@ func renderScaffolds(
 		if entry.Kind != FileKindScaffold {
 			continue
 		}
-		parsed, err := loadScaffoldTemplate(*entry, dataKeys)
+		compiled, err := compileScaffoldTemplate(*entry, dataKeys)
 		if err != nil {
 			return nil, err
 		}
-		content, err := parsed.Render(dataKeys, context)
+		content, err := compiled.Render(context)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"module %q scaffold source %q: %w",
@@ -160,14 +147,14 @@ func validateScaffolds(entries []DesiredEntry, dataKeys []string) error {
 		if entry.Kind != FileKindScaffold {
 			continue
 		}
-		if _, err := loadScaffoldTemplate(entry, dataKeys); err != nil {
+		if _, err := compileScaffoldTemplate(entry, dataKeys); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func loadScaffoldTemplate(entry DesiredEntry, dataKeys []string) (*templateengine.Template, error) {
+func compileScaffoldTemplate(entry DesiredEntry, dataKeys []string) (*templateengine.Template, error) {
 	source, err := os.ReadFile(entry.SourcePath)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -177,7 +164,7 @@ func loadScaffoldTemplate(entry DesiredEntry, dataKeys []string) (*templateengin
 			err,
 		)
 	}
-	parsed, err := templateengine.Parse(entry.Module+"/"+entry.Source, source)
+	compiled, err := templateengine.Compile(entry.Module+"/"+entry.Source, source, dataKeys)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"module %q scaffold source %q: %w",
@@ -186,28 +173,83 @@ func loadScaffoldTemplate(entry DesiredEntry, dataKeys []string) (*templateengin
 			err,
 		)
 	}
-	if err := parsed.ValidateVariables(dataKeys); err != nil {
-		return nil, fmt.Errorf(
-			"module %q scaffold source %q: %w",
-			entry.Module,
-			entry.Source,
-			err,
-		)
-	}
-	return parsed, nil
+	return compiled, nil
+}
+
+type classifiedModuleSource struct {
+	Source         string
+	SourcePath     string
+	Kind           FileKind
+	Mode           fs.FileMode
+	TargetOverride string
 }
 
 func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry, error) {
-	if !manifestNamePattern.MatchString(module.Name) {
-		return nil, fmt.Errorf("invalid resolved module name %q", module.Name)
-	}
-	if module.SourceDir == "" || !filepath.IsAbs(module.SourceDir) {
-		return nil, fmt.Errorf("module %q source directory must be a non-empty absolute path", module.Name)
+	if err := validateResolvedModuleSource(module); err != nil {
+		return nil, err
 	}
 	if err := validateTargetPath(module.TargetRoot); err != nil {
 		return nil, fmt.Errorf("module %q target root: %w", module.Name, err)
 	}
 
+	sources, err := classifyModuleSources(module)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]DesiredEntry, 0, len(sources))
+	for _, source := range sources {
+		target, err := desiredTarget(module, source.Source, source.TargetOverride)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, DesiredEntry{
+			Module:     module.Name,
+			Source:     source.Source,
+			SourcePath: source.SourcePath,
+			Target:     target,
+			TargetPath: expandDesiredTarget(home, target),
+			Kind:       source.Kind,
+			Mode:       source.Mode,
+		})
+	}
+	return entries, nil
+}
+
+func enumerateModuleScaffolds(module ResolvedModule) ([]DesiredEntry, error) {
+	if err := validateResolvedModuleSource(module); err != nil {
+		return nil, err
+	}
+	sources, err := classifyModuleSources(module)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]DesiredEntry, 0)
+	for _, source := range sources {
+		if source.Kind != FileKindScaffold {
+			continue
+		}
+		entries = append(entries, DesiredEntry{
+			Module:     module.Name,
+			Source:     source.Source,
+			SourcePath: source.SourcePath,
+			Kind:       source.Kind,
+			Mode:       source.Mode,
+		})
+	}
+	return entries, nil
+}
+
+func validateResolvedModuleSource(module ResolvedModule) error {
+	if !manifestNamePattern.MatchString(module.Name) {
+		return fmt.Errorf("invalid resolved module name %q", module.Name)
+	}
+	if module.SourceDir == "" || !filepath.IsAbs(module.SourceDir) {
+		return fmt.Errorf("module %q source directory must be a non-empty absolute path", module.Name)
+	}
+	return nil
+}
+
+func classifyModuleSources(module ResolvedModule) ([]classifiedModuleSource, error) {
 	rules, err := indexFileRules(module)
 	if err != nil {
 		return nil, err
@@ -218,7 +260,7 @@ func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry,
 	}
 
 	usedRules := make(map[string]struct{}, len(rules))
-	entries := make([]DesiredEntry, 0, len(sources))
+	classified := make([]classifiedModuleSource, 0, len(sources))
 	for _, source := range sources {
 		rule, explicit := rules[source.path]
 		// source 层已移除不可覆盖的内置 ignore；这里表达 [files] > 用户 ignore。
@@ -237,19 +279,12 @@ func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry,
 		if err != nil {
 			return nil, err
 		}
-		target, err := desiredTarget(module, source.path, targetOverride)
-		if err != nil {
-			return nil, err
-		}
-
-		entries = append(entries, DesiredEntry{
-			Module:     module.Name,
-			Source:     source.path,
-			SourcePath: filepath.Join(filepath.Clean(module.SourceDir), filepath.FromSlash(source.path)),
-			Target:     target,
-			TargetPath: expandDesiredTarget(home, target),
-			Kind:       kind,
-			Mode:       mode,
+		classified = append(classified, classifiedModuleSource{
+			Source:         source.path,
+			SourcePath:     filepath.Join(filepath.Clean(module.SourceDir), filepath.FromSlash(source.path)),
+			Kind:           kind,
+			Mode:           mode,
+			TargetOverride: targetOverride,
 		})
 	}
 
@@ -260,7 +295,7 @@ func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry,
 			return nil, fmt.Errorf("module %q file rule source %q is excluded by a built-in ignore", module.Name, source)
 		}
 	}
-	return entries, nil
+	return classified, nil
 }
 
 func indexFileRules(module ResolvedModule) (map[string]ResolvedFileRule, error) {

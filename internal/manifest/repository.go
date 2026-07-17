@@ -89,6 +89,29 @@ func (r Repository) DataKeys() []string {
 	return sortedKeys(r.manifest.data)
 }
 
+// ValidateTemplates 静态检查仓库中每个有效 scaffold 的语法、函数与变量引用。
+// 检查不受 profile 或 OS 过滤影响，因此也覆盖 unassigned 与当前 OS 不活跃的模块；
+// 它不需要运行 data，不渲染模板，也不读取 target。
+func (r Repository) ValidateTemplates() error {
+	entries := make([]DesiredEntry, 0)
+	for _, name := range r.moduleNames {
+		loaded := r.modules[name]
+		module := ResolvedModule{
+			Name:      name,
+			SourceDir: loaded.root,
+			Ignore:    mergeIgnore(r.manifest.ignore, loaded.manifest.ignore),
+			FileRules: materializeFileRules(loaded.manifest.files),
+			RunOnce:   append([]string(nil), loaded.manifest.runOnce...),
+		}
+		moduleEntries, err := enumerateModuleScaffolds(module)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, moduleEntries...)
+	}
+	return validateScaffolds(entries, r.DataKeys())
+}
+
 // UnassignedModules 返回未被任何 profile 引用的模块名，结果按字节序排列。
 func (r Repository) UnassignedModules() []string {
 	return append([]string(nil), r.unassigned...)

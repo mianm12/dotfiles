@@ -1,9 +1,10 @@
-// Package template 提供不依赖环境或文件系统的模板解析、校验与渲染能力。
+// Package template 提供不依赖环境或文件系统的模板编译与渲染能力。
 package template
 
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	texttemplate "text/template"
 	"text/template/parse"
 
@@ -27,13 +28,14 @@ var builtInVariables = map[string]struct{}{
 	"Home":     {},
 }
 
-// Template 是经过函数白名单校验的模板。
+// Template 是已经完成语法、函数与变量引用静态校验的模板。
 type Template struct {
-	parsed *texttemplate.Template
+	parsed   *texttemplate.Template
+	dataKeys []string
 }
 
 // Context 是渲染唯一可见的显式运行输入。Data 可以包含机器配置遗留键，Render 只暴露
-// 当前 manifest 声明的键。
+// 编译时声明的键。
 type Context struct {
 	OS       string
 	Arch     string
@@ -43,8 +45,13 @@ type Context struct {
 	Data     map[string]string
 }
 
-// Parse 解析 source，并拒绝 M1 配置语言未开放的函数。
-func Parse(name string, source []byte) (*Template, error) {
+// Compile 解析 source，并检查 M1 函数白名单与 manifest 用户 data 声明。
+func Compile(name string, source []byte, declaredData []string) (*Template, error) {
+	declared, dataKeys, err := compileDataKeys(declaredData)
+	if err != nil {
+		return nil, fmt.Errorf("compile template %q: %w", name, err)
+	}
+
 	parsed, err := texttemplate.New(name).
 		Option("missingkey=error").
 		Funcs(texttemplate.FuncMap{"default": defaultString}).
@@ -53,36 +60,21 @@ func Parse(name string, source []byte) (*Template, error) {
 		return nil, fmt.Errorf("parse template %q: %w", name, err)
 	}
 	for _, candidate := range parsed.Templates() {
-		if err := validateFunctionNodes(candidate.Root); err != nil {
+		if candidate.Root == nil {
+			continue
+		}
+		if err := walkNode(candidate.Root, func(node parse.Node) error {
+			return validateNode(node, declared)
+		}); err != nil {
 			return nil, fmt.Errorf("template %q: %w", candidate.Name(), err)
 		}
 	}
-	return &Template{parsed: parsed}, nil
+	return &Template{parsed: parsed, dataKeys: dataKeys}, nil
 }
 
-// ValidateVariables 检查所有根变量引用是否属于内建命名空间或 manifest 声明的用户 data。
-func (t *Template) ValidateVariables(declaredData []string) error {
-	declared := make(map[string]struct{}, len(declaredData))
-	for _, key := range declaredData {
-		if !datakey.Valid(key) {
-			return fmt.Errorf("declared data key %q is invalid", key)
-		}
-		declared[key] = struct{}{}
-	}
-	for _, candidate := range t.parsed.Templates() {
-		if err := validateVariableNodes(candidate.Root, declared); err != nil {
-			return fmt.Errorf("template %q: %w", candidate.Name(), err)
-		}
-	}
-	return nil
-}
-
-// Render 使用显式 context 逐字节渲染模板。declaredData 缺值时拒绝渲染，不从 manifest
+// Render 使用显式 context 逐字节渲染模板。声明 data 缺值时拒绝渲染，不从 manifest
 // default、进程环境或其他来源补值。
-func (t *Template) Render(declaredData []string, context Context) ([]byte, error) {
-	if err := t.ValidateVariables(declaredData); err != nil {
-		return nil, err
-	}
+func (t *Template) Render(context Context) ([]byte, error) {
 	values := map[string]string{
 		"OS":       context.OS,
 		"Arch":     context.Arch,
@@ -90,7 +82,7 @@ func (t *Template) Render(declaredData []string, context Context) ([]byte, error
 		"Profile":  context.Profile,
 		"Home":     context.Home,
 	}
-	for _, key := range declaredData {
+	for _, key := range t.dataKeys {
 		value, exists := context.Data[key]
 		if !exists {
 			return nil, fmt.Errorf("declared data key %q is missing from render context; rerun init", key)
@@ -105,6 +97,23 @@ func (t *Template) Render(declaredData []string, context Context) ([]byte, error
 	return output.Bytes(), nil
 }
 
+func compileDataKeys(dataKeys []string) (map[string]struct{}, []string, error) {
+	declared := make(map[string]struct{}, len(dataKeys))
+	keys := make([]string, 0, len(dataKeys))
+	for _, key := range dataKeys {
+		if !datakey.Valid(key) {
+			return nil, nil, fmt.Errorf("declared data key %q is invalid", key)
+		}
+		if _, exists := declared[key]; exists {
+			continue
+		}
+		declared[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return declared, keys, nil
+}
+
 func defaultString(fallback, value string) string {
 	if value == "" {
 		return fallback
@@ -112,45 +121,45 @@ func defaultString(fallback, value string) string {
 	return value
 }
 
-func validateFunctionNodes(node parse.Node) error {
+func walkNode(node parse.Node, visit func(parse.Node) error) error {
 	if node == nil {
 		return nil
 	}
+
+	var err error
 	switch current := node.(type) {
 	case *parse.ListNode:
 		for _, child := range current.Nodes {
-			if err := validateFunctionNodes(child); err != nil {
+			if err = walkNode(child, visit); err != nil {
 				return err
 			}
 		}
 	case *parse.ActionNode:
-		return validateFunctionNodes(current.Pipe)
+		err = walkNode(current.Pipe, visit)
 	case *parse.IfNode:
-		return validateBranchNode(current.Pipe, current.List, current.ElseList)
+		err = walkBranch(current.Pipe, current.List, current.ElseList, visit)
 	case *parse.RangeNode:
-		return validateBranchNode(current.Pipe, current.List, current.ElseList)
+		err = walkBranch(current.Pipe, current.List, current.ElseList, visit)
 	case *parse.WithNode:
-		return validateBranchNode(current.Pipe, current.List, current.ElseList)
+		err = walkBranch(current.Pipe, current.List, current.ElseList, visit)
 	case *parse.TemplateNode:
-		return validateFunctionNodes(current.Pipe)
+		if current.Pipe != nil {
+			err = walkNode(current.Pipe, visit)
+		}
 	case *parse.PipeNode:
 		for _, command := range current.Cmds {
-			if err := validateFunctionNodes(command); err != nil {
+			if err = walkNode(command, visit); err != nil {
 				return err
 			}
 		}
 	case *parse.CommandNode:
 		for _, argument := range current.Args {
-			if err := validateFunctionNodes(argument); err != nil {
+			if err = walkNode(argument, visit); err != nil {
 				return err
 			}
 		}
 	case *parse.ChainNode:
-		return validateFunctionNodes(current.Node)
-	case *parse.IdentifierNode:
-		if _, allowed := allowedFunctions[current.Ident]; !allowed {
-			return fmt.Errorf("function %q is not allowed", current.Ident)
-		}
+		err = walkNode(current.Node, visit)
 	case *parse.TextNode,
 		*parse.CommentNode,
 		*parse.BoolNode,
@@ -160,60 +169,41 @@ func validateFunctionNodes(node parse.Node) error {
 		*parse.DotNode,
 		*parse.FieldNode,
 		*parse.VariableNode,
+		*parse.IdentifierNode,
 		*parse.BreakNode,
 		*parse.ContinueNode:
-		return nil
+		// 叶子节点由 visit 校验。
 	default:
 		return fmt.Errorf("unsupported template AST node %T", node)
 	}
-	return nil
-}
-
-func validateBranchNode(pipe *parse.PipeNode, list, elseList *parse.ListNode) error {
-	if err := validateFunctionNodes(pipe); err != nil {
+	if err != nil {
 		return err
 	}
-	if err := validateFunctionNodes(list); err != nil {
+	return visit(node)
+}
+
+func walkBranch(
+	pipe *parse.PipeNode,
+	list, elseList *parse.ListNode,
+	visit func(parse.Node) error,
+) error {
+	if err := walkNode(pipe, visit); err != nil {
+		return err
+	}
+	if err := walkNode(list, visit); err != nil {
 		return err
 	}
 	if elseList != nil {
-		return validateFunctionNodes(elseList)
+		return walkNode(elseList, visit)
 	}
 	return nil
 }
 
-func validateVariableNodes(node parse.Node, declared map[string]struct{}) error {
-	if node == nil {
-		return nil
-	}
+func validateNode(node parse.Node, declared map[string]struct{}) error {
 	switch current := node.(type) {
-	case *parse.ListNode:
-		for _, child := range current.Nodes {
-			if err := validateVariableNodes(child, declared); err != nil {
-				return err
-			}
-		}
-	case *parse.ActionNode:
-		return validateVariableNodes(current.Pipe, declared)
-	case *parse.IfNode:
-		return validateVariableBranch(current.Pipe, current.List, current.ElseList, declared)
-	case *parse.RangeNode:
-		return validateVariableBranch(current.Pipe, current.List, current.ElseList, declared)
-	case *parse.WithNode:
-		return validateVariableBranch(current.Pipe, current.List, current.ElseList, declared)
-	case *parse.TemplateNode:
-		return validateVariableNodes(current.Pipe, declared)
-	case *parse.PipeNode:
-		for _, command := range current.Cmds {
-			if err := validateVariableNodes(command, declared); err != nil {
-				return err
-			}
-		}
-	case *parse.CommandNode:
-		for _, argument := range current.Args {
-			if err := validateVariableNodes(argument, declared); err != nil {
-				return err
-			}
+	case *parse.IdentifierNode:
+		if _, allowed := allowedFunctions[current.Ident]; !allowed {
+			return fmt.Errorf("function %q is not allowed", current.Ident)
 		}
 	case *parse.FieldNode:
 		if len(current.Ident) != 1 {
@@ -232,37 +222,6 @@ func validateVariableNodes(node parse.Node, declared map[string]struct{}) error 
 		if len(current.Field) != 0 {
 			return fmt.Errorf("variable reference %q must name one root value", current.String())
 		}
-		return validateVariableNodes(current.Node, declared)
-	case *parse.TextNode,
-		*parse.CommentNode,
-		*parse.BoolNode,
-		*parse.NumberNode,
-		*parse.StringNode,
-		*parse.NilNode,
-		*parse.DotNode,
-		*parse.IdentifierNode,
-		*parse.BreakNode,
-		*parse.ContinueNode:
-		return nil
-	default:
-		return fmt.Errorf("unsupported template AST node %T", node)
-	}
-	return nil
-}
-
-func validateVariableBranch(
-	pipe *parse.PipeNode,
-	list, elseList *parse.ListNode,
-	declared map[string]struct{},
-) error {
-	if err := validateVariableNodes(pipe, declared); err != nil {
-		return err
-	}
-	if err := validateVariableNodes(list, declared); err != nil {
-		return err
-	}
-	if elseList != nil {
-		return validateVariableNodes(elseList, declared)
 	}
 	return nil
 }

@@ -20,12 +20,12 @@ func TestResolve_AppliesBuiltInDefaults(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve(%q) error = %v, want nil", goos, err)
 		}
-		if len(got.Modules) != 1 {
-			t.Fatalf("Resolve(%q).Modules = %v, want one module", goos, got.Modules)
+		if len(got.modules) != 1 {
+			t.Fatalf("Resolve(%q) modules = %v, want one module", goos, got.modules)
 		}
-		module := got.Modules[0]
+		module := got.modules[0]
 		if module.Name != "zsh" || module.TargetRoot != "~" || len(module.Ignore) != 0 {
-			t.Errorf("Resolve(%q).Modules[0] = %#v, want zsh targeting ~ with no ignore", goos, module)
+			t.Errorf("Resolve(%q) module = %#v, want zsh targeting ~ with no ignore", goos, module)
 		}
 		if module.SourceDir != filepath.Join(repo, "modules", "zsh") {
 			t.Errorf("Resolve(%q).SourceDir = %q, want module directory", goos, module.SourceDir)
@@ -161,17 +161,17 @@ func TestResolve_MergeMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v, want nil", err)
 			}
-			if len(got.Modules) != tt.wantModules {
-				t.Fatalf("Resolve().Modules = %v, want length %d", got.Modules, tt.wantModules)
+			if len(got.modules) != tt.wantModules {
+				t.Fatalf("Resolve() modules = %v, want length %d", got.modules, tt.wantModules)
 			}
 			if tt.wantModules == 0 {
 				return
 			}
-			if got.Modules[0].TargetRoot != tt.wantTarget {
-				t.Errorf("TargetRoot = %q, want %q", got.Modules[0].TargetRoot, tt.wantTarget)
+			if got.modules[0].TargetRoot != tt.wantTarget {
+				t.Errorf("TargetRoot = %q, want %q", got.modules[0].TargetRoot, tt.wantTarget)
 			}
-			if tt.wantIgnore != nil && !reflect.DeepEqual(got.Modules[0].Ignore, tt.wantIgnore) {
-				t.Errorf("Ignore = %v, want %v", got.Modules[0].Ignore, tt.wantIgnore)
+			if tt.wantIgnore != nil && !reflect.DeepEqual(got.modules[0].Ignore, tt.wantIgnore) {
+				t.Errorf("Ignore = %v, want %v", got.modules[0].Ignore, tt.wantIgnore)
 			}
 		})
 	}
@@ -182,6 +182,8 @@ func TestResolve_ReturnsStableFileRulesAndHooks(t *testing.T) {
 requires = ">=0.3.0"
 [profiles]
 base = ["app"]
+[data.machine]
+[data.email]
 `)
 	writeModule(t, repo, "app", `
 [ignore]
@@ -216,19 +218,23 @@ run_once = ["hooks/z", "hooks/a"]
 		{Source: "b.template", Kind: FileKindScaffold, Mode: "0600"},
 		{Source: "z.template", Kind: FileKindScaffold, Mode: "0644"},
 	}
-	if !reflect.DeepEqual(first.Modules[0].FileRules, wantFileRules) {
-		t.Errorf("FileRules = %#v, want %#v", first.Modules[0].FileRules, wantFileRules)
+	if !reflect.DeepEqual(first.modules[0].FileRules, wantFileRules) {
+		t.Errorf("FileRules = %#v, want %#v", first.modules[0].FileRules, wantFileRules)
 	}
-	if !reflect.DeepEqual(first.Modules[0].RunOnce, []string{"hooks/z", "hooks/a"}) {
-		t.Errorf("RunOnce = %v, want declaration order", first.Modules[0].RunOnce)
+	if !reflect.DeepEqual(first.modules[0].RunOnce, []string{"hooks/z", "hooks/a"}) {
+		t.Errorf("RunOnce = %v, want declaration order", first.modules[0].RunOnce)
 	}
-	if !reflect.DeepEqual(first.Modules[0].Ignore, []string{"*.bak"}) {
-		t.Errorf("Ignore = %v, want [*.bak]", first.Modules[0].Ignore)
+	if !reflect.DeepEqual(first.modules[0].Ignore, []string{"*.bak"}) {
+		t.Errorf("Ignore = %v, want [*.bak]", first.modules[0].Ignore)
+	}
+	if first.goos != "darwin" || !reflect.DeepEqual(first.dataKeys, []string{"email", "machine"}) {
+		t.Errorf("resolved context = GOOS %q, data %v; want darwin and [email machine]", first.goos, first.dataKeys)
 	}
 
-	first.Modules[0].FileRules[0].Source = "changed"
-	first.Modules[0].Ignore[0] = "changed"
-	first.Modules[0].RunOnce[0] = "changed"
+	first.modules[0].FileRules[0].Source = "changed"
+	first.modules[0].Ignore[0] = "changed"
+	first.modules[0].RunOnce[0] = "changed"
+	first.dataKeys[0] = "changed"
 	third, err := loaded.Resolve("base", "darwin")
 	if err != nil {
 		t.Fatalf("Resolve() third error = %v, want nil", err)
@@ -279,7 +285,7 @@ func TestResolve_ValidatesFileTargetWithinEffectiveRoot(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v, want nil", err)
 			}
-			if got := resolved.Modules[0].FileRules[0].TargetOverride; got != tt.fileTarget {
+			if got := resolved.modules[0].FileRules[0].TargetOverride; got != tt.fileTarget {
 				t.Errorf("TargetOverride = %q, want %q", got, tt.fileTarget)
 			}
 		})

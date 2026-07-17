@@ -10,10 +10,8 @@ const defaultScaffoldMode = "0644"
 
 // ResolvedProfile 表示一个 profile 在指定 GOOS 上的有效 manifest 配置。
 type ResolvedProfile struct {
-	// Name 是被解析的 profile 名。
-	Name string
-	// Modules 是经过 OS 过滤、按模块名字节序排列的有效模块。
-	Modules  []ResolvedModule
+	name     string
+	modules  []ResolvedModule
 	goos     string
 	dataKeys []string
 }
@@ -69,8 +67,8 @@ func (r Repository) Resolve(profile, goos string) (ResolvedProfile, error) {
 		}
 	}
 	return ResolvedProfile{
-		Name:     profile,
-		Modules:  modules,
+		name:     profile,
+		modules:  modules,
 		goos:     goos,
 		dataKeys: sortedKeys(r.manifest.data),
 	}, nil
@@ -125,6 +123,25 @@ func (t targetSpec) forOS(goos string) (string, bool) {
 }
 
 func resolveFileRules(module string, rules map[string]fileSpec, targetRoot string) ([]ResolvedFileRule, error) {
+	resolvedRules := materializeFileRules(rules)
+	for _, rule := range resolvedRules {
+		if rule.TargetOverride == "" {
+			continue
+		}
+		if !isLexicalTargetDescendant(targetRoot, rule.TargetOverride) {
+			return nil, fmt.Errorf(
+				"module %q file %q target %q must be a true descendant of target root %q",
+				module,
+				rule.Source,
+				rule.TargetOverride,
+				targetRoot,
+			)
+		}
+	}
+	return resolvedRules, nil
+}
+
+func materializeFileRules(rules map[string]fileSpec) []ResolvedFileRule {
 	sources := make([]string, 0, len(rules))
 	for source := range rules {
 		sources = append(sources, source)
@@ -144,15 +161,6 @@ func resolveFileRules(module string, rules map[string]fileSpec, targetRoot strin
 		target := ""
 		if rule.target != nil {
 			target = *rule.target
-			if !isLexicalTargetDescendant(targetRoot, target) {
-				return nil, fmt.Errorf(
-					"module %q file %q target %q must be a true descendant of target root %q",
-					module,
-					source,
-					target,
-					targetRoot,
-				)
-			}
 		}
 		resolvedRules = append(resolvedRules, ResolvedFileRule{
 			Source:         source,
@@ -161,7 +169,7 @@ func resolveFileRules(module string, rules map[string]fileSpec, targetRoot strin
 			TargetOverride: target,
 		})
 	}
-	return resolvedRules, nil
+	return resolvedRules
 }
 
 // isLexicalTargetDescendant 只接收 validateTargetPath 校验后的 target，比较其字面层级关系。

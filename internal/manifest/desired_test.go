@@ -141,7 +141,7 @@ mode = "0700"
 	}
 }
 
-func TestResolvedProfileValidateTemplates_DoesNotRequireRuntimeData(t *testing.T) {
+func TestRepositoryValidateTemplates_DoesNotRequireRuntimeData(t *testing.T) {
 	tests := []struct {
 		name    string
 		source  string
@@ -167,12 +167,76 @@ base = ["app"]
 			if err != nil {
 				t.Fatalf("Load() error = %v, want nil", err)
 			}
-			profile, err := loaded.Resolve("base", "darwin")
+			err = loaded.ValidateTemplates()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateTemplates() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateTemplates() error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRepositoryValidateTemplates_CoversModuleLocalTemplateCandidates(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		setup   func(t *testing.T, repo string)
+		wantErr string
+	}{
+		{
+			name:    "unassigned module",
+			profile: `base = ["active"]`,
+			setup: func(t *testing.T, repo string) {
+				writeModule(t, repo, "active", "")
+				writeSourceFile(t, filepath.Join(repo, "modules", "active"), "config", "literal")
+				writeModule(t, repo, "unassigned", "")
+				writeSourceFile(t, filepath.Join(repo, "modules", "unassigned"), "config.template", `{{ .token }}`)
+			},
+			wantErr: `module "unassigned" scaffold source "config.template"`,
+		},
+		{
+			name:    "module inactive on darwin",
+			profile: `base = ["app"]`,
+			setup: func(t *testing.T, repo string) {
+				writeModule(t, repo, "app", `os = ["linux"]`)
+				writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.template", `{{ .token }}`)
+			},
+			wantErr: `user variable ".token" is not declared`,
+		},
+		{
+			name:    "suffixless explicit scaffold",
+			profile: `base = ["app"]`,
+			setup: func(t *testing.T, repo string) {
+				writeModule(t, repo, "app", "[files.config]\nkind = \"scaffold\"")
+				writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config", `{{ .token }}`)
+			},
+			wantErr: `user variable ".token" is not declared`,
+		},
+		{
+			name:    "template suffix explicitly linked",
+			profile: `base = ["app"]`,
+			setup: func(t *testing.T, repo string) {
+				writeModule(t, repo, "app", "[files.\"config.template\"]\nkind = \"link\"")
+				writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.template", `{{ .token }}`)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\n"+tt.profile+"\n[data.email]\n")
+			tt.setup(t, repo)
+			loaded, err := Load(repo)
 			if err != nil {
-				t.Fatalf("Resolve() error = %v, want nil", err)
+				t.Fatalf("Load() error = %v, want nil", err)
 			}
 
-			err = profile.ValidateTemplates()
+			err = loaded.ValidateTemplates()
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("ValidateTemplates() error = %v, want nil", err)
@@ -431,7 +495,7 @@ func TestParseDesiredMode(t *testing.T) {
 }
 
 func testResolvedProfile(modules ...ResolvedModule) ResolvedProfile {
-	return ResolvedProfile{Name: "base", Modules: modules, goos: "darwin"}
+	return ResolvedProfile{name: "base", modules: modules, goos: "darwin"}
 }
 
 func testRuntimeContext(home string) RuntimeContext {
