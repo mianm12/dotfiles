@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 const defaultScaffoldMode = "0644"
@@ -85,12 +86,17 @@ func (r Repository) resolveModule(name string, loaded loadedModule, goos string)
 		return ResolvedModule{}, false, fmt.Errorf("module %q is active on %s but target table has no %s entry", name, goos, goos)
 	}
 
+	files, err := resolveFiles(name, loaded.manifest.files, targetRoot)
+	if err != nil {
+		return ResolvedModule{}, false, err
+	}
+
 	return ResolvedModule{
 		Name:       name,
 		SourceDir:  loaded.root,
 		TargetRoot: targetRoot,
 		Ignore:     mergeIgnore(r.manifest.ignore, loaded.manifest.ignore),
-		Files:      resolveFiles(loaded.manifest.files),
+		Files:      files,
 		RunOnce:    append([]string(nil), loaded.manifest.runOnce...),
 	}, true, nil
 }
@@ -103,7 +109,7 @@ func (t targetSpec) forOS(goos string) (string, bool) {
 	return value, exists
 }
 
-func resolveFiles(files map[string]fileSpec) []ResolvedFile {
+func resolveFiles(module string, files map[string]fileSpec, targetRoot string) ([]ResolvedFile, error) {
 	sources := make([]string, 0, len(files))
 	for source := range files {
 		sources = append(sources, source)
@@ -123,6 +129,15 @@ func resolveFiles(files map[string]fileSpec) []ResolvedFile {
 		target := ""
 		if file.target != nil {
 			target = *file.target
+			if !isTargetDescendant(targetRoot, target) {
+				return nil, fmt.Errorf(
+					"module %q file %q target %q must be a true descendant of target root %q",
+					module,
+					source,
+					target,
+					targetRoot,
+				)
+			}
 		}
 		resolved = append(resolved, ResolvedFile{
 			Source:         source,
@@ -131,7 +146,14 @@ func resolveFiles(files map[string]fileSpec) []ResolvedFile {
 			TargetOverride: target,
 		})
 	}
-	return resolved
+	return resolved, nil
+}
+
+func isTargetDescendant(root, target string) bool {
+	if root == "~" {
+		return strings.HasPrefix(target, "~/")
+	}
+	return strings.HasPrefix(target, root+"/")
 }
 
 func mergeIgnore(global, module []string) []string {

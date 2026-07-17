@@ -236,6 +236,54 @@ run_once = ["hooks/z", "hooks/a"]
 	}
 }
 
+func TestResolve_ValidatesFileTargetWithinEffectiveRoot(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaultsRoot string
+		moduleRoot   string
+		fileTarget   string
+		wantError    bool
+	}{
+		{name: "home root", defaultsRoot: "~", fileTarget: "~/.config/app"},
+		{name: "inherited root", defaultsRoot: "~/.config", fileTarget: "~/.config/app"},
+		{name: "module root override", defaultsRoot: "~/.config", moduleRoot: "~/Library/App", fileTarget: "~/Library/App/settings"},
+		{name: "outside inherited root", defaultsRoot: "~/.config", fileTarget: "~/Library/App/settings", wantError: true},
+		{name: "same as root", defaultsRoot: "~/.config", fileTarget: "~/.config", wantError: true},
+		{name: "shared prefix is not descendant", defaultsRoot: "~/.config", fileTarget: "~/.configuration/app", wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := "requires = \">=0.3.0\"\n[defaults]\ntarget = \"" + tt.defaultsRoot + "\"\n[profiles]\nbase = [\"app\"]"
+			repo := writeRepositoryManifest(t, root)
+			module := ""
+			if tt.moduleRoot != "" {
+				module += "target = \"" + tt.moduleRoot + "\"\n"
+			}
+			module += "[files.settings]\ntarget = \"" + tt.fileTarget + "\""
+			writeModule(t, repo, "app", module)
+			loaded, err := Load(repo)
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+
+			resolved, err := loaded.Resolve("base", "darwin")
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "true descendant of target root") {
+					t.Fatalf("Resolve() error = %v, want target root boundary error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Resolve() error = %v, want nil", err)
+			}
+			if got := resolved.Modules[0].Files[0].TargetOverride; got != tt.fileTarget {
+				t.Errorf("TargetOverride = %q, want %q", got, tt.fileTarget)
+			}
+		})
+	}
+}
+
 func TestResolve_RejectsUnknownProfileAndGOOS(t *testing.T) {
 	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
 	loaded, err := Load(repo)
