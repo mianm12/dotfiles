@@ -76,6 +76,8 @@ func cleanTargetPath(path string) (string, error) {
 }
 
 func (resolver *targetResolver) resolveLeafName(path, resolvedParent, leaf string) (string, error) {
+	// 先让内核 lookup leaf：missing 不需要枚举整个 parent，权限错误也不能被 ReadDir
+	// 返回的同名目录项掩盖。Lstat 不跟随 leaf symlink。
 	_, err := os.Lstat(path)
 	if err == nil {
 		return resolver.resolveExistingLeafName(path, resolvedParent, leaf)
@@ -99,6 +101,7 @@ func (resolver *targetResolver) resolveExistingLeafName(path, resolvedParent, le
 	if err != nil {
 		return "", fmt.Errorf("read target parent %q: %w", resolvedParent, err)
 	}
+	// 精确名称直接表示该目录项位置；只有别名写法才需要恢复文件系统保存的真实名称。
 	for _, entry := range entries {
 		if entry.Name() == leaf {
 			return leaf, nil
@@ -123,6 +126,8 @@ func (resolver *targetResolver) resolveExistingEntryName(path, parent, requested
 	if err != nil {
 		return "", fmt.Errorf("inspect existing path %q: %w", path, err)
 	}
+	// SameFile 只用于把已成功 lookup 的别名映射回 parent 目录项，不能成为 leaf identity；
+	// 否则不同名称的 hard link 会被错误合并。
 	candidates := make([]string, 0, 1)
 	for _, entry := range entries {
 		candidatePath := filepath.Join(parent, entry.Name())
@@ -141,6 +146,7 @@ func (resolver *targetResolver) resolveExistingEntryName(path, parent, requested
 		return "", fmt.Errorf("%w: filesystem lookup for %q has no matching directory entry", ErrIdentityUnavailable, path)
 	}
 
+	// 多个候选是同一 inode 的不同 hard-link 目录项，必须按名称语义选出用户请求的位置。
 	requestedKey, err := resolver.missingNameKey(parent, requested)
 	if err != nil {
 		return "", fmt.Errorf("%w: multiple hard-link entries match alias %q: %w", ErrIdentityUnavailable, path, err)

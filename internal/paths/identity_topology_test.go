@@ -218,6 +218,7 @@ func TestResolveTarget_PreservesLeafLookupPermissionError(t *testing.T) {
 	if err := os.WriteFile(target, []byte("content"), 0o600); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", target, err)
 	}
+	// 0400 允许枚举目录名但禁止按名称 lookup，证明 resolver 不能只信 ReadDir。
 	if err := os.Chmod(parent, 0o400); err != nil {
 		t.Fatalf("os.Chmod(%q) error = %v", parent, err)
 	}

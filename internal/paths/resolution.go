@@ -85,6 +85,7 @@ type resolvedTargetParent struct {
 }
 
 func (resolver *targetResolver) resolveTargetParent(path string) (resolvedTargetParent, error) {
+	// 向上收集 missing tail；最近的现存对象负责锚定 canonical parent 和名称语义。
 	current := filepath.Clean(path)
 	missing := make([]string, 0)
 	for {
@@ -143,6 +144,7 @@ const maxSymlinkTraversals = 255
 
 // resolveExistingDirectory 逐组件解析既有目录，并保留 symlink 展开的完整遍历轨迹。
 func (resolver *targetResolver) resolveExistingDirectory(path string) (string, []TargetIdentity, error) {
+	// walker 需要 Readlink 才能记录 trace，但只有内核 lookup 能权威判定完整路径可达。
 	resolvedInfo, err := os.Stat(path)
 	if err != nil {
 		if isTraversalBlocker(err) {

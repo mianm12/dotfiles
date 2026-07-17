@@ -19,6 +19,7 @@ func queryCaseSensitivity(fd int) (int, error) {
 	return syscall.Fpathconf(fd, pathconfCaseSensitive)
 }
 
+// missingNameKeyWithQuery 将 capability 观测与名称分类分开；查询失败表示语义不可证明。
 func missingNameKeyWithQuery(parent, name string, query func(int) (int, error)) (string, error) {
 	folded, ascii := asciiFold(name)
 	if !ascii {
@@ -35,6 +36,7 @@ func missingNameKeyWithQuery(parent, name string, query func(int) (int, error)) 
 
 	caseSensitive, err := query(int(directory.Fd()))
 	if err != nil {
+		// sentinel 供调用方 fail closed，syscall cause 保留给诊断。
 		return "", fmt.Errorf("%w: query case sensitivity for %q: %w", ErrIdentityUnavailable, parent, err)
 	}
 	switch caseSensitive {
