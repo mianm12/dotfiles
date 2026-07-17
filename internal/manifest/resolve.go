@@ -13,7 +13,9 @@ type ResolvedProfile struct {
 	// Name 是被解析的 profile 名。
 	Name string
 	// Modules 是经过 OS 过滤、按模块名字节序排列的有效模块。
-	Modules []ResolvedModule
+	Modules  []ResolvedModule
+	goos     string
+	dataKeys []string
 }
 
 // ResolvedModule 表示已经应用 defaults、ignore 合并和 OS 过滤的模块配置。
@@ -67,8 +69,10 @@ func (r Repository) Resolve(profile, goos string) (ResolvedProfile, error) {
 		}
 	}
 	return ResolvedProfile{
-		Name:    profile,
-		Modules: modules,
+		Name:     profile,
+		Modules:  modules,
+		goos:     goos,
+		dataKeys: sortedKeys(r.manifest.data),
 	}, nil
 }
 

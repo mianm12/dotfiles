@@ -3,16 +3,19 @@ package manifest
 import (
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+
+	templateengine "github.com/ghstlnx/dotfiles/internal/template"
 )
 
 // DesiredEntry 是 render、target 身份校验和 planner 消费的结构性期望值。“只读”描述
 // enumerate 的 IO 边界和下游消费约定；该类型仍是普通 Go 值，每次调用返回彼此独立的结果。
 // Source 是规范化模块相对路径，Target 是规范化 ~/ 展示路径；对应的 Path 字段是绝对路径。
-// Mode 仅对 scaffold 有效，link 的 Mode 恒为零。
+// Mode 与 Content 仅对 scaffold 有效；link 的 Mode 恒为零且 Content 为 nil。
 type DesiredEntry struct {
 	Module     string
 	Source     string
@@ -21,16 +24,48 @@ type DesiredEntry struct {
 	TargetPath string
 	Kind       FileKind
 	Mode       fs.FileMode
+	Content    []byte
 }
 
-// Enumerate 把 effective profile 转换为确定排序的结构性 desired entries。
-// 它只读取 source 树，不读取或修改 target，也不执行模板解析、文件系统身份或控制面校验。
-func (p ResolvedProfile) Enumerate(home string) ([]DesiredEntry, error) {
-	if home == "" || !filepath.IsAbs(home) {
-		return nil, fmt.Errorf("effective HOME must be a non-empty absolute path")
-	}
-	home = filepath.Clean(home)
+// RuntimeContext 是 desired 形成时唯一允许传给模板的显式运行输入。
+type RuntimeContext struct {
+	OS       string
+	Arch     string
+	Hostname string
+	Profile  string
+	Home     string
+	Data     map[string]string
+}
 
+// Enumerate 把 effective profile 转换为确定排序且已完成 scaffold 渲染的 desired entries。
+// 它只读取 source 树，不读取或修改 target，也不执行文件系统身份或控制面校验。任一模板
+// parse、变量或渲染错误都返回 nil，planner 不会看到部分结果。
+func (p ResolvedProfile) Enumerate(context RuntimeContext) ([]DesiredEntry, error) {
+	renderContext, err := p.validateRuntimeContext(context)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := p.enumerateStructure(renderContext.Home)
+	if err != nil {
+		return nil, err
+	}
+	return renderScaffolds(entries, p.dataKeys, renderContext)
+}
+
+// ValidateTemplates 为 doctor 等静态消费者检查 scaffold 的语法、函数与变量引用。
+// 它不需要运行 data，也不渲染模板或读取 target。
+func (p ResolvedProfile) ValidateTemplates() error {
+	if !isSupportedGOOS(p.goos) {
+		return fmt.Errorf("resolved profile has unsupported GOOS %q", p.goos)
+	}
+	entries, err := p.enumerateStructure(string(filepath.Separator))
+	if err != nil {
+		return err
+	}
+	return validateScaffolds(entries, p.dataKeys)
+}
+
+func (p ResolvedProfile) enumerateStructure(home string) ([]DesiredEntry, error) {
 	// 不依赖 Resolve 的既有顺序，也不原地排序 receiver，保证其他合法构造方得到同样结果。
 	modules := append([]ResolvedModule(nil), p.Modules...)
 	slices.SortFunc(modules, func(left, right ResolvedModule) int {
@@ -55,6 +90,111 @@ func (p ResolvedProfile) Enumerate(home string) ([]DesiredEntry, error) {
 		return strings.Compare(left.Source, right.Source)
 	})
 	return entries, nil
+}
+
+func (p ResolvedProfile) validateRuntimeContext(context RuntimeContext) (templateengine.Context, error) {
+	if !isSupportedGOOS(p.goos) {
+		return templateengine.Context{}, fmt.Errorf("resolved profile has unsupported GOOS %q", p.goos)
+	}
+	if context.OS != p.goos {
+		return templateengine.Context{}, fmt.Errorf(
+			"runtime OS %q does not match resolved profile OS %q",
+			context.OS,
+			p.goos,
+		)
+	}
+	if context.Profile != p.Name {
+		return templateengine.Context{}, fmt.Errorf(
+			"runtime profile %q does not match resolved profile %q",
+			context.Profile,
+			p.Name,
+		)
+	}
+	if context.Arch != "arm64" && context.Arch != "amd64" {
+		return templateengine.Context{}, fmt.Errorf("runtime architecture %q is not supported", context.Arch)
+	}
+	if context.Home == "" || !filepath.IsAbs(context.Home) {
+		return templateengine.Context{}, fmt.Errorf("effective HOME must be a non-empty absolute path")
+	}
+	return templateengine.Context{
+		OS:       context.OS,
+		Arch:     context.Arch,
+		Hostname: context.Hostname,
+		Profile:  context.Profile,
+		Home:     filepath.Clean(context.Home),
+		Data:     context.Data,
+	}, nil
+}
+
+func renderScaffolds(
+	entries []DesiredEntry,
+	dataKeys []string,
+	context templateengine.Context,
+) ([]DesiredEntry, error) {
+	rendered := append([]DesiredEntry(nil), entries...)
+	for index := range rendered {
+		entry := &rendered[index]
+		if entry.Kind != FileKindScaffold {
+			continue
+		}
+		parsed, err := loadScaffoldTemplate(*entry, dataKeys)
+		if err != nil {
+			return nil, err
+		}
+		content, err := parsed.Render(dataKeys, context)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"module %q scaffold source %q: %w",
+				entry.Module,
+				entry.Source,
+				err,
+			)
+		}
+		entry.Content = content
+	}
+	return rendered, nil
+}
+
+func validateScaffolds(entries []DesiredEntry, dataKeys []string) error {
+	for _, entry := range entries {
+		if entry.Kind != FileKindScaffold {
+			continue
+		}
+		if _, err := loadScaffoldTemplate(entry, dataKeys); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadScaffoldTemplate(entry DesiredEntry, dataKeys []string) (*templateengine.Template, error) {
+	source, err := os.ReadFile(entry.SourcePath)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"read scaffold template for module %q source %q: %w",
+			entry.Module,
+			entry.Source,
+			err,
+		)
+	}
+	parsed, err := templateengine.Parse(entry.Module+"/"+entry.Source, source)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"module %q scaffold source %q: %w",
+			entry.Module,
+			entry.Source,
+			err,
+		)
+	}
+	if err := parsed.ValidateVariables(dataKeys); err != nil {
+		return nil, fmt.Errorf(
+			"module %q scaffold source %q: %w",
+			entry.Module,
+			entry.Source,
+			err,
+		)
+	}
+	return parsed, nil
 }
 
 func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry, error) {

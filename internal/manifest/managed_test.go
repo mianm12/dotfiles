@@ -35,7 +35,7 @@ func TestResolvedProfileEnumerate_RejectsImplicitManaged(t *testing.T) {
 	writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.tmpl", "template")
 	module := resolveOnlyModule(t, repo)
 
-	entries, err := (ResolvedProfile{Name: "base", Modules: []ResolvedModule{module}}).Enumerate(t.TempDir())
+	entries, err := testResolvedProfile(module).Enumerate(testRuntimeContext(t.TempDir()))
 	if !errors.Is(err, ErrManagedUnsupported) {
 		t.Fatalf("Enumerate() error = %v, want ErrManagedUnsupported", err)
 	}
@@ -82,7 +82,7 @@ func TestResolvedProfileEnumerate_DoesNotInferManagedBeforeHigherPriorities(t *t
 			writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.tmpl", "template")
 			module := resolveOnlyModule(t, repo)
 
-			entries, err := (ResolvedProfile{Name: "base", Modules: []ResolvedModule{module}}).Enumerate(t.TempDir())
+			entries, err := testResolvedProfile(module).Enumerate(testRuntimeContext(t.TempDir()))
 			if err != nil {
 				t.Fatalf("Enumerate() error = %v, want nil", err)
 			}
@@ -108,7 +108,7 @@ func TestResolvedProfileEnumerate_DoesNotInferManagedBeforeHigherPriorities(t *t
 func TestResolvedProfileEnumerate_RejectsInjectedManagedRule(t *testing.T) {
 	root := t.TempDir()
 	writeSourceFile(t, root, "config", "template")
-	profile := ResolvedProfile{Modules: []ResolvedModule{{
+	profile := testResolvedProfile(ResolvedModule{
 		Name:       "app",
 		SourceDir:  root,
 		TargetRoot: "~",
@@ -116,9 +116,9 @@ func TestResolvedProfileEnumerate_RejectsInjectedManagedRule(t *testing.T) {
 			Source: "config",
 			Kind:   FileKind(managedFileKindName),
 		}},
-	}}}
+	})
 
-	entries, err := profile.Enumerate(t.TempDir())
+	entries, err := profile.Enumerate(testRuntimeContext(t.TempDir()))
 	if !errors.Is(err, ErrManagedUnsupported) {
 		t.Fatalf("Enumerate() error = %v, want ErrManagedUnsupported", err)
 	}
