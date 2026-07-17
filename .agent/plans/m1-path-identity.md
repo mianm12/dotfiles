@@ -79,8 +79,9 @@ var ErrIdentityUnavailable error
 - [x] 2026-07-17：Milestone 2 完成；symlink/blocker/missing 窄测与 `make check` 通过，
   以 `feat(paths): 解析 target 祖先拓扑` 提交（`6195f39`）。
 - [x] 2026-07-17：Milestone 3 完成；真实文件系统 oracle、hard-link、交叉编译与
-  `make check` 通过，以 `test(paths): 覆盖平台 target 身份语义` 提交。
-- [ ] Milestone 4：完整门禁、独立复核与收口。
+  `make check` 通过，以 `test(paths): 覆盖平台 target 身份语义` 提交（`10e51b1`）。
+- [x] 2026-07-17：Milestone 4 完成；`main...HEAD` diff check、最终 `make check`、10 次
+  paths 重复测试和独立只读复核通过，以 `docs(paths): 收口 target 身份 ExecPlan` 提交。
 
 每完成一个 milestone，立即记录日期、测试、commit SHA 和新发现；更新随该 milestone 的
 语义 commit 提交。
@@ -235,7 +236,7 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 | 不存在路径 | leaf、缺失尾部、可重复解析与 `ErrIdentityUnavailable` |
 | 大小写/Unicode | 真实文件系统 lookup oracle 与 resolver 一致 |
 | hard link | `SameFile` 为真但 identity 不同 |
-| 只读 | 解析前后 fixture 目录项和对象 metadata 不变 |
+| 只读 | 缺失路径保持缺失，fixture 无新增/删除目录项，代码路径不含创建或写入调用 |
 | 每 milestone 门禁 | 窄测、`make check`、diff check、计划更新、commit、clean |
 | 最终门禁 | `git diff main...HEAD --check`、`make check`、独立只读复核 |
 
@@ -280,6 +281,10 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   因而 case alias 不会把 sibling hard link 合并。
 - 2026-07-17：darwin/amd64 与 linux/amd64 test binary 交叉编译成功；按 Goal 授权边界未
   push，故 Linux 测试已编写但未在真实 Linux runner 执行。
+- 2026-07-17：最终独立 subagent 逐行复核 3 个 milestone commit 和 8 个变更文件，未发现
+  P0–P2 或其他必须修复的问题；复核覆盖平台名称语义、symlink 角色、missing tail、blocker
+  cause、hard-link 多候选、只读性和范围边界。
+- 2026-07-17：`go test -count=10 ./internal/paths` 通过，未发现真实文件系统测试抖动。
 
 ## Decision Log
 
@@ -300,16 +305,35 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 
 ## Outcomes & Retrospective
 
-执行完成后填写：
+结果：
 
-- milestone 和 review-fix commit SHA；
-- 每轮窄测、`make check`、diff check 与 clean 证据；
-- 本机文件系统的 case/Unicode oracle 结果及未知语义拒绝结果；
-- darwin/linux 交叉编译结果，以及未获授权执行的 Linux CI 边界；
-- 独立复核意见与对应修复；
-- 最终 diff 的范围、依赖、README/规范/持久化影响；
-- 与本计划的偏差和后续消费者接入所需的最小工作。
+- Milestone 1：`d405146 feat(paths): 建立 target 文件系统身份`。
+- Milestone 2：`6195f39 feat(paths): 解析 target 祖先拓扑`。
+- Milestone 3：`10e51b1 test(paths): 覆盖平台 target 身份语义`。
+- Milestone 4：本文件所在的 `docs(paths): 收口 target 身份 ExecPlan` commit；独立复核未
+  产生 fix commit。
+- 每个 milestone 均按顺序完成失败测试、最小实现、窄测、`make check`、完整 diff/check、
+  ExecPlan 更新、独立 commit 和提交后 clean 检查。
+- 最终验证通过：`git diff main...HEAD --check`、`make check`、
+  `go test -count=10 ./internal/paths`，以及 darwin/amd64、linux/amd64 test binary 交叉编译。
+- 本机真实文件系统 oracle 接受大小写和 NFC/NFD 现存别名；resolver 返回相同身份。ASCII
+  缺失名称按只读 case capability 比较，非 ASCII 缺失名称返回 `ErrIdentityUnavailable`。
+- hard-link fixture 先证明 `os.SameFile == true`，再证明不同目录项身份不同；case alias 面对
+  同 inode 多候选时只映射唯一名称项。
+- 独立 subagent 无 P0–P2 finding，确认 ancestor/leaf symlink、missing tail、blocker/cause、
+  hard-link、只读性和范围均符合规范与本计划。
+- 最终 diff 仅涉及本 ExecPlan、`internal/paths` 实现/测试和 package doc；未新增依赖，未修改
+  README、规范、持久化格式、控制面、state、planner、mutation 或 Precond。
 
-完成结论必须证明：`internal/paths` 已提供只读、fail-closed 的 target 身份原语；现存祖先
-symlink 和文件系统别名一致解释，不存在路径在可证明时比较、不可证明时拒绝，leaf hard
-link 不合并，且未触碰任何持久化、planner 或 mutation 边界。
+偏差与后续：
+
+- 研究确认不存在名称没有跨文件系统通用只读 collation-key API；按用户裁决，对未知语义
+  fail closed，而不是实现 normalization fallback。
+- 本 Goal 不授权 push/PR，因此没有真实 Linux runner 结果；Linux 测试和 build 已就绪，需
+  后续获授权后由现有双平台 CI 执行。
+- 后续消费者应直接复用本 API，并在收到 `ErrIdentityUnavailable` 时整体拒绝依赖身份的
+  校验阶段；不得自行添加字符串 fallback 或持久化内部身份字段。
+
+结论：`internal/paths` 已提供只读、fail-closed 的 target 身份原语；现存祖先 symlink 和
+文件系统别名一致解释，不存在路径在可证明时比较、不可证明时拒绝，leaf hard link 不合并，
+且未触碰任何持久化、planner 或 mutation 边界。
