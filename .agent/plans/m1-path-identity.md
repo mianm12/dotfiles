@@ -75,8 +75,9 @@ var ErrIdentityUnavailable error
 - [x] 2026-07-17：完成只读平台研究和 ExecPlan 独立审查；用户接受未知不存在名称语义时
   `ErrIdentityUnavailable`、整体 fail closed。
 - [x] 2026-07-17：Milestone 1 完成；窄测与 `make check` 通过，完整 diff/check 无错误，
-  以 `feat(paths): 建立 target 文件系统身份` 提交。
-- [ ] Milestone 2：祖先 symlink、阻断对象和不存在 leaf。
+  以 `feat(paths): 建立 target 文件系统身份` 提交（`d405146`）。
+- [x] 2026-07-17：Milestone 2 完成；symlink/blocker/missing 窄测与 `make check` 通过，
+  以 `feat(paths): 解析 target 祖先拓扑` 提交。
 - [ ] Milestone 3：macOS/Linux 大小写、Unicode 与 hard-link 真实文件系统测试。
 - [ ] Milestone 4：完整门禁、独立复核与收口。
 
@@ -265,6 +266,11 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   Milestone 2/3。
 - 2026-07-17：本机 `make check` 全部通过；沙箱拒绝 Go 写真实 module stat cache 时只输出
   非致命 warning，测试、race、lint 与构建均成功，未修改真实用户数据。
+- 2026-07-17：Milestone 2 无需重构 `IsMissing`。resolver 向上寻找最近安全可达目录时复用
+  其“悬空 symlink 不算正常缺失”判断，再由 `Stat`/`EvalSymlinks` 区分目录 symlink、非目录、
+  loop 和普通 IO 错误。
+- 2026-07-17：缺失多级尾部只有在最近现存父目录的名称语义可外推时才建立身份；本机
+  macOS 的 ASCII 尾部可用，Linux/Unicode 未知语义仍按裁决返回不可用。
 
 ## Decision Log
 
@@ -278,6 +284,8 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   条件；review 修复使用新 commit，不 amend。
 - 2026-07-17：Milestone 1 不新增依赖；macOS 仅对可由 `Fpathconf` 权威分类的 ASCII 缺失
   名称建 key，Linux 与非 ASCII 未知语义返回 `ErrIdentityUnavailable`。
+- 2026-07-17：Milestone 2 保持 leaf 与 ancestor 两种 symlink 角色分离：leaf 目录项不跟随，
+  同一路径有后续组件时作为 ancestor 跟随；因此 leaf identity 不是 resolved child 的祖先。
 
 ## Outcomes & Retrospective
 

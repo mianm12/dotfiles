@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 var (
@@ -47,24 +48,85 @@ func ResolveTargetIdentity(path string) (TargetIdentity, error) {
 	cleanPath := filepath.Clean(path)
 	parent := filepath.Dir(cleanPath)
 	leaf := filepath.Base(cleanPath)
-	resolvedParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return TargetIdentity{}, fmt.Errorf("resolve target parent %q: %w", parent, err)
-	}
-	parentInfo, err := os.Stat(resolvedParent)
-	if err != nil {
-		return TargetIdentity{}, fmt.Errorf("inspect target parent %q: %w", resolvedParent, err)
-	}
-	if !parentInfo.IsDir() {
-		return TargetIdentity{}, fmt.Errorf("%w: target parent %q is not a directory", ErrPathBlocked, resolvedParent)
-	}
-
-	leafName, err := resolveLeafName(cleanPath, resolvedParent, leaf)
+	resolvedParent, missingParents, err := resolveTargetParent(parent)
 	if err != nil {
 		return TargetIdentity{}, err
 	}
-	root, components := splitAbsolutePath(filepath.Join(resolvedParent, leafName))
+
+	root, components := splitAbsolutePath(resolvedParent)
+	for _, missingParent := range missingParents {
+		key, keyErr := missingNameKey(resolvedParent, missingParent)
+		if keyErr != nil {
+			return TargetIdentity{}, fmt.Errorf(
+				"resolve missing target parent component %q below %q: %w",
+				missingParent,
+				resolvedParent,
+				keyErr,
+			)
+		}
+		components = append(components, key)
+	}
+
+	leafName := ""
+	if len(missingParents) == 0 {
+		leafName, err = resolveLeafName(cleanPath, resolvedParent, leaf)
+	} else {
+		leafName, err = missingNameKey(resolvedParent, leaf)
+		if err != nil {
+			err = fmt.Errorf("resolve missing target name %q: %w", cleanPath, err)
+		}
+	}
+	if err != nil {
+		return TargetIdentity{}, err
+	}
+	components = append(components, leafName)
 	return TargetIdentity{root: root, components: components, valid: true}, nil
+}
+
+func resolveTargetParent(path string) (string, []string, error) {
+	current := filepath.Clean(path)
+	missing := make([]string, 0)
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			resolvedInfo, statErr := os.Stat(current)
+			if statErr != nil {
+				if errors.Is(statErr, fs.ErrNotExist) || errors.Is(statErr, syscall.ELOOP) {
+					return "", nil, fmt.Errorf("%w: target ancestor %q cannot resolve to a directory", ErrPathBlocked, current)
+				}
+				return "", nil, fmt.Errorf("inspect target ancestor %q: %w", current, statErr)
+			}
+			if !resolvedInfo.IsDir() {
+				return "", nil, fmt.Errorf("%w: target ancestor %q is not a directory", ErrPathBlocked, current)
+			}
+			resolved, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr != nil {
+				if errors.Is(resolveErr, fs.ErrNotExist) || errors.Is(resolveErr, syscall.ELOOP) {
+					return "", nil, fmt.Errorf("%w: target ancestor %q cannot resolve to a directory", ErrPathBlocked, current)
+				}
+				return "", nil, fmt.Errorf("resolve target ancestor %q: %w", current, resolveErr)
+			}
+			slices.Reverse(missing)
+			return resolved, missing, nil
+		}
+
+		if errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
+			return "", nil, fmt.Errorf("%w: target ancestor %q is blocked", ErrPathBlocked, current)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", nil, fmt.Errorf("inspect target ancestor %q: %w", current, err)
+		}
+		if !IsMissing(current, err) {
+			return "", nil, fmt.Errorf("%w: target ancestor %q is not safely missing", ErrPathBlocked, current)
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", nil, fmt.Errorf("%w: no reachable directory for target parent %q", ErrPathBlocked, path)
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func resolveLeafName(path, resolvedParent, leaf string) (string, error) {
