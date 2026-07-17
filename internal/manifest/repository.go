@@ -14,9 +14,12 @@ var manifestNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // Repository 表示已经严格加载、但尚未按 profile 和 OS 解析的仓库 manifest。
 type Repository struct {
-	manifest    rootSpec
-	modules     map[string]loadedModule
-	moduleNames []string
+	manifest     rootSpec
+	modules      map[string]loadedModule
+	moduleNames  []string
+	profiles     map[string][]string
+	profileNames []string
+	unassigned   []string
 }
 
 type loadedModule struct {
@@ -46,11 +49,18 @@ func Load(repo string) (Repository, error) {
 	if err != nil {
 		return Repository{}, err
 	}
+	profiles, profileNames, unassigned, err := expandProfiles(rootManifest.profiles, modules, moduleNames)
+	if err != nil {
+		return Repository{}, fmt.Errorf("manifest %q: %w", filepath.Join(repo, filename), err)
+	}
 
 	return Repository{
-		manifest:    rootManifest,
-		modules:     modules,
-		moduleNames: moduleNames,
+		manifest:     rootManifest,
+		modules:      modules,
+		moduleNames:  moduleNames,
+		profiles:     profiles,
+		profileNames: profileNames,
+		unassigned:   unassigned,
 	}, nil
 }
 
@@ -62,6 +72,16 @@ func (r Repository) Requirement() Requirement {
 // ModuleNames 返回按字节序排列的全部已发现模块名。
 func (r Repository) ModuleNames() []string {
 	return append([]string(nil), r.moduleNames...)
+}
+
+// ProfileNames 返回按字节序排列的全部 profile 名。
+func (r Repository) ProfileNames() []string {
+	return append([]string(nil), r.profileNames...)
+}
+
+// UnassignedModules 返回未被任何 profile 引用的模块名，结果按字节序排列。
+func (r Repository) UnassignedModules() []string {
+	return append([]string(nil), r.unassigned...)
 }
 
 func loadModules(modulesRoot string) (map[string]loadedModule, []string, error) {
