@@ -145,10 +145,26 @@ func validateFunctionNodes(node parse.Node) error {
 				return err
 			}
 		}
+	case *parse.ChainNode:
+		return validateFunctionNodes(current.Node)
 	case *parse.IdentifierNode:
 		if _, allowed := allowedFunctions[current.Ident]; !allowed {
 			return fmt.Errorf("function %q is not allowed", current.Ident)
 		}
+	case *parse.TextNode,
+		*parse.CommentNode,
+		*parse.BoolNode,
+		*parse.NumberNode,
+		*parse.StringNode,
+		*parse.NilNode,
+		*parse.DotNode,
+		*parse.FieldNode,
+		*parse.VariableNode,
+		*parse.BreakNode,
+		*parse.ContinueNode:
+		return nil
+	default:
+		return fmt.Errorf("unsupported template AST node %T", node)
 	}
 	return nil
 }
@@ -217,6 +233,19 @@ func validateVariableNodes(node parse.Node, declared map[string]struct{}) error 
 			return fmt.Errorf("variable reference %q must name one root value", current.String())
 		}
 		return validateVariableNodes(current.Node, declared)
+	case *parse.TextNode,
+		*parse.CommentNode,
+		*parse.BoolNode,
+		*parse.NumberNode,
+		*parse.StringNode,
+		*parse.NilNode,
+		*parse.DotNode,
+		*parse.IdentifierNode,
+		*parse.BreakNode,
+		*parse.ContinueNode:
+		return nil
+	default:
+		return fmt.Errorf("unsupported template AST node %T", node)
 	}
 	return nil
 }

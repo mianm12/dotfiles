@@ -19,7 +19,13 @@ func TestParse_AllowsM1FunctionsAndNativeActions(t *testing.T) {
 }
 
 func TestParse_RejectsFunctionsOutsideWhitelist(t *testing.T) {
-	functions := []string{"printf", "len", "index", "call", "html", "js", "urlquery", "env"}
+	functions := []string{
+		"printf", "print", "println",
+		"len", "index", "slice", "call",
+		"html", "js", "urlquery",
+		"ge", "gt", "le", "lt",
+		"env",
+	}
 	for _, function := range functions {
 		t.Run(function, func(t *testing.T) {
 			source := []byte("{{ " + function + " .value }}")
@@ -28,6 +34,13 @@ func TestParse_RejectsFunctionsOutsideWhitelist(t *testing.T) {
 				t.Fatalf("Parse() = %#v, nil; want function rejection", parsed)
 			}
 		})
+	}
+}
+
+func TestParse_RejectsDisallowedFunctionInsideChain(t *testing.T) {
+	parsed, err := Parse("chain", []byte(`{{ (printf "%s" "value").Missing }}`))
+	if err == nil || !strings.Contains(err.Error(), `function "printf" is not allowed`) {
+		t.Fatalf("Parse() = %#v, %v; want nested printf rejection", parsed, err)
 	}
 }
 
