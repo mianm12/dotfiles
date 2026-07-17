@@ -195,6 +195,9 @@ func decodeModuleManifest(path string) (moduleSpec, error) {
 	if err != nil {
 		return moduleSpec{}, err
 	}
+	if err := validateExplicitFiles(path, files, runOnce); err != nil {
+		return moduleSpec{}, err
+	}
 
 	return moduleSpec{
 		os:      osValues,
@@ -298,7 +301,8 @@ func validateTargetPath(value string) error {
 	if value == "~" {
 		return nil
 	}
-	if !strings.HasPrefix(value, "~/") || strings.HasSuffix(value, "/") || strings.ContainsRune(value, '\x00') {
+	if !strings.HasPrefix(value, "~/") || strings.HasSuffix(value, "/") ||
+		strings.ContainsRune(value, '\x00') || strings.Contains(value, "$") {
 		return fmt.Errorf("target %q must be ~ or a canonical ~/ path", value)
 	}
 	for _, part := range strings.Split(strings.TrimPrefix(value, "~/"), "/") {
@@ -436,6 +440,41 @@ func validateEntryTargetPath(path string) error {
 		return fmt.Errorf("entry target must be a true descendant of HOME")
 	}
 	return nil
+}
+
+func validateExplicitFiles(path string, files map[string]fileSpec, runOnce []string) error {
+	hookPaths := make(map[string]struct{}, len(runOnce))
+	for _, script := range runOnce {
+		hookPaths[script] = struct{}{}
+	}
+	for _, source := range sortedKeys(files) {
+		if reason := builtInIgnoreReason(source, hookPaths); reason != "" {
+			return fmt.Errorf("manifest %q: files.%s cannot override built-in ignore for %s", path, source, reason)
+		}
+	}
+	return nil
+}
+
+func builtInIgnoreReason(source string, hookPaths map[string]struct{}) string {
+	if source == filename {
+		return "root dot.toml"
+	}
+	segments := strings.Split(source, "/")
+	if segments[0] == "hooks" {
+		return "root hooks directory"
+	}
+	for _, segment := range segments {
+		if segment == ".git" {
+			return ".git path"
+		}
+	}
+	if strings.HasSuffix(segments[len(segments)-1], ".swp") {
+		return "*.swp path"
+	}
+	if _, exists := hookPaths[source]; exists {
+		return "hook reference"
+	}
+	return ""
 }
 
 func cloneProfiles(raw map[string][]string) map[string][]string {

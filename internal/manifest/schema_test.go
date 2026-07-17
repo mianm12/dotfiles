@@ -73,6 +73,7 @@ func TestDecodeRootManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "unknown target os", content: "requires = \">=1.0.0\"\n[defaults.target]\nfreebsd = \"~\"\n[profiles]\nbase = []", want: "unsupported OS"},
 		{name: "non-string target", content: "requires = \">=1.0.0\"\n[defaults.target]\ndarwin = 1\n[profiles]\nbase = []", want: "must be a string"},
 		{name: "non-canonical target", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/a/../b\"\n[profiles]\nbase = []", want: "canonical"},
+		{name: "target environment variable", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/$HOME/app\"\n[profiles]\nbase = []", want: "canonical"},
 		{name: "invalid ignore pattern", content: "requires = \">=1.0.0\"\n[ignore]\npatterns = [\"a/**b\"]\n[profiles]\nbase = []", want: "requires ** to occupy"},
 	}
 
@@ -152,6 +153,11 @@ func TestDecodeModuleManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "file path escapes module", content: "[files.\"../../x\"]", want: "stay within the module"},
 		{name: "absolute file path", content: "[files.\"/tmp/x\"]", want: "relative path"},
 		{name: "duplicate normalized file path", content: "[files.x]\n[files.\"a/../x\"]", want: "duplicates normalized source"},
+		{name: "root manifest override", content: "[files.\"dot.toml\"]", want: "root dot.toml"},
+		{name: "root hooks override", content: "[files.\"hooks/data\"]", want: "root hooks directory"},
+		{name: "git path override", content: "[files.\"nested/.git/config\"]", want: ".git path"},
+		{name: "swap path override", content: "[files.\"nested/.vimrc.swp\"]", want: "*.swp path"},
+		{name: "hook reference override", content: "[files.\"scripts/setup.sh\"]\n[hooks]\nrun_once = [\"scripts/setup.sh\"]", want: "hook reference"},
 		{name: "invalid ignore pattern", content: "[ignore]\npatterns = [\"foo//bar\"]", want: "invalid path segment"},
 		{name: "empty hook", content: "[hooks]\nrun_once = [\"\"]", want: "must not be empty"},
 		{name: "hook path escapes module", content: "[hooks]\nrun_once = [\"../setup.sh\"]", want: "stay within the module"},
@@ -218,6 +224,22 @@ run_once = ["hooks/../setup.sh"]
 	}
 	if strings.Join(got.runOnce, ",") != "setup.sh" {
 		t.Errorf("runOnce = %v, want normalized setup.sh", got.runOnce)
+	}
+}
+
+func TestDecodeModuleManifest_ExplicitFileOverridesUserIgnore(t *testing.T) {
+	path := writeManifest(t, `
+[ignore]
+patterns = ["README.md"]
+[files."README.md"]
+`)
+
+	got, err := decodeModuleManifest(path)
+	if err != nil {
+		t.Fatalf("decodeModuleManifest() error = %v, want nil", err)
+	}
+	if _, exists := got.files["README.md"]; !exists {
+		t.Errorf("files = %v, want explicit README.md", got.files)
 	}
 }
 
