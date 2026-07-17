@@ -182,13 +182,12 @@ func parseDesiredMode(module, source string, kind FileKind, raw string) (fs.File
 }
 
 func desiredTarget(module ResolvedModule, source, override string) (string, error) {
-	derived, err := stripTemplateSuffix(source)
-	if err != nil {
-		return "", fmt.Errorf("module %q source %q: %w", module.Name, source, err)
-	}
-
 	target := override
 	if target == "" {
+		derived, err := stripTemplateSuffix(source)
+		if err != nil {
+			return "", fmt.Errorf("module %q source %q: %w", module.Name, source, err)
+		}
 		target = module.TargetRoot + "/" + derived
 		if module.TargetRoot == "~" {
 			target = "~/" + derived

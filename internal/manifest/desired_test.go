@@ -209,6 +209,44 @@ func TestResolvedProfileEnumerate_RejectsEmptySuffixResult(t *testing.T) {
 	}
 }
 
+func TestResolvedProfileEnumerate_ExplicitTargetSkipsSuffixDerivation(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		kind   FileKind
+		mode   string
+	}{
+		{name: "link template", source: ".template", kind: FileKindLink},
+		{name: "scaffold managed suffix", source: ".tmpl", kind: FileKindScaffold, mode: "0600"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeSourceFile(t, root, tt.source, "value")
+			profile := ResolvedProfile{Modules: []ResolvedModule{{
+				Name:       "app",
+				SourceDir:  root,
+				TargetRoot: "~",
+				FileRules: []ResolvedFileRule{{
+					Source:         tt.source,
+					Kind:           tt.kind,
+					Mode:           tt.mode,
+					TargetOverride: "~/.config",
+				}},
+			}}}
+
+			entries, err := profile.Enumerate(t.TempDir())
+			if err != nil {
+				t.Fatalf("Enumerate() error = %v, want nil", err)
+			}
+			if len(entries) != 1 || entries[0].Target != "~/.config" {
+				t.Fatalf("Enumerate() entries = %#v, want one entry targeting ~/.config", entries)
+			}
+		})
+	}
+}
+
 func TestResolvedProfileEnumerate_RejectsInvalidHome(t *testing.T) {
 	profile := ResolvedProfile{}
 	for _, home := range []string{"", "relative", "~/home"} {
