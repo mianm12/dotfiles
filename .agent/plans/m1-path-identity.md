@@ -98,6 +98,11 @@ var ErrIdentityUnavailable error
   记录递归 link target，补 root/snapshot 契约、规范澄清和回归测试。窄测、10 次 paths 测试、
   darwin/linux 交叉编译、`make check` 和二次独立复核通过，以
   `fix(paths): 完整记录 target 遍历拓扑` 提交（`df0fe9c`）。
+- [x] 2026-07-18：最终 review 以 64 层静态 symlink 链复现内核返回 `ELOOP` 而 resolver
+  false-success，并发现普通 IO cause 缺少回归保护。新增内核 `Stat` authority、统一 blocker
+  分类及双 API 测试；20 次 paths 测试、两项回归 50 次重复、darwin/linux 交叉编译、
+  `make check` 和独立复核通过，以 `fix(paths): 以内核校验 target 祖先可达性` 提交
+  （`eba7959`）。
 
 每完成一个 milestone，立即记录日期、测试、commit SHA 和新发现；更新随该 milestone 的
 语义 commit 提交。
@@ -313,6 +318,10 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 - 2026-07-18：独立复核发现“展示前缀 + 最终 canonical 链”仍不是完整遍历拓扑；例如
   `A -> B -> real` 会漏掉 `B`，`A -> X/../real` 会漏掉实际必须先作为目录遍历的 `X`。
   resolver 因而改为逐组件展开 symlink，并直接记录完整 traversal trace。
+- 2026-07-18：用户态 walker 的 255 次 link guard 不是内核 pathname resolution 上限；当
+  target parent 本身是深链 symlink 且真实 leaf 精确存在时，原实现只 `Lstat` parent，随后
+  可绕过展示路径 lookup 并返回身份。稳定复现中 `os.Stat(A/child)` 返回 `ELOOP`，resolver
+  却成功，因此仅靠 walker 不能权威证明祖先可达。
 
 ## Decision Log
 
@@ -338,6 +347,10 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 - 2026-07-18：resolution 不从最终 identity 反推祖先；resolver 逐组件跟随 symlink target，
   把每个实际要求为目录的 entry identity 加入 trace，并在 `..` 改变当前位置前保留已遍历
   entry。该规则同时覆盖 chained symlink 与非最终 canonical 前缀。
+- 2026-07-18：内核 `Stat` 权威判定 target parent 是否实际可达且为目录，显式 walker 只负责
+  恢复真实目录项名称和记录完整 trace；walker 的 255 次限制仅作自身循环保护，不猜测平台
+  内核上限。`ENOENT`/`ENOTDIR`/`ELOOP` 是 traversal blocker，权限和其他普通 IO 错误继续
+  保留底层 cause 且不伪装成 `ErrPathBlocked`。
 
 ## Outcomes & Retrospective
 
@@ -350,16 +363,21 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   fix commit。
 - 后续设计复核：`df0fe9c fix(paths): 完整记录 target 遍历拓扑`。它将 leaf equality 与
   traversal topology 分层，并以逐组件 symlink walker 取代从最终 identity 反推祖先。
+- 最终 review 修复：`eba7959 fix(paths): 以内核校验 target 祖先可达性`。它恢复 kernel
+  authority 与 trace collection 的职责分离，并补齐 deep symlink `ELOOP` 和普通 IO cause
+  的双 API 回归。
 - 每个 milestone 均按顺序完成失败测试、最小实现、窄测、`make check`、完整 diff/check、
   ExecPlan 更新、独立 commit 和提交后 clean 检查。
 - 最终验证通过：`git diff main...HEAD --check`、`make check`、
-  `go test -count=10 ./internal/paths`，以及 darwin/amd64、linux/amd64 test binary 交叉编译。
+  `go test -count=20 ./internal/paths`，以及 darwin/amd64、linux/amd64 test binary 交叉编译；
+  deep symlink 与普通 IO 两项新增回归各重复 50 次通过。
 - 本机真实文件系统 oracle 接受大小写和 NFC/NFD 现存别名；resolver 返回相同身份。ASCII
   缺失名称按只读 case capability 比较，非 ASCII 缺失名称返回 `ErrIdentityUnavailable`。
 - hard-link fixture 先证明 `os.SameFile == true`，再证明不同目录项身份不同；case alias 面对
   同 inode 多候选时只映射唯一名称项。
 - 原 Milestone 4 复核无 P0–P2；后续主线程发现 leaf symlink 中间项缺口，第一轮独立复核又
-  发现 chained symlink 和 `X/../real` 的 P1。两者均由 `df0fe9c` 修复；二次独立复核无
+  发现 chained symlink 和 `X/../real` 的 P1，两者由 `df0fe9c` 修复。最终 review 继续发现
+  内核 symlink limit 的 P1 与普通 IO cause 测试 P3，由 `eba7959` 修复；修复后独立复核无
   P0–P3 actionable finding。
 - 最终 diff 涉及本 ExecPlan、`internal/paths` 实现/测试/package doc，以及 `docs/02`、
   `docs/05`、`docs/08` 对既有身份/拓扑不变量的澄清；未新增依赖，未修改 README、持久化
