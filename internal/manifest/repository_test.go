@@ -49,6 +49,45 @@ func TestLoad_MissingModulesDirectoryMeansNoModules(t *testing.T) {
 	}
 }
 
+func TestLoad_RejectsInvalidModulesDirectoryPath(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, path string)
+	}{
+		{
+			name: "regular file",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+					t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+				}
+			},
+		},
+		{
+			name: "dangling symlink",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Symlink(filepath.Join(filepath.Dir(path), "missing-modules"), path); err != nil {
+					t.Fatalf("os.Symlink(%q) error = %v", path, err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+			modulesRoot := filepath.Join(repo, "modules")
+			tt.setup(t, modulesRoot)
+
+			_, err := Load(repo)
+			if err == nil || !strings.Contains(err.Error(), modulesRoot) {
+				t.Fatalf("Load() error = %v, want hard error containing %q", err, modulesRoot)
+			}
+		})
+	}
+}
+
 func TestLoad_RejectsUnavailableOrInvalidRepository(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
 	if _, err := Load(missing); !errors.Is(err, ErrRepositoryUnavailable) {

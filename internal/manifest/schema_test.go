@@ -57,14 +57,19 @@ func TestDecodeRootManifest_RejectsInvalidSchema(t *testing.T) {
 		want    string
 	}{
 		{name: "missing requires", content: "[profiles]\nbase = []", want: "requires is missing"},
+		{name: "requires wrong type", content: "requires = 1\n[profiles]\nbase = []", want: "cannot decode"},
 		{name: "invalid requires", content: "requires = \"^1.0.0\"\n[profiles]\nbase = []", want: "invalid requires"},
 		{name: "missing profiles", content: `requires = ">=1.0.0"`, want: "profiles must declare"},
 		{name: "empty profiles", content: "requires = \">=1.0.0\"\n[profiles]", want: "profiles must declare"},
 		{name: "unknown root", content: "requires = \">=1.0.0\"\nunknown = true\n[profiles]\nbase = []", want: "strict mode"},
 		{name: "unknown defaults", content: "requires = \">=1.0.0\"\n[defaults]\nunknown = true\n[profiles]\nbase = []", want: "strict mode"},
+		{name: "defaults os wrong type", content: "requires = \">=1.0.0\"\n[defaults]\nos = \"darwin\"\n[profiles]\nbase = []", want: "cannot decode"},
 		{name: "wrong profile type", content: "requires = \">=1.0.0\"\n[profiles]\nbase = 1", want: "cannot decode"},
 		{name: "invalid data key", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.Upper]\nprompt = \"x\"", want: "invalid data key"},
 		{name: "unknown data field", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\nunknown = \"x\"", want: "strict mode"},
+		{name: "data prompt wrong type", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\nprompt = 1", want: "cannot decode"},
+		{name: "data default wrong type", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\ndefault = true", want: "cannot decode"},
+		{name: "data from env wrong type", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\nfrom_env = 1", want: "cannot decode"},
 		{name: "from env", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\nfrom_env = \"EMAIL\"", want: "requires M2"},
 		{name: "invalid defaults os", content: "requires = \">=1.0.0\"\n[defaults]\nos = [\"freebsd\"]\n[profiles]\nbase = []", want: "unsupported OS"},
 		{name: "duplicate defaults os", content: "requires = \">=1.0.0\"\n[defaults]\nos = [\"darwin\", \"darwin\"]\n[profiles]\nbase = []", want: "duplicate OS"},
@@ -74,6 +79,8 @@ func TestDecodeRootManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "non-string target", content: "requires = \">=1.0.0\"\n[defaults.target]\ndarwin = 1\n[profiles]\nbase = []", want: "must be a string"},
 		{name: "non-canonical target", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/a/../b\"\n[profiles]\nbase = []", want: "canonical"},
 		{name: "target environment variable", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/$HOME/app\"\n[profiles]\nbase = []", want: "canonical"},
+		{name: "target braced environment variable", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/${HOME}/app\"\n[profiles]\nbase = []", want: "canonical"},
+		{name: "ignore patterns wrong type", content: "requires = \">=1.0.0\"\n[ignore]\npatterns = \"*.tmp\"\n[profiles]\nbase = []", want: "cannot decode"},
 		{name: "invalid ignore pattern", content: "requires = \">=1.0.0\"\n[ignore]\npatterns = [\"a/**b\"]\n[profiles]\nbase = []", want: "requires ** to occupy"},
 	}
 
@@ -82,6 +89,16 @@ func TestDecodeRootManifest_RejectsInvalidSchema(t *testing.T) {
 			_, err := decodeRootManifest(writeManifest(t, tt.content))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("decodeRootManifest() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateTargetPath_AllowsLiteralDollar(t *testing.T) {
+	for _, path := range []string{"~/price$/file", "~/$5/file", "~/dollar$$/file"} {
+		t.Run(path, func(t *testing.T) {
+			if err := validateTargetPath(path); err != nil {
+				t.Fatalf("validateTargetPath(%q) error = %v, want nil", path, err)
 			}
 		})
 	}
@@ -139,15 +156,20 @@ func TestDecodeModuleManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "unknown ignore", content: "[ignore]\nunknown = true", want: "strict mode"},
 		{name: "unknown file field", content: "[files.x]\nunknown = true", want: "strict mode"},
 		{name: "unknown hooks field", content: "[hooks]\nunknown = []", want: "strict mode"},
+		{name: "os wrong type", content: `os = "darwin"`, want: "cannot decode"},
 		{name: "invalid os", content: `os = ["windows"]`, want: "unsupported OS"},
 		{name: "duplicate os", content: `os = ["linux", "linux"]`, want: "duplicate OS"},
 		{name: "invalid target path", content: `target = "relative"`, want: "canonical"},
 		{name: "invalid target table key", content: "[target]\nwindows = \"~\"", want: "unsupported OS"},
+		{name: "ignore patterns wrong type", content: "[ignore]\npatterns = \"*.tmp\"", want: "cannot decode"},
+		{name: "mode wrong type", content: "[files.x]\nmode = 420", want: "cannot decode"},
 		{name: "invalid mode", content: "[files.\"x.template\"]\nmode = \"644\"", want: "invalid mode"},
 		{name: "mode on link", content: "[files.x]\nmode = \"0644\"", want: "not allowed for link"},
+		{name: "kind wrong type", content: "[files.x]\nkind = true", want: "cannot decode"},
 		{name: "managed kind", content: "[files.x]\nkind = \"managed\"", want: "requires M2"},
 		{name: "implicit managed", content: "[files.\"x.tmpl\"]", want: "requires M2"},
 		{name: "invalid kind", content: "[files.x]\nkind = \"copy\"", want: "invalid kind"},
+		{name: "file target wrong type", content: "[files.x]\ntarget = 1", want: "cannot decode"},
 		{name: "invalid file target", content: "[files.x]\ntarget = \"/tmp/x\"", want: "canonical"},
 		{name: "file target at home", content: "[files.x]\ntarget = \"~\"", want: "true descendant of HOME"},
 		{name: "file path escapes module", content: "[files.\"../../x\"]", want: "stay within the module"},
@@ -157,12 +179,15 @@ func TestDecodeModuleManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "root hooks override", content: "[files.\"hooks/data\"]", want: "root hooks directory"},
 		{name: "git path override", content: "[files.\"nested/.git/config\"]", want: ".git path"},
 		{name: "swap path override", content: "[files.\"nested/.vimrc.swp\"]", want: "*.swp path"},
+		{name: "swap directory descendant override", content: "[files.\"cache.swp/data\"]", want: "*.swp path"},
 		{name: "hook reference override", content: "[files.\"scripts/setup.sh\"]\n[hooks]\nrun_once = [\"scripts/setup.sh\"]", want: "hook reference"},
 		{name: "invalid ignore pattern", content: "[ignore]\npatterns = [\"foo//bar\"]", want: "invalid path segment"},
 		{name: "empty hook", content: "[hooks]\nrun_once = [\"\"]", want: "must not be empty"},
 		{name: "hook path escapes module", content: "[hooks]\nrun_once = [\"../setup.sh\"]", want: "stay within the module"},
 		{name: "duplicate normalized hook", content: "[hooks]\nrun_once = [\"setup.sh\", \"hooks/../setup.sh\"]", want: "duplicates script"},
 		{name: "inline hook", content: "[hooks]\nrun_once = [{ script = \"hooks/x\" }]", want: "requires M2"},
+		{name: "hook watch", content: "[hooks]\nrun_once = [{ script = \"hooks/x\", watch = [\"hooks/data\"] }]", want: "requires M2"},
+		{name: "run once wrong type", content: "[hooks]\nrun_once = \"hooks/x\"", want: "cannot decode"},
 		{name: "wrong hook type", content: "[hooks]\nrun_once = [1]", want: "must be a string"},
 	}
 
@@ -240,6 +265,18 @@ patterns = ["README.md"]
 	}
 	if _, exists := got.files["README.md"]; !exists {
 		t.Errorf("files = %v, want explicit README.md", got.files)
+	}
+}
+
+func TestDecodeModuleManifest_AllowsRootHooksFile(t *testing.T) {
+	path := writeManifest(t, `[files.hooks]`)
+
+	got, err := decodeModuleManifest(path)
+	if err != nil {
+		t.Fatalf("decodeModuleManifest() error = %v, want nil", err)
+	}
+	if _, exists := got.files["hooks"]; !exists {
+		t.Errorf("files = %v, want explicit root hooks file", got.files)
 	}
 }
 

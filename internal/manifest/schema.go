@@ -12,7 +12,10 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-var modePattern = regexp.MustCompile(`^0[0-7]{3}$`)
+var (
+	modePattern                 = regexp.MustCompile(`^0[0-7]{3}$`)
+	environmentReferencePattern = regexp.MustCompile(`\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+)
 
 type optional[T any] struct {
 	value T
@@ -302,7 +305,7 @@ func validateTargetPath(value string) error {
 		return nil
 	}
 	if !strings.HasPrefix(value, "~/") || strings.HasSuffix(value, "/") ||
-		strings.ContainsRune(value, '\x00') || strings.Contains(value, "$") {
+		strings.ContainsRune(value, '\x00') || environmentReferencePattern.MatchString(value) {
 		return fmt.Errorf("target %q must be ~ or a canonical ~/ path", value)
 	}
 	for _, part := range strings.Split(strings.TrimPrefix(value, "~/"), "/") {
@@ -460,16 +463,16 @@ func builtInIgnoreReason(source string, hookPaths map[string]struct{}) string {
 		return "root dot.toml"
 	}
 	segments := strings.Split(source, "/")
-	if segments[0] == "hooks" {
+	if len(segments) > 1 && segments[0] == "hooks" {
 		return "root hooks directory"
 	}
 	for _, segment := range segments {
 		if segment == ".git" {
 			return ".git path"
 		}
-	}
-	if strings.HasSuffix(segments[len(segments)-1], ".swp") {
-		return "*.swp path"
+		if strings.HasSuffix(segment, ".swp") {
+			return "*.swp path"
+		}
 	}
 	if _, exists := hookPaths[source]; exists {
 		return "hook reference"

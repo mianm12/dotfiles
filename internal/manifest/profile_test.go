@@ -37,6 +37,29 @@ empty = []
 	}
 }
 
+func TestLoad_ExpandsDiamondProfileOnce(t *testing.T) {
+	repo := writeRepositoryManifest(t, `
+requires = ">=0.3.0"
+[profiles]
+base = ["git"]
+left = ["@base", "zsh"]
+right = ["@base", "nvim"]
+top = ["@left", "@right"]
+`)
+	for _, name := range []string{"zsh", "git", "nvim"} {
+		writeModule(t, repo, name, "")
+	}
+
+	got, err := Load(repo)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	want := []string{"git", "nvim", "zsh"}
+	if !reflect.DeepEqual(got.profiles["top"], want) {
+		t.Errorf("expanded top = %v, want diamond de-duplicated %v", got.profiles["top"], want)
+	}
+}
+
 func TestLoad_RejectsInvalidProfiles(t *testing.T) {
 	tests := []struct {
 		name     string
