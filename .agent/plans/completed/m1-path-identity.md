@@ -112,6 +112,10 @@ var ErrIdentityUnavailable error
   parent 及 exact leaf 绕过权限错误。新增两项回归，50 次重复、20 次 paths 测试、
   darwin/linux 交叉编译及 `make check` 通过，以 `fix(paths): 收口 target 身份错误边界`
   提交（`dcfed7f`）。
+- [x] 2026-07-18：PR #1 首次 Ubuntu 门禁发现通用 `identity.go` 中的 `asciiFold` 仅被
+  Darwin 文件消费，Linux `unused` linter 因而稳定失败。将 helper 归入 Darwin build boundary，
+  补齐名称语义分支测试；`make check`、30 次 paths 测试及 darwin/linux amd64 测试二进制与
+  CLI 交叉编译通过，以 `fix(paths): 对齐平台名称语义边界` 提交（`080020f`）。
 
 每完成一个 milestone，立即记录日期、测试、commit SHA 和新发现；更新随该 milestone 的
 语义 commit 提交。
@@ -314,6 +318,10 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   因而 case alias 不会把 sibling hard link 合并。
 - 2026-07-17：darwin/amd64 与 linux/amd64 test binary 交叉编译成功；按 Goal 授权边界未
   push，故 Linux 测试已编写但未在真实 Linux runner 执行。
+- 2026-07-18：PR #1 的首次真实 Ubuntu runner 在 `golangci-lint` 阶段发现 `asciiFold` 未使用：
+  Linux 会选入无 build tag 的 `identity.go`，却排除唯一调用它的 Darwin 文件。Go 允许未使用的
+  包级函数，故此前 linux test binary 交叉编译不能替代目标平台静态检查；helper 必须与其
+  平台语义消费者共享同一 build boundary。
 - 2026-07-17：最终独立 subagent 逐行复核 3 个 milestone commit 和 8 个变更文件，未发现
   P0–P2 或其他必须修复的问题；复核覆盖平台名称语义、symlink 角色、missing tail、blocker
   cause、hard-link 多候选、只读性和范围边界。
@@ -387,6 +395,9 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 - 再次 review 修复：`dcfed7f fix(paths): 收口 target 身份错误边界`。它明确 blocker 与普通
   cause 的分类，保证 Darwin capability 查询失败可由 `ErrIdentityUnavailable` 识别，并将
   leaf lookup 前置到目录枚举之前。
+- Ubuntu 门禁修复：`080020f fix(paths): 对齐平台名称语义边界`。它将 ASCII folding 收回
+  Darwin 名称语义实现，并通过注入 capability 结果覆盖 case-sensitive、case-insensitive、
+  Unicode 不可证明、未知 capability 和查询失败；Linux 继续按既定契约 fail closed。
 - 每个 milestone 均按顺序完成失败测试、最小实现、窄测、`make check`、完整 diff/check、
   ExecPlan 更新、独立 commit 和提交后 clean 检查。
 - 最终验证通过：`git diff main...HEAD --check`、`make check`、
@@ -408,8 +419,8 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 
 - 研究确认不存在名称没有跨文件系统通用只读 collation-key API；按用户裁决，对未知语义
   fail closed，而不是实现 normalization fallback。
-- 本 Goal 不授权 push/PR，因此没有真实 Linux runner 结果；Linux 测试和 build 已就绪，需
-  后续获授权后由现有双平台 CI 执行。
+- 本 Goal 最初不授权 push/PR，因此收口当时没有真实 Linux runner 结果；PR #1 后续承担该
+  外部门禁，并证明交叉编译不能代替目标平台静态检查。双平台 CI 继续作为合并门禁。
 - 后续消费者应直接复用本 API，并在收到 `ErrIdentityUnavailable` 时整体拒绝依赖身份的
   校验阶段；不得自行添加字符串 fallback 或持久化内部身份字段。
 
