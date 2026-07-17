@@ -12,12 +12,17 @@ func TestTargetIdentity_ZeroValue(t *testing.T) {
 	if zero.Equal(zero) {
 		t.Error("zero TargetIdentity compares equal to itself")
 	}
-	if zero.IsAncestorOf(zero) {
-		t.Error("zero TargetIdentity is an ancestor of itself")
+
+	var zeroResolution TargetResolution
+	if zeroResolution.Equal(zeroResolution) {
+		t.Error("zero TargetResolution compares equal to itself")
+	}
+	if zeroResolution.IsAncestorOf(zeroResolution) {
+		t.Error("zero TargetResolution is an ancestor of itself")
 	}
 }
 
-func TestTargetIdentity_Relations(t *testing.T) {
+func TestTargetResolution_Relations(t *testing.T) {
 	root := t.TempDir()
 	alpha := filepath.Join(root, "alpha")
 	child := filepath.Join(alpha, "child")
@@ -28,24 +33,27 @@ func TestTargetIdentity_Relations(t *testing.T) {
 		}
 	}
 
-	alphaID := mustResolveTargetIdentity(t, alpha)
-	alphaAgainID := mustResolveTargetIdentity(t, filepath.Join(root, ".", "alpha"))
-	childID := mustResolveTargetIdentity(t, child)
-	peerID := mustResolveTargetIdentity(t, alphaPeer)
+	alphaResolution := mustResolveTarget(t, alpha)
+	alphaAgainResolution := mustResolveTarget(t, filepath.Join(root, ".", "alpha"))
+	childResolution := mustResolveTarget(t, child)
+	peerResolution := mustResolveTarget(t, alphaPeer)
+	if !alphaResolution.Identity().Equal(mustResolveTargetIdentity(t, alpha)) {
+		t.Error("resolution leaf identity differs from identity-only resolution")
+	}
 
-	if !alphaID.Equal(alphaAgainID) {
+	if !alphaResolution.Equal(alphaAgainResolution) {
 		t.Error("same target identities compare different")
 	}
-	if alphaID.Equal(childID) || alphaID.Equal(peerID) {
+	if alphaResolution.Equal(childResolution) || alphaResolution.Equal(peerResolution) {
 		t.Error("different target identities compare equal")
 	}
-	if !alphaID.IsAncestorOf(childID) {
+	if !alphaResolution.IsAncestorOf(childResolution) {
 		t.Error("alpha target is not an ancestor of its child")
 	}
-	if alphaID.IsAncestorOf(alphaAgainID) {
+	if alphaResolution.IsAncestorOf(alphaAgainResolution) {
 		t.Error("target is a strict ancestor of itself")
 	}
-	if alphaID.IsAncestorOf(peerID) {
+	if alphaResolution.IsAncestorOf(peerResolution) {
 		t.Error("component string prefix is treated as an ancestor")
 	}
 }
@@ -72,11 +80,14 @@ func TestResolveTargetIdentity_BasicMissingLeaf(t *testing.T) {
 	}
 }
 
-func TestResolveTargetIdentity_BasicRejectsNonAbsolutePath(t *testing.T) {
-	for _, path := range []string{"", "relative/path"} {
+func TestResolveTargetIdentity_BasicRejectsInvalidPath(t *testing.T) {
+	for _, path := range []string{"", "relative/path", string(filepath.Separator)} {
 		t.Run(path, func(t *testing.T) {
 			if _, err := ResolveTargetIdentity(path); err == nil {
 				t.Fatalf("ResolveTargetIdentity(%q) error = nil", path)
+			}
+			if _, err := ResolveTarget(path); err == nil {
+				t.Fatalf("ResolveTarget(%q) error = nil", path)
 			}
 		})
 	}
@@ -120,4 +131,14 @@ func mustResolveTargetIdentity(t *testing.T, path string) TargetIdentity {
 		t.Fatalf("ResolveTargetIdentity(%q) error = %v", path, err)
 	}
 	return identity
+}
+
+func mustResolveTarget(t *testing.T, path string) TargetResolution {
+	t.Helper()
+
+	resolution, err := ResolveTarget(path)
+	if err != nil {
+		t.Fatalf("ResolveTarget(%q) error = %v", path, err)
+	}
+	return resolution
 }

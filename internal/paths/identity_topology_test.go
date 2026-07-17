@@ -36,7 +36,7 @@ func TestResolveTargetIdentity_SymlinkAncestors(t *testing.T) {
 	}
 }
 
-func TestResolveTargetIdentity_LeafSymlinkIsNotFollowed(t *testing.T) {
+func TestResolveTarget_LeafSymlinkIsNotFollowed(t *testing.T) {
 	root := t.TempDir()
 	realDirectory := filepath.Join(root, "real")
 	child := filepath.Join(realDirectory, "child")
@@ -52,23 +52,112 @@ func TestResolveTargetIdentity_LeafSymlinkIsNotFollowed(t *testing.T) {
 		t.Fatalf("os.Symlink(%q, %q) error = %v", "real", alias, err)
 	}
 
-	aliasID := mustResolveTargetIdentity(t, alias)
-	realID := mustResolveTargetIdentity(t, realDirectory)
-	aliasChildID := mustResolveTargetIdentity(t, filepath.Join(alias, "child"))
-	realChildID := mustResolveTargetIdentity(t, child)
+	aliasResolution := mustResolveTarget(t, alias)
+	realResolution := mustResolveTarget(t, realDirectory)
+	aliasChildResolution := mustResolveTarget(t, filepath.Join(alias, "child"))
+	realChildResolution := mustResolveTarget(t, child)
 
-	if aliasID.Equal(realID) {
+	if aliasResolution.Equal(realResolution) {
 		t.Error("leaf symlink identity equals its destination")
 	}
-	if aliasID.IsAncestorOf(aliasChildID) || aliasID.IsAncestorOf(realChildID) {
-		t.Error("leaf symlink identity is an ancestor of a path reached through its destination")
+	if !aliasResolution.IsAncestorOf(aliasChildResolution) {
+		t.Error("leaf symlink entry is not an ancestor traversed by its displayed child path")
 	}
-	if !realID.IsAncestorOf(aliasChildID) || !aliasChildID.Equal(realChildID) {
+	if aliasResolution.IsAncestorOf(realChildResolution) {
+		t.Error("leaf symlink entry is an ancestor of a child path that does not traverse it")
+	}
+	if !realResolution.IsAncestorOf(aliasChildResolution) || !aliasChildResolution.Equal(realChildResolution) {
 		t.Error("ancestor symlink path does not resolve under the real directory identity")
 	}
 }
 
-func TestResolveTargetIdentity_BlockedAncestors(t *testing.T) {
+func TestResolveTarget_SymlinkExpansionTopology(t *testing.T) {
+	t.Run("chained aliases", func(t *testing.T) {
+		root := t.TempDir()
+		realDirectory := filepath.Join(root, "real")
+		child := filepath.Join(realDirectory, "child")
+		if err := os.Mkdir(realDirectory, 0o700); err != nil {
+			t.Fatalf("os.Mkdir(%q) error = %v", realDirectory, err)
+		}
+		if err := os.WriteFile(child, []byte("content"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", child, err)
+		}
+
+		bridge := filepath.Join(root, "bridge")
+		alias := filepath.Join(root, "alias")
+		if err := os.Symlink("real", bridge); err != nil {
+			t.Fatalf("os.Symlink(%q, %q) error = %v", "real", bridge, err)
+		}
+		if err := os.Symlink("bridge", alias); err != nil {
+			t.Fatalf("os.Symlink(%q, %q) error = %v", "bridge", alias, err)
+		}
+
+		bridgeResolution := mustResolveTarget(t, bridge)
+		aliasChildResolution := mustResolveTarget(t, filepath.Join(alias, "child"))
+		realChildResolution := mustResolveTarget(t, child)
+		if !bridgeResolution.IsAncestorOf(aliasChildResolution) {
+			t.Error("intermediate symlink target is absent from traversal ancestors")
+		}
+		if bridgeResolution.IsAncestorOf(realChildResolution) {
+			t.Error("intermediate symlink target is an ancestor of a path that does not traverse it")
+		}
+		if !aliasChildResolution.Equal(realChildResolution) {
+			t.Error("chained symlink path does not resolve to the real leaf identity")
+		}
+	})
+
+	t.Run("lexically canceled target component", func(t *testing.T) {
+		root := t.TempDir()
+		detour := filepath.Join(root, "detour")
+		realDirectory := filepath.Join(root, "real")
+		child := filepath.Join(realDirectory, "child")
+		for _, path := range []string{detour, realDirectory} {
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatalf("os.Mkdir(%q) error = %v", path, err)
+			}
+		}
+		if err := os.WriteFile(child, []byte("content"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", child, err)
+		}
+
+		alias := filepath.Join(root, "alias")
+		if err := os.Symlink(filepath.FromSlash("detour/../real"), alias); err != nil {
+			t.Fatalf("os.Symlink(detour/../real, %q) error = %v", alias, err)
+		}
+
+		detourResolution := mustResolveTarget(t, detour)
+		aliasChildResolution := mustResolveTarget(t, filepath.Join(alias, "child"))
+		realChildResolution := mustResolveTarget(t, child)
+		if !detourResolution.IsAncestorOf(aliasChildResolution) {
+			t.Error("symlink target component traversed before .. is absent from traversal ancestors")
+		}
+		if detourResolution.IsAncestorOf(realChildResolution) {
+			t.Error("symlink target detour is an ancestor of a path that does not traverse it")
+		}
+		if !aliasChildResolution.Equal(realChildResolution) {
+			t.Error("symlink target containing .. does not resolve to the real leaf identity")
+		}
+	})
+}
+
+func TestResolveTarget_EqualAliasIsNotItsOwnAncestor(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(".", alias); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", ".", alias, err)
+	}
+
+	aliasResolution := mustResolveTarget(t, alias)
+	nestedAliasResolution := mustResolveTarget(t, filepath.Join(alias, "alias"))
+	if !aliasResolution.Equal(nestedAliasResolution) {
+		t.Fatal("nested alias does not resolve to the same leaf target")
+	}
+	if aliasResolution.IsAncestorOf(nestedAliasResolution) || nestedAliasResolution.IsAncestorOf(aliasResolution) {
+		t.Error("equal leaf target is treated as its own strict ancestor")
+	}
+}
+
+func TestResolveTarget_BlockedAncestors(t *testing.T) {
 	root := t.TempDir()
 
 	file := filepath.Join(root, "file")
@@ -103,39 +192,55 @@ func TestResolveTargetIdentity_BlockedAncestors(t *testing.T) {
 		filepath.Join(loop, "child"),
 	} {
 		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
-			_, err := ResolveTargetIdentity(path)
-			if !errors.Is(err, ErrPathBlocked) {
-				t.Fatalf("ResolveTargetIdentity(%q) error = %v, want ErrPathBlocked", path, err)
+			resolvers := []struct {
+				name    string
+				resolve func(string) error
+			}{
+				{name: "identity", resolve: func(path string) error {
+					_, err := ResolveTargetIdentity(path)
+					return err
+				}},
+				{name: "resolution", resolve: func(path string) error {
+					_, err := ResolveTarget(path)
+					return err
+				}},
+			}
+			for _, resolver := range resolvers {
+				if err := resolver.resolve(path); !errors.Is(err, ErrPathBlocked) {
+					t.Fatalf("%s resolver error = %v, want ErrPathBlocked", resolver.name, err)
+				}
 			}
 		})
 	}
 
-	if _, err := ResolveTargetIdentity(fifo); err != nil {
-		t.Fatalf("ResolveTargetIdentity(leaf FIFO) error = %v", err)
-	}
-	if _, err := ResolveTargetIdentity(dangling); err != nil {
-		t.Fatalf("ResolveTargetIdentity(dangling leaf symlink) error = %v", err)
+	for _, path := range []string{fifo, dangling} {
+		if _, err := ResolveTargetIdentity(path); err != nil {
+			t.Fatalf("ResolveTargetIdentity(%q) error = %v", path, err)
+		}
+		if _, err := ResolveTarget(path); err != nil {
+			t.Fatalf("ResolveTarget(%q) error = %v", path, err)
+		}
 	}
 }
 
-func TestResolveTargetIdentity_MissingTail(t *testing.T) {
+func TestResolveTarget_MissingTail(t *testing.T) {
 	root := t.TempDir()
 	missingParent := filepath.Join(root, "missing")
 	missingChild := filepath.Join(missingParent, "child")
 
-	parentID, err := ResolveTargetIdentity(missingParent)
+	parentResolution, err := ResolveTarget(missingParent)
 	if errors.Is(err, ErrIdentityUnavailable) {
 		assertPathsMissing(t, missingParent, missingChild)
 		return
 	}
 	if err != nil {
-		t.Fatalf("ResolveTargetIdentity(%q) error = %v", missingParent, err)
+		t.Fatalf("ResolveTarget(%q) error = %v", missingParent, err)
 	}
-	childID, err := ResolveTargetIdentity(missingChild)
+	childResolution, err := ResolveTarget(missingChild)
 	if err != nil {
-		t.Fatalf("ResolveTargetIdentity(%q) error = %v", missingChild, err)
+		t.Fatalf("ResolveTarget(%q) error = %v", missingChild, err)
 	}
-	if !parentID.IsAncestorOf(childID) {
+	if !parentResolution.IsAncestorOf(childResolution) {
 		t.Error("missing parent identity is not an ancestor of its missing child")
 	}
 	assertPathsMissing(t, missingParent, missingChild)

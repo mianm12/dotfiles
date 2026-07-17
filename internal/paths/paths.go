@@ -1,4 +1,4 @@
-// Package paths 解析 dot 的 control-plane 路径和 target 文件系统身份，
+// Package paths 解析 dot 的 control-plane 路径、target 文件系统身份与祖先拓扑，
 // 并区分正常缺失与不可忽略的路径错误。
 package paths
 

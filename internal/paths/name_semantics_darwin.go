@@ -8,6 +8,7 @@ import (
 	"syscall"
 )
 
+// pathconfCaseSensitive 对应 Darwin <sys/unistd.h> 的 _PC_CASE_SENSITIVE。
 const pathconfCaseSensitive = 11
 
 func missingNameKey(parent, name string) (string, error) {

@@ -13,8 +13,8 @@ planner 和提交前 Precond 提供单一路径语义来源，但本计划不接
 
 范围内：
 
-- `internal/paths` 中不持久化、无文件系统 mutation 的 target 身份表示、解析、等价与严格
-  祖先关系。
+- `internal/paths` 中不持久化、无文件系统 mutation 的 target leaf 身份、路径解析拓扑、
+  等价与严格祖先关系。
 - 现存祖先 symlink、阻断对象、现存或不存在 leaf，以及缺失中间目录形成的虚拟尾部。
 - macOS/Linux 大小写、Unicode 与 hard-link 的真实文件系统测试和跨平台编译。
 - 每个 milestone 的窄测、`make check`、完整 diff、计划更新、独立 commit 与 clean 检查。
@@ -23,7 +23,8 @@ planner 和提交前 Precond 提供单一路径语义来源，但本计划不接
 
 - 控制面家族、完整 effective profile 全局校验、state、planner、mutation、提交时
   Precond 或持久化格式。
-- 接入 manifest/apply/add/doctor 等消费者，或改变 CLI/README/规范行为。
+- 接入 manifest/apply/add/doctor 等消费者，或改变 CLI/README/规范行为；允许澄清既有路径
+  安全性质与内部 identity/topology 分工，但不得降低不变量。
 - 对抗恶意环境或主动并发篡改；Windows 不在范围内。
 - 通过 `GOOS`、文件系统类型、`strings.EqualFold` 或通用 Unicode normalization 猜测未知
   文件系统语义。
@@ -31,14 +32,19 @@ planner 和提交前 Precond 提供单一路径语义来源，但本计划不接
 ## Required Properties
 
 1. 身份与展示路径分离；`filepath.Clean` 只做词法输入清理，不能成为身份判断。
-2. 输入必须是非空绝对路径。身份值仅用于当前进程和当前文件系统快照，不序列化、不持久化。
+2. 输入必须是非根的非空绝对路径。身份与 resolution 仅用于相关拓扑未变化的一次只读快照；
+   发生文件系统 mutation 后必须重新解析，不序列化、不持久化。
 3. 祖先 symlink 跟随相对或绝对 link target；最终 leaf symlink 不跟随，因为 target 身份
    表示目录项位置，不表示 leaf 指向对象。
-4. 若 `A` 是 leaf symlink，则 `A` 不是 `A/child` 或其真实目标下 `child` 的祖先；解析
-   `A/child` 时 `A` 作为祖先被跟随，真实目标目录是该 child 身份的祖先。
+4. 若 `A` 是 leaf symlink，则 `A` 的 leaf identity 与其真实目标目录不同；解析
+   `A/child` 时，resolution 的遍历祖先同时包含 `A` 目录项和解析后的真实目录。因此
+   desired `A`/`A/child` 形成中间目录项冲突，但 `A` 不因指向 `real` 就成为直接写成
+   `real/child` 的祖先。
 5. 现存祖先目录可以使用文件系统对象身份锚定；leaf inode 永不参与 target 等价，避免把
    hard link 的不同目录项合并。
-6. 相等按完整身份组件判断；祖先关系是严格的组件前缀，自身不是自身祖先，`foo` 不是
+6. 相等只按完整 leaf identity 判断；祖先关系由 resolution 记录的 canonical 目录链与完整
+   traversal trace 共同判断。trace 包含递归 symlink target 展开中经过的目录项，即使该项
+   随后被 `..` 折返或不在最终 canonical 链上。相同 leaf 不是自身的严格祖先，`foo` 不是
    `foobar` 的祖先。
 7. 现存普通文件、悬空 symlink、loop 和特殊对象仅在作为祖先时阻断；作为 leaf 时仍表示
    该目录项位置。
@@ -48,7 +54,8 @@ planner 和提交前 Precond 提供单一路径语义来源，但本计划不接
    ErrPathBlocked)` 判断，身份不可用可由 `ErrIdentityUnavailable` 判断。
 10. 解析只允许 `Lstat`、`Stat`、`Readlink`、目录枚举和只读能力查询；不得创建 probe、目录、
     文件或其他临时对象。
-11. 同一稳定拓扑下重复解析结果相同。零值身份无效，不与任何身份相等，也不形成祖先关系。
+11. 同一稳定拓扑下重复解析结果相同。零值 identity/resolution 无效，不相等也不形成祖先
+    关系。
 
 ## Internal API
 
@@ -56,10 +63,14 @@ planner 和提交前 Precond 提供单一路径语义来源，但本计划不接
 
 ```go
 type TargetIdentity struct { /* private */ }
+type TargetResolution struct { /* private */ }
 
 func ResolveTargetIdentity(path string) (TargetIdentity, error)
+func ResolveTarget(path string) (TargetResolution, error)
 func (id TargetIdentity) Equal(other TargetIdentity) bool
-func (id TargetIdentity) IsAncestorOf(other TargetIdentity) bool
+func (resolution TargetResolution) Identity() TargetIdentity
+func (resolution TargetResolution) Equal(other TargetResolution) bool
+func (resolution TargetResolution) IsAncestorOf(other TargetResolution) bool
 
 var ErrPathBlocked error
 var ErrIdentityUnavailable error
@@ -82,6 +93,9 @@ var ErrIdentityUnavailable error
   `make check` 通过，以 `test(paths): 覆盖平台 target 身份语义` 提交（`10e51b1`）。
 - [x] 2026-07-17：Milestone 4 完成；`main...HEAD` diff check、最终 `make check`、10 次
   paths 重复测试和独立只读复核通过，以 `docs(paths): 收口 target 身份 ExecPlan` 提交。
+- [ ] 2026-07-18：后续主线程设计复核确认 bare identity 的组件前缀不足以表达 leaf symlink
+  作为展示路径中间目录项的冲突；按既有主线性质拆分 leaf identity 与 traversal resolution，
+  补 root/snapshot 契约、局部只读缓存、规范澄清和回归测试，待完整门禁与 fix commit 收口。
 
 每完成一个 milestone，立即记录日期、测试、commit SHA 和新发现；更新随该 milestone 的
 语义 commit 提交。
@@ -92,7 +106,7 @@ var ErrIdentityUnavailable error
 
 先写失败测试，再实现：
 
-- 增加不透明身份值、零值规则、等价和严格祖先关系。
+- 增加不透明 leaf 身份值、resolution、零值规则、等价和严格祖先关系。
 - 支持父目录现存且没有祖先 symlink 的 basic path；现存目录项恢复实际名称，不以 leaf
   inode 判等。
 - 为不存在 leaf 建立平台只读名称语义边界：能权威分类才生成组件；否则返回
@@ -103,7 +117,7 @@ var ErrIdentityUnavailable error
 窄测：
 
 ```sh
-go test -count=1 ./internal/paths -run 'TestTargetIdentity|TestResolveTargetIdentity_Basic|TestIsMissing'
+go test -count=1 ./internal/paths -run 'TestTarget(Identity|Resolution)|TestResolveTargetIdentity_Basic|TestIsMissing'
 ```
 
 完整门禁与 diff：
@@ -117,8 +131,8 @@ git diff HEAD -- .agent/plans/m1-path-identity.md internal/paths
 git diff HEAD --check
 ```
 
-可观察验收：同一路径相等、兄弟不同、严格祖先按组件工作、零值无效；现存不同 hard-link
-leaf 不因 inode 合并；未知缺失名称语义明确失败且无写入。
+可观察验收：同一路径相等、兄弟不同、strict ancestor 按 resolution topology 工作、零值
+无效；现存不同 hard-link leaf 不因 inode 合并；未知缺失名称语义明确失败且无写入。
 
 提交：`feat(paths): 建立 target 文件系统身份`。提交后 `git status --short` 必须为空才进入
 Milestone 2。
@@ -132,7 +146,8 @@ Milestone 2。
 
 先写失败测试，再实现：
 
-- 逐组件处理相对/绝对祖先 symlink、loop 上限、阻断对象和底层 IO 错误。
+- 逐组件处理相对/绝对祖先 symlink、递归 link target 的完整 traversal trace、loop 上限、
+  阻断对象和底层 IO 错误。
 - leaf symlink 不跟随；同一路径作为后续 child 的祖先时才跟随。
 - 支持不存在 leaf 和缺失中间目录尾部；只有最近现存父目录的语义能权威外推时才生成身份，
   否则 fail closed。
@@ -142,14 +157,16 @@ Milestone 2。
 窄测：
 
 ```sh
-go test -count=1 ./internal/paths -run 'TestResolveTargetIdentity_(Symlink|Blocked|Missing|LeafSymlink)|TestIsMissing'
+go test -count=1 ./internal/paths -run 'TestResolveTarget(Identity)?_(Symlink|Blocked|Missing|LeafSymlink|EqualAlias)|TestIsMissing'
 ```
 
 随后运行与 Milestone 1 相同的 `make check`、完整 diff/untracked 和 `git diff HEAD --check`。
 
-可观察验收：目录 symlink 别名与真实路径身份相等；leaf symlink 与目标不同且不是目标 child
-祖先；祖先普通文件、FIFO/特殊对象、悬空 link 和 loop 拒绝；缺失 leaf/尾部可重复解析或
-明确不可用；解析不产生文件系统 mutation。
+可观察验收：目录 symlink 别名与真实路径身份相等；leaf symlink 与目标 identity 不同，
+但作为 `A/child` 的中间目录项时进入遍历祖先；`A -> B -> real` 的 `B` 和 link target 中
+被 `..` 折返的目录同样进入 trace，直接写成真实路径的 child 不产生伪祖先关系；祖先普通
+文件、FIFO/特殊对象、悬空 link 和 loop 拒绝；缺失 leaf/尾部可重复解析或明确不可用；
+解析不产生文件系统 mutation。
 
 提交：`feat(paths): 解析 target 祖先拓扑`。提交后工作区必须 clean。
 
@@ -230,7 +247,7 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 | 性质 | 证据 |
 |---|---|
 | 身份与展示分离 | API 无字符串 key/marshal；关系测试不比较展示路径 |
-| 严格祖先 | 自身、组件前缀、字符串前缀反例和 leaf symlink 边界 |
+| 严格祖先 | 自身、canonical 目录链、展示路径与递归 link target 的完整 trace、`..` 折返项、字符串前缀反例和 leaf symlink 正反例 |
 | 祖先 symlink | 相对/绝对 alias 与真实目录身份相同 |
 | 阻断 fail closed | 普通文件、特殊对象、悬空 link、loop、权限/IO cause |
 | 不存在路径 | leaf、缺失尾部、可重复解析与 `ErrIdentityUnavailable` |
@@ -285,12 +302,21 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   P0–P2 或其他必须修复的问题；复核覆盖平台名称语义、symlink 角色、missing tail、blocker
   cause、hard-link 多候选、只读性和范围边界。
 - 2026-07-17：`go test -count=10 ./internal/paths` 通过，未发现真实文件系统测试抖动。
+- 2026-07-18：后续主线程复核发现 identity equality 与 traversal ancestry 是两个相关但不同
+  的关系：目录 symlink `A` 的 leaf identity 不等于目标目录，但 `A/child` 的展示路径确实
+  经过 `A`；只保留解析后的组件会漏掉 05 §5 的中间目录项冲突。
+- 2026-07-18：两个 resolution 可以拥有同一 leaf identity 却来自不同展示路径，ancestor
+  topology 因而不能塞进 `TargetIdentity` 而保持值语义；新增独立 `TargetResolution`，并用
+  单次调用内的目录与 missing-name key 缓存避免 symlink 展开重复枚举目录和能力查询。
+- 2026-07-18：独立复核发现“展示前缀 + 最终 canonical 链”仍不是完整遍历拓扑；例如
+  `A -> B -> real` 会漏掉 `B`，`A -> X/../real` 会漏掉实际必须先作为目录遍历的 `X`。
+  resolver 因而改为逐组件展开 symlink，并直接记录完整 traversal trace。
 
 ## Decision Log
 
 - 2026-07-17：身份是进程内只读值，不建立持久化 key。
 - 2026-07-17：leaf 身份由父目录位置与目录项名称决定，leaf inode 永不判等。
-- 2026-07-17：ancestor symlink 跟随；leaf symlink 不跟随且不是其 resolved child 的祖先。
+- 2026-07-17：ancestor symlink 跟随；leaf symlink 不跟随且不是其目标目录 identity。
 - 2026-07-17：未知或无法权威外推的缺失名称语义返回 `ErrIdentityUnavailable`。
 - 2026-07-17：保持 `IsMissing` 不动；本切片只增加必要回归，不预建统一框架。
 - 2026-07-17：不接入控制面、profile、state、planner、mutation 或 Precond。
@@ -299,9 +325,17 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 - 2026-07-17：Milestone 1 不新增依赖；macOS 仅对可由 `Fpathconf` 权威分类的 ASCII 缺失
   名称建 key，Linux 与非 ASCII 未知语义返回 `ErrIdentityUnavailable`。
 - 2026-07-17：Milestone 2 保持 leaf 与 ancestor 两种 symlink 角色分离：leaf 目录项不跟随，
-  同一路径有后续组件时作为 ancestor 跟随；因此 leaf identity 不是 resolved child 的祖先。
+  同一路径有后续组件时作为 ancestor 跟随。2026-07-18 补充裁决：前者决定 equality，后者
+  必须同时把 symlink 目录项与解析后的真实目录记入 resolution 的遍历祖先，不能只比较
+  canonical identity 组件前缀。
 - 2026-07-17：Milestone 3 对现存 path 的 case/Unicode 等价以实际 lookup 为准，不自行实现
   Unicode fold；只有不存在名称需要平台 capability，未知时继续 fail closed。
+- 2026-07-18：`TargetIdentity` 只表达 leaf 等价，`TargetResolution` 表达一次展示路径解析及
+  祖先拓扑；root 不是合法 entry target，入口明确拒绝。所有值只属于相关拓扑未变化的只读
+  快照，mutation 后重新解析，不承诺跨快照稳定。
+- 2026-07-18：resolution 不从最终 identity 反推祖先；resolver 逐组件跟随 symlink target，
+  把每个实际要求为目录的 entry identity 加入 trace，并在 `..` 改变当前位置前保留已遍历
+  entry。该规则同时覆盖 chained symlink 与非最终 canonical 前缀。
 
 ## Outcomes & Retrospective
 

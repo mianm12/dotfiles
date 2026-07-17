@@ -282,9 +282,14 @@ plan 完成、execute 之前,用**完整 effective profile 的结构性 desired 
 
 1. **target 身份唯一**:两个条目不得按目标文件系统语义指向同一逻辑 target;冲突时列出
    双方来源——大小写/Unicode 别名、跨模块撞车、`foo` 与 `foo.tmpl` 去后缀碰撞均在此被抓。
-2. **无祖先冲突**:任一 desired **文件** target 不得是另一 target 的祖先;祖先关系按
-   路径语义判断,不得使用字符串前缀判断。
-3. **中间目录不穿文件**:target 落地路径的待建中间目录不得与任何 desired 文件条目重合。
+2. **无逻辑祖先冲突**:任一 desired **文件** target 的 leaf 位置不得位于另一 target
+   解析后的目录链上;祖先关系按路径语义判断,不得使用字符串前缀判断。因祖先 symlink
+   到达的真实目录同样计入该目录链。
+3. **中间目录不穿文件**:任一 target 展示路径实际经过的中间目录项不得同时是 desired 文件
+   target 的 leaf,无论该中间项是待建目录、现存目录还是指向目录的 symlink;递归展开
+   symlink target 时经过、随后被 `..` 折返或不在最终解析目录链上的项仍在此范围。因此
+   已有目录 symlink `A` 时,desired `A` 与 `A/child` 必须冲突;`A` 作为 leaf 仍与其目标目录
+   身份不同,不得仅因它指向 `real` 就把 `A` 判为直接写成 `real/child` 的祖先。
 4. **控制面隔离**:repo/config/state 家族/binary 已两两隔离,且 desired entry target 不得
    与任一控制面家族重叠(ADR-33)。
 5. **祖先链可安全到达**:本次可能 mutation、adopt 或 rebuild 的 entry target 满足 §1 的

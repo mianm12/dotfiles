@@ -78,11 +78,15 @@ update → apply 等嵌套流程必须复用该所有权且不能自锁。锁原
 除 `init` 的明确持久化语义外,flag 与环境覆盖只影响本次运行(04 号文档 §4.1)。
 
 **target root** 是模块级落地目录根,**entry target** 是单个文件的最终落地路径;后文无
-歧义处的 target 均指 entry target。**target 身份(ADR-35)** 与展示字符串分离:唯一性、
-state 查找、desired/orphan 差集及祖先/重叠判断必须尊重当前文件系统的路径等价语义。
-既有祖先 symlink 是用户文件系统拓扑的一部分:指向目录时允许使用,但由它形成的路径别名
-仍必须合并为同一 target 身份;叶子 hard link 的不同路径仍是不同 target。两个 desired
-路径若具有同一 target 身份,必须在 mutation 前作为碰撞整体拒绝;
+歧义处的 target 均指 entry target。**target 身份(ADR-35)** 与展示字符串分离,用于判断
+entry target 是否位于同一 leaf 目录项位置;state 查找和 desired/orphan 差集据此匹配。
+祖先/重叠判断必须复用同一路径边界得到的遍历拓扑,同时考虑解析后的目录链与路径解析实际
+经过的所有中间目录项;递归 symlink target 展开中经过但不在最终目录链上的目录项也不能
+遗漏,不能只对完整 identity 或展示字符串做前缀比较。既有祖先 symlink 是用户文件系统
+拓扑的一部分:指向目录时允许使用,由它形成的 entry target 路径别名仍必须合并为同一
+target 身份;symlink 自身作为 leaf 时与其目标目录不是同一身份,但另一 target 经它向下
+遍历时仍须把该 symlink 目录项计入祖先拓扑。叶子 hard link 的不同路径仍是不同 target。
+两个 desired 路径若具有同一 target 身份,必须在 mutation 前作为碰撞整体拒绝;
 单个历史 state key 若只是当前 desired 的别名,
 必须作为同一条目迁移记账,不得同时进入 orphan。多个 state key 指向同一 target 属 state
 语义损坏并 fail closed。对一个 target 的内容或 mode mutation 不得经共享 inode 连带改变
