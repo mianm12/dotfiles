@@ -2,8 +2,10 @@ package paths
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -157,6 +159,54 @@ func TestResolveTarget_EqualAliasIsNotItsOwnAncestor(t *testing.T) {
 	}
 }
 
+func TestResolveTarget_KernelRejectsDeepSymlinkChain(t *testing.T) {
+	root := t.TempDir()
+	realDirectory := filepath.Join(root, "real")
+	if err := os.Mkdir(realDirectory, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", realDirectory, err)
+	}
+	child := filepath.Join(realDirectory, "child")
+	if err := os.WriteFile(child, []byte("content"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", child, err)
+	}
+
+	next := "real"
+	for index := 63; index >= 0; index-- {
+		name := fmt.Sprintf("link-%02d", index)
+		path := filepath.Join(root, name)
+		if err := os.Symlink(next, path); err != nil {
+			t.Fatalf("os.Symlink(%q, %q) error = %v", next, path, err)
+		}
+		next = name
+	}
+	target := filepath.Join(root, "link-00", "child")
+	if _, err := os.Stat(target); !errors.Is(err, syscall.ELOOP) {
+		t.Fatalf("deep symlink fixture os.Stat(%q) error = %v, want ELOOP", target, err)
+	}
+
+	checkTargetResolvers(t, target, func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, ErrPathBlocked) {
+			t.Fatalf("resolver error = %v, want ErrPathBlocked", err)
+		}
+	})
+}
+
+func TestResolveTarget_PreservesOrdinaryIOCause(t *testing.T) {
+	overlongComponent := strings.Repeat("x", 4096)
+	target := filepath.Join(t.TempDir(), overlongComponent, "child")
+
+	checkTargetResolvers(t, target, func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, syscall.ENAMETOOLONG) {
+			t.Fatalf("resolver error = %v, want ENAMETOOLONG cause", err)
+		}
+		if errors.Is(err, ErrPathBlocked) {
+			t.Fatalf("resolver error = %v, must not be ErrPathBlocked", err)
+		}
+	})
+}
+
 func TestResolveTarget_BlockedAncestors(t *testing.T) {
 	root := t.TempDir()
 
@@ -192,34 +242,24 @@ func TestResolveTarget_BlockedAncestors(t *testing.T) {
 		filepath.Join(loop, "child"),
 	} {
 		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
-			resolvers := []struct {
-				name    string
-				resolve func(string) error
-			}{
-				{name: "identity", resolve: func(path string) error {
-					_, err := ResolveTargetIdentity(path)
-					return err
-				}},
-				{name: "resolution", resolve: func(path string) error {
-					_, err := ResolveTarget(path)
-					return err
-				}},
-			}
-			for _, resolver := range resolvers {
-				if err := resolver.resolve(path); !errors.Is(err, ErrPathBlocked) {
-					t.Fatalf("%s resolver error = %v, want ErrPathBlocked", resolver.name, err)
+			checkTargetResolvers(t, path, func(t *testing.T, err error) {
+				t.Helper()
+				if !errors.Is(err, ErrPathBlocked) {
+					t.Fatalf("resolver error = %v, want ErrPathBlocked", err)
 				}
-			}
+			})
 		})
 	}
 
 	for _, path := range []string{fifo, dangling} {
-		if _, err := ResolveTargetIdentity(path); err != nil {
-			t.Fatalf("ResolveTargetIdentity(%q) error = %v", path, err)
-		}
-		if _, err := ResolveTarget(path); err != nil {
-			t.Fatalf("ResolveTarget(%q) error = %v", path, err)
-		}
+		t.Run(filepath.Base(path)+" leaf", func(t *testing.T) {
+			checkTargetResolvers(t, path, func(t *testing.T, err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatalf("resolver error = %v", err)
+				}
+			})
+		})
 	}
 }
 
@@ -253,5 +293,28 @@ func assertPathsMissing(t *testing.T, paths ...string) {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatalf("path %q changed during identity resolution: os.Lstat error = %v", path, err)
 		}
+	}
+}
+
+func checkTargetResolvers(t *testing.T, path string, check func(*testing.T, error)) {
+	t.Helper()
+
+	resolvers := []struct {
+		name    string
+		resolve func(string) error
+	}{
+		{name: "identity", resolve: func(path string) error {
+			_, err := ResolveTargetIdentity(path)
+			return err
+		}},
+		{name: "resolution", resolve: func(path string) error {
+			_, err := ResolveTarget(path)
+			return err
+		}},
+	}
+	for _, resolver := range resolvers {
+		t.Run(resolver.name, func(t *testing.T) {
+			check(t, resolver.resolve(path))
+		})
 	}
 }

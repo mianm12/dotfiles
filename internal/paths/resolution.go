@@ -143,6 +143,17 @@ const maxSymlinkTraversals = 255
 
 // resolveExistingDirectory 逐组件解析既有目录，并保留 symlink 展开的完整遍历轨迹。
 func (resolver *targetResolver) resolveExistingDirectory(path string) (string, []TargetIdentity, error) {
+	resolvedInfo, err := os.Stat(path)
+	if err != nil {
+		if isTraversalBlocker(err) {
+			return "", nil, fmt.Errorf("%w: target ancestor %q cannot resolve to a directory", ErrPathBlocked, path)
+		}
+		return "", nil, fmt.Errorf("inspect target ancestor %q: %w", path, err)
+	}
+	if !resolvedInfo.IsDir() {
+		return "", nil, fmt.Errorf("%w: target ancestor %q is not a directory", ErrPathBlocked, path)
+	}
+
 	root, pending := splitTraversalPath(path)
 	currentRoot := root
 	currentComponents := make([]string, 0, len(pending))
@@ -165,7 +176,7 @@ func (resolver *targetResolver) resolveExistingDirectory(path string) (string, [
 		parent := joinIdentityPath(currentRoot, currentComponents)
 		actual, info, err := resolver.resolveTraversedEntry(parent, component)
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
+			if isTraversalBlocker(err) {
 				return "", nil, fmt.Errorf("%w: target ancestor component %q is not traversable", ErrPathBlocked, filepath.Join(parent, component))
 			}
 			return "", nil, fmt.Errorf("inspect target ancestor component %q: %w", filepath.Join(parent, component), err)
@@ -198,6 +209,12 @@ func (resolver *targetResolver) resolveExistingDirectory(path string) (string, [
 	}
 
 	return joinIdentityPath(currentRoot, currentComponents), ancestors, nil
+}
+
+func isTraversalBlocker(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, syscall.ENOTDIR) ||
+		errors.Is(err, syscall.ELOOP)
 }
 
 func (resolver *targetResolver) resolveTraversedEntry(parent, requested string) (string, fs.FileInfo, error) {
