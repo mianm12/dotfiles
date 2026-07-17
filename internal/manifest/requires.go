@@ -39,6 +39,7 @@ func (r Requirement) String() string {
 type numericVersion [3]string
 
 // ReadRequirement 对顶层 requires 做宽松预读，不执行完整 manifest 校验。
+// repo 的解析不属于本函数职责，调用方应传入路径层已经解析的绝对路径。
 func ReadRequirement(repo string) (Requirement, error) {
 	info, err := os.Stat(repo)
 	if err != nil {

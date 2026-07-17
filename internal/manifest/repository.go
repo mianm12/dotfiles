@@ -28,6 +28,7 @@ type loadedModule struct {
 }
 
 // Load 严格读取根 manifest 与所有模块 manifest；缺少 modules 目录表示仓库没有模块。
+// repo 的解析不属于 Load 职责，调用方应传入路径层已经解析的绝对路径。
 // Load 只读取仓库，不创建、删除或修改任何文件。
 func Load(repo string) (Repository, error) {
 	info, err := os.Stat(repo)
@@ -97,6 +98,7 @@ func loadModules(modulesRoot string) (map[string]loadedModule, []string, error) 
 		return nil, nil, fmt.Errorf("read modules directory %q: %w", modulesRoot, err)
 	}
 
+	// module 只来自 modules/ 的直接子目录；普通文件和 symlink 条目都不是 module。
 	modules := make(map[string]loadedModule)
 	moduleNames := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -124,6 +126,7 @@ func loadOptionalModuleManifest(path string) (moduleSpec, error) {
 	if err == nil {
 		return manifest, nil
 	}
+	// 只有确认该路径真正缺失才使用空 manifest；dangling symlink 与读取错误必须继续上报。
 	if paths.IsMissing(path, err) {
 		return moduleSpec{}, nil
 	}

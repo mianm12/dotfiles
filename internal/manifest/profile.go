@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+// profileExpander 使用带记忆的 DFS 展开全部 profile：零值状态表示未访问，visiting
+// 用于检测环，complete 复用已经稳定排序的结果；stack 只保存当前引用链。
 type profileExpander struct {
 	declared    map[string][]string
 	modules     map[string]loadedModule
@@ -45,6 +47,7 @@ func expandProfiles(
 		states:      make(map[string]profileState, len(declared)),
 		expanded:    make(map[string][]string, len(declared)),
 	}
+	// unassigned 是仓库级概念，因此必须汇总所有已声明 profile，而不是只看调用方将选择的一个。
 	assigned := make(map[string]struct{}, len(modules))
 	for _, name := range profileNames {
 		members, err := expander.expand(name)
@@ -115,6 +118,7 @@ func (e *profileExpander) expand(name string) ([]string, error) {
 		add(member)
 	}
 
+	// profile 语义是模块集合；排序得到与声明展开路径无关的规范结果。
 	slices.Sort(result)
 	e.states[name] = profileComplete
 	e.expanded[name] = result

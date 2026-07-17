@@ -73,6 +73,7 @@ func (r Repository) Resolve(profile, goos string) (ResolvedProfile, error) {
 }
 
 func (r Repository) resolveModule(name string, loaded loadedModule, goos string) (ResolvedModule, bool, error) {
+	// os 与 target 分别按“内建缺省 → 顶层 defaults → 模块”整键替换，不做逐项合并。
 	operatingSystems := []string{goosDarwin, goosLinux}
 	if r.manifest.defaults.os.set {
 		operatingSystems = r.manifest.defaults.os.value
@@ -169,6 +170,7 @@ func isLexicalTargetDescendant(root, target string) bool {
 }
 
 func mergeIgnore(global, module []string) []string {
+	// ignore 是唯一的并集合并项；按全局、模块声明顺序保留每个 pattern 的首次出现。
 	merged := make([]string, 0, len(global)+len(module))
 	seen := make(map[string]struct{}, len(global)+len(module))
 	for _, patterns := range [][]string{global, module} {

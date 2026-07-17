@@ -21,11 +21,14 @@ const (
 	goosLinux  = "linux"
 )
 
+// optional 保留字段是否出现；显式空值也必须覆盖上一层，不能与缺失混为一谈。
 type optional[T any] struct {
 	value T
 	set   bool
 }
 
+// raw 类型只描述允许的 TOML 键和基础类型。target 与 run_once 使用 any 表达规范规定的
+// 联合形态，随后由 parseTarget 和 parseRunOnce 收口到封闭类型集合。
 type rawRootManifest struct {
 	Requires *string                 `toml:"requires"`
 	Defaults *rawDefaults            `toml:"defaults"`
@@ -93,6 +96,7 @@ type moduleSpec struct {
 	runOnce []string
 }
 
+// targetSpec 是已经校验的联合形态；有效值只会设置 common 或非空 byOS 之一。
 type targetSpec struct {
 	common *string
 	byOS   map[string]string
@@ -226,6 +230,7 @@ func decodeManifestFile[T any](path string) (T, error) {
 	var document T
 	decoder := toml.NewDecoder(file)
 	decoder.DisallowUnknownFields()
+	// 不使用 defer，以便报告 Close 错误；Decode 与 Close 均失败时优先返回 Decode 错误。
 	decodeErr := decoder.Decode(&document)
 	closeErr := file.Close()
 	if decodeErr != nil {
@@ -354,6 +359,7 @@ func parseFile(path, source string, raw rawFile) (fileSpec, error) {
 }
 
 func parseFileKind(path, source string, declared *string) (FileKind, error) {
+	// 后缀只提供缺省；显式 kind 可以把模板后缀覆盖为 M1 支持的 link 或 scaffold。
 	kindName := string(FileKindLink)
 	switch {
 	case strings.HasSuffix(source, ".tmpl"):
@@ -472,6 +478,7 @@ func validateEntryTargetPath(path string) error {
 }
 
 func validateExplicitFiles(path string, files map[string]fileSpec, runOnce []string) error {
+	// 用户 ignore 可由 [files] 覆盖，内置 ignore 与 hook 引用则始终不可覆盖。
 	hookPaths := make(map[string]struct{}, len(runOnce))
 	for _, script := range runOnce {
 		hookPaths[script] = struct{}{}
@@ -514,6 +521,7 @@ func cloneProfiles(raw map[string][]string) map[string][]string {
 	return profiles
 }
 
+// sortedKeys 按字节序返回 map key，避免调用方的结果或首个错误受 TOML 键顺序影响。
 func sortedKeys[V any](values map[string]V) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
