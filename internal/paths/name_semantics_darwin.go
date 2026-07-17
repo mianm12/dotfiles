@@ -19,6 +19,19 @@ func queryCaseSensitivity(fd int) (int, error) {
 	return syscall.Fpathconf(fd, pathconfCaseSensitive)
 }
 
+func asciiFold(name string) (string, bool) {
+	bytes := []byte(name)
+	for i, value := range bytes {
+		if value >= 0x80 {
+			return "", false
+		}
+		if value >= 'A' && value <= 'Z' {
+			bytes[i] = value + ('a' - 'A')
+		}
+	}
+	return string(bytes), true
+}
+
 // missingNameKeyWithQuery 将 capability 观测与名称分类分开；查询失败表示语义不可证明。
 func missingNameKeyWithQuery(parent, name string, query func(int) (int, error)) (string, error) {
 	folded, ascii := asciiFold(name)

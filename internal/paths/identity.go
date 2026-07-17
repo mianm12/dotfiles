@@ -177,16 +177,3 @@ func splitAbsolutePath(path string) (string, []string) {
 	}
 	return root, strings.Split(rest, string(filepath.Separator))
 }
-
-func asciiFold(name string) (string, bool) {
-	bytes := []byte(name)
-	for i, value := range bytes {
-		if value >= 0x80 {
-			return "", false
-		}
-		if value >= 'A' && value <= 'Z' {
-			bytes[i] = value + ('a' - 'A')
-		}
-	}
-	return string(bytes), true
-}
