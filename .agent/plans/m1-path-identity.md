@@ -93,9 +93,11 @@ var ErrIdentityUnavailable error
   `make check` 通过，以 `test(paths): 覆盖平台 target 身份语义` 提交（`10e51b1`）。
 - [x] 2026-07-17：Milestone 4 完成；`main...HEAD` diff check、最终 `make check`、10 次
   paths 重复测试和独立只读复核通过，以 `docs(paths): 收口 target 身份 ExecPlan` 提交。
-- [ ] 2026-07-18：后续主线程设计复核确认 bare identity 的组件前缀不足以表达 leaf symlink
-  作为展示路径中间目录项的冲突；按既有主线性质拆分 leaf identity 与 traversal resolution，
-  补 root/snapshot 契约、局部只读缓存、规范澄清和回归测试，待完整门禁与 fix commit 收口。
+- [x] 2026-07-18：后续设计与独立复核确认 bare identity 前缀及“展示前缀 + 最终 canonical
+  链”均不足以表达完整 symlink traversal；拆分 leaf identity 与 resolution，以逐组件 walker
+  记录递归 link target，补 root/snapshot 契约、规范澄清和回归测试。窄测、10 次 paths 测试、
+  darwin/linux 交叉编译、`make check` 和二次独立复核通过，以
+  `fix(paths): 完整记录 target 遍历拓扑` 提交（`df0fe9c`）。
 
 每完成一个 milestone，立即记录日期、测试、commit SHA 和新发现；更新随该 milestone 的
 语义 commit 提交。
@@ -344,8 +346,10 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 - Milestone 1：`d405146 feat(paths): 建立 target 文件系统身份`。
 - Milestone 2：`6195f39 feat(paths): 解析 target 祖先拓扑`。
 - Milestone 3：`10e51b1 test(paths): 覆盖平台 target 身份语义`。
-- Milestone 4：本文件所在的 `docs(paths): 收口 target 身份 ExecPlan` commit；独立复核未
-  产生 fix commit。
+- Milestone 4：`41d1834 docs(paths): 收口 target 身份 ExecPlan`；当时的独立复核未产生
+  fix commit。
+- 后续设计复核：`df0fe9c fix(paths): 完整记录 target 遍历拓扑`。它将 leaf equality 与
+  traversal topology 分层，并以逐组件 symlink walker 取代从最终 identity 反推祖先。
 - 每个 milestone 均按顺序完成失败测试、最小实现、窄测、`make check`、完整 diff/check、
   ExecPlan 更新、独立 commit 和提交后 clean 检查。
 - 最终验证通过：`git diff main...HEAD --check`、`make check`、
@@ -354,10 +358,12 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
   缺失名称按只读 case capability 比较，非 ASCII 缺失名称返回 `ErrIdentityUnavailable`。
 - hard-link fixture 先证明 `os.SameFile == true`，再证明不同目录项身份不同；case alias 面对
   同 inode 多候选时只映射唯一名称项。
-- 独立 subagent 无 P0–P2 finding，确认 ancestor/leaf symlink、missing tail、blocker/cause、
-  hard-link、只读性和范围均符合规范与本计划。
-- 最终 diff 仅涉及本 ExecPlan、`internal/paths` 实现/测试和 package doc；未新增依赖，未修改
-  README、规范、持久化格式、控制面、state、planner、mutation 或 Precond。
+- 原 Milestone 4 复核无 P0–P2；后续主线程发现 leaf symlink 中间项缺口，第一轮独立复核又
+  发现 chained symlink 和 `X/../real` 的 P1。两者均由 `df0fe9c` 修复；二次独立复核无
+  P0–P3 actionable finding。
+- 最终 diff 涉及本 ExecPlan、`internal/paths` 实现/测试/package doc，以及 `docs/02`、
+  `docs/05`、`docs/08` 对既有身份/拓扑不变量的澄清；未新增依赖，未修改 README、持久化
+  格式、控制面、state、planner、mutation 或 Precond。
 
 偏差与后续：
 
@@ -368,6 +374,7 @@ merge、push、rebase、amend、tag、删除分支或访问真实用户数据。
 - 后续消费者应直接复用本 API，并在收到 `ErrIdentityUnavailable` 时整体拒绝依赖身份的
   校验阶段；不得自行添加字符串 fallback 或持久化内部身份字段。
 
-结论：`internal/paths` 已提供只读、fail-closed 的 target 身份原语；现存祖先 symlink 和
-文件系统别名一致解释，不存在路径在可证明时比较、不可证明时拒绝，leaf hard link 不合并，
-且未触碰任何持久化、planner 或 mutation 边界。
+结论：`internal/paths` 已提供只读、fail-closed 的 target leaf identity 与 traversal
+resolution；现存祖先 symlink 的递归展开和文件系统别名得到一致解释，不存在路径在可证明
+时比较、不可证明时拒绝，leaf hard link 不合并，且未触碰任何持久化、planner 或 mutation
+边界。
