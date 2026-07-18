@@ -173,6 +173,39 @@ func TestDecode_ClassifiesVersionAndSchemaErrors(t *testing.T) {
 	}
 }
 
+func TestDecode_VersionClassificationPrecedence(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want error
+	}{
+		{
+			name: "too-new ignores additional case variant and future schema",
+			raw:  `{"version":2,"Version":999,"future":{"shape":"unknown"}}`,
+			want: ErrTooNew,
+		},
+		{
+			name: "decoded duplicate still precedes too-new",
+			raw:  `{"version":2,"future":1,"\u0066uture":2}`,
+			want: ErrCorrupt,
+		},
+		{
+			name: "v1 still enforces exact schema",
+			raw:  `{"version":1,"Version":1,"entries":{},"run_once":{}}`,
+			want: ErrCorrupt,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Decode([]byte(tt.raw))
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Decode() error = %v, want errors.Is(%v)", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestDecode_RejectsInvalidEntrySemantics(t *testing.T) {
 	valid := testSymlinkEntry()
 	tests := []struct {

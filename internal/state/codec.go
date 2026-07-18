@@ -113,11 +113,6 @@ func probeVersion(data []byte) (*big.Int, error) {
 	if err := json.Unmarshal(data, &members); err != nil {
 		return nil, corruptf("decode state envelope: %v", err)
 	}
-	for name := range members {
-		if name != "version" && strings.EqualFold(name, "version") {
-			return nil, corruptf("top-level member %q must use exact spelling \"version\"", name)
-		}
-	}
 	versionRaw, exists := members["version"]
 	if !exists {
 		return nil, corruptf("required top-level version is missing")
