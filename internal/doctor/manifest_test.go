@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -23,10 +24,7 @@ base = []
 	writeFile(t, filepath.Join(repo, "untracked.local"), "private")
 	git(t, root, repo, "add", "dot.toml", "machine.local", "modules/app/nested.local")
 
-	result := CheckManifest(context.Background(), ManifestOptions{
-		Repository: repo,
-		Version:    "v0.1.0",
-	})
+	result := CheckManifest(context.Background(), manifestOptions(t, root, repo, "v0.1.0"))
 	if result.ExitCode() != 1 {
 		t.Fatalf("CheckManifest().ExitCode() = %d, want 1", result.ExitCode())
 	}
@@ -76,10 +74,7 @@ func TestCheckManifest_RequiresOutcomesDoNotStopGit(t *testing.T) {
 			writeFile(t, filepath.Join(repo, "tracked.local"), "private")
 			git(t, root, repo, "add", "dot.toml", "tracked.local")
 
-			result := CheckManifest(context.Background(), ManifestOptions{
-				Repository: repo,
-				Version:    tt.version,
-			})
+			result := CheckManifest(context.Background(), manifestOptions(t, root, repo, tt.version))
 			text := findingsText(result)
 			for _, want := range []string{tt.wantText, "tracked.local"} {
 				if !strings.Contains(text, want) {
@@ -101,7 +96,7 @@ base = []
 	writeFile(t, filepath.Join(repo, "tracked.local"), "private")
 	git(t, root, repo, "add", "dot.toml", "tracked.local")
 
-	result := CheckManifest(context.Background(), ManifestOptions{Repository: repo, Version: "v1.0.0"})
+	result := CheckManifest(context.Background(), manifestOptions(t, root, repo, "v1.0.0"))
 	checks := make([]string, 0, len(result.Findings()))
 	for _, finding := range result.Findings() {
 		checks = append(checks, finding.Check)
@@ -118,7 +113,7 @@ func TestCheckManifest_InvalidTOMLStillQueriesGit(t *testing.T) {
 	writeFile(t, filepath.Join(repo, "tracked.local"), "private")
 	git(t, root, repo, "add", "dot.toml", "tracked.local")
 
-	result := CheckManifest(context.Background(), ManifestOptions{Repository: repo, Version: "v1.0.0"})
+	result := CheckManifest(context.Background(), manifestOptions(t, root, repo, "v1.0.0"))
 	checks := make([]string, 0, len(result.Findings()))
 	for _, finding := range result.Findings() {
 		checks = append(checks, finding.Check)
@@ -129,10 +124,10 @@ func TestCheckManifest_InvalidTOMLStillQueriesGit(t *testing.T) {
 }
 
 func TestCheckManifest_DevelopmentNoticeIsNotWarning(t *testing.T) {
-	_, repo := newGitRepository(t)
+	root, repo := newGitRepository(t)
 	writeFile(t, filepath.Join(repo, "dot.toml"), "requires = \">=999.0.0\"\n[profiles]\nbase = []\n")
 
-	result := CheckManifest(context.Background(), ManifestOptions{Repository: repo, Version: "dev"})
+	result := CheckManifest(context.Background(), manifestOptions(t, root, repo, "dev"))
 	if result.ExitCode() != 0 || len(result.Findings()) != 0 {
 		t.Fatalf("CheckManifest() = %#v, exit %d; want no findings and exit 0", result.Findings(), result.ExitCode())
 	}
@@ -142,10 +137,14 @@ func TestCheckManifest_DevelopmentNoticeIsNotWarning(t *testing.T) {
 }
 
 func TestCheckManifest_GitQueryFailureIsError(t *testing.T) {
-	repo := t.TempDir()
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", repo, err)
+	}
 	writeFile(t, filepath.Join(repo, "dot.toml"), "requires = \">=0.1.0\"\n[profiles]\nbase = []\n")
 
-	result := CheckManifest(context.Background(), ManifestOptions{Repository: repo, Version: "v0.1.0"})
+	result := CheckManifest(context.Background(), manifestOptions(t, root, repo, "v0.1.0"))
 	if result.ExitCode() != 1 || len(result.Findings()) != 1 {
 		t.Fatalf("CheckManifest() findings = %#v, exit %d; want one error", result.Findings(), result.ExitCode())
 	}
@@ -198,5 +197,20 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func manifestOptions(t *testing.T, root, repo, version string) ManifestOptions {
+	t.Helper()
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", home, err)
+	}
+	return ManifestOptions{
+		Repository: repo,
+		Version:    version,
+		Home:       home,
+		Config:     filepath.Join(home, ".config", "dot", "config.toml"),
+		GOOS:       runtime.GOOS,
 	}
 }

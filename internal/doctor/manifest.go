@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mianm12/dotfiles/internal/manifest"
+	"github.com/mianm12/dotfiles/internal/paths"
 )
 
 const developmentNotice = "development build skipped the requires version comparison"
@@ -17,6 +18,10 @@ const developmentNotice = "development build skipped the requires version compar
 type ManifestOptions struct {
 	Repository string
 	Version    string
+	Home       string
+	Config     string
+	GOOS       string
+	Profile    string
 }
 
 // CheckManifest 执行不依赖 machine config 或 state 的只读 manifest 诊断。
@@ -43,7 +48,7 @@ func CheckManifest(ctx context.Context, options ManifestOptions) Result {
 		findings = appendError(findings, "manifest.requires", requirementErr)
 	}
 
-	_, loadErr := manifest.Load(options.Repository)
+	loaded, loadErr := manifest.Load(options.Repository)
 	if loadErr != nil {
 		requirementAlreadyReported := requirementErr != nil &&
 			errors.Is(requirementErr, manifest.ErrInvalidRequirement) &&
@@ -54,6 +59,9 @@ func CheckManifest(ctx context.Context, options ManifestOptions) Result {
 	} else if requirementErr != nil {
 		// 两次只读检查通常会同样成功或失败；若外部状态在两者之间变化，仍保留预读错误。
 		findings = appendError(findings, "manifest.load", requirementErr)
+	}
+	if loadErr == nil {
+		findings = checkRepository(findings, loaded, options)
 	}
 
 	tracked, err := trackedLocalFiles(ctx, options.Repository)
@@ -70,6 +78,50 @@ func CheckManifest(ctx context.Context, options ManifestOptions) Result {
 	}
 
 	return newResult(findings, notices)
+}
+
+func checkRepository(
+	findings []Finding,
+	repository manifest.Repository,
+	options ManifestOptions,
+) []Finding {
+	if err := repository.ValidateTemplates(); err != nil {
+		findings = appendError(findings, "manifest.templates", err)
+	}
+	if err := repository.ValidateModuleRules(options.GOOS); err != nil {
+		findings = appendError(findings, "manifest.modules", err)
+	}
+
+	controlPaths, controlErr := paths.ResolveControlPlanePaths(
+		options.Home,
+		options.Repository,
+		options.Config,
+	)
+	if controlErr != nil {
+		findings = appendError(findings, "paths.control", controlErr)
+	} else if _, err := paths.ValidatePathBoundaries(controlPaths, nil); err != nil {
+		controlErr = err
+		findings = appendError(findings, "paths.control", err)
+	}
+
+	profiles := repository.ProfileNames()
+	if options.Profile != "" {
+		profiles = []string{options.Profile}
+	}
+	for _, name := range profiles {
+		resolved, err := repository.Resolve(name, options.GOOS)
+		if err != nil {
+			findings = appendError(findings, "manifest.profile", err)
+			continue
+		}
+		if controlErr != nil {
+			continue
+		}
+		if _, err := resolved.ValidatePathBoundaries(controlPaths); err != nil {
+			findings = appendError(findings, "manifest.profile", err)
+		}
+	}
+	return findings
 }
 
 func appendError(findings []Finding, check string, err error) []Finding {

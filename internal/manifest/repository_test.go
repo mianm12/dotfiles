@@ -61,6 +61,25 @@ base = []
 	}
 }
 
+func TestRepositoryValidateModuleRules_CoversUnassignedModules(t *testing.T) {
+	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+	writeModule(t, repo, "unassigned", `target = { darwin = "~/.config/app" }`)
+	loaded, err := Load(repo)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	if err := loaded.ValidateModuleRules("darwin"); err != nil {
+		t.Fatalf("ValidateModuleRules(darwin) error = %v, want nil", err)
+	}
+	if err := loaded.ValidateModuleRules("linux"); err == nil || !strings.Contains(err.Error(), "no linux entry") {
+		t.Fatalf("ValidateModuleRules(linux) error = %v, want missing current GOOS target", err)
+	}
+	if err := loaded.ValidateModuleRules("freebsd"); err == nil || !strings.Contains(err.Error(), "unsupported GOOS") {
+		t.Fatalf("ValidateModuleRules(freebsd) error = %v, want unsupported GOOS", err)
+	}
+}
+
 func TestLoad_MissingModulesDirectoryMeansNoModules(t *testing.T) {
 	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
 
