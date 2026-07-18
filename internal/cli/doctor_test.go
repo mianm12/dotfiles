@@ -290,6 +290,10 @@ func runDoctorForTest(
 	build buildinfo.Info,
 ) (string, string, int) {
 	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := run(args, environment{

@@ -53,7 +53,12 @@ doctor-manifest: build
 	trap 'doctor_status=$$?; rm -rf "$$doctor_root"; exit $$doctor_status' 0; \
 	doctor_home="$$doctor_root/home"; \
 	mkdir "$$doctor_home"; \
-	env -u DOT_CONFIG -u DOT_REPO "$(abspath $(BINARY))" doctor --manifest-only \
+	env -u DOT_CONFIG -u DOT_REPO \
+		HOME="$$doctor_home" \
+		XDG_CONFIG_HOME="$$doctor_home/.config" \
+		XDG_STATE_HOME="$$doctor_home/.local/state" \
+		XDG_CACHE_HOME="$$doctor_home/.cache" \
+		"$(abspath $(BINARY))" doctor --manifest-only \
 		--home "$$doctor_home" --repo "$(abspath .)"
 
 # fmt 和 tidy 会修改工作区；对应的 *-check 目标只验证，不产生修复性改动。

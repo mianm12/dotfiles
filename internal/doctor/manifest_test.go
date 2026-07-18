@@ -190,16 +190,45 @@ func TestCheckManifest_GitEnvironmentCannotRedirectIndex(t *testing.T) {
 	}
 }
 
+func TestCheckManifest_GitUsesEffectiveHome(t *testing.T) {
+	root, repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "dot.toml"), "requires = \">=0.1.0\"\n[profiles]\nbase = []\n")
+	writeFile(t, filepath.Join(repo, "tracked.local"), "private")
+	git(t, root, repo, "add", "dot.toml", "tracked.local")
+
+	options := manifestOptions(t, root, repo, "v0.1.0")
+	processHome := t.TempDir()
+	writeFile(t, filepath.Join(processHome, ".gitconfig"), "[broken\n")
+	t.Setenv("HOME", processHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(processHome, "xdg-config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(processHome, "xdg-state"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(processHome, "xdg-cache"))
+
+	result := CheckManifest(context.Background(), options)
+	if checks := findingChecks(result); !reflect.DeepEqual(checks, []string{"git.tracked-local"}) {
+		t.Fatalf("CheckManifest() checks = %v, want effective HOME to isolate Git config; findings = %#v", checks, result.Findings())
+	}
+}
+
 func TestIsolatedGitEnvironment(t *testing.T) {
 	environment := []string{
 		"PATH=/usr/bin",
-		"HOME=/tmp/home",
+		"HOME=/tmp/process-home",
+		"XDG_CONFIG_HOME=/tmp/process-config",
+		"XDG_STATE_HOME=/tmp/process-state",
+		"XDG_CACHE_HOME=/tmp/process-cache",
 		"GIT_DIR=/tmp/other.git",
 		"GIT_INDEX_FILE=/tmp/index",
 		"GIT_LITERAL_PATHSPECS=1",
 	}
-	want := []string{"PATH=/usr/bin", "HOME=/tmp/home"}
-	if got := isolatedGitEnvironment(environment); !reflect.DeepEqual(got, want) {
+	want := []string{
+		"PATH=/usr/bin",
+		"HOME=/tmp/effective-home",
+		"XDG_CONFIG_HOME=/tmp/effective-home/.config",
+		"XDG_STATE_HOME=/tmp/effective-home/.local/state",
+		"XDG_CACHE_HOME=/tmp/effective-home/.cache",
+	}
+	if got := isolatedGitEnvironment(environment, "/tmp/effective-home"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("isolatedGitEnvironment() = %v, want %v", got, want)
 	}
 }
@@ -256,6 +285,10 @@ func manifestOptions(t *testing.T, root, repo, version string) ManifestOptions {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(%q) error = %v", home, err)
 	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	return ManifestOptions{
 		Repository: repo,
 		Version:    version,

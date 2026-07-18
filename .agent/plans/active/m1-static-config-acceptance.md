@@ -61,7 +61,9 @@ HOME。合成 process HOME 中的非法 `.gitconfig` 已使真实仓库 manifest
 - [x] 2026-07-18：以 `ecc9ca6` 提交本计划起点。
 - [x] 2026-07-18：新增 5 个 unassigned/inactive target 派生失败回归；修改前全部
   false-clean，修复后 `go test -count=20 ./internal/manifest ./internal/doctor` 通过。
-- [ ] 增加失败回归并完成最小 Git/Makefile 隔离修复。
+- [x] 2026-07-18：新增合成坏 process HOME 回归，修改前 Git 读取外部 `.gitconfig` 并失败；
+  修复后 doctor/CLI 窄测与完整两包各 20 次、真实仓库 gate、坏 process HOME 手工复现均通过，
+  effective HOME 保持为空。
 - [ ] 完成全量门禁、独立复核、计划收口与语义 commits。
 
 ## Milestones
@@ -127,9 +129,9 @@ Commit 边界：
 | 必须成立的性质 | 证据 | 状态 |
 |---|---|---|
 | unassigned/inactive 模块的非法 target 派生被拒绝 | manifest/doctor 回归 | 通过 |
-| Git index 查询不读取 process HOME/XDG global config | 合成损坏配置回归 | 待验证 |
-| 外部 `GIT_*` 不能重定向 repo/index | 既有与新增 doctor 测试 | 待验证 |
-| gate 只预创建空 HOME 根，machine-local 路径保持缺失 | Makefile/manual capability gate 与树快照 | 待验证 |
+| Git index 查询不读取 process HOME/XDG global config | 合成损坏配置回归 | 通过 |
+| 外部 `GIT_*` 不能重定向 repo/index | 既有与新增 doctor 测试 | 通过 |
+| gate 只预创建空 HOME 根，machine-local 路径保持缺失 | Makefile/manual capability gate 与树快照 | 通过 |
 | CP1 全部本地门禁与 diff check 通过 | 窄测、`make doctor-manifest`、`make check`、完整 diff | 待验证 |
 | 当前 HEAD 远端双平台 CI 实际通过 | GitHub Actions 精确 SHA | 待验收 |
 

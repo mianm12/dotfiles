@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/mianm12/dotfiles/internal/manifest"
@@ -65,7 +66,7 @@ func CheckManifest(ctx context.Context, options ManifestOptions) Result {
 		findings = checkRepository(findings, loaded, options)
 	}
 
-	tracked, err := trackedLocalFiles(ctx, options.Repository)
+	tracked, err := trackedLocalFiles(ctx, options.Repository, options.Home)
 	if err != nil {
 		findings = appendError(findings, "git.index", err)
 	} else {
@@ -133,10 +134,12 @@ func appendError(findings []Finding, check string, err error) []Finding {
 	})
 }
 
-func trackedLocalFiles(ctx context.Context, repository string) ([]string, error) {
+func trackedLocalFiles(ctx context.Context, repository, home string) ([]string, error) {
 	command := exec.CommandContext(ctx, "git", "-C", repository, "ls-files", "-z")
-	// GIT_* 可以覆盖 repository、worktree、index 与 pathspec 解释；doctor 必须只查询显式 repo。
-	command.Env = isolatedGitEnvironment(os.Environ())
+	// GIT_* 可以覆盖 repository、worktree、index 与 pathspec 解释；process HOME/XDG
+	// 还会让测试专用 --home 意外读取主力机器配置。Git 只查询显式 repo，并使用
+	// 本次 effective HOME 发现用户级配置。
+	command.Env = isolatedGitEnvironment(os.Environ(), home)
 	output, err := command.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -166,14 +169,29 @@ func trackedLocalFiles(ctx context.Context, repository string) ([]string, error)
 	return paths, nil
 }
 
-func isolatedGitEnvironment(environment []string) []string {
-	isolated := make([]string, 0, len(environment))
+func isolatedGitEnvironment(environment []string, home string) []string {
+	isolated := make([]string, 0, len(environment)+4)
 	for _, variable := range environment {
 		name, _, _ := strings.Cut(variable, "=")
-		if strings.HasPrefix(name, "GIT_") {
+		if strings.HasPrefix(name, "GIT_") || isGitHomeVariable(name) {
 			continue
 		}
 		isolated = append(isolated, variable)
 	}
+	isolated = append(isolated,
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
+		"XDG_STATE_HOME="+filepath.Join(home, ".local", "state"),
+		"XDG_CACHE_HOME="+filepath.Join(home, ".cache"),
+	)
 	return isolated
+}
+
+func isGitHomeVariable(name string) bool {
+	switch name {
+	case "HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME":
+		return true
+	default:
+		return false
+	}
 }
