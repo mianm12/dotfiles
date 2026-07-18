@@ -54,7 +54,7 @@ func validateTargetIdentities(
 			if identity.Equal(previous.identity) {
 				return fmt.Errorf(
 					"%w: %w: state targets %q and %q resolve to the same identity",
-					ErrPathValidation,
+					ErrCorrupt,
 					ErrTargetIdentityConflict,
 					previous.key,
 					key,

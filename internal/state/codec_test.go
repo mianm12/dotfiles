@@ -81,6 +81,59 @@ func TestDecode_RejectsDuplicateMemberAtAnyObjectLevel(t *testing.T) {
 	}
 }
 
+func TestDecode_RequiresExactCaseSensitiveSchemaMembers(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "top-level case variant", raw: `{"Version":1,"entries":{},"run_once":{}}`},
+		{name: "top-level canonical and case variant", raw: `{"version":1,"Version":1,"entries":{},"run_once":{}}`},
+		{name: "top-level entries case variant", raw: `{"version":1,"Entries":{},"run_once":{}}`},
+		{name: "top-level run-once case variant", raw: `{"version":1,"entries":{},"Run_Once":{}}`},
+		{name: "entry case variant", raw: `{"version":1,"entries":{"~/file":{"Module":"app","kind":"symlink","source":"modules/app/file","link_dest":"/repo/file","applied_at":"2026-07-14T10:00:00Z"}},"run_once":{}}`},
+		{name: "entry canonical and case variant", raw: `{"version":1,"entries":{"~/file":{"module":"app","Module":"app","kind":"symlink","source":"modules/app/file","link_dest":"/repo/file","applied_at":"2026-07-14T10:00:00Z"}},"run_once":{}}`},
+		{name: "run-once case variant", raw: `{"version":1,"entries":{},"run_once":{"app/hooks/x":{"Hash":"sha256:` + strings.Repeat("a", 64) + `","executed_at":"2026-07-14T10:00:00Z"}}}`},
+		{name: "run-once canonical and case variant", raw: `{"version":1,"entries":{},"run_once":{"app/hooks/x":{"hash":"sha256:` + strings.Repeat("a", 64) + `","Hash":"sha256:` + strings.Repeat("a", 64) + `","executed_at":"2026-07-14T10:00:00Z"}}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Decode([]byte(tt.raw))
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("Decode() error = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
+func TestDecode_RejectsInvalidUnicodeBeforeTokenOrSchemaDecoding(t *testing.T) {
+	invalidUTF8 := append([]byte(`{"version":1,"entries":{"~/`), 0xff)
+	invalidUTF8 = append(invalidUTF8, []byte(`":{"module":"app","kind":"symlink","source":"modules/app/file","link_dest":"/repo/file","applied_at":"2026-07-14T10:00:00Z"}},"run_once":{}}`)...)
+	tests := []struct {
+		name string
+		raw  []byte
+	}{
+		{name: "invalid UTF-8", raw: invalidUTF8},
+		{name: "unpaired high surrogate", raw: []byte(`{"version":1,"entries":{"~/file":{"module":"app","kind":"symlink","source":"modules/app/\uD800","link_dest":"/repo/file","applied_at":"2026-07-14T10:00:00Z"}},"run_once":{}}`)},
+		{name: "unpaired low surrogate", raw: []byte(`{"version":1,"entries":{"~/file":{"module":"app","kind":"symlink","source":"modules/app/\uDC00","link_dest":"/repo/file","applied_at":"2026-07-14T10:00:00Z"}},"run_once":{}}`)},
+		{name: "high followed by non-low surrogate", raw: []byte(`{"version":1,"entries":{"~/file":{"module":"app","kind":"symlink","source":"modules/app/\uD800\u0041","link_dest":"/repo/file","applied_at":"2026-07-14T10:00:00Z"}},"run_once":{}}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Decode(tt.raw)
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("Decode() error = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+
+	validPair := []byte(`{"version":1,"entries":{"~/file":{"module":"app","kind":"symlink","source":"modules/app/\uD83D\uDE00","link_dest":"/repo/file","applied_at":"2026-07-14T10:00:00Z"}},"run_once":{}}`)
+	if _, err := Decode(validPair); err != nil {
+		t.Fatalf("Decode(valid surrogate pair) error = %v", err)
+	}
+}
+
 func TestDecode_ClassifiesVersionAndSchemaErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -142,6 +195,9 @@ func TestDecode_RejectsInvalidEntrySemantics(t *testing.T) {
 		{name: "source dot component", target: "~/file", mutate: setEntry("source", "modules/zsh/./file")},
 		{name: "empty source leaf", target: "~/file", mutate: setEntry("source", "modules/zsh")},
 		{name: "invalid time", target: "~/file", mutate: setEntry("applied_at", "yesterday")},
+		{name: "comma fractional time", target: "~/file", mutate: setEntry("applied_at", "2026-07-14T10:00:00,5Z")},
+		{name: "invalid zone hour", target: "~/file", mutate: setEntry("applied_at", "2026-07-14T10:00:00+24:00")},
+		{name: "invalid zone minute", target: "~/file", mutate: setEntry("applied_at", "2026-07-14T10:00:00+00:60")},
 		{name: "unknown kind", target: "~/file", mutate: setEntry("kind", "managed")},
 		{name: "missing link dest", target: "~/file", mutate: deleteEntry("link_dest")},
 		{name: "empty link dest", target: "~/file", mutate: setEntry("link_dest", "")},

@@ -7,8 +7,10 @@ import (
 	"io"
 	"math/big"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -16,6 +18,7 @@ var (
 	integerPattern     = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 	sha256Pattern      = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	environmentPattern = regexp.MustCompile(`\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+	rfc3339Pattern     = regexp.MustCompile(`^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$`)
 )
 
 type rawDocument struct {
@@ -40,6 +43,9 @@ type rawRunOnceRecord struct {
 
 // Decode 严格解码一个完整 state JSON 文档。它不读取文件系统，也不验证当前 target identity。
 func Decode(data []byte) (Snapshot, error) {
+	if err := validateRawJSONText(data); err != nil {
+		return Snapshot{}, corruptf("%v", err)
+	}
 	if err := rejectDuplicateMembers(data); err != nil {
 		return Snapshot{}, corruptf("%v", err)
 	}
@@ -49,6 +55,9 @@ func Decode(data []byte) (Snapshot, error) {
 	}
 	if version.Cmp(big.NewInt(1)) > 0 {
 		return Snapshot{}, fmt.Errorf("%w: found version %s, maximum supported is 1", ErrTooNew, version)
+	}
+	if err := validateExactSchema(data); err != nil {
+		return Snapshot{}, corruptf("%v", err)
 	}
 
 	var raw rawDocument
@@ -100,17 +109,21 @@ func Decode(data []byte) (Snapshot, error) {
 }
 
 func probeVersion(data []byte) (*big.Int, error) {
-	var probe struct {
-		Version json.RawMessage `json:"version"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
 		return nil, corruptf("decode state envelope: %v", err)
 	}
-	if probe.Version == nil {
+	for name := range members {
+		if name != "version" && strings.EqualFold(name, "version") {
+			return nil, corruptf("top-level member %q must use exact spelling \"version\"", name)
+		}
+	}
+	versionRaw, exists := members["version"]
+	if !exists {
 		return nil, corruptf("required top-level version is missing")
 	}
 	var number json.Number
-	decoder := json.NewDecoder(bytes.NewReader(probe.Version))
+	decoder := json.NewDecoder(bytes.NewReader(versionRaw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&number); err != nil || !integerPattern.MatchString(number.String()) {
 		return nil, corruptf("version must be a positive integer")
@@ -120,6 +133,140 @@ func probeVersion(data []byte) (*big.Int, error) {
 		return nil, corruptf("version must be a positive integer")
 	}
 	return version, nil
+}
+
+func validateExactSchema(data []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("decode top-level object: %w", err)
+	}
+	if err := rejectUnknownMembers(root, map[string]struct{}{
+		"version":  {},
+		"entries":  {},
+		"run_once": {},
+	}); err != nil {
+		return fmt.Errorf("top-level schema: %w", err)
+	}
+	if rawEntries, exists := root["entries"]; exists {
+		var entries map[string]json.RawMessage
+		if err := json.Unmarshal(rawEntries, &entries); err != nil {
+			return fmt.Errorf("entries must be an object: %w", err)
+		}
+		for target, rawEntry := range entries {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(rawEntry, &fields); err != nil {
+				return fmt.Errorf("entry target %q must be an object: %w", target, err)
+			}
+			if err := rejectUnknownMembers(fields, map[string]struct{}{
+				"module": {}, "kind": {}, "source": {}, "link_dest": {}, "hash": {}, "applied_at": {},
+			}); err != nil {
+				return fmt.Errorf("entry target %q schema: %w", target, err)
+			}
+		}
+	}
+	if rawRunOnce, exists := root["run_once"]; exists {
+		var runOnce map[string]json.RawMessage
+		if err := json.Unmarshal(rawRunOnce, &runOnce); err != nil {
+			return fmt.Errorf("run_once must be an object: %w", err)
+		}
+		for key, rawRecord := range runOnce {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(rawRecord, &fields); err != nil {
+				return fmt.Errorf("run_once key %q must be an object: %w", key, err)
+			}
+			if err := rejectUnknownMembers(fields, map[string]struct{}{
+				"hash": {}, "executed_at": {},
+			}); err != nil {
+				return fmt.Errorf("run_once key %q schema: %w", key, err)
+			}
+		}
+	}
+	return nil
+}
+
+func rejectUnknownMembers(members map[string]json.RawMessage, allowed map[string]struct{}) error {
+	unknown := make([]string, 0)
+	for name := range members {
+		if _, exists := allowed[name]; !exists {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	slices.Sort(unknown)
+	return fmt.Errorf("unknown JSON member %q", unknown[0])
+}
+
+func validateRawJSONText(data []byte) error {
+	if !utf8.Valid(data) {
+		return fmt.Errorf("state JSON contains invalid UTF-8")
+	}
+	insideString := false
+	for index := 0; index < len(data); {
+		switch {
+		case !insideString:
+			insideString = data[index] == '"'
+			index++
+		case data[index] == '"':
+			insideString = false
+			index++
+		case data[index] != '\\':
+			index++
+		default:
+			if index+1 >= len(data) {
+				return fmt.Errorf("state JSON ends in an incomplete escape")
+			}
+			if data[index+1] != 'u' {
+				index += 2
+				continue
+			}
+			unit, err := decodeUTF16Escape(data, index)
+			if err != nil {
+				return err
+			}
+			switch {
+			case unit >= 0xd800 && unit <= 0xdbff:
+				if index+12 > len(data) || data[index+6] != '\\' || data[index+7] != 'u' {
+					return fmt.Errorf("high UTF-16 surrogate escape is not followed by a low surrogate")
+				}
+				low, err := decodeUTF16Escape(data, index+6)
+				if err != nil {
+					return err
+				}
+				if low < 0xdc00 || low > 0xdfff {
+					return fmt.Errorf("high UTF-16 surrogate escape is followed by non-low surrogate")
+				}
+				index += 12
+			case unit >= 0xdc00 && unit <= 0xdfff:
+				return fmt.Errorf("low UTF-16 surrogate escape has no preceding high surrogate")
+			default:
+				index += 6
+			}
+		}
+	}
+	return nil
+}
+
+func decodeUTF16Escape(data []byte, start int) (uint16, error) {
+	if start+6 > len(data) {
+		return 0, fmt.Errorf("incomplete UTF-16 escape")
+	}
+	var value uint16
+	for _, character := range data[start+2 : start+6] {
+		value <<= 4
+		switch {
+		case character >= '0' && character <= '9':
+			value |= uint16(character - '0')
+		case character >= 'a' && character <= 'f':
+			value |= uint16(character-'a') + 10
+		case character >= 'A' && character <= 'F':
+			value |= uint16(character-'A') + 10
+		default:
+			return 0, fmt.Errorf("invalid UTF-16 escape")
+		}
+	}
+	return value, nil
 }
 
 func rejectDuplicateMembers(data []byte) error {
@@ -290,6 +437,9 @@ func validateNormalizedRelativePath(path string) error {
 }
 
 func validateRFC3339(name, value string) error {
+	if !rfc3339Pattern.MatchString(value) {
+		return fmt.Errorf("%s %q is not strict RFC3339", name, value)
+	}
 	if _, err := time.Parse(time.RFC3339, value); err != nil {
 		return fmt.Errorf("%s %q is not RFC3339: %w", name, value, err)
 	}

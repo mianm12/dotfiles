@@ -74,6 +74,9 @@ func TestValidateTargetIdentities_RejectsAliasedStateKeys(t *testing.T) {
 	if err := os.MkdirAll(realDirectory, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll() error = %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(realDirectory, "file"), []byte("existing leaf"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
 	if err := os.Symlink(realDirectory, filepath.Join(home, "alias")); err != nil {
 		t.Fatalf("os.Symlink() error = %v", err)
 	}
@@ -88,8 +91,8 @@ func TestValidateTargetIdentities_RejectsAliasedStateKeys(t *testing.T) {
 	}
 
 	err = ValidateTargetIdentities(snapshot, home)
-	if !errors.Is(err, ErrPathValidation) || !errors.Is(err, ErrTargetIdentityConflict) || errors.Is(err, ErrCorrupt) {
-		t.Fatalf("ValidateTargetIdentities() error = %v, want non-corrupt identity conflict", err)
+	if !errors.Is(err, ErrCorrupt) || !errors.Is(err, ErrTargetIdentityConflict) || errors.Is(err, ErrPathValidation) {
+		t.Fatalf("ValidateTargetIdentities() error = %v, want corrupt identity conflict", err)
 	}
 }
 
