@@ -75,28 +75,15 @@ func snapshotsEqual(left, right Snapshot) bool {
 	}
 	for key, leftEntry := range left.entries {
 		rightEntry, exists := right.entries[key]
-		if !exists || !entriesEqual(leftEntry, rightEntry) {
+		if !exists || leftEntry != rightEntry {
 			return false
 		}
 	}
 	for key, leftRecord := range left.runOnce {
 		rightRecord, exists := right.runOnce[key]
-		if !exists || !runOnceRecordsEqual(leftRecord, rightRecord) {
+		if !exists || leftRecord != rightRecord {
 			return false
 		}
 	}
 	return true
-}
-
-func entriesEqual(left, right Entry) bool {
-	return left.module == right.module &&
-		left.kind == right.kind &&
-		left.source == right.source &&
-		left.linkDest == right.linkDest &&
-		left.hash == right.hash &&
-		left.appliedAt == right.appliedAt
-}
-
-func runOnceRecordsEqual(left, right RunOnceRecord) bool {
-	return left.hash == right.hash && left.executedAt == right.executedAt
 }
