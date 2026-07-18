@@ -65,14 +65,21 @@ func (resolver *targetResolver) resolveCleanTarget(cleanPath string) (TargetReso
 }
 
 func cleanTargetPath(path string) (string, error) {
-	if path == "" || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("target path %q must be a non-empty absolute path", path)
+	cleanPath, err := cleanAbsolutePath(path)
+	if err != nil {
+		return "", fmt.Errorf("target %w", err)
 	}
-	cleanPath := filepath.Clean(path)
 	if filepath.Dir(cleanPath) == cleanPath {
 		return "", fmt.Errorf("target path %q must not be a filesystem root", path)
 	}
 	return cleanPath, nil
+}
+
+func cleanAbsolutePath(path string) (string, error) {
+	if path == "" || !filepath.IsAbs(path) {
+		return "", fmt.Errorf("path %q must be a non-empty absolute path", path)
+	}
+	return filepath.Clean(path), nil
 }
 
 func (resolver *targetResolver) resolveLeafName(path, resolvedParent, leaf string) (string, error) {
