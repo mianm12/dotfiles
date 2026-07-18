@@ -68,6 +68,10 @@ release，BSD-3-Clause，Go directive 为 1.24，pkg.go.dev 约有 1499 known im
   Darwin/Linux amd64 测试二进制交叉编译、`git diff 7b43272...HEAD --check` 与最终
   `make check BINARY=/private/tmp/dot-cp2-process-lock-check`，全部通过；完整 diff 仅含本
   Goal 的 8 个文件。计划保持 active，等待独立复核。
+- [x] 2026-07-19：首轮独立复核发现新 lock inode 已发布后，post-create chmod/close 失败路径
+  按名称删除文件会破坏跨进程互斥；以持有同一 inode 的 contender 回归复现，并改为保留已
+  发布 inode、返回原始错误。`go test -race ./internal/storage ./internal/lock` 通过。
+- [ ] 等待针对 fix commit 的完整独立复审及最终门禁；在此之前计划保持 active。
 
 ## Milestones
 
@@ -175,6 +179,13 @@ guard；路径必须绑定，嵌套复用只能由已有 owner 发起。
 
 ## Surprises & Discoveries
 
+- Observation: `O_EXCL` 成功返回时 lock inode 已经对其他进程可见，后续错误处理不能再按路径
+  删除它。
+  Evidence: 首轮 reviewer 指出正常 contender 可先打开并锁住旧 inode，而删除路径后第三个
+  进程会创建并锁住新 inode；故障注入测试保持 contender fd 打开并断言路径仍命名同一 inode。
+  Impact: post-create chmod/close 失败现在保留已发布文件并明确报错；下次获取可重新校正权限，
+  不会制造并行锁域。
+
 - Observation: `go mod tidy` 会下载并在 `go.sum` 记录 flock 自身测试依赖，但本项目的生产
   `go.mod` 只新增 flock 与 indirect `x/sys`。
   Evidence: `go mod graph` 显示 testify、go-spew、difflib、yaml 等仅位于 flock 的出边；项目
@@ -200,13 +211,18 @@ guard；路径必须绑定，嵌套复用只能由已有 owner 发起。
 
 ## Outcomes and Handoff
 
-实现与本地验证已经完成，计划保持 active 等待未参与实现的只读 reviewer。分支基线为
+实现与本地验证已经完成，计划保持 active 等待 fix 后完整独立复审。分支基线为
 `7b43272d6a98`，语义 commits 为：
 
 - `14c4351`：创建本 active ExecPlan。
 - `6aea049`：建立后续 state-store 可复用的 0700/0600 storage 权限边界及测试。
 - `173f33d`：引入 `gofrs/flock v0.13.0`，交付窄 adapter、进程排他锁、显式 ownership/
   guard、真实 helper 子进程测试和依赖文件。
+
+首轮独立复核提出 1 个有效 P1：已发布 lock inode 的 post-create error cleanup 会按路径删除
+文件并允许正常并发创建第二个锁域。修复保留已发布 inode，并用故障注入下已打开 contender
+仍指向同一 inode 的测试锁定该不变量；修复将以独立 fix commit 记录。其余复核项无 blocking
+finding。
 
 本机 Darwin/arm64 完成 storage/lock 20 次重复、race、tidy diff、module graph 审计和完整
 `make check`；Darwin/Linux amd64 测试二进制交叉编译通过。完整

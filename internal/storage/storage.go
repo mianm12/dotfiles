@@ -16,6 +16,13 @@ const (
 	PrivateFileMode fs.FileMode = 0o600
 )
 
+type privateFile interface {
+	Chmod(fs.FileMode) error
+	Close() error
+}
+
+type privateFileOpener func(string, int, fs.FileMode) (privateFile, error)
+
 // EnsureRoot 建立私有 state 家族根目录，并把现存目录权限收敛为 0700。
 func EnsureRoot(path string) error {
 	cleanPath, err := cleanAbsolute(path)
@@ -45,7 +52,12 @@ func EnsurePrivateFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("private file: %w", err)
 	}
+	return ensurePrivateFile(cleanPath, func(name string, flag int, perm fs.FileMode) (privateFile, error) {
+		return os.OpenFile(name, flag, perm)
+	})
+}
 
+func ensurePrivateFile(cleanPath string, openFile privateFileOpener) error {
 	for {
 		info, inspectErr := os.Lstat(cleanPath)
 		switch {
@@ -61,7 +73,7 @@ func EnsurePrivateFile(path string) error {
 			return fmt.Errorf("inspect private file %q: %w", cleanPath, inspectErr)
 		}
 
-		file, createErr := os.OpenFile(cleanPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, PrivateFileMode)
+		file, createErr := openFile(cleanPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, PrivateFileMode)
 		if errors.Is(createErr, fs.ErrExist) {
 			continue
 		}
@@ -70,11 +82,9 @@ func EnsurePrivateFile(path string) error {
 		}
 		if err := file.Chmod(PrivateFileMode); err != nil {
 			_ = file.Close()
-			_ = os.Remove(cleanPath)
 			return fmt.Errorf("set new private file permissions %q: %w", cleanPath, err)
 		}
 		if err := file.Close(); err != nil {
-			_ = os.Remove(cleanPath)
 			return fmt.Errorf("close new private file %q: %w", cleanPath, err)
 		}
 		return nil
