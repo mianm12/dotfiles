@@ -4,9 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mianm12/dotfiles/internal/config"
 	"github.com/mianm12/dotfiles/internal/manifest"
-	"github.com/mianm12/dotfiles/internal/paths"
+	runtimecontext "github.com/mianm12/dotfiles/internal/runtime"
 	"github.com/spf13/cobra"
 )
 
@@ -40,30 +39,18 @@ func runVersion(command *cobra.Command, options versionOptions, env environment)
 	command.Printf("commit=%s\n", env.build.Commit)
 	command.Printf("build_time=%s\n", env.build.BuildTime)
 
-	home, err := paths.EffectiveHome(options.home, options.homeSet, env.userHomeDir)
+	context, err := runtimecontext.PreflightRepository(runtimecontext.Options{
+		Home:        options.home,
+		HomeSet:     options.homeSet,
+		Repo:        options.repo,
+		RepoSet:     options.repoSet,
+		LookupEnv:   env.lookupEnv,
+		UserHomeDir: env.userHomeDir,
+	})
 	if err != nil {
 		return reportVersionError(command, err)
 	}
-	configPath, err := paths.Config(home, env.lookupEnv)
-	if err != nil {
-		return reportVersionError(command, err)
-	}
-	machine, exists, err := config.Load(configPath)
-	if err != nil {
-		return reportVersionError(command, err)
-	}
-	// 即使 --repo 或 DOT_REPO 会覆盖 machine.Repo，也先验证持久化值，避免损坏配置被静默掩盖。
-	if exists && machine.Repo != nil {
-		if _, err := paths.ResolveControlPath(*machine.Repo, home); err != nil {
-			return reportVersionError(command, fmt.Errorf("machine config repo: %w", err))
-		}
-	}
-
-	repo, err := paths.Repository(home, options.repo, options.repoSet, env.lookupEnv, machine.Repo)
-	if err != nil {
-		return reportVersionError(command, err)
-	}
-	requirement, err := manifest.ReadRequirement(repo)
+	requirement, err := manifest.ReadRequirement(context.Repository)
 	if errors.Is(err, manifest.ErrRepositoryUnavailable) {
 		// 尚未安装仓库时仍允许 version 成功，并明确报告 requires 不可用。
 		command.Println("requires=unavailable")

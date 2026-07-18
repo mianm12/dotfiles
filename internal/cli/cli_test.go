@@ -225,6 +225,36 @@ func TestVersion_RejectsInvalidConfiguredRepositoryDespiteOverride(t *testing.T)
 	}
 }
 
+func TestVersion_RejectsControlPlaneOverlapBeforeRepositoryRead(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", home, err)
+	}
+	repo := writeRepository(t, ">=1.0.0")
+	configPath := filepath.Join(repo, "machine.toml")
+	if err := os.WriteFile(configPath, []byte("profile = \"mac\"\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", configPath, err)
+	}
+
+	stdout, stderr, exitCode := runForTest(
+		t,
+		[]string{"version", "--home", home, "--repo", repo},
+		map[string]string{"DOT_CONFIG": configPath},
+		buildinfo.Info{Version: "v1.0.0", Commit: "abc123", BuildTime: "now"},
+	)
+
+	if exitCode != 1 {
+		t.Errorf("run() exit code = %d, want 1", exitCode)
+	}
+	if !strings.HasSuffix(stdout, "requires=error\n") {
+		t.Errorf("run() stdout = %q, want requires error", stdout)
+	}
+	if !strings.Contains(stderr, "control-plane paths overlap") {
+		t.Errorf("run() stderr = %q, want control-plane overlap", stderr)
+	}
+}
+
 func TestVersion_RejectsInvalidPathBeforeRepositoryRead(t *testing.T) {
 	// 显式控制路径非法时必须直接失败，不能因仓库不可用而降级为 unavailable。
 	stdout, stderr, exitCode := runForTest(t, []string{"version"}, map[string]string{
@@ -283,7 +313,7 @@ func TestVersion_RejectsDanglingRepositorySymlink(t *testing.T) {
 	if !strings.HasSuffix(stdout, wantStdoutSuffix) {
 		t.Errorf("run() stdout = %q, want suffix %q", stdout, wantStdoutSuffix)
 	}
-	wantStderr := "inspect repository"
+	wantStderr := "resolve repository control path"
 	if !strings.Contains(stderr, wantStderr) {
 		t.Errorf("run() stderr = %q, want substring %q", stderr, wantStderr)
 	}
