@@ -141,7 +141,11 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
   symlink 跟随后的消费位置；target resolver 保持拒绝 root、leaf 不跟随。control identity
   窄测、`go test -count=20 ./internal/paths`、darwin/linux amd64 test binary 交叉编译和
   `make check BINARY=/private/tmp/.../dot` 均通过；未增加 boundary fallback 或依赖。
-- [ ] Milestone 1：identity 前置修复完成并独立提交后，继续建立控制面路径家族。
+- [x] 2026-07-18：identity 前置修复以 `cf0b61c fix(paths): 扩展控制面路径身份` 独立提交；
+  Milestone 1 集中构造 repo/config/state root/state.json/lock/backup/binary 的绝对展示路径，state
+  预定父子关系只保存在同一 opaque member table。窄测、10 次重复和
+  `make check BINARY=/private/tmp/.../dot` 通过，完整 diff/check 无越界；待以
+  `feat(paths): 建立控制面路径家族` 提交。
 - [ ] Milestone 2：以共享 identity/topology 语义校验控制面家族两两隔离。
 - [ ] Milestone 3：校验完整 profile 的 target identity 与祖先拓扑不变量。
 - [ ] Milestone 4：合并 desired/control-plane 校验并证明部分作用域无法绕过完整 profile。
@@ -417,8 +421,8 @@ Commit 边界：
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
 | control path 全部可由 identity 语义表达 | root 与 control leaf-symlink capability 回归、identity 前置修复/裁决证据 | identity 前置修复本地验证通过，待 checkpoint commit |
-| repo/config/state/binary 集中解析 | `ControlPlanePaths`/等价测试，cwd 与 `--home` 反例 | 待验证 |
-| state family 唯一预定包含例外 | family member matrix 与 alias 反例；源码复核无消费者例外 | 待验证 |
+| repo/config/state/binary 集中解析 | `ControlPlanePaths`/等价测试，cwd 与 `--home` 反例 | Milestone 1 本地验证通过，待 checkpoint commit |
+| state family 唯一预定包含例外 | family member matrix 与 alias 反例；源码复核无消费者例外 | Milestone 1 hierarchy 已固定；alias relation 待 Milestone 2 |
 | 控制面家族两两隔离 | equal、双向 ancestor、symlink/case/Unicode alias 测试 | 待验证 |
 | 完整 profile target identity 唯一 | 跨模块、suffix、override、平台 alias 碰撞测试 | 待验证 |
 | 无祖先冲突和中间目录穿文件 | 普通 ancestor、`A`/`A/child`、recursive symlink、`..` trace 正反例 | 待验证 |
@@ -516,6 +520,10 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   Evidence: directory/file/chained leaf-symlink 的 control/target 与 control/control 回归。
   Impact: `ControlPathResolution` 保存 entry 与 consumed 两个 opaque `TargetResolution`，关系仍
   全部复用同一 walker 和 identity equality。
+- Observation: control members 用固定 role-indexed table 同时承载路径、family 和 state parent，
+  可以让路径 accessor 与后续 validator 消费同一存储，而不复制一份例外清单。
+  Evidence: `ControlPlanePaths` 的 accessor、state hierarchy 和 cwd/read-only 测试。
+  Impact: Milestone 2 只需解析该 table 并识别显式 parent relation，不允许调用方注入 skip。
 
 ## Decision Log
 
@@ -551,6 +559,11 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   语义和 topology；在 identity 层显式建模可解除 gate，同时避免 boundary 自行 Readlink、
   `EvalSymlinks` 或字符串特判。
   Date: 2026-07-18
+- Decision: `ControlPlanePaths` 以固定 role-indexed member table 作为 repo/config/state/binary
+  路径与 state 预定 hierarchy 的单一存储；公开 accessor 只读取该 table。
+  Rationale: 后续 state/doctor/planner 需要各自路径，但 family 和允许的 root-child relation
+  不能由消费者重新枚举或传入例外。
+  Date: 2026-07-18
 - Decision: 不新增依赖，不持久化 identity，不跨文件系统 mutation 快照复用 resolution。
   Rationale: 当前 API 是只读、进程内、snapshot-scoped 的唯一语义源；本 Goal 无需改变这些
   边界。
@@ -558,14 +571,16 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
 
 ## Outcomes and Handoff
 
-当前已完成计划起点、Milestone 1 capability gate 的复现和获授权的 identity 前置修复。
+当前已完成计划起点、Milestone 1 capability gate、获授权的 identity 前置修复，以及
+Milestone 1 控制面路径家族实现。
 2026-07-18 从干净 `main@8075a6c` 创建 `feat/path-boundaries`，以 `4f05174` 提交本计划；
 `cb501d3` 记录 gate。新增 control resolution 后，paths 窄测、20 次重复、darwin/linux amd64
-交叉编译和本机 `make check` 通过；尚待形成独立 `fix(paths)` checkpoint，之后才能继续
-Milestone 1 控制面家族。未执行真实 Linux runner、后续 milestone 或最终独立实现复核，也未
+交叉编译和本机 `make check` 通过，identity 已形成独立 `cf0b61c` checkpoint。控制面路径家族
+的窄测、重复测试和完整 `make check` 也通过，尚待 milestone commit。未执行真实 Linux runner、
+后续 milestone 或最终独立实现复核，也未
 访问真实私人数据或进行未授权 Git/托管操作。
 
-后续接手者应先确认独立 identity checkpoint 已成功提交且工作区 clean，再按 Milestone 1–5
+后续接手者应先确认 Milestone 1 checkpoint 已成功提交且工作区 clean，再按 Milestone 2–5
 顺序推进；每个 milestone 同步更新 living sections、执行窄测与完整门禁、检查
 完整 diff 并创建独立 semantic commit。最终只有双平台 CI、独立复核、所有意见处理和计划
 生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`
