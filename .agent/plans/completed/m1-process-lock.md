@@ -71,7 +71,10 @@ release，BSD-3-Clause，Go directive 为 1.24，pkg.go.dev 约有 1499 known im
 - [x] 2026-07-19：首轮独立复核发现新 lock inode 已发布后，post-create chmod/close 失败路径
   按名称删除文件会破坏跨进程互斥；以持有同一 inode 的 contender 回归复现，并改为保留已
   发布 inode、返回原始错误。`go test -race ./internal/storage ./internal/lock` 通过。
-- [ ] 等待针对 fix commit 的完整独立复审及最终门禁；在此之前计划保持 active。
+- [x] 2026-07-19：第 2 轮完整独立复审结论 GO；storage/lock 20 次、race、完整 diff check 与
+  `make check` 均通过，无 P0–P3 finding。
+- [x] 2026-07-19：main 仅因已验收 state-v1 前进；以 `0b09dca` 非重写合入 current main，
+  重跑 storage/lock/state 20 次与 `make check`，freshness 后完整独立复审再次 GO。
 
 ## Milestones
 
@@ -211,24 +214,27 @@ guard；路径必须绑定，嵌套复用只能由已有 owner 发起。
 
 ## Outcomes and Handoff
 
-实现与本地验证已经完成，计划保持 active 等待 fix 后完整独立复审。分支基线为
+实现、本地验证、独立复核与 freshness gate 已完成。分支原始基线为
 `7b43272d6a98`，语义 commits 为：
 
 - `14c4351`：创建本 active ExecPlan。
 - `6aea049`：建立后续 state-store 可复用的 0700/0600 storage 权限边界及测试。
 - `173f33d`：引入 `gofrs/flock v0.13.0`，交付窄 adapter、进程排他锁、显式 ownership/
   guard、真实 helper 子进程测试和依赖文件。
+- `3f7316e`：修复已发布 lock inode 的 post-create error cleanup 竞态并增加故障回归。
+- `0b09dca`：按 freshness gate 非重写合入已验收 state-v1 基线。
 
 首轮独立复核提出 1 个有效 P1：已发布 lock inode 的 post-create error cleanup 会按路径删除
 文件并允许正常并发创建第二个锁域。修复保留已发布 inode，并用故障注入下已打开 contender
-仍指向同一 inode 的测试锁定该不变量；修复将以独立 fix commit 记录。其余复核项无 blocking
-finding。
+仍指向同一 inode 的测试锁定该不变量；第 2 轮完整复审与 freshness 后完整复审均 GO，无
+P0–P3 finding。
 
 本机 Darwin/arm64 完成 storage/lock 20 次重复、race、tidy diff、module graph 审计和完整
 `make check`；Darwin/Linux amd64 测试二进制交叉编译通过。完整
 `git diff 7b43272...HEAD --check` 通过，diff 只包含计划、storage/lock、测试和依赖文件。
 精确 HEAD 的远端 macOS/Linux CI 未运行，因此当前结论是“本地验收通过、远端待验收”。
 
-尚未完成独立复核、ExecPlan 迁移或 plan-closure commit；本 worker 不执行这些步骤。后续
-runtime-loading 应只在严格 preflight/control validation 成功后调用 `lock.Acquire`，只读流程
-不调用；嵌套 mutation 必须显式传递 `*lock.Ownership` 并用同一 root/path 创建 guard。
+当前 HEAD 的本地完整门禁与 lifecycle closure 已通过，可由 coordinator fast-forward-only
+合入 main。后续 runtime-loading 应只在严格 preflight/control validation 成功后调用
+`lock.Acquire`，只读流程不调用；嵌套 mutation 必须显式传递 `*lock.Ownership` 并用同一
+root/path 创建 guard。
