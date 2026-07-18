@@ -129,8 +129,11 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   unassigned 模块仍做局部检查且不并入碰撞集合。macOS doctor/manifest 窄测连续 20 次、Linux
   amd64 Btrfs runtime 连续 5 次、Linux arm64 交叉编译及
   `make check BINARY=/private/tmp/dot-doctor-static/dot` 均通过，正准备独立 `feat(doctor)` 提交。
-- [ ] 接入 Cobra doctor、稳定输出和退出码，完成隔离/只读/写失败测试、门禁、diff 检查和
-  语义提交。
+- [x] 2026-07-18：接入 Cobra `doctor --manifest-only`、稳定 finding/notice 输出和诊断退出码；
+  裸 doctor 明确 M2 边界。CLI 行为测试覆盖 flag/`DOT_REPO`/default repo、profile 转发、missing
+  与故意非法 machine config/state、零写入树快照、未创建 lock、输出失败优先级。macOS
+  CLI/doctor 窄测连续 20 次、Linux amd64 Btrfs runtime 连续 5 次、Linux arm64 交叉编译及
+  `make check BINARY=/private/tmp/dot-doctor-cli/dot` 均通过，正准备独立 `feat(cli)` 提交。
 - [ ] 创建最小根 `dot.toml`，验证并语义提交。
 - [ ] 接入 Makefile 与确有必要的 CI 改动，验证只运行一次并语义提交。
 - [ ] 同步 README 与确有必要的长期仓库指南，验证并语义提交。
@@ -494,6 +497,22 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   Impact: engine 先用共享入口验证一次 control-only 集合，失败形成单个 `paths.control` 并跳过
   依赖它的 profile boundary；成功后仍逐 profile 调用完整共享入口，target/control 冲突不会漏掉。
 
+- Observation: Cobra `Print*` 方法不把 writer 错误返回给 `RunE`；现有
+  `errorTrackingWriter` 只在 `run` 的 `finish` 阶段把写失败提升为 exit 1。若 doctor 为诊断非零
+  直接返回普通 error，`run` 又会附加一条泛化 error，并丢失 warning-only 的 exit 2。
+  Evidence: 现有 version 输出失败测试与 `commandOutput.finish`；新增 doctor 测试固定 clean
+  stdout failure、dev notice stderr failure，以及 finding 输出无额外泛化 error。
+  Impact: 使用只携带已报告退出码的内部 `commandExitError`；`run` 识别后直接进入同一个
+  `finish(code)`，所有 stdout/stderr 首错优先级保持不变。
+
+- Observation: manifest-only 可在不加载 machine config 的前提下完整确定 repo/control 输入：
+  effective HOME 来自 `--home`/user home，config 来自 `DOT_CONFIG`/default，repo 来自
+  `--repo`/`DOT_REPO`/default；profile 只接受本次 flag。
+  Evidence: CLI 隔离测试分别覆盖三种 repo 来源；default repo 场景同时放置无法解析的 machine
+  config/state/lock 内容并保持成功，执行前后整个合成树内容与 mode 相同。
+  Impact: doctor CLI 向 `paths.Repository` 传入 nil configured repo，绝不调用 `config.Load` 或 state/
+  lock API；engine 只接收已经解析的绝对路径。
+
 ## Decision Log
 
 - Decision: 将 goal 文件规定的默认语义边界分别保留为 ExecPlan、可选 paths fix、diagnostic
@@ -549,10 +568,19 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   target 合并、doctor-local identity 或 unassigned 碰撞旁路。
   Date: 2026-07-18
 
+- Decision: manifest-only finding 逐行写 stderr，格式为
+  `<severity> [<check>]: <message>`；compatibility notice 使用 `notice: ...`，无 finding 时 stdout
+  输出 `Manifest check passed.`。裸 doctor 返回普通 CLI error，文本同时说明 full doctor requires
+  M2 与可用的 `dot doctor --manifest-only`。
+  Rationale: 符合人类正常输出走 stdout、error/warning/notice 走 stderr 的规范，同时由 Result
+  排序直接保证稳定输出，不把 M1 子集伪装成完整巡检。
+  Date: 2026-07-18
+
 ## Outcomes and Handoff
 
 尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建，首个 ExecPlan commit 已完成；
 Linux capability 与 findings/requires/Git 聚合均已形成独立 commit；完整
 manifest/profile/template/path static engine 已完成验证，正待形成第二个 `feat(doctor)` commit。
-CLI、真实根 manifest、Makefile/CI 和 README 尚未完成。merge、push、Pull Request、rebase、
-tag、发布和删除分支不在本 Goal 授权范围。
+CLI 接入与隔离/只读行为已完成验证，正待形成 `feat(cli)` commit；真实根 manifest、Makefile/CI
+和 README 尚未完成。merge、push、Pull Request、rebase、tag、发布和删除分支不在本 Goal
+授权范围。

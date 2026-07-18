@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -346,7 +347,7 @@ func TestRoot_HelpListsSpecifiedCommandsAndFlags(t *testing.T) {
 	if exitCode != 0 {
 		t.Errorf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, want := range []string{"version", "--repo", "--profile", "--verbose", "--no-color"} {
+	for _, want := range []string{"doctor", "version", "--repo", "--profile", "--verbose", "--no-color"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("run() stdout = %q, want substring %q", stdout, want)
 		}
@@ -426,6 +427,7 @@ func runForTest(t *testing.T, args []string, envVars map[string]string, build bu
 			return home, nil
 		},
 		build: build,
+		goos:  runtime.GOOS,
 	})
 	return stdout.String(), stderr.String(), exitCode
 }
