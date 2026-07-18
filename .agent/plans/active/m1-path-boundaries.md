@@ -160,8 +160,15 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
   通过。manifest 私有 `validateTargetStructure` 复用完整 `enumerateStructure`，覆盖跨模块、
   `.template`、显式 scaffold `.tmpl`、`[files].target` 碰撞，不读取或渲染 scaffold。paths 20 次、
   manifest 10 次重复、两包完整回归和
-  `make check BINARY=/private/tmp/dot-path-boundaries-m3` 均退出 0，待本 milestone checkpoint。
-- [ ] Milestone 4：合并 desired/control-plane 校验并证明部分作用域无法绕过完整 profile。
+  `make check BINARY=/private/tmp/dot-path-boundaries-m3` 均退出 0；已以
+  `1a8c76d feat(paths): 校验完整 profile target 拓扑` 提交，提交后工作区 clean。
+- [x] 2026-07-18：Milestone 4 以 `ValidatePathBoundaries` 在同一个 resolver snapshot 内依次校验
+  control plane、完整 target set 和 target/control cross-product；manifest 的公开入口从同一
+  opaque `ControlPlanePaths` 取得 effective HOME，不接受独立 HOME 或 scope，成功才返回
+  `ValidatedProfile` 条目副本。七个 control member matrix、双向/leaf/ancestor symlink、case/
+  Unicode oracle、顺序、零值、只读测试，以及未请求模块 identity/control 冲突和 profile 分离
+  回归通过；共享生产行为已以 `a594516 feat(paths): 建立完整 profile 路径入口` 提交，scope
+  回归与本计划待独立 test checkpoint。
 - [ ] Milestone 5：完成 macOS/Linux 门禁、完整 diff、独立复核和计划收口。
 
 ## Execution Start and Commit Discipline
@@ -440,9 +447,9 @@ Commit 边界：
 | 完整 profile target identity 唯一 | 跨模块、suffix、override、平台 alias 碰撞测试 | 通用 validator 与 manifest 完整结构接缝本地通过；待最终双平台门禁 |
 | 无祖先冲突和中间目录穿文件 | 普通 ancestor、`A`/`A/child`、recursive symlink、`..` trace 正反例 | 双向 ancestor、leaf/chained/`..` traversal、穿文件 blocker 与正反例通过 |
 | leaf hard link 不误合并 | `os.SameFile` 为真但不同 target identity 的全局校验测试 | 不同 leaf hard link 正例通过 |
-| desired 与控制面双向隔离 | 四 family/所有 state member overlap matrix | 待验证 |
-| 部分作用域不能绕过完整 profile | 未请求模块 identity 冲突与控制面重叠测试 | 待验证 |
-| fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | Milestone 2–3 的 unavailable oracle、blocked、permission/IO cause、tree snapshot 与 nil result 通过；global entry 待 Milestone 4 |
+| desired 与控制面双向隔离 | 四 family/所有 state member overlap matrix | 七 member equality/consumed endpoint matrix、双向 ancestor、symlink 与平台名称 oracle 通过 |
+| 部分作用域不能绕过完整 profile | 未请求模块 identity 冲突与控制面重叠测试 | 正式入口无 scope 参数；两类未请求模块反例与 profile 分离通过 |
+| fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | unavailable oracle、blocked、permission/IO cause、全局 tree snapshot、零值与失败 nil result 通过 |
 | 单一语义源 | 完整 diff 人工检查与独立复核，无 consumer-specific list/fallback | 待验证 |
 | 双平台完整门禁 | macOS/Linux CI `make check`、本机重复测试与交叉编译 | 待验证 |
 
@@ -552,6 +559,13 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   `ErrPathBlocked` cause。
   Impact: target/target 与 control/control 使用同一个 relation engine；未增加路径字符串前缀、
   symlink 展开或 inode fallback。
+- Observation: 若完整 profile 入口同时接受独立 HOME 和已经构造的 `ControlPlanePaths`，调用方
+  可以把 desired 按 HOME-A 展开、却校验 HOME-B 的 state/binary；即使两组输入各自合法，组合
+  也不是同一次 effective path snapshot。
+  Evidence: API 复核发现旧草案签名包含两个独立值；`ControlPlanePaths` 构造时本来已经持有
+  派生 state/binary 所需的 clean effective HOME。
+  Impact: opaque control 值现在同时保存 effective HOME，manifest 正式入口只从该值展开 desired；
+  不从 state/binary 字符串反推 HOME，也不给调用方 mismatch 参数。
 
 ## Decision Log
 
@@ -614,21 +628,33 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   Rationale: receiver 的私有 resolved modules 是完整 effective profile 的可信来源；公开返回
   必须等 control-plane 与 target/control 边界也完成，避免 target-only API 成为绕过入口。
   Date: 2026-07-18
+- Decision: 正式 `ResolvedProfile.ValidatePathBoundaries` 只接受 opaque `ControlPlanePaths`，其顺序
+  是完整结构形成后，由 paths 层在同一个 resolver 内依次完成 control、target set、cross-product；
+  返回的 `ValidatedProfile` 不可注入 scope，`Entries` 只给独立副本。
+  Rationale: effective HOME 与 control family 必须来自同一次解析；scope 只能发生在成功结果
+  之后，失败路径不能泄露部分可执行结构。
+  Date: 2026-07-18
+- Decision: Milestone 4 按计划拆为 `feat(paths): 建立完整 profile 路径入口` 与
+  `test(paths): 固定完整 profile 边界复用` 两个 commit。
+  Rationale: 前者包含独立生产 API、HOME 绑定和核心 matrix；后者只固定未请求 scope 与 profile
+  分离契约，使行为改动和消费约束可分别 review。
+  Date: 2026-07-18
 
 ## Outcomes and Handoff
 
-当前已完成计划起点、Milestone 1 capability gate、获授权的 identity 前置修复、Milestone 1
-控制面路径家族、Milestone 2 控制面家族隔离，以及 Milestone 3 完整 target topology 实现。
+当前已完成计划起点、Milestone 1 capability gate、获授权的 identity 前置修复，以及
+Milestone 1–4 的控制面、target topology 与完整 profile 全局入口实现。
 2026-07-18 从干净 `main@8075a6c` 创建 `feat/path-boundaries`，以 `4f05174` 提交本计划；
 `cb501d3` 记录 gate。新增 control resolution 后，paths 窄测、20 次重复、darwin/linux amd64
 交叉编译和本机 `make check` 通过，identity 已形成独立 `cf0b61c` checkpoint。控制面路径家族
-以 `93a176c` 提交，Milestone 2 以 `d9ff0e7` 提交。Milestone 3 的 target-set topology 与
-manifest full-structure adapter 窄测、重复测试、包回归和完整 `make check` 已通过，待独立
-milestone commit。未执行真实 Linux runner、后续 milestone 或最终独立实现复核，也未
+以 `93a176c` 提交，Milestone 2 以 `d9ff0e7` 提交，Milestone 3 以 `1a8c76d` 提交。Milestone 4
+共享入口已以 `a594516` 提交；partial-scope/profile-separation 回归与 living plan 待独立 test
+checkpoint。相关窄测、10 次重复、两包回归和完整 `make check` 已通过。未执行真实 Linux
+runner、Milestone 5 或最终独立实现复核，也未
 访问真实私人数据或进行未授权 Git/托管操作。
 
-后续接手者应先确认 Milestone 3 checkpoint 已成功提交且工作区 clean，再按 Milestone 4–5
-顺序推进；每个 milestone 同步更新 living sections、执行窄测与完整门禁、检查
+后续接手者应先完成 Milestone 4 的 scope/test checkpoint 并确认工作区 clean，再执行
+Milestone 5；同步更新 living sections、执行窄测与完整门禁、检查
 完整 diff 并创建独立 semantic commit。最终只有双平台 CI、独立复核、所有意见处理和计划
 生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`
 达到 review-ready；merge、push、PR 或发布仍不由本计划自身授权。
