@@ -178,10 +178,16 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
 - [x] 2026-07-18：将跨平台成功/冲突夹具改为真实存在的 target leaf，并增加 Linux-only
   missing desired/control 整组失败和零结果回归；macOS 两包窄测与 20 次重复、linux/amd64
   交叉编译、Ubuntu 22.04 amd64 容器以 root/非 root 执行两包及非 root 20 次重复均通过，
-  `make check BINARY=/private/tmp/dot-path-boundaries-review-fix/dot` 退出 0。待提交独立复核修复
-  checkpoint，并在提交后复核完整 diff。
-- [ ] Milestone 5：完成最终完整 diff、修复后独立复核和计划收口；GitHub macOS/Linux CI 仍因
-  未授权 push/PR 而未运行。
+  `make check BINARY=/private/tmp/dot-path-boundaries-review-fix/dot` 退出 0；已以
+  `0780050 fix(paths): 对齐 Linux missing-name 测试边界` 提交，提交后工作区 clean。
+- [x] 2026-07-18：提交后运行 `git diff main...HEAD --check` 和
+  `make check BINARY=/private/tmp/dot-path-boundaries-review-fix/dot-final` 均退出 0；无 pathspec
+  检查 18 个文件、3304 insertions/21 deletions，范围只有 active ExecPlan、`internal/paths` 与
+  `internal/manifest`，无依赖、CLI、state load、planner、mutation、doctor/add 或持久化改动。
+  修复后独立终审 P0–P3 无实质问题，确认唯一 relation engine、control member/state parent
+  单一语义源、full-profile-before-scope、只读/fail-closed 与 Non-goals 均成立。
+- [ ] Milestone 5：完成 GitHub macOS/Linux matrix 与计划生命周期收口；因未授权 push/PR，当前
+  计划保持 `active/`，不得迁移 completed 或声称外部 CI 已通过。
 
 ## Execution Start and Commit Discipline
 
@@ -462,7 +468,7 @@ Commit 边界：
 | desired 与控制面双向隔离 | 四 family/所有 state member overlap matrix | 七 member equality/consumed endpoint matrix、双向 ancestor、symlink 与平台名称 oracle 通过 |
 | 部分作用域不能绕过完整 profile | 未请求模块 identity 冲突与控制面重叠测试 | 正式入口无 scope 参数；两类未请求模块反例与 profile 分离通过 |
 | fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | unavailable oracle、blocked、permission/IO cause、全局 tree snapshot、零值与失败 nil result 通过 |
-| 单一语义源 | 完整 diff 人工检查与独立复核，无 consumer-specific list/fallback | 两次独立复核除测试夹具外无发现；生产 overlap 仍只经共享 relation engine，待修复后终审 |
+| 单一语义源 | 完整 diff 人工检查与独立复核，无 consumer-specific list/fallback | 修复后终审 P0–P3 无发现；生产 overlap 只经共享 relation engine，control member/state parent 只定义一次 |
 | 双平台完整门禁 | macOS/Linux CI `make check`、本机重复测试与交叉编译 | macOS `make check` 与两包 20 次重复、Ubuntu 容器两包非 root 20 次重复通过；GitHub matrix 未运行 |
 
 最终成功判据不是“新增某个类型”，而是所有非法 topology 在任何 consumer 获取可执行子集前
@@ -681,12 +687,14 @@ Milestone 1–4 的控制面、target topology 与完整 profile 全局入口实
 Milestone 5 的两次独立复核发现同一 Linux missing-name 测试夹具 P1；主线程依据已合入的
 identity 契约将通用 topology fixture 改为现存 leaf，并新增 Linux-only fail-closed 回归。
 修复后 macOS 两包 20 次重复、Ubuntu 22.04 amd64 容器两包 root/非 root 与非 root 20 次重复、
-darwin/linux amd64 交叉编译及完整 `make check` 均通过。当前仍待独立提交该修复、提交后完整
-diff/终审，以及 GitHub Actions matrix；后者因未授权 push/PR 尚不能运行。未访问真实私人数据
-或进行未授权 Git/托管操作。
+darwin/linux amd64 交叉编译及完整 `make check` 均通过；修复以 `0780050` 提交。提交后
+`git diff main...HEAD --check` 与完整 `make check` 通过，无 pathspec 的 18 文件 diff 已检查，
+修复后独立终审 P0–P3 无实质问题。当前只剩 GitHub Actions macOS/Linux matrix 与计划生命周期
+收口；前者因未授权 push/PR 尚不能运行，因此计划保持 active。未访问真实私人数据或进行
+未授权 Git/托管操作。
 
-后续接手者应先提交当前独立复核修复并确认工作区 clean，再完成 Milestone 5 的完整 diff 与
-修复后终审；同步更新 living sections 并创建独立 semantic commit。最终只有双平台 CI、独立
-复核、所有意见处理和计划
+后续接手者只需在获得托管授权后触发 GitHub macOS/Linux matrix；若均通过，更新 living
+sections、把计划移到 `completed/` 并创建独立 closure commit。最终只有双平台 CI、独立复核、
+所有意见处理和计划
 生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`
 达到 review-ready；merge、push、PR 或发布仍不由本计划自身授权。
