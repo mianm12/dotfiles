@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/spf13/cobra"
@@ -16,6 +17,21 @@ const (
 	exitError = 1
 )
 
+type commandExitError struct {
+	code int
+}
+
+func (e commandExitError) Error() string {
+	return fmt.Sprintf("command requested exit code %d", e.code)
+}
+
+func commandExit(code int) error {
+	if code == exitOK {
+		return nil
+	}
+	return commandExitError{code: code}
+}
+
 // environment 集中保存 CLI 的外部依赖，便于测试替换 I/O、环境变量、HOME 和构建元数据。
 type environment struct {
 	stdout      io.Writer
@@ -23,6 +39,7 @@ type environment struct {
 	lookupEnv   func(string) (string, bool)
 	userHomeDir func() (string, error)
 	build       buildinfo.Info
+	goos        string
 }
 
 // Run 使用不含程序名的 args 执行 dot，将命令输出写入 stdout 和 stderr，
@@ -34,6 +51,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		lookupEnv:   os.LookupEnv,
 		userHomeDir: os.UserHomeDir,
 		build:       buildinfo.Current(),
+		goos:        runtime.GOOS,
 	})
 }
 
@@ -49,6 +67,10 @@ func run(args []string, env environment) int {
 	root.SetErr(&output.stderr)
 
 	if err := root.Execute(); err != nil {
+		var requested commandExitError
+		if errors.As(err, &requested) {
+			return output.finish(requested.code)
+		}
 		root.PrintErrf("error: %v\n", err)
 		return output.finish(exitError)
 	}
@@ -80,6 +102,9 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 		return nil, err
 	}
 
-	root.AddCommand(newVersionCommand(env, &options))
+	root.AddCommand(
+		newDoctorCommand(env, &options),
+		newVersionCommand(env, &options),
+	)
 	return root, nil
 }

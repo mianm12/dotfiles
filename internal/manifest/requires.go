@@ -19,9 +19,28 @@ const filename = "dot.toml"
 var (
 	// ErrRepositoryUnavailable 表示配置的仓库尚未安装。
 	ErrRepositoryUnavailable = errors.New("repository unavailable")
-	requirementPattern       = regexp.MustCompile(`^>=([0-9]+)\.([0-9]+)\.([0-9]+)$`)
-	releasePattern           = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
+	// ErrInvalidRequirement 标记 manifest 中缺失或语法非法的 requires。
+	// 错误仍保留原始上下文，供 doctor 区分可独立继续的 compatibility 诊断。
+	ErrInvalidRequirement = errors.New("invalid manifest requires")
+	requirementPattern    = regexp.MustCompile(`^>=([0-9]+)\.([0-9]+)\.([0-9]+)$`)
+	releasePattern        = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 )
+
+type invalidRequirementError struct {
+	err error
+}
+
+func (e invalidRequirementError) Error() string {
+	return e.err.Error()
+}
+
+func (e invalidRequirementError) Unwrap() []error {
+	return []error{ErrInvalidRequirement, e.err}
+}
+
+func markInvalidRequirement(err error) error {
+	return invalidRequirementError{err: err}
+}
 
 // Requirement 表示已校验的最低 CLI 版本约束；零值无效。
 // 应通过 ParseRequirement 或 ReadRequirement 创建。
@@ -72,12 +91,14 @@ func ReadRequirement(repo string) (Requirement, error) {
 		return Requirement{}, fmt.Errorf("close manifest %q after reading: %w", manifestPath, closeErr)
 	}
 	if document.Requires == nil {
-		return Requirement{}, fmt.Errorf("manifest %q: required top-level requires is missing", manifestPath)
+		return Requirement{}, markInvalidRequirement(
+			fmt.Errorf("manifest %q: required top-level requires is missing", manifestPath),
+		)
 	}
 
 	requirement, err := ParseRequirement(*document.Requires)
 	if err != nil {
-		return Requirement{}, fmt.Errorf("manifest %q: %w", manifestPath, err)
+		return Requirement{}, markInvalidRequirement(fmt.Errorf("manifest %q: %w", manifestPath, err))
 	}
 	return requirement, nil
 }

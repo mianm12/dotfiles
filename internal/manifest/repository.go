@@ -114,6 +114,21 @@ func (r Repository) ValidateTemplates() error {
 	return validateScaffolds(entries, r.DataKeys())
 }
 
+// ValidateModuleRules 在指定 GOOS 上检查全部模块的 effective 局部规则，不形成跨模块 target
+// 集合。它覆盖未被当前或任何 profile 选择的模块；全局 target 不变量仍由各 profile 的
+// ValidatePathBoundaries 单独负责。
+func (r Repository) ValidateModuleRules(goos string) error {
+	if !isSupportedGOOS(goos) {
+		return fmt.Errorf("unsupported GOOS %q: want %s or %s", goos, goosDarwin, goosLinux)
+	}
+	for _, name := range r.moduleNames {
+		if _, _, err := r.resolveModule(name, r.modules[name], goos); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // UnassignedModules 返回未被任何 profile 引用的模块名，结果按字节序排列。
 func (r Repository) UnassignedModules() []string {
 	return append([]string(nil), r.unassigned...)

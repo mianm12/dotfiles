@@ -129,11 +129,13 @@ func decodeRootManifest(path string) (rootSpec, error) {
 		return rootSpec{}, err
 	}
 	if raw.Requires == nil {
-		return rootSpec{}, fmt.Errorf("manifest %q: required top-level requires is missing", path)
+		return rootSpec{}, markInvalidRequirement(
+			fmt.Errorf("manifest %q: required top-level requires is missing", path),
+		)
 	}
 	requirement, err := ParseRequirement(*raw.Requires)
 	if err != nil {
-		return rootSpec{}, fmt.Errorf("manifest %q: %w", path, err)
+		return rootSpec{}, markInvalidRequirement(fmt.Errorf("manifest %q: %w", path, err))
 	}
 	if raw.Profiles == nil || len(*raw.Profiles) == 0 {
 		return rootSpec{}, fmt.Errorf("manifest %q: profiles must declare at least one profile", path)
