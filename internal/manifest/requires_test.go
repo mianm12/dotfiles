@@ -57,13 +57,14 @@ func TestReadRequirement_RejectsDanglingRepositorySymlink(t *testing.T) {
 
 func TestReadRequirement_RejectsInvalidManifest(t *testing.T) {
 	tests := []struct {
-		name    string
-		content string
+		name                   string
+		content                string
+		wantInvalidRequirement bool
 	}{
-		{name: "missing requires", content: `[profiles]`},
+		{name: "missing requires", content: `[profiles]`, wantInvalidRequirement: true},
 		{name: "wrong type", content: `requires = 3`},
-		{name: "unsupported syntax", content: `requires = "^0.3.0"`},
-		{name: "v prefix", content: `requires = ">=v0.3.0"`},
+		{name: "unsupported syntax", content: `requires = "^0.3.0"`, wantInvalidRequirement: true},
+		{name: "v prefix", content: `requires = ">=v0.3.0"`, wantInvalidRequirement: true},
 		{name: "invalid toml", content: `requires =`},
 	}
 
@@ -80,6 +81,9 @@ func TestReadRequirement_RejectsInvalidManifest(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), manifestPath) {
 				t.Fatalf("ReadRequirement() error = %q, want manifest path %q", err, manifestPath)
+			}
+			if got := errors.Is(err, ErrInvalidRequirement); got != tt.wantInvalidRequirement {
+				t.Fatalf("errors.Is(ReadRequirement(), ErrInvalidRequirement) = %v, want %v", got, tt.wantInvalidRequirement)
 			}
 		})
 	}

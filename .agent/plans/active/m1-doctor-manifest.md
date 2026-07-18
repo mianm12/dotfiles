@@ -119,7 +119,11 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   均为 GO、无 P0/P1。Linux amd64 Btrfs runtime 全量路径测试连续 5 次、Linux arm64 交叉编译、
   macOS 路径测试连续 20 次及 `make check BINARY=/private/tmp/dot-doctor-capability/dot` 均通过，
   正准备独立 `fix(paths)` 提交。
-- [ ] 实现 findings、requires 与诊断继续语义，完成测试、门禁、diff 检查和语义提交。
+- [x] 2026-07-18：实现确定性 findings/result、error/warning 退出映射、requires 诊断标记与
+  compatibility 继续语义，并加入独立 Git index `*.local` 查询。doctor/manifest 窄测连续 20 次
+  通过，覆盖 warning-only=2、非法/缺失/不满足 requires、unknown key、TOML 损坏、tracked
+  local、Git query failure 与 dev notice；`make check BINARY=/private/tmp/dot-doctor-findings/dot`
+  通过，正准备独立 `feat(doctor)` 提交。
 - [ ] 完成全部 manifest/profile/template/path/Git 静态检查，完成测试、门禁、diff 检查和语义
   提交。
 - [ ] 接入 Cobra doctor、稳定输出和退出码，完成隔离/只读/写失败测试、门禁、diff 检查和
@@ -461,6 +465,15 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   Evidence: `.github/workflows/ci.yml` 的单一 `Run project checks` step。
   Impact: 预期只改 Makefile 即可完成双平台门禁；没有语义需要时不修改 workflow。
 
+- Observation: 宽松 `ReadRequirement` 与严格 `Load` 必须都读取完整 TOML 文档；TOML 语法或
+  requires 类型错误会让两者同时失败，而缺失/非法约束字符串是可单独定级的 compatibility
+  错误。直接把两次错误都加入结果会产生重复 finding。
+  Evidence: `go-toml` decoder 的宽松预读仍需解析文档语法；新增行为测试固定 invalid TOML
+  只报告一次 `manifest.load`，但 invalid requires string 与 strict unknown key 同次分别报告。
+  Impact: manifest 共享层只为缺失/非法约束字符串附加 `ErrInvalidRequirement` 身份，不改变错误
+  文本或严格 `Load`；doctor 仅在两阶段确认是同一 requires 错误时去重，不从非法文档构造
+  Repository。Git index 始终作为独立阶段继续。
+
 ## Decision Log
 
 - Decision: 将 goal 文件规定的默认语义边界分别保留为 ExecPlan、可选 paths fix、diagnostic
@@ -496,9 +509,22 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   control entry/consumed 和 relation engine 均不改变。
   Date: 2026-07-18
 
+- Decision: findings 按 severity（error 先于 warning）、check id、message 的字节序稳定排序；
+  error/warning/clean 分别映射 1/2/0。M1 不创建公开 warning，warning-only 只由 result 单测固定。
+  development compatibility 使用单独 notice 列表，不进入 finding 排序和退出码。
+  Rationale: 这提供 CLI 可直接消费的确定性结果，同时不预建 M2 registry 或虚构降级路径。
+  Date: 2026-07-18
+
+- Decision: tracked `*.local` 通过系统 Git 的 `git -C <repo> ls-files -z -- '*.local'` 查询，按
+  NUL 分隔保留任意合法路径 bytes；每个 tracked path 形成 error，命令失败或输出契约损坏形成
+  `git.index` error。该阶段不依赖 manifest load 是否成功。
+  Rationale: Git index 是 tracked 状态的单一真相源；查询失败不能等同于空结果，且无需新依赖。
+  Date: 2026-07-18
+
 ## Outcomes and Handoff
 
 尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建，首个 ExecPlan commit 已完成；
-Linux missing-path capability gate 的共享 paths 修复与回归已完成验证，正待形成独立
-`fix(paths)` commit。doctor、真实根 manifest、Makefile/CI 和 README 尚未修改。merge、push、
-Pull Request、rebase、tag、发布和删除分支不在本 Goal 授权范围。
+Linux missing-path capability gate 已形成独立 `fix(paths)` commit；findings/requires/Git 继续
+语义实现与测试已完成验证，正待形成独立 `feat(doctor)` commit。完整 profile/template/path
+静态检查、CLI、真实根 manifest、Makefile/CI 和 README 尚未完成。merge、push、Pull Request、
+rebase、tag、发布和删除分支不在本 Goal 授权范围。
