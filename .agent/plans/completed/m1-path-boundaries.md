@@ -186,8 +186,18 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
   `internal/manifest`，无依赖、CLI、state load、planner、mutation、doctor/add 或持久化改动。
   修复后独立终审 P0–P3 无实质问题，确认唯一 relation engine、control member/state parent
   单一语义源、full-profile-before-scope、只读/fail-closed 与 Non-goals 均成立。
-- [ ] Milestone 5：完成 GitHub macOS/Linux matrix 与计划生命周期收口；因未授权 push/PR，当前
-  计划保持 `active/`，不得迁移 completed 或声称外部 CI 已通过。
+- [x] 2026-07-18：维护者后续明确授权推送当前分支并创建 PR；已推送
+  `feat/path-boundaries@fc594f3` 并创建 draft PR #2。GitHub Actions run `29640243330` 的
+  `Go (macos-latest)` 与 `Go (ubuntu-latest)` 分别在 36s 与 21s 内通过。首次 PR diff 暴露
+  `origin/main@b266cb4` 落后本地基线 `main@8075a6c`；维护者另行明确授权后，已把本地 main
+  以普通 fast-forward 推送到 `origin/main`，未 rebase、force-push 或改写 feature commits。
+- [x] 2026-07-18：Milestone 5 的本机门禁、Ubuntu 容器验证、GitHub 双平台 matrix、完整 diff
+  检查和独立复核均已完成；living sections 已按实际结果收口，同一计划迁移到 `completed/`
+  并进入独立 plan-closure commit，未修改生产代码或测试。
+- [x] 2026-07-18：plan closure 前再次运行
+  `make check BINARY=/private/tmp/dot-path-boundaries-closure-dot`；沙箱内首次尝试因 Go module
+  cache 写权限使 `golangci-lint` 无法加载 package，允许既有缓存写入后原命令退出 0，lint
+  0 issues、race tests 与 build 全部通过。
 
 ## Execution Start and Commit Discipline
 
@@ -469,7 +479,7 @@ Commit 边界：
 | 部分作用域不能绕过完整 profile | 未请求模块 identity 冲突与控制面重叠测试 | 正式入口无 scope 参数；两类未请求模块反例与 profile 分离通过 |
 | fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | unavailable oracle、blocked、permission/IO cause、全局 tree snapshot、零值与失败 nil result 通过 |
 | 单一语义源 | 完整 diff 人工检查与独立复核，无 consumer-specific list/fallback | 修复后终审 P0–P3 无发现；生产 overlap 只经共享 relation engine，control member/state parent 只定义一次 |
-| 双平台完整门禁 | macOS/Linux CI `make check`、本机重复测试与交叉编译 | macOS `make check` 与两包 20 次重复、Ubuntu 容器两包非 root 20 次重复通过；GitHub matrix 未运行 |
+| 双平台完整门禁 | macOS/Linux CI `make check`、本机重复测试与交叉编译 | macOS `make check` 与两包 20 次重复、Ubuntu 容器两包非 root 20 次重复通过；GitHub Actions run `29640243330` 的 macOS/Linux jobs 均通过 |
 
 最终成功判据不是“新增某个类型”，而是所有非法 topology 在任何 consumer 获取可执行子集前
 整体失败，当前平台能够权威建立 identity 的合法 topology 在 macOS/Linux 都稳定通过，且实现
@@ -478,11 +488,12 @@ missing name 仍按既有 identity 契约整体 fail closed，不属于合法成
 
 ## Safety, Authorization, and Recovery
 
-当前实施任务已明确授权创建/切换 `feat/path-boundaries`，并在该分支 stage、commit 本 Goal
-的计划、实现、测试、复核修复和计划收口改动；已据此创建分支并提交计划起点。当前任务不
-授权 merge、push、PR、rebase、amend、tag、删除分支或访问真实私人数据。若双平台 CI 必须
-依赖 push/PR 才能执行，缺少相应授权时保持本计划在 `active/` 并报告未验证，不得以省略 CI
-降低交付标准。本节记录本次任务证据，不为后续任务延续权限。
+实施任务已明确授权创建/切换 `feat/path-boundaries`，并在该分支 stage、commit 本 Goal 的
+计划、实现、测试、复核修复和计划收口改动；已据此创建分支并提交计划起点。初始任务不授权
+push/PR，维护者于 2026-07-18 后续明确授权推送当前 feature 分支并创建 PR，又单独授权将本地
+`main@8075a6c` 以 fast-forward 推送到 `origin/main`；这些操作均已按精确对象完成。merge、
+rebase、amend、tag、删除分支和访问真实私人数据仍未授权且未执行。本节只记录本次任务证据，
+不为后续任务延续权限。
 
 所有测试必须使用 `t.TempDir()` 下的合成 HOME、repo、config、state、backup、binary 和
 targets；不得读取或修改真实 `modules/`、真实 machine config、state、backup、`.env*` 或
@@ -593,6 +604,12 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   fail closed，不允许 generic normalization fallback。
   Impact: 通用成功/碰撞测试必须创建真实 target leaf，Linux-only 测试单独证明 missing desired
   与 missing control member 整体失败且返回零结果；生产 identity/boundary 实现无需改变。
+- Observation: 首次创建 PR #2 时，远端 `main@b266cb4` 落后本 Goal 的已审查本地基线
+  `main@8075a6c`，使 GitHub 暂时把前置 `docs(agent)` commit 的三个文件计入 feature diff。
+  Evidence: 本地 `main...HEAD` 为 18 文件，而 GitHub 初始 PR 为 21 文件；
+  `git rev-list origin/main..main` 只列出 `8075a6c`，且祖先检查证明可 fast-forward。
+  Impact: 在维护者单独授权后先同步远端 main，保留 feature commit 历史；不以 rebase、
+  force-push 或把前置文档混入本 Goal 的最终 review 范围来掩盖基线差异。
 
 ## Decision Log
 
@@ -672,29 +689,30 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   裁决 unknown semantics 整体拒绝。跨平台 topology 测试使用现存 leaf 可验证本 Goal 性质，
   专用 Linux 回归继续固定 unavailable cause 和零结果。
   Date: 2026-07-18
+- Decision: PR 发布发现远端 main 落后一个已审查本地基线 commit 后，在维护者明确授权下将
+  `main@8075a6c` 以 fast-forward 推送到 `origin/main`，不重写 `feat/path-boundaries` 历史。
+  Rationale: 该提交本来就是本 Goal 的创建基线；同步 base 可让 GitHub review 范围与本地
+  `main...HEAD` 审查一致，同时避免 stacked PR 或 force-push 引入额外生命周期。
+  Date: 2026-07-18
 
 ## Outcomes and Handoff
 
-当前已完成计划起点、Milestone 1 capability gate、获授权的 identity 前置修复，以及
-Milestone 1–4 的控制面、target topology 与完整 profile 全局入口实现。
-2026-07-18 从干净 `main@8075a6c` 创建 `feat/path-boundaries`，以 `4f05174` 提交本计划；
-`cb501d3` 记录 gate。新增 control resolution 后，paths 窄测、20 次重复、darwin/linux amd64
-交叉编译和本机 `make check` 通过，identity 已形成独立 `cf0b61c` checkpoint。控制面路径家族
-以 `93a176c` 提交，Milestone 2 以 `d9ff0e7` 提交，Milestone 3 以 `1a8c76d` 提交。Milestone 4
-共享入口已以 `a594516` 提交；partial-scope/profile-separation 回归与 living plan 已以
-`a443b45` 提交。相关窄测、10 次重复、两包回归和完整 `make check` 已通过。
+本 Goal 已完成。2026-07-18 从干净 `main@8075a6c` 创建 `feat/path-boundaries`；计划起点、
+identity capability gate、获授权的 root/control-leaf identity 修复、控制面家族、控制面隔离、
+完整 target topology 与 full-profile-before-scope 全局入口均按 milestone 形成独立 commits。
+最终实现只修改 `internal/paths` 与 `internal/manifest`：所有 control/target relation 复用同一
+identity walker，state planned containment 只由固定 member table 声明，失败不返回部分可信
+desired，也未接入 state load、planner、mutation、doctor 或 add。
 
-Milestone 5 的两次独立复核发现同一 Linux missing-name 测试夹具 P1；主线程依据已合入的
-identity 契约将通用 topology fixture 改为现存 leaf，并新增 Linux-only fail-closed 回归。
-修复后 macOS 两包 20 次重复、Ubuntu 22.04 amd64 容器两包 root/非 root 与非 root 20 次重复、
-darwin/linux amd64 交叉编译及完整 `make check` 均通过；修复以 `0780050` 提交。提交后
-`git diff main...HEAD --check` 与完整 `make check` 通过，无 pathspec 的 18 文件 diff 已检查，
-修复后独立终审 P0–P3 无实质问题。当前只剩 GitHub Actions macOS/Linux matrix 与计划生命周期
-收口；前者因未授权 push/PR 尚不能运行，因此计划保持 active。未访问真实私人数据或进行
-未授权 Git/托管操作。
+Milestone 5 的独立复核发现 Linux missing-name 测试夹具偏离既有 fail-closed 契约；修复以
+`0780050` 单独提交，随后 macOS 两包 20 次重复、Ubuntu 22.04 amd64 容器 root/非 root 回归与
+非 root 20 次重复、darwin/linux amd64 交叉编译、完整 `make check` 和无 pathspec diff check
+均通过；plan closure 前的最终 `make check BINARY=/private/tmp/dot-path-boundaries-closure-dot`
+也退出 0。修复后独立终审未发现 P0–P3 实质问题。draft PR #2 上 GitHub Actions run
+`29640243330` 的 macOS/Linux jobs 也全部通过；远端 main 经明确授权以 fast-forward 同步到
+本地创建基线，未改写 feature commits。
 
-后续接手者只需在获得托管授权后触发 GitHub macOS/Linux matrix；若均通过，更新 living
-sections、把计划移到 `completed/` 并创建独立 closure commit。最终只有双平台 CI、独立复核、
-所有意见处理和计划
-生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`
-达到 review-ready；merge、push、PR 或发布仍不由本计划自身授权。
+本计划随独立 `docs(paths): 收口 path boundaries ExecPlan` commit 迁移到 `completed/`；当前
+branch 已达到 review-ready。PR 保持 draft，尚未 merge；后续人工 review 若发现实质问题，按
+计划生命周期先 reopen，再以新 fix commit 修复并重新验证。未访问真实私人数据，也未执行
+rebase、amend、tag、删除分支或 merge。
