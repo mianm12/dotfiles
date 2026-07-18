@@ -71,8 +71,12 @@ runtime 的普通 profile/data 消费策略，不得破坏 `version` 的 `requir
 - [x] 2026-07-19：三名未参与实现的只读 subagent 分别完成规范缺口、DAG/共享契约和测试/
   依赖/跨平台审查；主 agent 核对后未发现 Plan Gate 停止条件。
 - [x] 2026-07-19：从 checkpoint_base 创建 coordinator branch/worktree，并建立本计划。
-- [ ] 提交 coordinator ExecPlan 起点并启动 Wave 1。
-- [ ] 按 DAG 完成五个 Milestone 的实现、review → fix → review、closure 与 main 集成。
+- [x] 2026-07-19：以 `05b9c43` 提交 coordinator ExecPlan 起点并启动 Wave 1。
+- [x] 2026-07-19：`feat/runtime-preflight` 完成测试先行实现、独立 review（GO、无 P0–P3）、
+  review 后最终门禁与计划 closure；main 以 `7b43272` fast-forward-only 集成，合入后 runtime/CLI
+  窄测与 `make check BINARY=/private/tmp/dot-cp2-main-after-preflight` 通过，worker worktree clean
+  后无 force 移除。
+- [ ] 按 DAG 完成其余四个 Milestone 的实现、review → fix → review、closure 与 main 集成。
 - [ ] 从 checkpoint_base 对完整 Checkpoint 执行三路 Acceptance，处理有效 finding。
 - [ ] 将最终 main 合入 coordinator，更新 Outcomes and Handoff，迁移计划并以纯计划 commit
   收口，再 fast-forward-only 合入 main。
