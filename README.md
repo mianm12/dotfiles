@@ -4,8 +4,14 @@
 它的数据保护目标是避免工具自身的 bug 误删或误覆盖用户数据，不把恶意仓库、恶意 hook、
 被攻陷的本机或主动并发篡改当作需要对抗的环境。
 
-项目正在实现 M1。目前已提供首个只读切片 `dot version`；其他命令以
+项目正在实现 M1。目前已提供只读的 `dot version` 和 `dot doctor --manifest-only`；后者
+检查仓库 manifest、当前 GOOS 下各 profile 的 effective 路径边界、模板和 Git index 中已跟踪的
+`*.local`，不读取机器配置或 state，也不取锁。裸 `dot doctor` 的完整环境巡检属于 M2；当前会
+明确提示改用 `--manifest-only` 并失败，不把静态子集伪装成完整检查。其他命令以
 [路线图](docs/09-roadmap.md)为准，未实现能力不会以静默降级替代。
+
+当前受版本管理的根 `dot.toml` 只有空的 `mac` profile，`modules/` 尚未建立。`mac` 只是 profile
+名，不是 Darwin 过滤条件；不传 `--profile` 时，macOS 与 Linux 都会在各自当前 GOOS 上验证它。
 
 ## 文档与实现
 
@@ -23,8 +29,13 @@ make fmt
 make tidy
 make lint
 make test
+make doctor-manifest
 make check
 ```
+
+`make doctor-manifest` 构建 CLI，并用自动清理的隔离 HOME 检查当前真实仓库；`make check` 已包含
+该门禁，CI 在 macOS 与 Linux 上运行同一入口。Git index 中任何已跟踪的 `*.local` 都会使
+manifest-only 与 CI 失败；`.gitignore` 只负责预防新的误跟踪，不能替代这项历史巡检。
 
 运行开发构建：
 
@@ -32,6 +43,7 @@ make check
 make version
 # 或透传其他参数
 make run ARGS='version --repo ~/src/dotfiles'
+make run ARGS='doctor --manifest-only --repo ~/src/dotfiles'
 ```
 
 未显式设置 `VERSION` 时，Makefile 只在工作区干净且当前提交精确命中 Git tag 时自动注入

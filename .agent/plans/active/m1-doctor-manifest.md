@@ -144,7 +144,10 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   通过且各只运行一次 doctor；Linux amd64 真实 CLI 在 Btrfs `/tmp` 与只读 repo mount 的同构
   shell 流程通过。现有 workflow 已经让 macOS/Linux 各执行一次 `make check`，无需修改，正准备
   独立 `ci(doctor)` 提交。
-- [ ] 同步 README 与确有必要的长期仓库指南，验证并语义提交。
+- [x] 2026-07-18：README 已同步 version/manifest-only、裸 doctor M1/M2 边界、真实仓库 Make
+  目标、tracked `*.local` 门禁，以及根 `mac` profile/尚无 `modules/`；AGENTS/CONTRIBUTING 仅
+  同步新增长期门禁命令事实。`make check BINARY=/private/tmp/dot-doctor-docs/dot` 与 diff check
+  通过，正准备独立 `docs(repo)` 提交。
 - [ ] 由未参与实现的只读 subagent 复核全部实质改动；以新的语义 commit 修复意见并完成必要
   复核。
 - [ ] 完成最终门禁与 diff 检查，收口 living sections，迁移计划至 `completed/` 并创建
@@ -603,9 +606,16 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   `--home`、`--repo`、清除两个环境变量使路径来源显式且与 runner 用户环境无关。
   Date: 2026-07-18
 
+- Decision: 用户文档明确把 manifest-only 描述为仓库静态检查，并同时写出 machine config/state/
+  lock 不在读取范围、裸 doctor 属于 M2；仓库现状只陈述 `mac = []` 与 `modules/` 尚未建立。
+  Rationale: 让当前实现边界、CI 操作入口和 `.local` 数据保护门禁可被直接发现，且不把 roadmap
+  能力或真实私人配置写成已实现事实。
+  Date: 2026-07-18
+
 ## Outcomes and Handoff
 
 尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建，首个 ExecPlan commit 已完成；
 Linux capability、findings/requires/Git 聚合、完整 static engine、CLI 与真实根 manifest 均已
-形成独立 commit。Makefile/CI 门禁现已完成验证，正待 `ci(doctor)` 提交；README 尚未完成。
-merge、push、Pull Request、rebase、tag、发布和删除分支不在本 Goal 授权范围。
+形成独立 commit，Makefile/CI 门禁也已提交。README 与必要长期仓库指南已完成验证，正待
+`docs(repo)` 提交；随后进入独立只读复核。merge、push、Pull Request、rebase、tag、发布和
+删除分支不在本 Goal 授权范围。
