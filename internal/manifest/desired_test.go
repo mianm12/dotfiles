@@ -1,12 +1,15 @@
 package manifest
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/mianm12/dotfiles/internal/paths"
 )
 
 func TestResolvedProfileEnumerate_AppliesPriorityAndReturnsStableDesired(t *testing.T) {
@@ -425,6 +428,194 @@ func TestResolvedProfileEnumerate_RejectsInvalidRuntimeContext(t *testing.T) {
 				t.Fatalf("Enumerate() error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolvedProfileValidateTargetStructure_DoesNotRenderScaffolds(t *testing.T) {
+	root := t.TempDir()
+	writeSourceFile(t, root, "config.template", `{{ if }}`)
+	profile := testResolvedProfile(ResolvedModule{Name: "app", SourceDir: root, TargetRoot: "~"})
+	homeRoot := t.TempDir()
+	home := filepath.Join(homeRoot, "missing-home")
+	before := snapshotTree(t, root)
+
+	entries, err := profile.validateTargetStructure(home)
+	if err != nil {
+		t.Fatalf("validateTargetStructure() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].Source != "config.template" || entries[0].Content != nil {
+		t.Fatalf("validateTargetStructure() entries = %#v, want unrendered scaffold", entries)
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("validateTargetStructure() changed source tree: before=%v after=%v", before, after)
+	}
+	if _, statErr := os.Lstat(home); !os.IsNotExist(statErr) {
+		t.Fatalf("target HOME Lstat error = %v, want not exist", statErr)
+	}
+
+	_, err = profile.Enumerate(testRuntimeContext(home))
+	if err == nil || !strings.Contains(err.Error(), "parse template") {
+		t.Fatalf("Enumerate() error = %v, want proof scaffold would fail rendering path", err)
+	}
+}
+
+func TestResolvedProfileValidateTargetStructure_RejectsDerivedAndExplicitCollisions(t *testing.T) {
+	tests := []struct {
+		name    string
+		modules func(t *testing.T) []ResolvedModule
+		wants   []string
+		path    string
+	}{
+		{
+			name: "cross-module target",
+			modules: func(t *testing.T) []ResolvedModule {
+				alpha := t.TempDir()
+				beta := t.TempDir()
+				writeSourceFile(t, alpha, "config", "alpha")
+				writeSourceFile(t, beta, "config", "beta")
+				return []ResolvedModule{
+					{Name: "alpha", SourceDir: alpha, TargetRoot: "~/.config"},
+					{Name: "beta", SourceDir: beta, TargetRoot: "~/.config"},
+				}
+			},
+			wants: []string{`module "alpha"`, `source "config"`, `module "beta"`, `target "~/.config/config"`},
+			path:  filepath.FromSlash(".config/config"),
+		},
+		{
+			name: "template suffix",
+			modules: func(t *testing.T) []ResolvedModule {
+				root := t.TempDir()
+				writeSourceFile(t, root, "config", "link")
+				writeSourceFile(t, root, "config.template", "scaffold")
+				return []ResolvedModule{{Name: "app", SourceDir: root, TargetRoot: "~"}}
+			},
+			wants: []string{`source "config"`, `source "config.template"`, `target "~/config"`},
+			path:  "config",
+		},
+		{
+			name: "explicit tmpl scaffold suffix",
+			modules: func(t *testing.T) []ResolvedModule {
+				root := t.TempDir()
+				writeSourceFile(t, root, "settings", "link")
+				writeSourceFile(t, root, "settings.tmpl", "scaffold")
+				return []ResolvedModule{{
+					Name:       "app",
+					SourceDir:  root,
+					TargetRoot: "~",
+					FileRules: []ResolvedFileRule{{
+						Source: "settings.tmpl",
+						Kind:   FileKindScaffold,
+						Mode:   "0600",
+					}},
+				}}
+			},
+			wants: []string{`source "settings"`, `source "settings.tmpl"`, `target "~/settings"`},
+			path:  "settings",
+		},
+		{
+			name: "target override",
+			modules: func(t *testing.T) []ResolvedModule {
+				root := t.TempDir()
+				writeSourceFile(t, root, "first", "first")
+				writeSourceFile(t, root, "second", "second")
+				return []ResolvedModule{{
+					Name:       "app",
+					SourceDir:  root,
+					TargetRoot: "~/.config/app",
+					FileRules: []ResolvedFileRule{
+						{Source: "first", Kind: FileKindLink, TargetOverride: "~/.config/app/shared"},
+						{Source: "second", Kind: FileKindLink, TargetOverride: "~/.config/app/shared"},
+					},
+				}}
+			},
+			wants: []string{`source "first"`, `source "second"`, `target "~/.config/app/shared"`},
+			path:  filepath.FromSlash(".config/app/shared"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile := testResolvedProfile(test.modules(t)...)
+			home := t.TempDir()
+			entries, err := profile.validateTargetStructure(home)
+			if !errors.Is(err, paths.ErrTargetOverlap) {
+				t.Fatalf("validateTargetStructure() = (%#v, %v), want nil ErrTargetOverlap", entries, err)
+			}
+			if entries != nil {
+				t.Fatalf("validateTargetStructure() entries = %#v, want nil", entries)
+			}
+			for _, want := range test.wants {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("validateTargetStructure() error = %q, want %q", err, want)
+				}
+			}
+			if want := filepath.Join(home, test.path); !strings.Contains(err.Error(), want) {
+				t.Errorf("validateTargetStructure() error = %q, want absolute path %q", err, want)
+			}
+		})
+	}
+}
+
+func TestResolvedProfileValidateTargetStructure_RejectsAncestorConflict(t *testing.T) {
+	root := t.TempDir()
+	writeSourceFile(t, root, "parent", "parent")
+	writeSourceFile(t, root, "child", "child")
+	profile := testResolvedProfile(ResolvedModule{
+		Name:       "app",
+		SourceDir:  root,
+		TargetRoot: "~",
+		FileRules: []ResolvedFileRule{
+			{Source: "parent", Kind: FileKindLink, TargetOverride: "~/.config/app"},
+			{Source: "child", Kind: FileKindLink, TargetOverride: "~/.config/app/child"},
+		},
+	})
+
+	home := t.TempDir()
+	entries, err := profile.validateTargetStructure(home)
+	if !errors.Is(err, paths.ErrTargetOverlap) || entries != nil {
+		t.Fatalf("validateTargetStructure() = (%#v, %v), want nil ErrTargetOverlap", entries, err)
+	}
+	for _, want := range []string{
+		`source "parent"`,
+		`source "child"`,
+		"ancestor",
+		filepath.Join(home, ".config", "app"),
+		filepath.Join(home, ".config", "app", "child"),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("validateTargetStructure() error = %q, want %q", err, want)
+		}
+	}
+}
+
+func TestResolvedProfileValidateTargetStructure_RejectsInvalidHomeAndBlockedTarget(t *testing.T) {
+	profile := testResolvedProfile()
+	if entries, err := profile.validateTargetStructure("relative"); err == nil || entries != nil {
+		t.Fatalf("validateTargetStructure(relative) = (%#v, %v), want nil error", entries, err)
+	}
+
+	source := t.TempDir()
+	writeSourceFile(t, source, "child", "child")
+	profile = testResolvedProfile(ResolvedModule{Name: "app", SourceDir: source, TargetRoot: "~/blocked"})
+	home := t.TempDir()
+	blocked := filepath.Join(home, "blocked")
+	if err := os.WriteFile(blocked, []byte("file"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", blocked, err)
+	}
+
+	entries, err := profile.validateTargetStructure(home)
+	if !errors.Is(err, paths.ErrPathBlocked) || entries != nil {
+		t.Fatalf("validateTargetStructure() = (%#v, %v), want nil ErrPathBlocked", entries, err)
+	}
+	for _, want := range []string{
+		`module "app"`,
+		`source "child"`,
+		`target "~/blocked/child"`,
+		filepath.Join(home, "blocked", "child"),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("validateTargetStructure() error = %q, want %q", err, want)
+		}
 	}
 }
 

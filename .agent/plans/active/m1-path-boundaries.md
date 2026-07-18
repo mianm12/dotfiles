@@ -152,8 +152,15 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
   全 pair matrix、双向 ancestor、binary-in-repo、ancestor symlink、control leaf alias、state
   sibling/root alias、hard-link 正例、blocked/permission fail-closed 和目录树快照测试通过；
   `go test -count=10 ./internal/paths -run TestValidateControlPlane` 与
-  `make check BINARY=/private/tmp/dot-path-boundaries-m2` 均退出 0，待本 milestone checkpoint。
-- [ ] Milestone 3：校验完整 profile 的 target identity 与祖先拓扑不变量。
+  `make check BINARY=/private/tmp/dot-path-boundaries-m2` 均退出 0；已以
+  `d9ff0e7 feat(paths): 校验控制面家族隔离` 提交，提交后工作区 clean。
+- [x] 2026-07-18：Milestone 3 增加通用 `ValidateTargetSet`，在一次 resolver snapshot 内整体
+  拒绝 target identity equality、双向 ancestor 与完整 symlink traversal ancestor，并保留双方
+  label/path provenance；hard-link leaf、字符串前缀 sibling 和 leaf-symlink/直接 real child 正例
+  通过。manifest 私有 `validateTargetStructure` 复用完整 `enumerateStructure`，覆盖跨模块、
+  `.template`、显式 scaffold `.tmpl`、`[files].target` 碰撞，不读取或渲染 scaffold。paths 20 次、
+  manifest 10 次重复、两包完整回归和
+  `make check BINARY=/private/tmp/dot-path-boundaries-m3` 均退出 0，待本 milestone checkpoint。
 - [ ] Milestone 4：合并 desired/control-plane 校验并证明部分作用域无法绕过完整 profile。
 - [ ] Milestone 5：完成 macOS/Linux 门禁、完整 diff、独立复核和计划收口。
 
@@ -430,12 +437,12 @@ Commit 边界：
 | repo/config/state/binary 集中解析 | `ControlPlanePaths`/等价测试，cwd 与 `--home` 反例 | `93a176c` 已提交，窄测/重复/完整门禁通过 |
 | state family 唯一预定包含例外 | family member matrix 与 alias 反例；源码复核无消费者例外 | 固定 member table 与显式 parent relation 通过；sibling/root alias 均拒绝 |
 | 控制面家族两两隔离 | equal、双向 ancestor、symlink/case/Unicode alias 测试 | 四 family 全 pair、双向 ancestor 与 symlink alias 本地通过；平台 case/Unicode 由 identity 既有测试覆盖，待最终双平台门禁 |
-| 完整 profile target identity 唯一 | 跨模块、suffix、override、平台 alias 碰撞测试 | 待验证 |
-| 无祖先冲突和中间目录穿文件 | 普通 ancestor、`A`/`A/child`、recursive symlink、`..` trace 正反例 | 待验证 |
-| leaf hard link 不误合并 | `os.SameFile` 为真但不同 target identity 的全局校验测试 | 待验证 |
+| 完整 profile target identity 唯一 | 跨模块、suffix、override、平台 alias 碰撞测试 | 通用 validator 与 manifest 完整结构接缝本地通过；待最终双平台门禁 |
+| 无祖先冲突和中间目录穿文件 | 普通 ancestor、`A`/`A/child`、recursive symlink、`..` trace 正反例 | 双向 ancestor、leaf/chained/`..` traversal、穿文件 blocker 与正反例通过 |
+| leaf hard link 不误合并 | `os.SameFile` 为真但不同 target identity 的全局校验测试 | 不同 leaf hard link 正例通过 |
 | desired 与控制面双向隔离 | 四 family/所有 state member overlap matrix | 待验证 |
 | 部分作用域不能绕过完整 profile | 未请求模块 identity 冲突与控制面重叠测试 | 待验证 |
-| fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | Milestone 2 blocked/permission cause 与 tree snapshot 通过；完整 profile 待 Milestone 3–4 |
+| fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | Milestone 2–3 的 unavailable oracle、blocked、permission/IO cause、tree snapshot 与 nil result 通过；global entry 待 Milestone 4 |
 | 单一语义源 | 完整 diff 人工检查与独立复核，无 consumer-specific list/fallback | 待验证 |
 | 双平台完整门禁 | macOS/Linux CI `make check`、本机重复测试与交叉编译 | 待验证 |
 
@@ -537,6 +544,14 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   同时产生预定 entry ancestor 与非法 equal/reverse relation，并由 Milestone 2 拒绝。
   Impact: identity 邻近层把相等、left-ancestor、right-ancestor 聚合为 relation bitmask；state
   例外只接受预期方向且明确排除 equal/reverse，不在 validator 读取路径字符串。
+- Observation: `TargetResolution.IsAncestorOf` 已把 leaf symlink entry、递归 link chain 和 link
+  target 中在 `..` 前实际经过的目录项统一保存在 traversal ancestors；target-set validator
+  无需区分“普通祖先冲突”和“中间目录穿 desired file”两套规则。
+  Evidence: `A`/`A/child`、bridge/alias-child、detour/`..`/real 与 leaf-symlink/direct-real-child
+  正反例全部只通过 `targetResolutionRelation` 得到预期结果；existing file blocker 直接保留
+  `ErrPathBlocked` cause。
+  Impact: target/target 与 control/control 使用同一个 relation engine；未增加路径字符串前缀、
+  symlink 展开或 inode fallback。
 
 ## Decision Log
 
@@ -587,20 +602,32 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   Rationale: 批量 resolver 保持一次校验的名称/目录观察一致；显式 parent relation 同时避免
   “同 family 全跳过”和 consumer-specific exception list，并能拒绝 state sibling/root alias。
   Date: 2026-07-18
+- Decision: paths 层只接受 `LabeledTarget{Label, Path}`，label 对 paths 不透明但必须非空；
+  manifest 用 module/source/展示 target 形成 label，并继续单独传绝对 `TargetPath`。失败返回零值
+  `TargetSet`，不暴露部分 resolution。
+  Rationale: paths 不应依赖 manifest 类型，未来 state/add 也能提供各自 provenance；同时错误
+  保留两端展示来源和绝对路径，identity 层仍只负责关系而不理解 consumer。
+  Date: 2026-07-18
+- Decision: manifest 的结构校验接缝保持私有并直接复用 `ResolvedProfile.enumerateStructure`；
+  不新增第二套 module/source/ignore/kind/suffix/override 枚举，也不在此阶段让消费者直接取得
+  可按 scope 裁剪的结果。
+  Rationale: receiver 的私有 resolved modules 是完整 effective profile 的可信来源；公开返回
+  必须等 control-plane 与 target/control 边界也完成，避免 target-only API 成为绕过入口。
+  Date: 2026-07-18
 
 ## Outcomes and Handoff
 
 当前已完成计划起点、Milestone 1 capability gate、获授权的 identity 前置修复、Milestone 1
-控制面路径家族，以及 Milestone 2 控制面家族隔离实现。
+控制面路径家族、Milestone 2 控制面家族隔离，以及 Milestone 3 完整 target topology 实现。
 2026-07-18 从干净 `main@8075a6c` 创建 `feat/path-boundaries`，以 `4f05174` 提交本计划；
 `cb501d3` 记录 gate。新增 control resolution 后，paths 窄测、20 次重复、darwin/linux amd64
 交叉编译和本机 `make check` 通过，identity 已形成独立 `cf0b61c` checkpoint。控制面路径家族
-以 `93a176c` 提交。Milestone 2 的四 family matrix、ancestor/alias、state 精确例外、
-fail-closed/read-only 窄测、10 次重复和完整 `make check` 已通过，待独立 milestone commit。
-未执行真实 Linux runner、后续 milestone 或最终独立实现复核，也未
+以 `93a176c` 提交，Milestone 2 以 `d9ff0e7` 提交。Milestone 3 的 target-set topology 与
+manifest full-structure adapter 窄测、重复测试、包回归和完整 `make check` 已通过，待独立
+milestone commit。未执行真实 Linux runner、后续 milestone 或最终独立实现复核，也未
 访问真实私人数据或进行未授权 Git/托管操作。
 
-后续接手者应先确认 Milestone 2 checkpoint 已成功提交且工作区 clean，再按 Milestone 3–5
+后续接手者应先确认 Milestone 3 checkpoint 已成功提交且工作区 clean，再按 Milestone 4–5
 顺序推进；每个 milestone 同步更新 living sections、执行窄测与完整门禁、检查
 完整 diff 并创建独立 semantic commit。最终只有双平台 CI、独立复核、所有意见处理和计划
 生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`

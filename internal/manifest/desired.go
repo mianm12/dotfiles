@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mianm12/dotfiles/internal/paths"
 	templateengine "github.com/mianm12/dotfiles/internal/template"
 )
 
@@ -79,6 +80,36 @@ func (p ResolvedProfile) enumerateStructure(home string) ([]DesiredEntry, error)
 	return entries, nil
 }
 
+// validateTargetStructure 从 receiver 的完整 effective modules 形成结构性 desired，
+// 并在不渲染 scaffold 的前提下整体校验 target identity/topology。
+// 该接缝保持私有，避免消费者绕过 control-plane 全局入口直接取得结构性 desired。
+func (p ResolvedProfile) validateTargetStructure(home string) ([]DesiredEntry, error) {
+	cleanHome, err := cleanEffectiveHome(home)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := p.enumerateStructure(cleanHome)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]paths.LabeledTarget, len(entries))
+	for index, entry := range entries {
+		targets[index] = paths.LabeledTarget{
+			Label: fmt.Sprintf(
+				"module %q source %q target %q",
+				entry.Module,
+				entry.Source,
+				entry.Target,
+			),
+			Path: entry.TargetPath,
+		}
+	}
+	if _, err := paths.ValidateTargetSet(targets); err != nil {
+		return nil, fmt.Errorf("resolved profile %q target paths: %w", p.name, err)
+	}
+	return entries, nil
+}
+
 func (p ResolvedProfile) validateRuntimeContext(context RuntimeContext) (templateengine.Context, error) {
 	if !isSupportedGOOS(p.goos) {
 		return templateengine.Context{}, fmt.Errorf("resolved profile has unsupported GOOS %q", p.goos)
@@ -100,17 +131,25 @@ func (p ResolvedProfile) validateRuntimeContext(context RuntimeContext) (templat
 	if context.Arch != "arm64" && context.Arch != "amd64" {
 		return templateengine.Context{}, fmt.Errorf("runtime architecture %q is not supported", context.Arch)
 	}
-	if context.Home == "" || !filepath.IsAbs(context.Home) {
-		return templateengine.Context{}, fmt.Errorf("effective HOME must be a non-empty absolute path")
+	cleanHome, err := cleanEffectiveHome(context.Home)
+	if err != nil {
+		return templateengine.Context{}, err
 	}
 	return templateengine.Context{
 		OS:       context.OS,
 		Arch:     context.Arch,
 		Hostname: context.Hostname,
 		Profile:  context.Profile,
-		Home:     filepath.Clean(context.Home),
+		Home:     cleanHome,
 		Data:     context.Data,
 	}, nil
+}
+
+func cleanEffectiveHome(home string) (string, error) {
+	if home == "" || !filepath.IsAbs(home) {
+		return "", fmt.Errorf("effective HOME must be a non-empty absolute path")
+	}
+	return filepath.Clean(home), nil
 }
 
 // renderScaffolds 在副本上填充 Content，并在首个错误时返回 nil，调用方不会收到
