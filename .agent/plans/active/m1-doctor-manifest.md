@@ -134,7 +134,10 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   与故意非法 machine config/state、零写入树快照、未创建 lock、输出失败优先级。macOS
   CLI/doctor 窄测连续 20 次、Linux amd64 Btrfs runtime 连续 5 次、Linux arm64 交叉编译及
   `make check BINARY=/private/tmp/dot-doctor-cli/dot` 均通过，正准备独立 `feat(cli)` 提交。
-- [ ] 创建最小根 `dot.toml`，验证并语义提交。
+- [x] 2026-07-18：创建已确认的最小根 `dot.toml`，仅含 `requires = ">=0.1.0"` 与空 `mac`
+  profile；未创建或读取 `modules/`。`make check BINARY=/private/tmp/dot-doctor-config/dot` 与使用
+  新建绝对临时 HOME、清除 `DOT_CONFIG`/`DOT_REPO` 的真实仓库 manifest-only 检查均通过，
+  正准备独立 `chore(config)` 提交。
 - [ ] 接入 Makefile 与确有必要的 CI 改动，验证只运行一次并语义提交。
 - [ ] 同步 README 与确有必要的长期仓库指南，验证并语义提交。
 - [ ] 由未参与实现的只读 subagent 复核全部实质改动；以新的语义 commit 修复意见并完成必要
@@ -576,11 +579,16 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   排序直接保证稳定输出，不把 M1 子集伪装成完整巡检。
   Date: 2026-07-18
 
+- Decision: 根 manifest 严格采用 Goal 已确认的四行语义内容，不增加 defaults、data、module、
+  example 或 placeholder；`mac` 仅是 profile 名，doctor 不传 profile 时仍在当前 GOOS 解析它。
+  Rationale: 这是当前真实仓库的最小可信配置，兼容性门槛与本次新增 CLI 能力同 commit 序列交付。
+  Date: 2026-07-18
+
 ## Outcomes and Handoff
 
 尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建，首个 ExecPlan commit 已完成；
 Linux capability 与 findings/requires/Git 聚合均已形成独立 commit；完整
 manifest/profile/template/path static engine 已完成验证，正待形成第二个 `feat(doctor)` commit。
-CLI 接入与隔离/只读行为已完成验证，正待形成 `feat(cli)` commit；真实根 manifest、Makefile/CI
-和 README 尚未完成。merge、push、Pull Request、rebase、tag、发布和删除分支不在本 Goal
-授权范围。
+CLI 已形成独立 commit；真实根 manifest 已按确认值创建并完成隔离验证，正待形成
+`chore(config)` commit。Makefile/CI 和 README 尚未完成。merge、push、Pull Request、rebase、
+tag、发布和删除分支不在本 Goal 授权范围。
