@@ -1,4 +1,4 @@
-// Package runtime 负责在任何 lock、state 或 mutation 之前建立可信的只读运行上下文。
+// Package runtime 建立可信运行上下文，并按命令语义组合 lock、manifest 与 state 加载。
 package runtime
 
 import (

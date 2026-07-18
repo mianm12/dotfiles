@@ -9,8 +9,9 @@
 完成后，后续 CLI 可以从 `internal/runtime` 选择语义明确的完整 mutation、嵌套 mutation、
 read-only/dry-run、init 与恢复入口，而不再自行拼接 preflight、锁、requires、strict manifest
 和 state。完整 mutation 在可信控制面前置后持有一次锁，再按固定顺序加载仓库与 state；
-任何锁后失败释放本层 lease 且保留可分类的原始原因。只读与恢复例外不会创建 lock 或被损坏、
-过新或 M1 不支持的 rendered state 阻塞。
+任何锁后失败释放本层 lease 且保留可分类的原始原因。read-only/control-only recovery 不创建
+lock；init/recovery mutation 仍持锁，但全部恢复入口都跳过 state，因此不会被损坏、过新或 M1
+不支持的 rendered state 阻塞。
 
 ## Scope / Non-goals
 
@@ -62,8 +63,10 @@ read-only/dry-run、init 与恢复入口，而不再自行拼接 preflight、锁
 - [x] 2026-07-19：确认分配 worktree、Git 顶层、branch 和 base 分别为
   `/private/tmp/dot-cp2-runtime-loading.uN4cR6`、`feat/runtime-loading` 与 `af990e80f1fe`，
   工作区 clean；读取规则、相关规范、代码和 CP2 前序 completed ExecPlans，未发现阻塞。
-- [ ] 单独提交本 active ExecPlan。
-- [ ] 测试先行交付 full mutation/read-only/nested loading 与 state 路径分类。
+- [x] 2026-07-19：以 `6bf7f9f` 单独提交本 active ExecPlan。
+- [x] 2026-07-19：先以缺失 API 的编译失败测试固定 full mutation/read-only/nested 顺序、失败
+  释放、strict requirement 二次检查、dev 结果与 state 路径分类；完成最小组合层和共享词法
+  target/control gate。runtime/paths 20 次重复与 race 通过。
 - [ ] 测试先行交付 init/recovery 入口及恢复零 state 读取。
 - [ ] 完成窄测、重复/race、双平台编译、完整门禁和 worker handoff；计划保持 active 等待独立复核。
 
