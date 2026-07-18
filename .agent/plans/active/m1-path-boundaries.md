@@ -144,9 +144,15 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
 - [x] 2026-07-18：identity 前置修复以 `cf0b61c fix(paths): 扩展控制面路径身份` 独立提交；
   Milestone 1 集中构造 repo/config/state root/state.json/lock/backup/binary 的绝对展示路径，state
   预定父子关系只保存在同一 opaque member table。窄测、10 次重复和
-  `make check BINARY=/private/tmp/.../dot` 通过，完整 diff/check 无越界；待以
-  `feat(paths): 建立控制面路径家族` 提交。
-- [ ] Milestone 2：以共享 identity/topology 语义校验控制面家族两两隔离。
+  `make check BINARY=/private/tmp/.../dot` 通过，完整 diff/check 无越界；已以
+  `93a176c feat(paths): 建立控制面路径家族` 提交，提交后工作区 clean。
+- [x] 2026-07-18：Milestone 2 增加共享、批量、只读的 `ValidateControlPlane`。全部固定成员
+  复用同一个 identity resolver；不同 family/member 的相等、双向祖先和 entry/consumed alias
+  均拒绝，只有 member table 声明的 state root 到三个 child 的纯正向祖先关系通过。四 family
+  全 pair matrix、双向 ancestor、binary-in-repo、ancestor symlink、control leaf alias、state
+  sibling/root alias、hard-link 正例、blocked/permission fail-closed 和目录树快照测试通过；
+  `go test -count=10 ./internal/paths -run TestValidateControlPlane` 与
+  `make check BINARY=/private/tmp/dot-path-boundaries-m2` 均退出 0，待本 milestone checkpoint。
 - [ ] Milestone 3：校验完整 profile 的 target identity 与祖先拓扑不变量。
 - [ ] Milestone 4：合并 desired/control-plane 校验并证明部分作用域无法绕过完整 profile。
 - [ ] Milestone 5：完成 macOS/Linux 门禁、完整 diff、独立复核和计划收口。
@@ -420,16 +426,16 @@ Commit 边界：
 
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
-| control path 全部可由 identity 语义表达 | root 与 control leaf-symlink capability 回归、identity 前置修复/裁决证据 | identity 前置修复本地验证通过，待 checkpoint commit |
-| repo/config/state/binary 集中解析 | `ControlPlanePaths`/等价测试，cwd 与 `--home` 反例 | Milestone 1 本地验证通过，待 checkpoint commit |
-| state family 唯一预定包含例外 | family member matrix 与 alias 反例；源码复核无消费者例外 | Milestone 1 hierarchy 已固定；alias relation 待 Milestone 2 |
-| 控制面家族两两隔离 | equal、双向 ancestor、symlink/case/Unicode alias 测试 | 待验证 |
+| control path 全部可由 identity 语义表达 | root 与 control leaf-symlink capability 回归、identity 前置修复/裁决证据 | `cf0b61c` 已提交，窄测/重复/完整门禁通过 |
+| repo/config/state/binary 集中解析 | `ControlPlanePaths`/等价测试，cwd 与 `--home` 反例 | `93a176c` 已提交，窄测/重复/完整门禁通过 |
+| state family 唯一预定包含例外 | family member matrix 与 alias 反例；源码复核无消费者例外 | 固定 member table 与显式 parent relation 通过；sibling/root alias 均拒绝 |
+| 控制面家族两两隔离 | equal、双向 ancestor、symlink/case/Unicode alias 测试 | 四 family 全 pair、双向 ancestor 与 symlink alias 本地通过；平台 case/Unicode 由 identity 既有测试覆盖，待最终双平台门禁 |
 | 完整 profile target identity 唯一 | 跨模块、suffix、override、平台 alias 碰撞测试 | 待验证 |
 | 无祖先冲突和中间目录穿文件 | 普通 ancestor、`A`/`A/child`、recursive symlink、`..` trace 正反例 | 待验证 |
 | leaf hard link 不误合并 | `os.SameFile` 为真但不同 target identity 的全局校验测试 | 待验证 |
 | desired 与控制面双向隔离 | 四 family/所有 state member overlap matrix | 待验证 |
 | 部分作用域不能绕过完整 profile | 未请求模块 identity 冲突与控制面重叠测试 | 待验证 |
-| fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | 待验证 |
+| fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | Milestone 2 blocked/permission cause 与 tree snapshot 通过；完整 profile 待 Milestone 3–4 |
 | 单一语义源 | 完整 diff 人工检查与独立复核，无 consumer-specific list/fallback | 待验证 |
 | 双平台完整门禁 | macOS/Linux CI `make check`、本机重复测试与交叉编译 | 待验证 |
 
@@ -524,6 +530,13 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   可以让路径 accessor 与后续 validator 消费同一存储，而不复制一份例外清单。
   Evidence: `ControlPlanePaths` 的 accessor、state hierarchy 和 cwd/read-only 测试。
   Impact: Milestone 2 只需解析该 table 并识别显式 parent relation，不允许调用方注入 skip。
+- Observation: control leaf 同时具有 entry 与 consumed 两个受保护位置，因此一次成员比较可能
+  同时出现多个关系；state root-child 不能只问“是否存在 ancestor”，否则 consumed alias
+  回指 root 或 sibling 时会被预定包含掩盖。
+  Evidence: state file/backup leaf symlink 回指 state root，以及 state file 消费 lock 的回归分别
+  同时产生预定 entry ancestor 与非法 equal/reverse relation，并由 Milestone 2 拒绝。
+  Impact: identity 邻近层把相等、left-ancestor、right-ancestor 聚合为 relation bitmask；state
+  例外只接受预期方向且明确排除 equal/reverse，不在 validator 读取路径字符串。
 
 ## Decision Log
 
@@ -568,19 +581,26 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   Rationale: 当前 API 是只读、进程内、snapshot-scoped 的唯一语义源；本 Goal 无需改变这些
   边界。
   Date: 2026-07-18
+- Decision: `ValidateControlPlane` 在一个只读 snapshot 内用同一个 `targetResolver` 解析全部固定
+  成员，再对所有 member pair 应用 identity relation；唯一 allow 条件是两端同属 state family、
+  member table 明确记录 parent，且 relation 只有预期方向的严格祖先。
+  Rationale: 批量 resolver 保持一次校验的名称/目录观察一致；显式 parent relation 同时避免
+  “同 family 全跳过”和 consumer-specific exception list，并能拒绝 state sibling/root alias。
+  Date: 2026-07-18
 
 ## Outcomes and Handoff
 
-当前已完成计划起点、Milestone 1 capability gate、获授权的 identity 前置修复，以及
-Milestone 1 控制面路径家族实现。
+当前已完成计划起点、Milestone 1 capability gate、获授权的 identity 前置修复、Milestone 1
+控制面路径家族，以及 Milestone 2 控制面家族隔离实现。
 2026-07-18 从干净 `main@8075a6c` 创建 `feat/path-boundaries`，以 `4f05174` 提交本计划；
 `cb501d3` 记录 gate。新增 control resolution 后，paths 窄测、20 次重复、darwin/linux amd64
 交叉编译和本机 `make check` 通过，identity 已形成独立 `cf0b61c` checkpoint。控制面路径家族
-的窄测、重复测试和完整 `make check` 也通过，尚待 milestone commit。未执行真实 Linux runner、
-后续 milestone 或最终独立实现复核，也未
+以 `93a176c` 提交。Milestone 2 的四 family matrix、ancestor/alias、state 精确例外、
+fail-closed/read-only 窄测、10 次重复和完整 `make check` 已通过，待独立 milestone commit。
+未执行真实 Linux runner、后续 milestone 或最终独立实现复核，也未
 访问真实私人数据或进行未授权 Git/托管操作。
 
-后续接手者应先确认 Milestone 1 checkpoint 已成功提交且工作区 clean，再按 Milestone 2–5
+后续接手者应先确认 Milestone 2 checkpoint 已成功提交且工作区 clean，再按 Milestone 3–5
 顺序推进；每个 milestone 同步更新 living sections、执行窄测与完整门禁、检查
 完整 diff 并创建独立 semantic commit。最终只有双平台 CI、独立复核、所有意见处理和计划
 生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`
