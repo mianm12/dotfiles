@@ -151,8 +151,10 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
 - [x] 2026-07-18：未参与实现的只读 subagent 复核全部实质改动，发现 Git 环境覆盖可能导致
   false-clean 的一项 P1。修复清除全部 `GIT_*`，改为完整 index 后 Go 后缀筛选并增加三类真实
   Git 回归；复核者再次给出 GO，确认 P1 已封闭且无新 P0-P3。
-- [ ] 完成最终门禁与 diff 检查，收口 living sections，迁移计划至 `completed/` 并创建
-  plan-closure commit。
+- [x] 2026-07-18：最终 `make check BINARY=/private/tmp/dot-doctor-final/dot`、
+  `git diff main...HEAD --check`、完整 diff/stat/name-status 与 status 审计均通过；范围内只有本
+  Goal 的 24 个文件，worktree clean。已收口 living sections，并在本 plan-closure commit 中把
+  计划迁移至 `completed/`；远端 GitHub Actions 因未授权 push 而未触发。
 
 ## Milestones
 
@@ -377,18 +379,18 @@ Commit 边界：
 
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
-| findings 顺序和 0/1/2 映射确定 | doctor/CLI 单元与行为测试 | 待验证 |
-| requires 错误不阻断独立检查，合法不满足继续结构检查 | 同次报告组合测试 | 待验证 |
-| schema/profile/module/template 复用单一 manifest 语义 | manifest/doctor 集成测试与 diff review | 待验证 |
-| 每个 profile 独立做完整 target/control boundary | profile 分离、显式 profile、unassigned 测试 | 待验证 |
-| Linux 新机 missing machine-local 路径可只读证明 | capability gate 与 Linux CI | 待验证 |
-| manifest-only 不读 config/state、不取锁、零 mutation | 缺失/非法 fixture、前后树快照、lock/真实 HOME 断言 | 待验证 |
-| Git index 无法查询为 error，tracked `*.local` 为 error | synthetic Git repo 行为测试 | 待验证 |
-| 裸 doctor 明确拒绝，manifest-only 输出/退出码稳定 | CLI 端到端与 writer failure 测试 | 待验证 |
-| 根 `dot.toml` 精确且两个平台验证 `mac` profile | config diff、Makefile gate、GitHub matrix（若本 Goal 不 push 则标未验证） | 待验证 |
-| 本地与 CI 共享 Makefile 入口且 doctor 仅运行一次 | Makefile dry-run/行为、workflow review | 待验证 |
-| 全部 Go/CI 适用门禁通过 | 每 milestone 与最终 `make check` | 待验证 |
-| 全部实质改动通过独立只读复核 | subagent 终审与 review fix 证据 | 待验证 |
+| findings 顺序和 0/1/2 映射确定 | doctor/CLI 单元与行为测试 | 通过 |
+| requires 错误不阻断独立检查，合法不满足继续结构检查 | 同次报告组合测试 | 通过 |
+| schema/profile/module/template 复用单一 manifest 语义 | manifest/doctor 集成测试与 diff review | 通过 |
+| 每个 profile 独立做完整 target/control boundary | profile 分离、显式 profile、unassigned 测试 | 通过 |
+| Linux 新机 missing machine-local 路径可只读证明 | capability gate 与 Linux CI | Linux amd64 Btrfs runtime 通过；arm64 交叉编译通过 |
+| manifest-only 不读 config/state、不取锁、零 mutation | 缺失/非法 fixture、前后树快照、lock/真实 HOME 断言 | 通过 |
+| Git index 无法查询为 error，tracked `*.local` 为 error | synthetic Git repo 行为测试 | 通过；含 `GIT_*` 重定向回归 |
+| 裸 doctor 明确拒绝，manifest-only 输出/退出码稳定 | CLI 端到端与 writer failure 测试 | 通过 |
+| 根 `dot.toml` 精确且两个平台验证 `mac` profile | config diff、Makefile gate、GitHub matrix（若本 Goal 不 push 则标未验证） | macOS 本地与 Linux Docker 通过；远端 matrix 未触发 |
+| 本地与 CI 共享 Makefile 入口且 doctor 仅运行一次 | Makefile dry-run/行为、workflow review | 通过 |
+| 全部 Go/CI 适用门禁通过 | 每 milestone 与最终 `make check` | 通过 |
+| 全部实质改动通过独立只读复核 | subagent 终审与 review fix 证据 | GO；一项 P1 已修复并复核封闭，无新 P0-P3 |
 
 最终在 repo root 运行：
 
@@ -628,9 +630,14 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
 
 ## Outcomes and Handoff
 
-尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建；ExecPlan、Linux capability、
-findings/requires/Git 聚合、完整 static engine、CLI、真实根 manifest、Makefile/CI 门禁与文档均
-已形成独立语义 commit。独立终审发现一项 Git 环境覆盖导致 false-clean 的 P1；修复与回归已
-通过 doctor 20 次窄测、Linux amd64 容器 5 次测试、Linux arm64 交叉编译及完整 `make check`，
-复核者已再次给出 GO，确认 P1 封闭且无新 P0-P3，正待独立 review-fix commit。merge、push、
-Pull Request、rebase、tag、发布和删除分支不在本 Goal 授权范围。
+M1 `dot doctor --manifest-only` 已在 `feat/doctor-manifest` 完成：确定性诊断聚合、完整 manifest/
+module/template/profile/path 静态检查、严格只读 CLI、Git tracked `.local` 门禁、最小根
+`dot.toml`、Makefile/CI 统一入口与仓库文档均按独立语义 commit 交付。Linux missing-path 共享
+能力只在同 fd 已证明的 ext-family/Btrfs byte-sensitive 目录上成功，其他 filesystem、casefold
+或查询失败仍 fail closed；未读取或创建真实 `modules/` 与 machine-local/private data。
+
+最终证据包括 doctor 窄测连续 20 次、Linux amd64 Btrfs 容器连续 5 次、Linux arm64 交叉编译、
+最终 `make check BINARY=/private/tmp/dot-doctor-final/dot`、完整 `main...HEAD` diff/stat/name-status、
+whitespace 与工作区审计。独立终审发现的 Git 环境覆盖 false-clean P1 已由 `66a64c6` 修复并经
+原复核者再次确认 GO，无新 P0-P3。GitHub Actions 未运行，因为本 Goal 不授权 push；没有声称
+远端 matrix 通过。merge、push、Pull Request、rebase、tag、发布和删除分支仍未执行。
