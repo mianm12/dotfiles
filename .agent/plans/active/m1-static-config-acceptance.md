@@ -58,7 +58,9 @@ HOME。合成 process HOME 中的非法 `.gitconfig` 已使真实仓库 manifest
 - [x] 2026-07-18：用合成 process HOME 复现 Git global config 污染；未读取真实 HOME。
 - [x] 2026-07-18：复核 unassigned/inactive 模块 target 派生缺口，确认 doctor 可漏报。
 - [x] 2026-07-18：从 clean main 创建 `fix/m1-static-config-acceptance`。
-- [ ] 提交本计划起点。
+- [x] 2026-07-18：以 `ecc9ca6` 提交本计划起点。
+- [x] 2026-07-18：新增 5 个 unassigned/inactive target 派生失败回归；修改前全部
+  false-clean，修复后 `go test -count=20 ./internal/manifest ./internal/doctor` 通过。
 - [ ] 增加失败回归并完成最小 Git/Makefile 隔离修复。
 - [ ] 完成全量门禁、独立复核、计划收口与语义 commits。
 
@@ -124,7 +126,7 @@ Commit 边界：
 
 | 必须成立的性质 | 证据 | 状态 |
 |---|---|---|
-| unassigned/inactive 模块的非法 target 派生被拒绝 | manifest/doctor 回归 | 待验证 |
+| unassigned/inactive 模块的非法 target 派生被拒绝 | manifest/doctor 回归 | 通过 |
 | Git index 查询不读取 process HOME/XDG global config | 合成损坏配置回归 | 待验证 |
 | 外部 `GIT_*` 不能重定向 repo/index | 既有与新增 doctor 测试 | 待验证 |
 | gate 只预创建空 HOME 根，machine-local 路径保持缺失 | Makefile/manual capability gate 与树快照 | 待验证 |

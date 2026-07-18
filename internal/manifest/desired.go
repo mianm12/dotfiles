@@ -371,6 +371,14 @@ func classifyModuleSources(module ResolvedModule) ([]classifiedModuleSource, err
 		if err != nil {
 			return nil, err
 		}
+		// target override 缺失时，落地名必然来自同一后缀派生规则。这里在 source
+		// 定级完成后立即验证，使 unassigned 与当前 GOOS inactive 模块也不能把
+		// 无效 target 推迟到未来进入 profile 后才暴露。
+		if targetOverride == "" {
+			if _, err := stripTemplateSuffix(source.path); err != nil {
+				return nil, fmt.Errorf("module %q source %q: %w", module.Name, source.path, err)
+			}
+		}
 		mode, err := parseDesiredMode(module.Name, source.path, kind, modeText)
 		if err != nil {
 			return nil, err

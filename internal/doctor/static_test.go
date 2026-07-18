@@ -81,6 +81,41 @@ other = ["other"]
 	}
 }
 
+func TestCheckManifest_InvalidLocalTargetOutsideEffectiveProfiles(t *testing.T) {
+	otherOS := "darwin"
+	if runtime.GOOS == "darwin" {
+		otherOS = "linux"
+	}
+	tests := []struct {
+		name     string
+		profiles string
+		module   string
+	}{
+		{name: "unassigned", profiles: "base = []\n"},
+		{name: "inactive", profiles: "base = [\"app\"]\n", module: "os = [\"" + otherOS + "\"]\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, repo := newGitRepository(t)
+			writeFile(t, filepath.Join(repo, "dot.toml"),
+				"requires = \">=0.1.0\"\n[profiles]\n"+tt.profiles)
+			if tt.module != "" {
+				writeFile(t, filepath.Join(repo, "modules", "app", "dot.toml"), tt.module)
+			}
+			writeFile(t, filepath.Join(repo, "modules", "app", ".template"), "value")
+
+			result := CheckManifest(context.Background(), manifestOptions(t, root, repo, "v0.1.0"))
+			if got := findingChecks(result); !reflect.DeepEqual(got, []string{"manifest.templates"}) {
+				t.Fatalf("CheckManifest() checks = %v, want invalid module-local target; findings = %#v", got, result.Findings())
+			}
+			if text := findingsText(result); !strings.Contains(text, "empty target basename") {
+				t.Fatalf("CheckManifest() findings = %q, want empty target basename", text)
+			}
+		})
+	}
+}
+
 func TestCheckManifest_ProfileResolveErrorsPreserveProfileProvenance(t *testing.T) {
 	root, repo := newGitRepository(t)
 	writeFile(t, filepath.Join(repo, "dot.toml"), `

@@ -253,6 +253,42 @@ func TestRepositoryValidateTemplates_CoversModuleLocalTemplateCandidates(t *test
 	}
 }
 
+func TestRepositoryValidateTemplates_RejectsInvalidTargetDerivationOutsideProfiles(t *testing.T) {
+	tests := []struct {
+		name           string
+		source         string
+		moduleManifest string
+	}{
+		{name: "implicit scaffold", source: ".template"},
+		{
+			name:           "explicit link template suffix",
+			source:         ".template",
+			moduleManifest: "[files.\".template\"]\nkind = \"link\"\n",
+		},
+		{
+			name:           "explicit scaffold managed suffix",
+			source:         ".tmpl",
+			moduleManifest: "[files.\".tmpl\"]\nkind = \"scaffold\"\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []\n")
+			writeModule(t, repo, "unassigned", tt.moduleManifest)
+			writeSourceFile(t, filepath.Join(repo, "modules", "unassigned"), tt.source, "value")
+
+			loaded, err := Load(repo)
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			if err := loaded.ValidateTemplates(); err == nil || !strings.Contains(err.Error(), "empty target basename") {
+				t.Fatalf("ValidateTemplates() error = %v, want empty target basename", err)
+			}
+		})
+	}
+}
+
 func TestResolvedProfileEnumerate_ValidatesStructuralInputs(t *testing.T) {
 	tests := []struct {
 		name   string
