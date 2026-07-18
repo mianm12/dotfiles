@@ -161,9 +161,11 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
 - [x] 2026-07-18：新增共享坏模块的默认双 profile 与显式 profile 行为测试，修改前精确失败；
   profile Resolve 错误边界仅用 `%w` 增加 profile 名，保留模块根因与 profile 影响两层语义。
   定向测试连续 20 次、doctor/CLI 各连续 20 次、Linux amd64 runtime 5 次、Linux arm64 交叉编译
-  及 `make check BINARY=/private/tmp/dot-profile-provenance/dot` 均通过。
-- [ ] 由未参与本次修复的只读 subagent 复核 fix diff；处理意见后完成最终 diff/status 审计并再次
-  迁移计划至 `completed/`。
+  及 `make check BINARY=/private/tmp/dot-profile-provenance/dot` 均通过；修复以 `3c5a468` 提交。
+- [x] 2026-07-18：未参与本次修复的只读 subagent 复核 `0ea9a61..3c5a468` 为 GO、无 P0-P3，
+  确认两层 finding、默认/显式 profile 范围与既有退出/排序/API 均保持。复核后的最终
+  `make check BINARY=/private/tmp/dot-profile-provenance-final/dot`、完整 diff/stat/name-status、
+  whitespace 与 status 审计通过；本 closure commit 将计划再次迁移至 `completed/`。
 
 ## Milestones
 
@@ -426,7 +428,7 @@ Commit 边界：
 | 根 `dot.toml` 精确且两个平台验证 `mac` profile | config diff、Makefile gate、GitHub matrix（若本 Goal 不 push 则标未验证） | macOS 本地与 Linux Docker 通过；远端 matrix 未触发 |
 | 本地与 CI 共享 Makefile 入口且 doctor 仅运行一次 | Makefile dry-run/行为、workflow review | 通过 |
 | 全部 Go/CI 适用门禁通过 | 每 milestone 与最终 `make check` | 通过 |
-| 全部实质改动通过独立只读复核 | subagent 终审与 review fix 证据 | GO；一项 P1 已修复并复核封闭，无新 P0-P3 |
+| 全部实质改动通过独立只读复核 | subagent 终审与 review fix 证据 | GO；P1/P2 均以独立 fix 修复并复核封闭，无未处理 P0-P3 |
 
 最终在 repo root 运行：
 
@@ -692,7 +694,8 @@ module/template/profile/path 静态检查、严格只读 CLI、Git tracked `.loc
 最终 `make check BINARY=/private/tmp/dot-doctor-final/dot`、完整 `main...HEAD` diff/stat/name-status、
 whitespace 与工作区审计。独立终审发现的 Git 环境覆盖 false-clean P1 已由 `66a64c6` 修复并经
 原复核者再次确认 GO。推送前人工 review 随后发现 profile Resolve 错误缺少 profile provenance
-的 P2；计划已由 `0ea9a61` 重新开启，最小错误包装、默认/显式 profile 回归和本机/Linux 验证均
-已完成，等待 fix commit 的独立只读复核与再次收口。GitHub Actions 未运行，因为本 Goal 不授权
+的 P2；计划由 `0ea9a61` 重新开启，`3c5a468` 以最小错误包装保留模块根因与可区分的 profile
+影响。默认/显式 profile 回归、本机/Linux 验证和独立 fix diff 复核均通过，复核者给出 GO、无
+P0-P3；最终完整门禁与 diff/status 审计也已通过。GitHub Actions 未运行，因为本 Goal 不授权
 push；没有声称远端 matrix 通过。merge、push、Pull Request、rebase、tag、发布和删除分支仍未
 执行。
