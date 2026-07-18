@@ -10,7 +10,9 @@ import (
 func TestResolveControlPathIdentity_FilesystemRoot(t *testing.T) {
 	root := string(filepath.Separator)
 	control := mustResolveControlPathIdentity(t, root)
-	target := mustResolveTarget(t, filepath.Join(t.TempDir(), "target"))
+	targetPath := filepath.Join(t.TempDir(), "target")
+	writeFixtureFile(t, targetPath)
+	target := mustResolveTarget(t, targetPath)
 
 	if !control.OverlapsTarget(target) {
 		t.Error("filesystem root control does not overlap a descendant target")
@@ -55,7 +57,9 @@ func TestResolveControlPathIdentity_LeafSymlinkConsumption(t *testing.T) {
 		t.Error("repo directory symlink control does not overlap config consumed inside the real repo tree")
 	}
 
-	unrelated := mustResolveTarget(t, filepath.Join(root, "unrelated"))
+	unrelatedPath := filepath.Join(root, "unrelated")
+	writeFixtureFile(t, unrelatedPath)
+	unrelated := mustResolveTarget(t, unrelatedPath)
 	if repoControl.OverlapsTarget(unrelated) || configControl.OverlapsTarget(unrelated) {
 		t.Error("control path overlaps an unrelated target")
 	}
@@ -87,9 +91,16 @@ func TestResolveControlPathIdentity_ChainedLeafSymlink(t *testing.T) {
 func TestResolveControlPathIdentity_MissingAndDangling(t *testing.T) {
 	root := t.TempDir()
 	missing := filepath.Join(root, "missing")
-	control := mustResolveControlPathIdentity(t, missing)
-	if !control.OverlapsTarget(mustResolveTarget(t, missing)) {
-		t.Error("missing control path does not overlap the same missing target")
+	control, err := ResolveControlPathIdentity(missing)
+	switch {
+	case err == nil:
+		if !control.OverlapsTarget(mustResolveTarget(t, missing)) {
+			t.Error("missing control path does not overlap the same missing target")
+		}
+	case errors.Is(err, ErrIdentityUnavailable):
+		// 不存在名称无法由当前文件系统的只读 API 权威解释时，identity 契约要求整体拒绝。
+	default:
+		t.Fatalf("ResolveControlPathIdentity(%q) error = %v, want success or ErrIdentityUnavailable", missing, err)
 	}
 	assertPathsMissing(t, missing)
 
@@ -104,7 +115,9 @@ func TestResolveControlPathIdentity_MissingAndDangling(t *testing.T) {
 
 func TestControlPathResolution_ZeroValue(t *testing.T) {
 	var zero ControlPathResolution
-	target := mustResolveTarget(t, filepath.Join(t.TempDir(), "target"))
+	targetPath := filepath.Join(t.TempDir(), "target")
+	writeFixtureFile(t, targetPath)
+	target := mustResolveTarget(t, targetPath)
 	if zero.OverlapsTarget(target) || zero.Overlaps(zero) {
 		t.Error("zero control path resolution overlaps another path")
 	}

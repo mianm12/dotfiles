@@ -22,6 +22,13 @@ func TestGlobalPathValidation_ValidProfileIsReadOnlyAndUnrendered(t *testing.T) 
 		SourceDir:  sourceRoot,
 		TargetRoot: "~/.config/app",
 	})
+	targetPath := filepath.Join(home, ".config", "app", "config")
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", filepath.Dir(targetPath), err)
+	}
+	if err := os.WriteFile(targetPath, []byte("existing target\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", targetPath, err)
+	}
 	before := snapshotTree(t, root)
 
 	validated, err := profile.ValidatePathBoundaries(controlPaths)
@@ -35,8 +42,9 @@ func TestGlobalPathValidation_ValidProfileIsReadOnlyAndUnrendered(t *testing.T) 
 	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("ValidatePathBoundaries() changed fixture: before=%v after=%v", before, after)
 	}
-	if _, err := os.Lstat(entries[0].TargetPath); !os.IsNotExist(err) {
-		t.Fatalf("target path %q Lstat error = %v, want missing", entries[0].TargetPath, err)
+	content, err := os.ReadFile(entries[0].TargetPath)
+	if err != nil || string(content) != "existing target\n" {
+		t.Fatalf("target path %q content = %q, error = %v", entries[0].TargetPath, content, err)
 	}
 
 	entries[0].Source = "changed"

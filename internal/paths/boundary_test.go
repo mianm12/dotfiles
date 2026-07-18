@@ -17,6 +17,12 @@ func TestValidatePathBoundaries_ValidAndReadOnly(t *testing.T) {
 		{Label: "module app source config", Path: filepath.Join(root, "targets", "config")},
 		{Label: "module shell source rc", Path: filepath.Join(root, "targets", "shell", "rc")},
 	}
+	for _, target := range targets {
+		if err := os.MkdirAll(filepath.Dir(target.Path), 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", filepath.Dir(target.Path), err)
+		}
+		writeFixtureFile(t, target.Path)
+	}
 	before := snapshotFixtureTree(t, root)
 
 	validated, err := ValidatePathBoundaries(controlPaths, targets)
@@ -29,7 +35,6 @@ func TestValidatePathBoundaries_ValidAndReadOnly(t *testing.T) {
 	if after := snapshotFixtureTree(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("ValidatePathBoundaries() changed fixture: before=%v after=%v", before, after)
 	}
-	assertPathsMissing(t, targets[0].Path, targets[1].Path)
 }
 
 func TestValidatePathBoundaries_RejectsControlPlaneBeforeTargets(t *testing.T) {
@@ -52,6 +57,7 @@ func TestValidatePathBoundaries_RejectsControlPlaneBeforeTargets(t *testing.T) {
 func TestValidatePathBoundaries_RejectsTargetSetBeforeCrossProduct(t *testing.T) {
 	controlPaths := writeValidControlPlaneFixture(t)
 	targetPath := filepath.Join(controlPaths.Repository(), "also-inside-repository")
+	writeFixtureFile(t, targetPath)
 	targets := []LabeledTarget{
 		{Label: "first desired", Path: targetPath},
 		{Label: "second desired", Path: targetPath},
@@ -113,9 +119,14 @@ func TestValidatePathBoundaries_DesiredControlOverlapMatrix(t *testing.T) {
 func TestValidatePathBoundaries_RejectsDesiredInsideAndAboveControl(t *testing.T) {
 	t.Run("desired inside repository", func(t *testing.T) {
 		controlPaths := writeValidControlPlaneFixture(t)
+		targetPath := filepath.Join(controlPaths.Repository(), "nested", "target")
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", filepath.Dir(targetPath), err)
+		}
+		writeFixtureFile(t, targetPath)
 		target := LabeledTarget{
 			Label: "desired inside repository",
-			Path:  filepath.Join(controlPaths.Repository(), "nested", "target"),
+			Path:  targetPath,
 		}
 		assertTargetControlOverlap(t, controlPaths, target, controlMemberRepository)
 	})
@@ -141,9 +152,11 @@ func TestValidatePathBoundaries_RejectsDesiredInsideAndAboveControl(t *testing.T
 		if err := os.Symlink(realRepository, controlPaths.Repository()); err != nil {
 			t.Fatalf("os.Symlink(%q, %q) error = %v", realRepository, controlPaths.Repository(), err)
 		}
+		targetPath := filepath.Join(realRepository, "target")
+		writeFixtureFile(t, targetPath)
 		target := LabeledTarget{
 			Label: "desired in real repository",
-			Path:  filepath.Join(realRepository, "target"),
+			Path:  targetPath,
 		}
 		assertTargetControlOverlap(t, controlPaths, target, controlMemberRepository)
 	})

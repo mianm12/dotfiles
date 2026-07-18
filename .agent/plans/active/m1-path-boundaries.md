@@ -168,8 +168,20 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
   `ValidatedProfile` 条目副本。七个 control member matrix、双向/leaf/ancestor symlink、case/
   Unicode oracle、顺序、零值、只读测试，以及未请求模块 identity/control 冲突和 profile 分离
   回归通过；共享生产行为已以 `a594516 feat(paths): 建立完整 profile 路径入口` 提交，scope
-  回归与本计划待独立 test checkpoint。
-- [ ] Milestone 5：完成 macOS/Linux 门禁、完整 diff、独立复核和计划收口。
+  回归与 living plan 已以 `a443b45 test(paths): 固定完整 profile 边界复用` 提交，提交后工作区
+  clean。
+- [x] 2026-07-18：Milestone 5 的两次独立只读复核均发现同一 P1：新增跨平台成功/冲突测试把
+  missing target 当作可解析输入，而 Linux 的既有 authoritative identity 契约会返回
+  `ErrIdentityUnavailable`，导致 Ubuntu 在 topology 断言前失败。核对已完成 path-identity
+  ExecPlan、`080020f` 与 M3 roadmap 后，确认这是测试夹具偏离已接受契约，不是 boundary 层可
+  修补的生产缺口；未增加字符串、normalization 或 filesystem-type fallback。
+- [x] 2026-07-18：将跨平台成功/冲突夹具改为真实存在的 target leaf，并增加 Linux-only
+  missing desired/control 整组失败和零结果回归；macOS 两包窄测与 20 次重复、linux/amd64
+  交叉编译、Ubuntu 22.04 amd64 容器以 root/非 root 执行两包及非 root 20 次重复均通过，
+  `make check BINARY=/private/tmp/dot-path-boundaries-review-fix/dot` 退出 0。待提交独立复核修复
+  checkpoint，并在提交后复核完整 diff。
+- [ ] Milestone 5：完成最终完整 diff、修复后独立复核和计划收口；GitHub macOS/Linux CI 仍因
+  未授权 push/PR 而未运行。
 
 ## Execution Start and Commit Discipline
 
@@ -443,19 +455,20 @@ Commit 边界：
 | control path 全部可由 identity 语义表达 | root 与 control leaf-symlink capability 回归、identity 前置修复/裁决证据 | `cf0b61c` 已提交，窄测/重复/完整门禁通过 |
 | repo/config/state/binary 集中解析 | `ControlPlanePaths`/等价测试，cwd 与 `--home` 反例 | `93a176c` 已提交，窄测/重复/完整门禁通过 |
 | state family 唯一预定包含例外 | family member matrix 与 alias 反例；源码复核无消费者例外 | 固定 member table 与显式 parent relation 通过；sibling/root alias 均拒绝 |
-| 控制面家族两两隔离 | equal、双向 ancestor、symlink/case/Unicode alias 测试 | 四 family 全 pair、双向 ancestor 与 symlink alias 本地通过；平台 case/Unicode 由 identity 既有测试覆盖，待最终双平台门禁 |
-| 完整 profile target identity 唯一 | 跨模块、suffix、override、平台 alias 碰撞测试 | 通用 validator 与 manifest 完整结构接缝本地通过；待最终双平台门禁 |
+| 控制面家族两两隔离 | equal、双向 ancestor、symlink/case/Unicode alias 测试 | 四 family 全 pair、双向 ancestor 与 symlink alias 在 macOS 与 Ubuntu 容器通过；平台 case/Unicode 由真实 lookup oracle 判定 |
+| 完整 profile target identity 唯一 | 跨模块、suffix、override、平台 alias 碰撞测试 | 通用 validator 与 manifest 完整结构接缝在 macOS 与 Ubuntu 容器通过 |
 | 无祖先冲突和中间目录穿文件 | 普通 ancestor、`A`/`A/child`、recursive symlink、`..` trace 正反例 | 双向 ancestor、leaf/chained/`..` traversal、穿文件 blocker 与正反例通过 |
 | leaf hard link 不误合并 | `os.SameFile` 为真但不同 target identity 的全局校验测试 | 不同 leaf hard link 正例通过 |
 | desired 与控制面双向隔离 | 四 family/所有 state member overlap matrix | 七 member equality/consumed endpoint matrix、双向 ancestor、symlink 与平台名称 oracle 通过 |
 | 部分作用域不能绕过完整 profile | 未请求模块 identity 冲突与控制面重叠测试 | 正式入口无 scope 参数；两类未请求模块反例与 profile 分离通过 |
 | fail closed 且只读 | identity unavailable、blocked、权限/IO cause 和目录项快照测试 | unavailable oracle、blocked、permission/IO cause、全局 tree snapshot、零值与失败 nil result 通过 |
-| 单一语义源 | 完整 diff 人工检查与独立复核，无 consumer-specific list/fallback | 待验证 |
-| 双平台完整门禁 | macOS/Linux CI `make check`、本机重复测试与交叉编译 | 待验证 |
+| 单一语义源 | 完整 diff 人工检查与独立复核，无 consumer-specific list/fallback | 两次独立复核除测试夹具外无发现；生产 overlap 仍只经共享 relation engine，待修复后终审 |
+| 双平台完整门禁 | macOS/Linux CI `make check`、本机重复测试与交叉编译 | macOS `make check` 与两包 20 次重复、Ubuntu 容器两包非 root 20 次重复通过；GitHub matrix 未运行 |
 
 最终成功判据不是“新增某个类型”，而是所有非法 topology 在任何 consumer 获取可执行子集前
-整体失败，合法 topology 在 macOS/Linux 都稳定通过，且实现中只有一个控制面成员/例外定义
-和一个 identity/topology relation engine。
+整体失败，当前平台能够权威建立 identity 的合法 topology 在 macOS/Linux 都稳定通过，且实现
+中只有一个控制面成员/例外定义和一个 identity/topology relation engine。无法权威解释的
+missing name 仍按既有 identity 契约整体 fail closed，不属于合法成功集合。
 
 ## Safety, Authorization, and Recovery
 
@@ -566,6 +579,14 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   派生 state/binary 所需的 clean effective HOME。
   Impact: opaque control 值现在同时保存 effective HOME，manifest 正式入口只从该值展开 desired；
   不从 state/binary 字符串反推 HOME，也不给调用方 mismatch 参数。
+- Observation: Milestone 3/4 新增的若干成功与碰撞测试把 missing target leaf 当作跨平台可解析
+  fixture；macOS 可以只读查询 ASCII 名称语义，Linux 的既有契约则对任意 missing name 返回
+  `ErrIdentityUnavailable`。
+  Evidence: 两次独立复核均定位该问题；首次在 Ubuntu 22.04 amd64 容器执行 test binary 时，
+  失败均发生在预期 topology 断言之前。`m1-path-identity.md` 与 `080020f` 明确记录 Linux 继续
+  fail closed，不允许 generic normalization fallback。
+  Impact: 通用成功/碰撞测试必须创建真实 target leaf，Linux-only 测试单独证明 missing desired
+  与 missing control member 整体失败且返回零结果；生产 identity/boundary 实现无需改变。
 
 ## Decision Log
 
@@ -639,6 +660,12 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   Rationale: 前者包含独立生产 API、HOME 绑定和核心 matrix；后者只固定未请求 scope 与 profile
   分离契约，使行为改动和消费约束可分别 review。
   Date: 2026-07-18
+- Decision: 独立复核发现的 Linux P1 通过测试夹具对齐既有 identity 契约解决，不扩展 Linux
+  missing-name identity，也不放宽 boundary fail-closed 行为。
+  Rationale: 两个均不存在的名称没有通用只读 collation-key API；此前已由 path-identity Goal
+  裁决 unknown semantics 整体拒绝。跨平台 topology 测试使用现存 leaf 可验证本 Goal 性质，
+  专用 Linux 回归继续固定 unavailable cause 和零结果。
+  Date: 2026-07-18
 
 ## Outcomes and Handoff
 
@@ -648,13 +675,18 @@ Milestone 1–4 的控制面、target topology 与完整 profile 全局入口实
 `cb501d3` 记录 gate。新增 control resolution 后，paths 窄测、20 次重复、darwin/linux amd64
 交叉编译和本机 `make check` 通过，identity 已形成独立 `cf0b61c` checkpoint。控制面路径家族
 以 `93a176c` 提交，Milestone 2 以 `d9ff0e7` 提交，Milestone 3 以 `1a8c76d` 提交。Milestone 4
-共享入口已以 `a594516` 提交；partial-scope/profile-separation 回归与 living plan 待独立 test
-checkpoint。相关窄测、10 次重复、两包回归和完整 `make check` 已通过。未执行真实 Linux
-runner、Milestone 5 或最终独立实现复核，也未
-访问真实私人数据或进行未授权 Git/托管操作。
+共享入口已以 `a594516` 提交；partial-scope/profile-separation 回归与 living plan 已以
+`a443b45` 提交。相关窄测、10 次重复、两包回归和完整 `make check` 已通过。
 
-后续接手者应先完成 Milestone 4 的 scope/test checkpoint 并确认工作区 clean，再执行
-Milestone 5；同步更新 living sections、执行窄测与完整门禁、检查
-完整 diff 并创建独立 semantic commit。最终只有双平台 CI、独立复核、所有意见处理和计划
+Milestone 5 的两次独立复核发现同一 Linux missing-name 测试夹具 P1；主线程依据已合入的
+identity 契约将通用 topology fixture 改为现存 leaf，并新增 Linux-only fail-closed 回归。
+修复后 macOS 两包 20 次重复、Ubuntu 22.04 amd64 容器两包 root/非 root 与非 root 20 次重复、
+darwin/linux amd64 交叉编译及完整 `make check` 均通过。当前仍待独立提交该修复、提交后完整
+diff/终审，以及 GitHub Actions matrix；后者因未授权 push/PR 尚不能运行。未访问真实私人数据
+或进行未授权 Git/托管操作。
+
+后续接手者应先提交当前独立复核修复并确认工作区 clean，再完成 Milestone 5 的完整 diff 与
+修复后终审；同步更新 living sections 并创建独立 semantic commit。最终只有双平台 CI、独立
+复核、所有意见处理和计划
 生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`
 达到 review-ready；merge、push、PR 或发布仍不由本计划自身授权。

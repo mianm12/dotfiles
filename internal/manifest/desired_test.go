@@ -436,8 +436,11 @@ func TestResolvedProfileValidateTargetStructure_DoesNotRenderScaffolds(t *testin
 	writeSourceFile(t, root, "config.template", `{{ if }}`)
 	profile := testResolvedProfile(ResolvedModule{Name: "app", SourceDir: root, TargetRoot: "~"})
 	homeRoot := t.TempDir()
-	home := filepath.Join(homeRoot, "missing-home")
-	before := snapshotTree(t, root)
+	home := filepath.Join(homeRoot, "home")
+	target := filepath.Join(home, "config")
+	writeBoundaryTarget(t, target)
+	beforeSource := snapshotTree(t, root)
+	beforeTarget := snapshotTree(t, homeRoot)
 
 	entries, err := profile.validateTargetStructure(home)
 	if err != nil {
@@ -446,11 +449,15 @@ func TestResolvedProfileValidateTargetStructure_DoesNotRenderScaffolds(t *testin
 	if len(entries) != 1 || entries[0].Source != "config.template" || entries[0].Content != nil {
 		t.Fatalf("validateTargetStructure() entries = %#v, want unrendered scaffold", entries)
 	}
-	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
-		t.Fatalf("validateTargetStructure() changed source tree: before=%v after=%v", before, after)
+	if after := snapshotTree(t, root); !reflect.DeepEqual(after, beforeSource) {
+		t.Fatalf("validateTargetStructure() changed source tree: before=%v after=%v", beforeSource, after)
 	}
-	if _, statErr := os.Lstat(home); !os.IsNotExist(statErr) {
-		t.Fatalf("target HOME Lstat error = %v, want not exist", statErr)
+	if after := snapshotTree(t, homeRoot); !reflect.DeepEqual(after, beforeTarget) {
+		t.Fatalf("validateTargetStructure() changed target tree: before=%v after=%v", beforeTarget, after)
+	}
+	content, err := os.ReadFile(target)
+	if err != nil || string(content) != "existing target\n" {
+		t.Fatalf("target %q content = %q, error = %v", target, content, err)
 	}
 
 	_, err = profile.Enumerate(testRuntimeContext(home))
@@ -537,6 +544,7 @@ func TestResolvedProfileValidateTargetStructure_RejectsDerivedAndExplicitCollisi
 		t.Run(test.name, func(t *testing.T) {
 			profile := testResolvedProfile(test.modules(t)...)
 			home := t.TempDir()
+			writeBoundaryTarget(t, filepath.Join(home, test.path))
 			entries, err := profile.validateTargetStructure(home)
 			if !errors.Is(err, paths.ErrTargetOverlap) {
 				t.Fatalf("validateTargetStructure() = (%#v, %v), want nil ErrTargetOverlap", entries, err)
@@ -571,6 +579,10 @@ func TestResolvedProfileValidateTargetStructure_RejectsAncestorConflict(t *testi
 	})
 
 	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "app"), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(target parent) error = %v", err)
+	}
+	writeBoundaryTarget(t, filepath.Join(home, ".config", "app", "child"))
 	entries, err := profile.validateTargetStructure(home)
 	if !errors.Is(err, paths.ErrTargetOverlap) || entries != nil {
 		t.Fatalf("validateTargetStructure() = (%#v, %v), want nil ErrTargetOverlap", entries, err)

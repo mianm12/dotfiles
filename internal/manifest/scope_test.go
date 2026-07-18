@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ func TestPartialScope_CannotBypassUnrequestedIdentityConflict(t *testing.T) {
 	betaRoot := filepath.Join(repository, "modules", "beta")
 	writeSourceFile(t, alphaRoot, "config", "alpha")
 	writeSourceFile(t, betaRoot, "config", "beta")
+	writeBoundaryTarget(t, filepath.Join(home, ".config", "config"))
 	alpha := ResolvedModule{Name: "alpha", SourceDir: alphaRoot, TargetRoot: "~/.config"}
 	beta := ResolvedModule{Name: "beta", SourceDir: betaRoot, TargetRoot: "~/.config"}
 
@@ -45,6 +47,8 @@ func TestPartialScope_CannotBypassUnrequestedControlOverlap(t *testing.T) {
 	unrequestedRoot := filepath.Join(repository, "modules", "unrequested")
 	writeSourceFile(t, requestedRoot, "good", "good")
 	writeSourceFile(t, unrequestedRoot, "bad", "bad")
+	writeBoundaryTarget(t, filepath.Join(home, "safe", "good"))
+	writeBoundaryTarget(t, filepath.Join(repository, "bad"))
 	requested := ResolvedModule{Name: "requested", SourceDir: requestedRoot, TargetRoot: "~/safe"}
 	unrequested := ResolvedModule{Name: "unrequested", SourceDir: unrequestedRoot, TargetRoot: "~/control-repository"}
 
@@ -72,6 +76,7 @@ func TestFullProfileValidation_ValidatesProfilesSeparately(t *testing.T) {
 	betaRoot := filepath.Join(repository, "modules", "beta")
 	writeSourceFile(t, alphaRoot, "config", "alpha")
 	writeSourceFile(t, betaRoot, "config", "beta")
+	writeBoundaryTarget(t, filepath.Join(home, "shared", "config"))
 	alpha := ResolvedModule{Name: "alpha", SourceDir: alphaRoot, TargetRoot: "~/shared"}
 	beta := ResolvedModule{Name: "beta", SourceDir: betaRoot, TargetRoot: "~/shared"}
 	alphaProfile := ResolvedProfile{name: "alpha-profile", modules: []ResolvedModule{alpha}, goos: "darwin"}
@@ -96,5 +101,16 @@ func TestFullProfileValidation_ValidatesProfilesSeparately(t *testing.T) {
 	}
 	if validated, err := combined.ValidatePathBoundaries(controlPaths); !errors.Is(err, paths.ErrTargetOverlap) || validated.Entries() != nil {
 		t.Fatalf("combined proof = (%#v, %v), want zero ErrTargetOverlap", validated, err)
+	}
+}
+
+func writeBoundaryTarget(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte("existing target\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
 	}
 }

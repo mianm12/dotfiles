@@ -15,6 +15,11 @@ func TestValidateTargetSet_Valid(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "first")
 	second := filepath.Join(root, "second")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("fixture\n"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+		}
+	}
 	inputs := []LabeledTarget{
 		{Label: "module alpha source first", Path: first},
 		{Label: "module beta source second", Path: second},
@@ -31,8 +36,6 @@ func TestValidateTargetSet_Valid(t *testing.T) {
 	if after := snapshotFixtureTree(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("ValidateTargetSet() changed target tree: before=%v after=%v", before, after)
 	}
-	assertPathsMissing(t, first, second)
-
 	inputs[0].Label = "changed"
 	if validated.targets[0].input.Label == inputs[0].Label {
 		t.Fatal("mutating inputs changed validated target provenance")
@@ -44,6 +47,9 @@ func TestValidateTargetSet_Valid(t *testing.T) {
 
 func TestValidateTargetSet_RejectsEqualIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "same")
+	if err := os.WriteFile(path, []byte("fixture\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
 	assertTargetSetOverlap(
 		t,
 		[]LabeledTarget{
@@ -102,6 +108,10 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 		if err := os.Symlink("real", alias); err != nil {
 			t.Fatalf("os.Symlink(%q, %q) error = %v", "real", alias, err)
 		}
+		child := filepath.Join(realDirectory, "child")
+		if err := os.WriteFile(child, []byte("fixture\n"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", child, err)
+		}
 
 		assertTargetSetOverlap(t, []LabeledTarget{
 			{Label: "alias leaf", Path: alias},
@@ -123,6 +133,10 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 		if err := os.Symlink("bridge", alias); err != nil {
 			t.Fatalf("os.Symlink(%q, %q) error = %v", "bridge", alias, err)
 		}
+		child := filepath.Join(realDirectory, "child")
+		if err := os.WriteFile(child, []byte("fixture\n"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", child, err)
+		}
 
 		assertTargetSetOverlap(t, []LabeledTarget{
 			{Label: "bridge leaf", Path: bridge},
@@ -143,6 +157,10 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 		if err := os.Symlink(filepath.FromSlash("detour/../real"), alias); err != nil {
 			t.Fatalf("os.Symlink(%q, %q) error = %v", "detour/../real", alias, err)
 		}
+		child := filepath.Join(realDirectory, "child")
+		if err := os.WriteFile(child, []byte("fixture\n"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", child, err)
+		}
 
 		assertTargetSetOverlap(t, []LabeledTarget{
 			{Label: "detour leaf", Path: detour},
@@ -157,6 +175,11 @@ func TestValidateTargetSet_DoesNotInventRelations(t *testing.T) {
 		inputs := []LabeledTarget{
 			{Label: "foo", Path: filepath.Join(root, "foo")},
 			{Label: "foobar", Path: filepath.Join(root, "foobar")},
+		}
+		for _, input := range inputs {
+			if err := os.WriteFile(input.Path, []byte("fixture\n"), 0o600); err != nil {
+				t.Fatalf("os.WriteFile(%q) error = %v", input.Path, err)
+			}
 		}
 		if _, err := ValidateTargetSet(inputs); err != nil {
 			t.Fatalf("ValidateTargetSet() error = %v", err)
@@ -173,10 +196,14 @@ func TestValidateTargetSet_DoesNotInventRelations(t *testing.T) {
 		if err := os.Symlink("real", alias); err != nil {
 			t.Fatalf("os.Symlink(%q, %q) error = %v", "real", alias, err)
 		}
+		realChild := filepath.Join(realDirectory, "child")
+		if err := os.WriteFile(realChild, []byte("fixture\n"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", realChild, err)
+		}
 
 		if _, err := ValidateTargetSet([]LabeledTarget{
 			{Label: "alias leaf", Path: alias},
-			{Label: "real child", Path: filepath.Join(realDirectory, "child")},
+			{Label: "real child", Path: realChild},
 		}); err != nil {
 			t.Fatalf("ValidateTargetSet() error = %v", err)
 		}
