@@ -55,7 +55,10 @@ release，BSD-3-Clause，Go directive 为 1.24，pkg.go.dev 约有 1499 known im
 
 - [x] 2026-07-19：确认 worktree、top-level、branch 与基线分别为分配路径、
   `feat/process-lock` 和 `7b43272d6a98`，工作区 clean。
-- [ ] 先用失败测试固定 storage 权限、锁错误分类、真实进程竞争/崩溃恢复和嵌套 ownership。
+- [x] 2026-07-19：先以缺失 API 的失败测试固定 storage 权限边界，再实现 `internal/storage`；
+  新建及现存 state root/私有文件收敛为 0700/0600，相对路径零写入，非目录/非普通文件明确
+  拒绝；`go test ./internal/storage` 通过。
+- [ ] 用失败测试固定锁错误分类、真实进程竞争/崩溃恢复和嵌套 ownership。
 - [ ] 引入依赖并完成窄 adapter、storage 权限边界与首个真实锁实现，形成语义 commits。
 - [ ] 完成重复窄测、双平台交叉编译、依赖图审计、diff check 与 `make check`，更新本计划后
   保持 active，等待独立复核。
