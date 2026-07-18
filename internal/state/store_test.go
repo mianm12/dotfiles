@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -99,6 +100,7 @@ func TestStore_PrePublishFailuresPreserveOldState(t *testing.T) {
 		name              string
 		fileFailure       storeFileFailure
 		configure         func(*storeOperations, error)
+		wantCause         error
 		wantCleanupCause  bool
 		wantTemporaryFile bool
 	}{
@@ -112,6 +114,7 @@ func TestStore_PrePublishFailuresPreserveOldState(t *testing.T) {
 		},
 		{name: "permissions", fileFailure: storeFileFailChmod},
 		{name: "write", fileFailure: storeFileFailWrite},
+		{name: "partial write", fileFailure: storeFileFailShortWrite, wantCause: io.ErrShortWrite},
 		{name: "sync", fileFailure: storeFileFailSync},
 		{name: "close", fileFailure: storeFileFailClose},
 		{
@@ -160,8 +163,12 @@ func TestStore_PrePublishFailuresPreserveOldState(t *testing.T) {
 			}
 
 			err := store(root, path, storeTestSnapshot(t, "new"), operations)
-			if !errors.Is(err, injected) {
-				t.Fatalf("store() error = %v, want injected cause", err)
+			wantCause := test.wantCause
+			if wantCause == nil {
+				wantCause = injected
+			}
+			if !errors.Is(err, wantCause) {
+				t.Fatalf("store() error = %v, want cause %v", err, wantCause)
 			}
 			if test.wantCleanupCause && !errors.Is(err, errInjectedCleanup) {
 				t.Fatalf("store() error = %v, want cleanup cause", err)
@@ -270,6 +277,7 @@ const (
 	storeFileFailNone storeFileFailure = iota
 	storeFileFailChmod
 	storeFileFailWrite
+	storeFileFailShortWrite
 	storeFileFailSync
 	storeFileFailClose
 )
@@ -290,6 +298,9 @@ func (file *failingStoreFile) Chmod(mode fs.FileMode) error {
 func (file *failingStoreFile) Write(data []byte) (int, error) {
 	if file.failure == storeFileFailWrite {
 		return 0, file.err
+	}
+	if file.failure == storeFileFailShortWrite {
+		return len(data) - 1, nil
 	}
 	return file.storeFile.Write(data)
 }

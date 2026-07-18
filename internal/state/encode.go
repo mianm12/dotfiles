@@ -58,8 +58,45 @@ func Encode(snapshot Snapshot) ([]byte, error) {
 		return nil, fmt.Errorf("encode state v1: %w", err)
 	}
 	data = append(data, '\n')
-	if _, err := Decode(data); err != nil {
+	roundTripped, err := Decode(data)
+	if err != nil {
 		return nil, fmt.Errorf("validate encoded state v1: %w", err)
 	}
+	if !snapshotsEqual(snapshot, roundTripped) {
+		return nil, corruptf("state Snapshot cannot be encoded without loss")
+	}
 	return data, nil
+}
+
+func snapshotsEqual(left, right Snapshot) bool {
+	if left.version != right.version || left.valid != right.valid ||
+		len(left.entries) != len(right.entries) || len(left.runOnce) != len(right.runOnce) {
+		return false
+	}
+	for key, leftEntry := range left.entries {
+		rightEntry, exists := right.entries[key]
+		if !exists || !entriesEqual(leftEntry, rightEntry) {
+			return false
+		}
+	}
+	for key, leftRecord := range left.runOnce {
+		rightRecord, exists := right.runOnce[key]
+		if !exists || !runOnceRecordsEqual(leftRecord, rightRecord) {
+			return false
+		}
+	}
+	return true
+}
+
+func entriesEqual(left, right Entry) bool {
+	return left.module == right.module &&
+		left.kind == right.kind &&
+		left.source == right.source &&
+		left.linkDest == right.linkDest &&
+		left.hash == right.hash &&
+		left.appliedAt == right.appliedAt
+}
+
+func runOnceRecordsEqual(left, right RunOnceRecord) bool {
+	return left.hash == right.hash && left.executedAt == right.executedAt
 }

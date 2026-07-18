@@ -114,3 +114,88 @@ func TestEncode_RejectsInvalidSnapshots(t *testing.T) {
 		t.Fatalf("Encode(internally invalid Snapshot) error = %v, want ErrCorrupt", err)
 	}
 }
+
+func TestEncode_RejectsLossyInvalidUTF8(t *testing.T) {
+	invalidUTF8 := string([]byte{0xff})
+	tests := []struct {
+		name   string
+		mutate func(*Snapshot)
+	}{
+		{
+			name: "target key",
+			mutate: func(snapshot *Snapshot) {
+				entry := snapshot.entries["~/.config/app/file"]
+				delete(snapshot.entries, "~/.config/app/file")
+				snapshot.entries["~/.config/app/"+invalidUTF8] = entry
+			},
+		},
+		{
+			name: "source",
+			mutate: func(snapshot *Snapshot) {
+				entry := snapshot.entries["~/.config/app/file"]
+				entry.source = "modules/app/" + invalidUTF8
+				snapshot.entries["~/.config/app/file"] = entry
+			},
+		},
+		{
+			name: "link_dest",
+			mutate: func(snapshot *Snapshot) {
+				entry := snapshot.entries["~/.config/app/file"]
+				entry.linkDest = "/repo/modules/app/" + invalidUTF8
+				snapshot.entries["~/.config/app/file"] = entry
+			},
+		},
+		{
+			name: "run_once key",
+			mutate: func(snapshot *Snapshot) {
+				record := snapshot.runOnce["app/hooks/setup.sh"]
+				delete(snapshot.runOnce, "app/hooks/setup.sh")
+				snapshot.runOnce["app/hooks/"+invalidUTF8] = record
+			},
+		},
+		{
+			name: "run_once field",
+			mutate: func(snapshot *Snapshot) {
+				record := snapshot.runOnce["app/hooks/setup.sh"]
+				record.executedAt += invalidUTF8
+				snapshot.runOnce["app/hooks/setup.sh"] = record
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := encodeUTF8TestSnapshot(t)
+			test.mutate(&snapshot)
+
+			if _, err := Encode(snapshot); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("Encode() error = %v, want ErrCorrupt for lossy invalid UTF-8", err)
+			}
+		})
+	}
+}
+
+func encodeUTF8TestSnapshot(t *testing.T) Snapshot {
+	t.Helper()
+	document := testDocument()
+	document["entries"] = map[string]any{
+		"~/.config/app/file": map[string]any{
+			"module":     "app",
+			"kind":       "symlink",
+			"source":     "modules/app/file",
+			"link_dest":  "/repo/modules/app/file",
+			"applied_at": "2026-07-14T10:00:00Z",
+		},
+	}
+	document["run_once"] = map[string]any{
+		"app/hooks/setup.sh": map[string]any{
+			"hash":        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"executed_at": "2026-07-14T10:00:01Z",
+		},
+	}
+	snapshot, err := Decode(marshalDocument(t, document))
+	if err != nil {
+		t.Fatalf("Decode(UTF-8 fixture) error = %v", err)
+	}
+	return snapshot
+}
