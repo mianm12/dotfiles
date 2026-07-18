@@ -113,7 +113,7 @@ func TestDecode_ClassifiesVersionAndSchemaErrors(t *testing.T) {
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("Decode() error = %v, want errors.Is(%v)", err, tt.want)
 			}
-			if tt.want == ErrTooNew && errors.Is(err, ErrCorrupt) {
+			if errors.Is(tt.want, ErrTooNew) && errors.Is(err, ErrCorrupt) {
 				t.Fatalf("Decode() error = %v, too-new must not be corrupt", err)
 			}
 		})
@@ -233,7 +233,7 @@ func TestDecode_ValidatesKindSpecificEvidenceBeforeRenderedClassification(t *tes
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("Decode() error = %v, want errors.Is(%v)", err, tt.want)
 			}
-			if tt.want == ErrCorrupt && errors.Is(err, ErrUnsupportedRendered) {
+			if errors.Is(tt.want, ErrCorrupt) && errors.Is(err, ErrUnsupportedRendered) {
 				t.Fatalf("Decode() error = %v, malformed rendered must be corrupt", err)
 			}
 		})
