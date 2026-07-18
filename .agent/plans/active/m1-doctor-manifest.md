@@ -138,7 +138,12 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   profile；未创建或读取 `modules/`。`make check BINARY=/private/tmp/dot-doctor-config/dot` 与使用
   新建绝对临时 HOME、清除 `DOT_CONFIG`/`DOT_REPO` 的真实仓库 manifest-only 检查均通过，
   正准备独立 `chore(config)` 提交。
-- [ ] 接入 Makefile 与确有必要的 CI 改动，验证只运行一次并语义提交。
+- [x] 2026-07-18：新增 `make doctor-manifest` 并接入统一 `check`；目标构建绝对 binary、在
+  `/tmp` 创建并清理隔离根、只创建 HOME 根、清除 `DOT_CONFIG`/`DOT_REPO`，以绝对 repo 运行且
+  不传 profile。`make help`、独立目标与 `make check BINARY=/private/tmp/dot-doctor-ci-check/dot`
+  通过且各只运行一次 doctor；Linux amd64 真实 CLI 在 Btrfs `/tmp` 与只读 repo mount 的同构
+  shell 流程通过。现有 workflow 已经让 macOS/Linux 各执行一次 `make check`，无需修改，正准备
+  独立 `ci(doctor)` 提交。
 - [ ] 同步 README 与确有必要的长期仓库指南，验证并语义提交。
 - [ ] 由未参与实现的只读 subagent 复核全部实质改动；以新的语义 commit 修复意见并完成必要
   复核。
@@ -516,6 +521,13 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   Impact: doctor CLI 向 `paths.Repository` 传入 nil configured repo，绝不调用 `config.Load` 或 state/
   lock API；engine 只接收已经解析的绝对路径。
 
+- Observation: Makefile 的 `build` 是 phony target；让 `doctor-manifest` 依赖 `build`，并让
+  `check` 只依赖 `doctor-manifest` 而不再单列 `build`，可在一次 make invocation 中明确只构建和
+  doctor 各一次。
+  Evidence: 实际 `make check BINARY=/private/tmp/dot-doctor-ci-check/dot` 输出恰有一个 `go build`
+  与一个 `Manifest check passed.`；workflow 每个平台只有一个 `Run project checks: make check`。
+  Impact: 只修改 Makefile，不机械修改 workflow；本地与两个 CI 平台继续共享同一事实来源。
+
 ## Decision Log
 
 - Decision: 将 goal 文件规定的默认语义边界分别保留为 ExecPlan、可选 paths fix、diagnostic
@@ -584,11 +596,16 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   Rationale: 这是当前真实仓库的最小可信配置，兼容性门槛与本次新增 CLI 能力同 commit 序列交付。
   Date: 2026-07-18
 
+- Decision: `doctor-manifest` 使用 `/tmp/dot-doctor.XXXXXX` 创建绝对隔离根，shell `trap` 保留原
+  退出码并递归清理该 mktemp 唯一路径；recipe 只 `mkdir <root>/home`，不修改进程 HOME，也不
+  创建 config/state/lock/backup/binary placeholder。
+  Rationale: 同时满足跨 macOS/Linux 的 mktemp 可移植性、调用侧清理和 mutation 验证隔离；
+  `--home`、`--repo`、清除两个环境变量使路径来源显式且与 runner 用户环境无关。
+  Date: 2026-07-18
+
 ## Outcomes and Handoff
 
 尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建，首个 ExecPlan commit 已完成；
-Linux capability 与 findings/requires/Git 聚合均已形成独立 commit；完整
-manifest/profile/template/path static engine 已完成验证，正待形成第二个 `feat(doctor)` commit。
-CLI 已形成独立 commit；真实根 manifest 已按确认值创建并完成隔离验证，正待形成
-`chore(config)` commit。Makefile/CI 和 README 尚未完成。merge、push、Pull Request、rebase、
-tag、发布和删除分支不在本 Goal 授权范围。
+Linux capability、findings/requires/Git 聚合、完整 static engine、CLI 与真实根 manifest 均已
+形成独立 commit。Makefile/CI 门禁现已完成验证，正待 `ci(doctor)` 提交；README 尚未完成。
+merge、push、Pull Request、rebase、tag、发布和删除分支不在本 Goal 授权范围。

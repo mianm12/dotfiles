@@ -22,13 +22,14 @@ LDFLAGS = -X '$(BUILDINFO_PACKAGE).Version=$(VERSION)' \
 	-X '$(BUILDINFO_PACKAGE).Commit=$(COMMIT)' \
 	-X '$(BUILDINFO_PACKAGE).BuildTime=$(BUILD_TIME)'
 
-.PHONY: help build run version fmt fmt-check tidy tidy-check lint test test-race check
+.PHONY: help build run version doctor-manifest fmt fmt-check tidy tidy-check lint test test-race check
 
 help:
 	@printf '%s\n' \
 		'make build              构建 bin/dot 并注入构建信息' \
 		'make run ARGS=version   直接运行开发构建' \
 		'make version            构建并运行 dot version' \
+		'make doctor-manifest    检查真实仓库的 manifest' \
 		'make fmt                格式化 Go 代码' \
 		'make tidy               整理 Go 模块依赖' \
 		'make lint               运行静态分析' \
@@ -44,6 +45,16 @@ run:
 
 version: build
 	"$(BINARY)" version $(ARGS)
+
+# 真实仓库检查只创建隔离 HOME 根；machine-local 控制面路径保持缺失，并由调用 shell 负责清理。
+doctor-manifest: build
+	@set -eu; \
+	doctor_root=$$(mktemp -d /tmp/dot-doctor.XXXXXX); \
+	trap 'doctor_status=$$?; rm -rf "$$doctor_root"; exit $$doctor_status' 0; \
+	doctor_home="$$doctor_root/home"; \
+	mkdir "$$doctor_home"; \
+	env -u DOT_CONFIG -u DOT_REPO "$(abspath $(BINARY))" doctor --manifest-only \
+		--home "$$doctor_home" --repo "$(abspath .)"
 
 # fmt 和 tidy 会修改工作区；对应的 *-check 目标只验证，不产生修复性改动。
 fmt:
@@ -68,4 +79,4 @@ test-race:
 	$(GO) test -race ./...
 
 # 汇总当前平台的完整门禁，作为本地与 CI 的共同入口；任一失败都会立即停止。
-check: tidy-check fmt-check lint test-race build
+check: tidy-check fmt-check lint test-race doctor-manifest
