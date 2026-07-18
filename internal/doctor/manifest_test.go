@@ -154,6 +154,56 @@ func TestCheckManifest_GitQueryFailureIsError(t *testing.T) {
 	}
 }
 
+func TestCheckManifest_GitEnvironmentCannotRedirectIndex(t *testing.T) {
+	root, repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "dot.toml"), "requires = \">=0.1.0\"\n[profiles]\nbase = []\n")
+	writeFile(t, filepath.Join(repo, "tracked.local"), "private")
+	git(t, root, repo, "add", "dot.toml", "tracked.local")
+
+	decoyRoot, decoy := newGitRepository(t)
+	writeFile(t, filepath.Join(decoy, "dot.toml"), "decoy")
+	git(t, decoyRoot, decoy, "add", "dot.toml")
+	tests := []struct {
+		name        string
+		environment map[string]string
+	}{
+		{name: "literal pathspec", environment: map[string]string{"GIT_LITERAL_PATHSPECS": "1"}},
+		{name: "alternate index", environment: map[string]string{
+			"GIT_INDEX_FILE": filepath.Join(decoy, ".git", "index"),
+		}},
+		{name: "alternate repository", environment: map[string]string{
+			"GIT_DIR":       filepath.Join(decoy, ".git"),
+			"GIT_WORK_TREE": decoy,
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for name, value := range tt.environment {
+				t.Setenv(name, value)
+			}
+			result := CheckManifest(context.Background(), manifestOptions(t, root, repo, "v0.1.0"))
+			if checks := findingChecks(result); !reflect.DeepEqual(checks, []string{"git.tracked-local"}) {
+				t.Fatalf("CheckManifest() checks = %v, want tracked local despite Git environment; findings = %#v", checks, result.Findings())
+			}
+		})
+	}
+}
+
+func TestIsolatedGitEnvironment(t *testing.T) {
+	environment := []string{
+		"PATH=/usr/bin",
+		"HOME=/tmp/home",
+		"GIT_DIR=/tmp/other.git",
+		"GIT_INDEX_FILE=/tmp/index",
+		"GIT_LITERAL_PATHSPECS=1",
+	}
+	want := []string{"PATH=/usr/bin", "HOME=/tmp/home"}
+	if got := isolatedGitEnvironment(environment); !reflect.DeepEqual(got, want) {
+		t.Fatalf("isolatedGitEnvironment() = %v, want %v", got, want)
+	}
+}
+
 func findingsText(result Result) string {
 	var text strings.Builder
 	for _, finding := range result.Findings() {

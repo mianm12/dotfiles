@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -133,7 +134,9 @@ func appendError(findings []Finding, check string, err error) []Finding {
 }
 
 func trackedLocalFiles(ctx context.Context, repository string) ([]string, error) {
-	command := exec.CommandContext(ctx, "git", "-C", repository, "ls-files", "-z", "--", "*.local")
+	command := exec.CommandContext(ctx, "git", "-C", repository, "ls-files", "-z")
+	// GIT_* 可以覆盖 repository、worktree、index 与 pathspec 解释；doctor 必须只查询显式 repo。
+	command.Env = isolatedGitEnvironment(os.Environ())
 	output, err := command.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -155,7 +158,22 @@ func trackedLocalFiles(ctx context.Context, repository string) ([]string, error)
 	parts := bytes.Split(output[:len(output)-1], []byte{0})
 	paths := make([]string, 0, len(parts))
 	for _, part := range parts {
-		paths = append(paths, string(part))
+		path := string(part)
+		if strings.HasSuffix(path, ".local") {
+			paths = append(paths, path)
+		}
 	}
 	return paths, nil
+}
+
+func isolatedGitEnvironment(environment []string) []string {
+	isolated := make([]string, 0, len(environment))
+	for _, variable := range environment {
+		name, _, _ := strings.Cut(variable, "=")
+		if strings.HasPrefix(name, "GIT_") {
+			continue
+		}
+		isolated = append(isolated, variable)
+	}
+	return isolated
 }

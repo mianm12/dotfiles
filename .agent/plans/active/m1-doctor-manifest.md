@@ -113,43 +113,44 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   ExecPlan 约定、规范、路线图，以及 manifest/template/desired/path/CLI/Makefile/CI 当前实现与
   测试；未读取真实 modules 或 machine-local/private data。
 - [x] 2026-07-18：创建本 active ExecPlan；Scope / Non-goals、capability gate、milestones、验证、
-  授权与停止条件已写入，`git diff --check` 通过，正进入仅包含计划文件的首个语义 commit。
+  授权与停止条件已写入，`git diff --check` 通过，并以 `6094498` 单独提交。
 - [x] 2026-07-18：完成 Linux missing-path capability gate。共享 `missingNameKey` 仅对同 parent
   fd 已证明的 ext-family/Btrfs byte identity 返回成功，其他情况 fail closed；两轮独立设计复核
   均为 GO、无 P0/P1。Linux amd64 Btrfs runtime 全量路径测试连续 5 次、Linux arm64 交叉编译、
   macOS 路径测试连续 20 次及 `make check BINARY=/private/tmp/dot-doctor-capability/dot` 均通过，
-  正准备独立 `fix(paths)` 提交。
+  并以 `bc6d779` 单独提交。
 - [x] 2026-07-18：实现确定性 findings/result、error/warning 退出映射、requires 诊断标记与
   compatibility 继续语义，并加入独立 Git index `*.local` 查询。doctor/manifest 窄测连续 20 次
   通过，覆盖 warning-only=2、非法/缺失/不满足 requires、unknown key、TOML 损坏、tracked
   local、Git query failure 与 dev notice；`make check BINARY=/private/tmp/dot-doctor-findings/dot`
-  通过，正准备独立 `feat(doctor)` 提交。
+  通过，并以 `923e45c` 单独提交。
 - [x] 2026-07-18：完成严格 Load 后的全量 template/module-local 检查，以及当前 GOOS 上逐
   profile 的 Resolve/`ValidatePathBoundaries`。显式 profile 仅缩小 profile 边界集合；未选择与
   unassigned 模块仍做局部检查且不并入碰撞集合。macOS doctor/manifest 窄测连续 20 次、Linux
   amd64 Btrfs runtime 连续 5 次、Linux arm64 交叉编译及
-  `make check BINARY=/private/tmp/dot-doctor-static/dot` 均通过，正准备独立 `feat(doctor)` 提交。
+  `make check BINARY=/private/tmp/dot-doctor-static/dot` 均通过，并以 `e1d8e62` 单独提交。
 - [x] 2026-07-18：接入 Cobra `doctor --manifest-only`、稳定 finding/notice 输出和诊断退出码；
   裸 doctor 明确 M2 边界。CLI 行为测试覆盖 flag/`DOT_REPO`/default repo、profile 转发、missing
   与故意非法 machine config/state、零写入树快照、未创建 lock、输出失败优先级。macOS
   CLI/doctor 窄测连续 20 次、Linux amd64 Btrfs runtime 连续 5 次、Linux arm64 交叉编译及
-  `make check BINARY=/private/tmp/dot-doctor-cli/dot` 均通过，正准备独立 `feat(cli)` 提交。
+  `make check BINARY=/private/tmp/dot-doctor-cli/dot` 均通过，并以 `95bb30e` 单独提交。
 - [x] 2026-07-18：创建已确认的最小根 `dot.toml`，仅含 `requires = ">=0.1.0"` 与空 `mac`
   profile；未创建或读取 `modules/`。`make check BINARY=/private/tmp/dot-doctor-config/dot` 与使用
   新建绝对临时 HOME、清除 `DOT_CONFIG`/`DOT_REPO` 的真实仓库 manifest-only 检查均通过，
-  正准备独立 `chore(config)` 提交。
+  并以 `a2ce4d7` 单独提交。
 - [x] 2026-07-18：新增 `make doctor-manifest` 并接入统一 `check`；目标构建绝对 binary、在
   `/tmp` 创建并清理隔离根、只创建 HOME 根、清除 `DOT_CONFIG`/`DOT_REPO`，以绝对 repo 运行且
   不传 profile。`make help`、独立目标与 `make check BINARY=/private/tmp/dot-doctor-ci-check/dot`
   通过且各只运行一次 doctor；Linux amd64 真实 CLI 在 Btrfs `/tmp` 与只读 repo mount 的同构
-  shell 流程通过。现有 workflow 已经让 macOS/Linux 各执行一次 `make check`，无需修改，正准备
-  独立 `ci(doctor)` 提交。
+  shell 流程通过。现有 workflow 已经让 macOS/Linux 各执行一次 `make check`，无需修改；变更以
+  `2ea8b9d` 单独提交。
 - [x] 2026-07-18：README 已同步 version/manifest-only、裸 doctor M1/M2 边界、真实仓库 Make
   目标、tracked `*.local` 门禁，以及根 `mac` profile/尚无 `modules/`；AGENTS/CONTRIBUTING 仅
   同步新增长期门禁命令事实。`make check BINARY=/private/tmp/dot-doctor-docs/dot` 与 diff check
-  通过，正准备独立 `docs(repo)` 提交。
-- [ ] 由未参与实现的只读 subagent 复核全部实质改动；以新的语义 commit 修复意见并完成必要
-  复核。
+  通过，并以 `ca4fccb` 单独提交。
+- [x] 2026-07-18：未参与实现的只读 subagent 复核全部实质改动，发现 Git 环境覆盖可能导致
+  false-clean 的一项 P1。修复清除全部 `GIT_*`，改为完整 index 后 Go 后缀筛选并增加三类真实
+  Git 回归；复核者再次给出 GO，确认 P1 已封闭且无新 P0-P3。
 - [ ] 完成最终门禁与 diff 检查，收口 living sections，迁移计划至 `completed/` 并创建
   plan-closure commit。
 
@@ -531,6 +532,16 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   与一个 `Manifest check passed.`；workflow 每个平台只有一个 `Run project checks: make check`。
   Impact: 只修改 Makefile，不机械修改 workflow；本地与两个 CI 平台继续共享同一事实来源。
 
+- Observation: 独立终审发现 Git 子进程会继承 `GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE`、
+  `GIT_LITERAL_PATHSPECS` 等环境覆盖；原 `git -C <repo> ls-files -- '*.local'` 因而可能查询其他
+  index，或把 glob 当作字面量，错误地产生 clean 结果。
+  Evidence: `final_readonly_review` 将其定为 P1；新增回归分别以 alternate index、alternate
+  repository/worktree 与 literal pathspec 环境运行真实 Git repo，并要求仍报告目标 repo 的
+  tracked `.local`。doctor 窄测连续 20 次、Linux amd64 容器连续 5 次、Linux arm64 交叉编译与
+  `make check BINARY=/private/tmp/dot-doctor-review-fix/dot` 均通过。
+  Impact: Git 查询清除所有 `GIT_*` 环境覆盖，只用 `-C` 指定 repository；命令读取完整 NUL
+  分隔 index，再由 Go 做 `.local` 后缀筛选，避免任何 pathspec 环境改变安全门禁语义。
+
 ## Decision Log
 
 - Decision: 将 goal 文件规定的默认语义边界分别保留为 ExecPlan、可选 paths fix、diagnostic
@@ -572,10 +583,13 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   Rationale: 这提供 CLI 可直接消费的确定性结果，同时不预建 M2 registry 或虚构降级路径。
   Date: 2026-07-18
 
-- Decision: tracked `*.local` 通过系统 Git 的 `git -C <repo> ls-files -z -- '*.local'` 查询，按
-  NUL 分隔保留任意合法路径 bytes；每个 tracked path 形成 error，命令失败或输出契约损坏形成
-  `git.index` error。该阶段不依赖 manifest load 是否成功。
-  Rationale: Git index 是 tracked 状态的单一真相源；查询失败不能等同于空结果，且无需新依赖。
+- Decision: tracked `*.local` 通过清除全部 `GIT_*` 环境覆盖后的系统 Git
+  `git -C <repo> ls-files -z` 查询；按 NUL 分隔完整 index，并在 Go 中按 `.local` 后缀筛选。每个
+  tracked path 形成 error，命令失败或输出契约损坏形成 `git.index` error。该阶段不依赖
+  manifest load 是否成功。
+  Rationale: Git index 是 tracked 状态的单一真相源；`GIT_*` 不得把查询重定向到其他 repo/index
+  或改变 pathspec 解释，查询失败也不能等同于空结果。读取完整 index 后本地筛选避免依赖 Git
+  pathspec 环境，同时无需新依赖。
   Date: 2026-07-18
 
 - Decision: static engine 在 strict `manifest.Load` 成功后，依次运行仓库级 templates、全部模块
@@ -614,8 +628,9 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
 
 ## Outcomes and Handoff
 
-尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建，首个 ExecPlan commit 已完成；
-Linux capability、findings/requires/Git 聚合、完整 static engine、CLI 与真实根 manifest 均已
-形成独立 commit，Makefile/CI 门禁也已提交。README 与必要长期仓库指南已完成验证，正待
-`docs(repo)` 提交；随后进入独立只读复核。merge、push、Pull Request、rebase、tag、发布和
-删除分支不在本 Goal 授权范围。
+尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建；ExecPlan、Linux capability、
+findings/requires/Git 聚合、完整 static engine、CLI、真实根 manifest、Makefile/CI 门禁与文档均
+已形成独立语义 commit。独立终审发现一项 Git 环境覆盖导致 false-clean 的 P1；修复与回归已
+通过 doctor 20 次窄测、Linux amd64 容器 5 次测试、Linux arm64 交叉编译及完整 `make check`，
+复核者已再次给出 GO，确认 P1 封闭且无新 P0-P3，正待独立 review-fix commit。merge、push、
+Pull Request、rebase、tag、发布和删除分支不在本 Goal 授权范围。
