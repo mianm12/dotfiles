@@ -155,6 +155,10 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   `git diff main...HEAD --check`、完整 diff/stat/name-status 与 status 审计均通过；范围内只有本
   Goal 的 24 个文件，worktree clean。已收口 living sections，并在本 plan-closure commit 中把
   计划迁移至 `completed/`；远端 GitHub Actions 因未授权 push 而未触发。
+- [ ] 2026-07-18：推送前人工 review 复现一项 P2：同一模块局部错误既形成
+  `manifest.modules` 根因，又在每个受影响 profile 的 `manifest.profile` 中原样重复，后者没有
+  profile provenance。用户确认按最小方案修复；本 plan-reopen commit 将计划迁回 `active/`，
+  随后补充 profile 上下文、行为测试、完整门禁、必要独立复核与再次收口。
 
 ## Milestones
 
@@ -374,6 +378,33 @@ Concrete steps：
 Commit 边界：
 
     docs(doctor): 收口 manifest doctor ExecPlan
+
+### Milestone 11：推送前 review 的 profile provenance 修复
+
+保持模块级与 profile 级检查的既有职责：`manifest.modules` 仍表达覆盖全部模块的仓库级根因，
+`manifest.profile` 仍表达某个 effective profile 无法继续路径校验的影响。只在
+`CheckManifest` 的逐 profile Resolve 错误边界用 `%w` 增加 profile 名，不做字符串去重，不新增
+finding 字段、诊断快照、checker registry 或第二套 resolve 语义；退出码、排序键、严格 Load、
+显式 profile 缩小范围与 unassigned 局部检查均不改变。
+
+新增行为测试让同一坏模块同时属于两个 profile，固定一个模块级 finding 与两个带各自 profile
+名的影响 finding；显式 profile 时仍保留全仓库模块根因，但只产生所选 profile 的影响 finding。
+运行 doctor 窄测、高重复测试、完整 `make check`、Linux amd64 runtime、Linux arm64 交叉编译
+以及完整 diff/status 检查。
+
+Commit 边界：
+
+    fix(doctor): 保留 profile 诊断来源
+
+### Milestone 12：review fix 复核与再次收口
+
+由未参与本次修复的只读 subagent 至少复核新增 fix diff，确认两层 finding 语义清楚、没有以
+字符串去重隐藏错误，且未改变 profile/path 安全边界。复核与全部门禁通过后更新 living
+sections，把计划重新迁至 `completed/`，并创建只包含计划终态更新和迁移的 closure commit。
+
+Commit 边界：
+
+    docs(doctor): 再次收口 manifest doctor ExecPlan
 
 ## Validation and Acceptance
 
@@ -636,8 +667,10 @@ module/template/profile/path 静态检查、严格只读 CLI、Git tracked `.loc
 能力只在同 fd 已证明的 ext-family/Btrfs byte-sensitive 目录上成功，其他 filesystem、casefold
 或查询失败仍 fail closed；未读取或创建真实 `modules/` 与 machine-local/private data。
 
-最终证据包括 doctor 窄测连续 20 次、Linux amd64 Btrfs 容器连续 5 次、Linux arm64 交叉编译、
+此前收口证据包括 doctor 窄测连续 20 次、Linux amd64 Btrfs 容器连续 5 次、Linux arm64 交叉编译、
 最终 `make check BINARY=/private/tmp/dot-doctor-final/dot`、完整 `main...HEAD` diff/stat/name-status、
 whitespace 与工作区审计。独立终审发现的 Git 环境覆盖 false-clean P1 已由 `66a64c6` 修复并经
-原复核者再次确认 GO，无新 P0-P3。GitHub Actions 未运行，因为本 Goal 不授权 push；没有声称
-远端 matrix 通过。merge、push、Pull Request、rebase、tag、发布和删除分支仍未执行。
+原复核者再次确认 GO。推送前人工 review 随后发现 profile Resolve 错误缺少 profile provenance
+的 P2，当前计划已重新开启，等待最小修复、验证、复核与再次收口。GitHub Actions 未运行，
+因为本 Goal 不授权 push；没有声称远端 matrix 通过。merge、push、Pull Request、rebase、tag、
+发布和删除分支仍未执行。
