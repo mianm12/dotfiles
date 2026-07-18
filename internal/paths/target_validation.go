@@ -28,7 +28,10 @@ type TargetSet struct {
 // ValidateTargetSet 在同一个只读 identity snapshot 内解析并校验全部 target。
 // 任一解析或 pair relation 失败都返回零值，调用方不会获得部分可信集合。
 func ValidateTargetSet(inputs []LabeledTarget) (TargetSet, error) {
-	resolver := newTargetResolver()
+	return validateTargetSet(inputs, newTargetResolver())
+}
+
+func validateTargetSet(inputs []LabeledTarget, resolver *targetResolver) (TargetSet, error) {
 	resolved := make([]resolvedLabeledTarget, len(inputs))
 	for index, input := range inputs {
 		if input.Label == "" {

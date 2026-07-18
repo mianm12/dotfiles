@@ -20,6 +20,7 @@ func TestResolveControlPlanePaths(t *testing.T) {
 	}
 	cleanHome := filepath.Clean(home)
 	want := []string{
+		cleanHome,
 		filepath.Clean(repo),
 		filepath.Clean(config),
 		filepath.Join(cleanHome, ".local", "state", "dot"),
@@ -29,6 +30,7 @@ func TestResolveControlPlanePaths(t *testing.T) {
 		filepath.Join(cleanHome, ".local", "bin", "dot"),
 	}
 	got := []string{
+		paths.EffectiveHome(),
 		paths.Repository(),
 		paths.Config(),
 		paths.StateRoot(),

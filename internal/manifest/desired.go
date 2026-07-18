@@ -38,6 +38,17 @@ type RuntimeContext struct {
 	Data     map[string]string
 }
 
+// ValidatedProfile 是完整 effective profile 的结构性 desired 已通过全部路径边界后的只读结果。
+// scope 选择只能消费 Entries 返回的副本，不能作为全局校验输入。
+type ValidatedProfile struct {
+	entries []DesiredEntry
+}
+
+// Entries 返回完整 profile 的结构性 desired 副本；scaffold 尚未渲染。
+func (profile ValidatedProfile) Entries() []DesiredEntry {
+	return cloneDesiredEntries(profile.entries)
+}
+
 // Enumerate 把 effective profile 转换为确定排序且已完成 scaffold 渲染的 desired entries。
 // 它只读取 source 树，不读取或修改 target，也不执行文件系统身份或控制面校验。任一模板
 // parse、变量或渲染错误都返回 nil，planner 不会看到部分结果。
@@ -84,13 +95,46 @@ func (p ResolvedProfile) enumerateStructure(home string) ([]DesiredEntry, error)
 // 并在不渲染 scaffold 的前提下整体校验 target identity/topology。
 // 该接缝保持私有，避免消费者绕过 control-plane 全局入口直接取得结构性 desired。
 func (p ResolvedProfile) validateTargetStructure(home string) ([]DesiredEntry, error) {
-	cleanHome, err := cleanEffectiveHome(home)
+	entries, targets, err := p.targetStructure(home)
 	if err != nil {
 		return nil, err
 	}
+	if _, err := paths.ValidateTargetSet(targets); err != nil {
+		return nil, fmt.Errorf("resolved profile %q target paths: %w", p.name, err)
+	}
+	return entries, nil
+}
+
+// ValidatePathBoundaries 是完整 effective profile 的共享全局路径入口。
+// HOME 只取自同一 ControlPlanePaths；形成完整结构后依次校验控制面、target set 与
+// target/control cross-product，失败不返回子集。
+func (p ResolvedProfile) ValidatePathBoundaries(
+	controlPaths paths.ControlPlanePaths,
+) (ValidatedProfile, error) {
+	entries, targets, err := p.targetStructure(controlPaths.EffectiveHome())
+	if err != nil {
+		return ValidatedProfile{}, err
+	}
+	if _, err := paths.ValidatePathBoundaries(controlPaths, targets); err != nil {
+		return ValidatedProfile{}, fmt.Errorf("resolved profile %q path boundaries: %w", p.name, err)
+	}
+	return ValidatedProfile{entries: entries}, nil
+}
+
+func (p ResolvedProfile) targetStructure(home string) ([]DesiredEntry, []paths.LabeledTarget, error) {
+	if !manifestNamePattern.MatchString(p.name) {
+		return nil, nil, fmt.Errorf("invalid resolved profile name %q", p.name)
+	}
+	if !isSupportedGOOS(p.goos) {
+		return nil, nil, fmt.Errorf("resolved profile has unsupported GOOS %q", p.goos)
+	}
+	cleanHome, err := cleanEffectiveHome(home)
+	if err != nil {
+		return nil, nil, err
+	}
 	entries, err := p.enumerateStructure(cleanHome)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	targets := make([]paths.LabeledTarget, len(entries))
 	for index, entry := range entries {
@@ -104,10 +148,15 @@ func (p ResolvedProfile) validateTargetStructure(home string) ([]DesiredEntry, e
 			Path: entry.TargetPath,
 		}
 	}
-	if _, err := paths.ValidateTargetSet(targets); err != nil {
-		return nil, fmt.Errorf("resolved profile %q target paths: %w", p.name, err)
+	return entries, targets, nil
+}
+
+func cloneDesiredEntries(entries []DesiredEntry) []DesiredEntry {
+	cloned := append([]DesiredEntry(nil), entries...)
+	for index := range cloned {
+		cloned[index].Content = append([]byte(nil), cloned[index].Content...)
 	}
-	return entries, nil
+	return cloned
 }
 
 func (p ResolvedProfile) validateRuntimeContext(context RuntimeContext) (templateengine.Context, error) {

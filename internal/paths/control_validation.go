@@ -22,7 +22,10 @@ type ControlPlane struct {
 // ValidateControlPlane 解析全部固定控制面成员并校验不同家族两两隔离。
 // state root 到预定 child 的正向包含是唯一例外；相等、反向包含和 sibling overlap 仍拒绝。
 func ValidateControlPlane(paths ControlPlanePaths) (ControlPlane, error) {
-	resolver := newTargetResolver()
+	return validateControlPlane(paths, newTargetResolver())
+}
+
+func validateControlPlane(paths ControlPlanePaths, resolver *targetResolver) (ControlPlane, error) {
 	var resolved [controlMemberCount]resolvedControlMember
 	for index, member := range paths.members {
 		if member.role != controlMemberRole(index) {

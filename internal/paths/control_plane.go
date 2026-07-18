@@ -35,9 +35,10 @@ type controlPathMember struct {
 	hasParent bool
 }
 
-// ControlPlanePaths 是一次运行中 repo、config、state 家族与已安装 binary 的绝对展示路径。
-// 字段与 state 预定父子关系保持不透明，由本类型作为唯一成员定义。
+// ControlPlanePaths 保存一次运行的 effective HOME，以及 repo、config、state 家族与已安装
+// binary 的绝对展示路径。字段与 state 预定父子关系保持不透明，由本类型作为唯一成员定义。
 type ControlPlanePaths struct {
+	home    string
 	members [controlMemberCount]controlPathMember
 }
 
@@ -58,7 +59,7 @@ func ResolveControlPlanePaths(home, repo, config string) (ControlPlanePaths, err
 	}
 
 	stateRoot := filepath.Join(cleanHome, ".local", "state", "dot")
-	return ControlPlanePaths{members: [controlMemberCount]controlPathMember{
+	return ControlPlanePaths{home: cleanHome, members: [controlMemberCount]controlPathMember{
 		controlMemberRepository: {
 			role:   controlMemberRepository,
 			family: controlFamilyRepository,
@@ -92,6 +93,11 @@ func ResolveControlPlanePaths(home, repo, config string) (ControlPlanePaths, err
 			path:   filepath.Join(cleanHome, ".local", "bin", "dot"),
 		},
 	}}, nil
+}
+
+// EffectiveHome 返回构造整组控制面路径时使用的有效 HOME。
+func (paths ControlPlanePaths) EffectiveHome() string {
+	return paths.home
 }
 
 func cleanControlPlaneInput(name, path string) (string, error) {
