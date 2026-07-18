@@ -136,9 +136,12 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
   `go test -count=1 ./internal/paths -run
   'Test(ResolveControlPath|ResolveTarget_LeafSymlinkIsNotFollowed|ResolveTargetIdentity_BasicRejectsInvalidPath)'`
   通过，确认 control path 接受绝对输入、target root 被拒绝且 leaf symlink 不跟随的当前契约。
-- [ ] Milestone 1：已复现 identity capability gate；等待维护者裁决是先独立扩展 path identity，
-  还是明确 control root/leaf 的规范语义。裁决前不得实现 boundary fallback；gate 解除后再建立
-  控制面路径家族。
+- [x] 2026-07-18：维护者授权在当前分支先以独立 `fix(paths)` commit 扩展 filesystem root 与
+  control leaf-symlink identity 语义。新增只读 control resolution，同时保护展示 leaf 和
+  symlink 跟随后的消费位置；target resolver 保持拒绝 root、leaf 不跟随。control identity
+  窄测、`go test -count=20 ./internal/paths`、darwin/linux amd64 test binary 交叉编译和
+  `make check BINARY=/private/tmp/.../dot` 均通过；未增加 boundary fallback 或依赖。
+- [ ] Milestone 1：identity 前置修复完成并独立提交后，继续建立控制面路径家族。
 - [ ] Milestone 2：以共享 identity/topology 语义校验控制面家族两两隔离。
 - [ ] Milestone 3：校验完整 profile 的 target identity 与祖先拓扑不变量。
 - [ ] Milestone 4：合并 desired/control-plane 校验并证明部分作用域无法绕过完整 profile。
@@ -413,7 +416,7 @@ Commit 边界：
 
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
-| control path 全部可由 identity 语义表达 | root 与 control leaf-symlink capability 回归、identity 前置修复/裁决证据 | 已发现缺口，等待 gate 解除 |
+| control path 全部可由 identity 语义表达 | root 与 control leaf-symlink capability 回归、identity 前置修复/裁决证据 | identity 前置修复本地验证通过，待 checkpoint commit |
 | repo/config/state/binary 集中解析 | `ControlPlanePaths`/等价测试，cwd 与 `--home` 反例 | 待验证 |
 | state family 唯一预定包含例外 | family member matrix 与 alias 反例；源码复核无消费者例外 | 待验证 |
 | 控制面家族两两隔离 | equal、双向 ancestor、symlink/case/Unicode alias 测试 | 待验证 |
@@ -452,6 +455,9 @@ targets；不得读取或修改真实 `modules/`、真实 machine config、state
 已知 root/control-leaf capability gate 未解除时，恢复动作只有记录证据并请求裁决；不得创建
 临时字符串或 `EvalSymlinks` fallback。identity 前置修复若在另一 branch 完成，应先由人工
 review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary branch 复制两套身份语义。
+2026-07-18 维护者进一步授权在当前分支以独立 `fix(paths)` commit 解除该 gate；该授权只扩大
+本 Goal 的 identity 前置修复范围，不授权把 boundary、mutation Precond 或其他 milestone
+混入同一提交。
 
 ## Interfaces and Dependencies
 
@@ -499,6 +505,17 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   Evidence: `internal/paths/resolution.go` 及 identity topology/filesystem tests。
   Impact: boundary 应组合 `Equal`/双向 `IsAncestorOf`，不新写路径前缀、`EvalSymlinks` 或 inode
   判等。
+- Observation: root relation 不需要改变 desired target 的合法域；只要 identity walker 把
+  filesystem root 记录为所有非 root resolution 的首个祖先，control root 就能通过同一关系
+  覆盖整个树。
+  Evidence: `ResolveTarget(root)` 继续拒绝；新增 control-root/target-descendant 回归与既有 paths
+  测试、20 次重复测试均通过。
+  Impact: root 特殊输入只存在于 control resolver，boundary 无需 root 字符串分支。
+- Observation: control leaf symlink 必须同时保护入口目录项和跟随后的最终消费位置；只保存
+  canonical endpoint 会漏掉位于 repo 内的 symlink entry，只保存 entry 又会漏掉直接真实路径。
+  Evidence: directory/file/chained leaf-symlink 的 control/target 与 control/control 回归。
+  Impact: `ControlPathResolution` 保存 entry 与 consumed 两个 opaque `TargetResolution`，关系仍
+  全部复用同一 walker 和 identity equality。
 
 ## Decision Log
 
@@ -527,6 +544,13 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   Rationale: 用户明确要求 identity 无法表达规范性质时先记录并暂停；改变 root/control
   resolution 或规范接受集合需要独立审查与明确授权。
   Date: 2026-07-18
+- Decision: 经维护者授权，在当前分支以独立 `fix(paths)` checkpoint 增加 control path 的只读
+  resolution：它同时保护展示 leaf 位置和 leaf symlink 跟随后的实际消费位置，并能把
+  filesystem root 作为 control tree root；既有 `ResolveTarget` 仍拒绝 root 且不跟随 leaf。
+  Rationale: control 与 desired 对 leaf 的消费语义不同，但二者必须共享 identity walker、名称
+  语义和 topology；在 identity 层显式建模可解除 gate，同时避免 boundary 自行 Readlink、
+  `EvalSymlinks` 或字符串特判。
+  Date: 2026-07-18
 - Decision: 不新增依赖，不持久化 identity，不跨文件系统 mutation 快照复用 resolution。
   Rationale: 当前 API 是只读、进程内、snapshot-scoped 的唯一语义源；本 Goal 无需改变这些
   边界。
@@ -534,15 +558,15 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
 
 ## Outcomes and Handoff
 
-当前已完成计划起点与 Milestone 1 capability gate 的复现。2026-07-18 从干净
-`main@8075a6c` 创建 `feat/path-boundaries`，以 `4f05174` 提交本计划；随后现有 paths 窄测通过，
-确认 filesystem root 与 control leaf-symlink consumption capability 缺口。本计划按批准的
-停止条件暂停在 Milestone 1，尚未修改生产代码或测试，未执行 `make check`、双平台 CI、后续
-milestone 或最终独立实现复核，也未访问真实私人数据或进行未授权 Git/托管操作。
+当前已完成计划起点、Milestone 1 capability gate 的复现和获授权的 identity 前置修复。
+2026-07-18 从干净 `main@8075a6c` 创建 `feat/path-boundaries`，以 `4f05174` 提交本计划；
+`cb501d3` 记录 gate。新增 control resolution 后，paths 窄测、20 次重复、darwin/linux amd64
+交叉编译和本机 `make check` 通过；尚待形成独立 `fix(paths)` checkpoint，之后才能继续
+Milestone 1 控制面家族。未执行真实 Linux runner、后续 milestone 或最终独立实现复核，也未
+访问真实私人数据或进行未授权 Git/托管操作。
 
-后续接手者应从 `feat/path-boundaries@4f05174` 及其后的计划暂停提交恢复，读取本计划的已知
-gate，并先取得 path-identity 前置修复或 control root/leaf 规范语义的裁决。gate 解除后才按
-Milestone 1–5 顺序推进，每个 milestone 同步更新 living sections、执行窄测与完整门禁、检查
+后续接手者应先确认独立 identity checkpoint 已成功提交且工作区 clean，再按 Milestone 1–5
+顺序推进；每个 milestone 同步更新 living sections、执行窄测与完整门禁、检查
 完整 diff 并创建独立 semantic commit。最终只有双平台 CI、独立复核、所有意见处理和计划
 生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`
 达到 review-ready；merge、push、PR 或发布仍不由本计划自身授权。

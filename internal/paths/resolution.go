@@ -142,24 +142,44 @@ func (resolver *targetResolver) resolveTargetParent(path string) (resolvedTarget
 // 与 filepath.EvalSymlinks 保持同一上限，避免递归 link 无限展开。
 const maxSymlinkTraversals = 255
 
-// resolveExistingDirectory 逐组件解析既有目录，并保留 symlink 展开的完整遍历轨迹。
+type resolvedExistingPath struct {
+	canonical  string
+	resolution TargetResolution
+	info       fs.FileInfo
+}
+
+// resolveExistingDirectory 逐组件解析既有目录，并把目录自身加入调用方 target 的祖先拓扑。
 func (resolver *targetResolver) resolveExistingDirectory(path string) (string, []TargetIdentity, error) {
-	// walker 需要 Readlink 才能记录 trace，但只有内核 lookup 能权威判定完整路径可达。
+	resolved, err := resolver.resolveExistingPath(path)
+	if err != nil {
+		return "", nil, err
+	}
+	if !resolved.info.IsDir() {
+		return "", nil, fmt.Errorf("%w: target ancestor %q is not a directory", ErrPathBlocked, path)
+	}
+	ancestors := appendUniqueIdentity(resolved.resolution.ancestors, resolved.resolution.identity)
+	return resolved.canonical, ancestors, nil
+}
+
+// resolveExistingPath 跟随完整展示路径（包含 leaf symlink），返回最终消费位置与完整遍历轨迹。
+// walker 负责记录 trace；只有内核 Stat 能权威判定整条路径实际可达。
+func (resolver *targetResolver) resolveExistingPath(path string) (resolvedExistingPath, error) {
 	resolvedInfo, err := os.Stat(path)
 	if err != nil {
 		if isTraversalBlocker(err) {
-			return "", nil, fmt.Errorf("%w: target ancestor %q cannot resolve to a directory", ErrPathBlocked, path)
+			return resolvedExistingPath{}, fmt.Errorf("%w: path %q cannot resolve to an existing object", ErrPathBlocked, path)
 		}
-		return "", nil, fmt.Errorf("inspect target ancestor %q: %w", path, err)
-	}
-	if !resolvedInfo.IsDir() {
-		return "", nil, fmt.Errorf("%w: target ancestor %q is not a directory", ErrPathBlocked, path)
+		return resolvedExistingPath{}, fmt.Errorf("inspect existing path %q: %w", path, err)
 	}
 
 	root, pending := splitTraversalPath(path)
 	currentRoot := root
 	currentComponents := make([]string, 0, len(pending))
-	ancestors := make([]TargetIdentity, 0, len(pending))
+	ancestors := make([]TargetIdentity, 0, len(pending)+1)
+	rootIdentity := newTargetIdentity(root, nil)
+	if len(pending) > 0 {
+		ancestors = append(ancestors, rootIdentity)
+	}
 	symlinks := 0
 
 	for len(pending) > 0 {
@@ -179,38 +199,52 @@ func (resolver *targetResolver) resolveExistingDirectory(path string) (string, [
 		actual, info, err := resolver.resolveTraversedEntry(parent, component)
 		if err != nil {
 			if isTraversalBlocker(err) {
-				return "", nil, fmt.Errorf("%w: target ancestor component %q is not traversable", ErrPathBlocked, filepath.Join(parent, component))
+				return resolvedExistingPath{}, fmt.Errorf("%w: path component %q is not traversable", ErrPathBlocked, filepath.Join(parent, component))
 			}
-			return "", nil, fmt.Errorf("inspect target ancestor component %q: %w", filepath.Join(parent, component), err)
+			return resolvedExistingPath{}, fmt.Errorf("inspect path component %q: %w", filepath.Join(parent, component), err)
 		}
 
 		entryComponents := append(slices.Clone(currentComponents), actual)
-		ancestors = appendUniqueIdentity(ancestors, newTargetIdentity(currentRoot, entryComponents))
+		entryIdentity := newTargetIdentity(currentRoot, entryComponents)
 		entryPath := filepath.Join(parent, actual)
 		if info.Mode()&fs.ModeSymlink != 0 {
+			ancestors = appendUniqueIdentity(ancestors, entryIdentity)
 			symlinks++
 			if symlinks > maxSymlinkTraversals {
-				return "", nil, fmt.Errorf("%w: too many symlinks while resolving target ancestor %q", ErrPathBlocked, path)
+				return resolvedExistingPath{}, fmt.Errorf("%w: too many symlinks while resolving path %q", ErrPathBlocked, path)
 			}
 			link, readErr := os.Readlink(entryPath)
 			if readErr != nil {
-				return "", nil, fmt.Errorf("read target ancestor symlink %q: %w", entryPath, readErr)
+				return resolvedExistingPath{}, fmt.Errorf("read path symlink %q: %w", entryPath, readErr)
 			}
 			linkRoot, linkComponents := splitTraversalPath(link)
 			if filepath.IsAbs(link) {
 				currentRoot = linkRoot
 				currentComponents = nil
+				ancestors = appendUniqueIdentity(ancestors, newTargetIdentity(linkRoot, nil))
 			}
 			pending = append(linkComponents, pending...)
 			continue
 		}
-		if !info.IsDir() {
-			return "", nil, fmt.Errorf("%w: target ancestor %q is not a directory", ErrPathBlocked, entryPath)
+		if len(pending) == 0 {
+			return resolvedExistingPath{
+				canonical:  joinIdentityPath(currentRoot, entryComponents),
+				resolution: TargetResolution{identity: entryIdentity, ancestors: ancestors},
+				info:       resolvedInfo,
+			}, nil
 		}
+		if !info.IsDir() {
+			return resolvedExistingPath{}, fmt.Errorf("%w: path component %q is not a directory", ErrPathBlocked, entryPath)
+		}
+		ancestors = appendUniqueIdentity(ancestors, entryIdentity)
 		currentComponents = entryComponents
 	}
 
-	return joinIdentityPath(currentRoot, currentComponents), ancestors, nil
+	return resolvedExistingPath{
+		canonical:  joinIdentityPath(currentRoot, currentComponents),
+		resolution: TargetResolution{identity: newTargetIdentity(currentRoot, currentComponents), ancestors: ancestors},
+		info:       resolvedInfo,
+	}, nil
 }
 
 func isTraversalBlocker(err error) bool {
