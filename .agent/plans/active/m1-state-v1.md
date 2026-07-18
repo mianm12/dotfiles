@@ -1,0 +1,186 @@
+# feat/state-v1：建立严格只读的 state v1 加载边界
+
+本 ExecPlan 是 living document。实施期间必须持续更新 `Progress`、
+`Surprises & Discoveries`、`Decision Log` 和 `Outcomes and Handoff`，并遵循
+`.agent/PLANS.md`。
+
+## Purpose / Big Picture
+
+完成后，后续 loader、planner 与 state store 可以通过 `internal/state` 读取 state v1，并明确
+区分文件缺失、持久格式损坏、版本过新和 M1 暂不支持的 rendered 记录。任意 JSON 对象层级的
+重复 member、严格 schema 或永久词法语义错误都会 fail closed；当前文件系统拓扑后来变得不可达、
+落入控制面别名或缺少只读 identity capability 时，不会被误标成永久 corrupt。
+
+本切片只建立只读 model、codec、loader 与独立 target identity 校验，不写 state、不创建目录或
+lock。所有测试使用 `t.TempDir()` 内的合成 HOME/state，不接触真实私人数据。
+
+## Scope / Non-goals
+
+范围内：
+
+- 新增 `internal/state` 的 state v1 model、严格 JSON codec 和只读文件 loader。
+- 在解码前扫描完整 JSON token 流，拒绝任意对象层级重复 member；member 名按 JSON 解码后的
+  字符串比较，因此 `a` 与 `\u0061` 同样重复。未知嵌套对象即使随后会被 strict schema 拒绝，
+  其中的重复 member 也必须先被识别。
+- 严格校验顶层、entry 与 run_once schema；必填字段、类型、未知字段、RFC3339 时间、kind 专属
+  证据、规范 `~/` target key、module/source/run_once key 和支持的 `sha256:<hex>` 摘要。
+- 区分 missing、corrupt、too-new、unsupported-rendered。合法 rendered 先通过完整 v1 校验，
+  再返回 unsupported；畸形 rendered 仍属于 corrupt。
+- 将不依赖当前文件系统的结构/词法语义验证与依赖 target identity 的运行时路径验证分层。
+  多个 state key 在当前稳定拓扑下解析为同一 target identity 时 fail closed；祖先阻断、控制面
+  alias 或 identity capability 不足返回独立的 runtime path validation 错误，不改变 codec 对
+  持久数据的 corrupt 判断。
+- 覆盖 macOS/Linux 编译、窄测、完整门禁、完整 diff 与 clean worktree。
+
+明确不做：
+
+- 不写 state、不创建 state root/state.json/lock、不取锁、不实现 atomic store、权限修正或恢复。
+- 不实现 ownership、planner、executor、apply/add/status/doctor/state rebuild 或 rendered 的 M2
+  生命周期。
+- 不检查历史 source/script 当前是否存在，不把祖先拓扑后来变化当作格式损坏，不建立
+  control-plane alias 的永久持久语义。
+- 不修改 CLI、`internal/runtime` preflight、`internal/paths`、Makefile、CI、README、规范、
+  `go.mod` 或 `go.sum`；不新增依赖。
+- 不读取真实 `modules/`、machine config、state、backup、HOME 或其他私人数据。
+
+## Contract and Context
+
+- `docs/05-apply-engine.md` §2：state v1 的顶层、entry/run_once schema、三态、重复 member、
+  rendered M1 fail-closed、target identity 冲突和历史记录语义。
+- `docs/02-architecture.md` §2、§4–§6：state 路径来自已解析控制面；state 组件负责校验读取，
+  mutation 前 fail closed；当前拓扑安全与持久格式语义必须分开。
+- `docs/03-manifest-spec.md` §8：state 加载位于 requires 与严格 manifest 之后的独立阶段；本切片
+  不改变 manifest 加载。
+- `docs/04-cli-spec.md` §2–§3：state fail-closed 最终映射 exit 1；本切片不接 CLI。
+- `docs/08-testing.md` §1–§3：任意层级重复 member、v1 字段、target/module/source/hash 与多个
+  key 同 identity 是不可删除回归；祖先暂不可达记录不得被抹掉。
+- `docs/09-roadmap.md` §1 M1、§3：M1 交付严格 state v1，但 rendered 只保留格式并整体不支持。
+
+基线为 clean `main@7b43272`。现有 `internal/paths.ResolveTargetIdentity` 提供只读、不透明、只在
+当前稳定拓扑内有效的 target identity；它可能返回 `ErrPathBlocked` 或
+`ErrIdentityUnavailable`。这些错误描述当前路径验证能力，不是 state JSON 的永久 corrupt 证据。
+当前仓库没有 `internal/state`，也没有 store/lock/loader 接线。
+
+## Progress
+
+- [x] 2026-07-19：确认 `pwd` 与 Git 顶层均为分配 worktree，branch 为 `feat/state-v1`，
+  HEAD/base 为 `7b43272`，工作树 clean。
+- [ ] 提交本 active ExecPlan 起点。
+- [ ] 测试先行实现严格 codec、model 与错误分类。
+- [ ] 增加只读 file loader 和独立 target identity validation。
+- [ ] 完成窄测、双平台编译、`make check`、diff 审计与验证进度提交。
+- [ ] 等待 coordinator 指派未参与实现的只读 reviewer；计划保持 active。
+
+## Milestones
+
+### Milestone 1：提交 ExecPlan 起点
+
+只提交本计划，记录范围、持久格式与运行时路径安全分层、验证和授权，不修改生产代码或测试。
+
+Commit 边界：
+
+    docs(state): 新建 state v1 ExecPlan
+
+### Milestone 2：严格 state v1 codec 与结果分类
+
+先增加会失败的测试，再建立最小 model 和内存 codec。解码协议先遍历完整 token 流并维护每个
+object 自己的 decoded-member set，任何重复立即归类 corrupt；随后仅提取 version 进行版本分流，
+`version > 1` 返回 too-new，`version = 1` 执行 strict schema 与完整词法语义校验。合法 rendered
+记录在全部字段、摘要与时间通过后返回 unsupported-rendered。版本缺失、非整数、零/负数或其他
+无效 v1 文档属于 corrupt。
+
+测试覆盖顶层、entries/run_once map、record、未知嵌套对象和转义同名重复；各 kind 的必填、禁止
+证据字段；RFC3339；规范 target/module/source/run_once key；sha256 摘要；历史 source/script 不
+存在仍可解码。
+
+Commit 边界：
+
+    feat(state): 严格解码 state v1
+
+### Milestone 3：只读 loader 与 target identity 分层验证
+
+增加只读 loader：明确缺失返回 missing，其他 open/read 错误不伪装成 missing，读取后复用 codec。
+loader 不创建 parent 或文件。增加独立 `ValidateTargetIdentities` 一类的只读边界：先把规范 target
+key 展开到给定 absolute HOME，再解析 identity；相同 identity 返回 fail-closed 冲突错误。
+`ErrPathBlocked`、`ErrIdentityUnavailable` 和其他路径 IO 错误保持 runtime validation cause，不能
+变成 `ErrCorrupt`。控制面 overlap 仍留给后续 runtime loading 组合已校验控制面处理。
+
+Commit 边界：
+
+    feat(state): 分离 state 路径运行时验证
+
+### Milestone 4：完整验证与 worker 交付记录
+
+运行窄测、高重复测试、darwin/linux 编译、完整 `make check`、base...HEAD diff check、完整 diff 和
+untracked 审计。更新本计划的 Progress、Discoveries、Decision Log 与 Handoff，但保持 active，
+不执行生命周期迁移或 closure。
+
+Commit 边界：
+
+    docs(state): 记录 state v1 验证
+
+## Validation and Acceptance
+
+| 必须成立的性质 | 验证证据 | 状态 |
+|---|---|---|
+| 任意对象层级与 escaped 同名重复 member 均 corrupt | codec table tests | 待验证 |
+| v1 strict schema、必填、类型、时间、kind 证据 | codec/model tests | 待验证 |
+| target/module/source/run_once/hash 词法语义严格 | semantic tests | 待验证 |
+| missing/corrupt/too-new/unsupported-rendered 可区分 | loader/codec tests | 待验证 |
+| 畸形 rendered 是 corrupt，合法 rendered 才 unsupported | rendered tests | 待验证 |
+| 多 target key 同 identity fail closed | identity filesystem tests | 待验证 |
+| blocked/capability/IO 不被标成 corrupt | identity error tests | 待验证 |
+| loader 与 validation 全程零写入 | tree snapshot tests | 待验证 |
+| macOS/Linux 可编译 | GOOS 交叉编译 | 待验证 |
+| 当前平台完整门禁 | `make check` | 待验证 |
+
+从本 worktree 根运行：
+
+    go test ./internal/state
+    go test -count=20 ./internal/state ./internal/paths
+    GOOS=darwin GOARCH=amd64 go test -run '^$' ./internal/state
+    GOOS=linux GOARCH=amd64 go test -run '^$' ./internal/state
+    git diff 7b43272...HEAD --check
+    make check BINARY=/private/tmp/dot-cp2-state-v1-check
+
+成功判据是全部本地命令退出 0，完整 diff 只含本计划与 `internal/state`，worktree clean。交叉编译
+只证明编译，不声称目标平台运行；远端 CI 未实际运行时必须标为待验收。
+
+## Safety, Authorization, and Recovery
+
+用户已授权在分配 worktree 的本分支创建/修改范围内文件、stage、commit 和运行门禁；不授权操作
+main、其他 worktree、merge、push、rebase、amend、branch 删除或读取真实私人数据。测试只使用
+`t.TempDir()` 合成 HOME/state；构建输出进入 `/private/tmp`。
+
+每个 milestone 形成独立 commit。失败保留最近成功 commit，以新 fix commit 修正；不 reset、
+restore、clean、amend、吞错或用近似语义继续。worker 交付时计划保持 active，由 coordinator
+安排 review、修复和 lifecycle closure。
+
+## Interfaces and Dependencies
+
+`internal/state` 只依赖标准库与现有 `internal/paths`。持久 model 不导出可由调用方绕过验证构造并
+写回的公共字段接口；只读 consumer 通过 getter 或副本读取。错误分类应支持 `errors.Is`，使后续
+runtime loader 能区分 missing/corrupt/too-new/unsupported-rendered 与 path validation 失败。
+
+本切片不规定 store 或 runtime loader 私有类型。未来 store 必须消费已验证 model 并原子发布；
+未来 runtime-loading 必须在其实际消费 state 的模式调用 loader，再单独组合当前 control-plane
+与 target identity/path safety，不得把恢复路径不消费的 state 变成前置门禁。
+
+## Surprises & Discoveries
+
+暂无。
+
+## Decision Log
+
+- Decision: JSON 重复 member 检测先于 version/schema 分类，并覆盖未知嵌套对象。
+  Rationale: duplicate 是原始文档歧义，不能因普通 decoder 的 last-wins 或 too-new 分流被隐藏。
+  Date: 2026-07-19
+
+- Decision: codec 只判永久格式与词法语义；当前 target identity 冲突使用独立只读验证入口。
+  Rationale: 多 key 当前确认为同一 identity 时必须 fail closed，但祖先阻断、控制面 alias 或 Linux
+  missing-name capability 不足是运行时路径安全，不能永久污染 corrupt 诊断或诱导用户丢 state。
+  Date: 2026-07-19
+
+## Outcomes and Handoff
+
+尚未完成。worker 将在实现、验证和完整 diff 审计后更新本节；计划保持 active，等待独立复核。
