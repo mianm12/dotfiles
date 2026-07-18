@@ -114,8 +114,11 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   测试；未读取真实 modules 或 machine-local/private data。
 - [x] 2026-07-18：创建本 active ExecPlan；Scope / Non-goals、capability gate、milestones、验证、
   授权与停止条件已写入，`git diff --check` 通过，正进入仅包含计划文件的首个语义 commit。
-- [ ] 执行 Linux missing-path capability gate；若共享 paths 修复必要，先设计复核，再实现、
-  测试、门禁、diff 检查并以独立 `fix(paths)` 提交。
+- [x] 2026-07-18：完成 Linux missing-path capability gate。共享 `missingNameKey` 仅对同 parent
+  fd 已证明的 ext-family/Btrfs byte identity 返回成功，其他情况 fail closed；两轮独立设计复核
+  均为 GO、无 P0/P1。Linux amd64 Btrfs runtime 全量路径测试连续 5 次、Linux arm64 交叉编译、
+  macOS 路径测试连续 20 次及 `make check BINARY=/private/tmp/dot-doctor-capability/dot` 均通过，
+  正准备独立 `fix(paths)` 提交。
 - [ ] 实现 findings、requires 与诊断继续语义，完成测试、门禁、diff 检查和语义提交。
 - [ ] 完成全部 manifest/profile/template/path/Git 静态检查，完成测试、门禁、diff 检查和语义
   提交。
@@ -414,6 +417,46 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   Impact: doctor 实现前必须先跑 capability gate；不能靠 CLI/doctor fallback 或创建控制面占位
   文件绕过，必要修复必须留在共享 paths 并保持 mutation fail-closed。
 
+- Observation: Linux 没有通用的只读“比较两个尚不存在名称”的 VFS API；但内核 UAPI 的
+  `FS_IOC_GETFLAGS` / `FS_CASEFOLD_FL` 能对支持 per-directory casefold 的文件系统暴露现存
+  parent 是否使用不区分大小写 lookup。ext2/3/4 共用的 filesystem magic 与该 flag 可在不创建
+  probe entry 的情况下形成有限、可拒绝的证明；其他未明确证明的 filesystem 仍应返回
+  `ErrIdentityUnavailable`。
+  Evidence: Linux UAPI `include/uapi/linux/fs.h` 定义 `FS_IOC_GETFLAGS` 与
+  `FS_CASEFOLD_FL = 0x40000000`；ext4 文档规定该 flag 表示目录内容使用 case-insensitive lookup。
+  Impact: 候选实现只在已识别且成功读取 flag、且 casefold 未启用的 ext-family parent 上把
+  missing name 的原始 bytes 作为 key；casefold、ioctl 失败与未识别 filesystem 一律 fail closed。
+  该设计先经独立只读复核，不能扩展为 filesystem type 猜测或 doctor 专用 fallback。
+
+- Observation: 未参与实现的只读设计复核对 ext-family + casefold flag 联合证明给出 GO，
+  无 P0/P1；但要求 filesystem magic 与 inode flags 从同一个已打开 parent directory fd 查询，
+  ioctl request 按目标 ABI 的 `long` 尺寸构造，且 syscall 注入不得依赖 package-global mutable
+  hook。
+  Evidence: `paths_capability_review` 复核了 path identity/boundary 实现、已完成计划与相关规范，
+  并指出 path-based statfs 与另行 open/ioctl 会混合两个对象的证据。
+  Impact: 实现采用 open parent → `Fstatfs(fd)` → `FS_IOC_GETFLAGS(fd)` 的同 fd 顺序；把观测值
+  到 success/`ErrIdentityUnavailable` 的判断写为窄纯函数，保留真实 Linux 集成测试。nested
+  missing tail、case/NFC-NFD bytes、control/target 关系与零结果 fail-closed 都加入回归。
+
+- Observation: 完整 Linux runtime 窄测运行在 Docker 的匿名 Btrfs volume 上，首版
+  ext-family-only 证明因此按预期返回 `ErrIdentityUnavailable`；这不是 ioctl 或边界实现错误。
+  Btrfs 当前目录项 lookup 按名称长度与原始 bytes 精确比较，且同 fd 的
+  `FS_IOC_GETFLAGS` 查询成功。
+  Evidence: Linux runtime 输出的 statfs magic 为 `0x9123683e`；Linux kernel
+  `fs/btrfs/dir-item.c` 的 `btrfs_match_dir_item_name` 先比较 `name_len`，再调用
+  `memcmp_extent_buffer` 比较名称 bytes。
+  Impact: 在同 fd/type/flags 联合证明中加入 Btrfs magic；Btrfs lookup 源码是 byte-sensitive
+  的正向证据，flag 查询成功且未设置 `FS_CASEFOLD_FL` 是附加 fail-closed guard。overlay、
+  tmpfs、FUSE 与任何未证明 filesystem 继续 fail closed，不按 filesystem type 泛化。
+
+- Observation: Btrfs 增量经原只读设计复核者复核为 GO，无 P0/P1；逐 filesystem 证明、同 fd
+  绑定和所有未知/失败路径 fail closed 的不变量均不变。
+  Evidence: `paths_capability_review` 复核了 Btrfs kernel lookup、现有 resolver/relation 路径和
+  新增实现；建议明确 flag 只是附加 guard，并增加 synthetic Btrfs casefold 回归。
+  Impact: 单测固定 Btrfs zero flags 成功与 synthetic casefold bit 拒绝；query failure 继续由同
+  fd query 回归覆盖。任何 overlay/tmpfs/FUSE 支持或不经通用 flag 暴露的 lookup 变化都必须另行
+  复核。
+
 - Observation: 现有 workflow 已在 macOS/Linux 各执行同一个 `make check`。
   Evidence: `.github/workflows/ci.yml` 的单一 `Run project checks` step。
   Impact: 预期只改 Makefile 即可完成双平台门禁；没有语义需要时不修改 workflow。
@@ -434,8 +477,28 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   requires/TOML 与 Git index 这类独立检查继续聚合。
   Date: 2026-07-18
 
+- Decision: capability gate 的候选修复保持现有公开 path API 不变，只完善 Linux 平台私有
+  `missingNameKey` 的权威成功域：现存 parent 必须位于已由内核 lookup 实现证明 byte-sensitive
+  的 ext2/3/4 family 或 Btrfs，且只读
+  `FS_IOC_GETFLAGS` 成功并确认未设置 `FS_CASEFOLD_FL`；除此之外继续返回
+  `ErrIdentityUnavailable`。测试通过注入的 statfs/ioctl 结果覆盖成功、casefold、unknown fs 与
+  query failure，并保留真实 Linux 新机 fixture；生产修改前先做未参与实现的只读设计复核。
+  Rationale: 该方案不为 doctor 建旁路、不复制 relation 逻辑、不写 probe entry；严格 mutation
+  入口也只在内核已证明 byte-sensitive lookup 的目录上获得能力，无法证明时仍 fail closed。
+  新 filesystem 只有取得同等级内核 lookup 证据后才能逐项加入，不得扩大为类别 allowlist。
+  Date: 2026-07-18
+
+- Decision: 接受独立设计复核的 GO 结论，并把同 fd 绑定、ABI-correct ioctl、纯 classifier、
+  逐项证明的 filesystem 成功域和 unknown/casefold/query failure fail-closed 作为实现约束。该联合证据
+  不等于已完成 path-identity 计划否决的“仅凭 filesystem type 猜测”；缺少任一证据都拒绝。
+  Rationale: ext-family 的 per-directory casefold 行为由 `FS_CASEFOLD_FL` 暴露；flag 未设置时
+  名称按 opaque bytes 区分。共享 resolver 仍只在单次拓扑 snapshot 内使用结果，现存 symlink、
+  control entry/consumed 和 relation engine 均不改变。
+  Date: 2026-07-18
+
 ## Outcomes and Handoff
 
-尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建，强制上下文读取完毕，本 active
-ExecPlan 正待形成首个语义 commit；生产代码、测试、真实根 manifest、Makefile/CI 和 README
-尚未修改。merge、push、Pull Request、rebase、tag、发布和删除分支不在本 Goal 授权范围。
+尚未收口。当前分支已从满足前置条件的 `main@f2362fa` 创建，首个 ExecPlan commit 已完成；
+Linux missing-path capability gate 的共享 paths 修复与回归已完成验证，正待形成独立
+`fix(paths)` commit。doctor、真实根 manifest、Makefile/CI 和 README 尚未修改。merge、push、
+Pull Request、rebase、tag、发布和删除分支不在本 Goal 授权范围。
