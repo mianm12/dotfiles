@@ -64,8 +64,10 @@ release，BSD-3-Clause，Go directive 为 1.24，pkg.go.dev 约有 1499 known im
   后生产 module graph 仅新增 direct flock 与 indirect `x/sys v0.37.0`，依赖仓库测试模块只进入
   checksum/graph。窄测、20 次重复、race、Darwin/Linux amd64 交叉编译和
   `make check BINARY=/private/tmp/dot-cp2-process-lock-check` 均通过。
-- [ ] 完成重复窄测、双平台交叉编译、依赖图审计、diff check 与 `make check`，更新本计划后
-  保持 active，等待独立复核。
+- [x] 2026-07-19：从 `173f33d` 重跑 storage/lock 各 20 次、race、tidy diff、module graph、
+  Darwin/Linux amd64 测试二进制交叉编译、`git diff 7b43272...HEAD --check` 与最终
+  `make check BINARY=/private/tmp/dot-cp2-process-lock-check`，全部通过；完整 diff 仅含本
+  Goal 的 8 个文件。计划保持 active，等待独立复核。
 
 ## Milestones
 
@@ -141,12 +143,12 @@ Commit 边界：
 
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
-| 非阻塞跨进程排他与 busy/IO 分类 | 真实 helper 子进程测试 | 待验证 |
-| release/异常退出后恢复 | 真实 helper 子进程测试 | 待验证 |
-| 显式 ownership 嵌套且不提前释放 | owner/guard 生命周期测试 | 待验证 |
-| state root/lock 为 0700/0600 | 真实文件系统 mode 测试 | 待验证 |
-| 未调用 Acquire 时零写入 | 临时根目录快照 | 待验证 |
-| Go module 与双平台门禁 | tidy、依赖图、交叉编译、make check | 待验证 |
+| 非阻塞跨进程排他与 busy/IO 分类 | 真实 helper 子进程测试 | 本机通过 |
+| release/异常退出后恢复 | 真实 helper 子进程测试 | 本机通过 |
+| 显式 ownership 嵌套且不提前释放 | owner/guard 生命周期测试 | 本机通过 |
+| state root/lock 为 0700/0600 | 真实文件系统 mode 测试 | 本机通过 |
+| 未调用 Acquire 时零写入 | 临时根目录快照 | 本机通过 |
+| Go module 与双平台门禁 | tidy、依赖图、交叉编译、make check | 本地通过；远端待验收 |
 
 最终成功判据是全部窄测、重复测试、module/diff 门禁与 `make check` 退出 0，分支 clean 且独立
 reviewer 没有未处理 blocking finding。远端 CI 不在本 worker 授权内。
@@ -198,4 +200,19 @@ guard；路径必须绑定，嵌套复用只能由已有 owner 发起。
 
 ## Outcomes and Handoff
 
-尚未实施。计划保持 active；完成实现和本地验证后交给未参与实现的只读 reviewer。
+实现与本地验证已经完成，计划保持 active 等待未参与实现的只读 reviewer。分支基线为
+`7b43272d6a98`，语义 commits 为：
+
+- `14c4351`：创建本 active ExecPlan。
+- `6aea049`：建立后续 state-store 可复用的 0700/0600 storage 权限边界及测试。
+- `173f33d`：引入 `gofrs/flock v0.13.0`，交付窄 adapter、进程排他锁、显式 ownership/
+  guard、真实 helper 子进程测试和依赖文件。
+
+本机 Darwin/arm64 完成 storage/lock 20 次重复、race、tidy diff、module graph 审计和完整
+`make check`；Darwin/Linux amd64 测试二进制交叉编译通过。完整
+`git diff 7b43272...HEAD --check` 通过，diff 只包含计划、storage/lock、测试和依赖文件。
+精确 HEAD 的远端 macOS/Linux CI 未运行，因此当前结论是“本地验收通过、远端待验收”。
+
+尚未完成独立复核、ExecPlan 迁移或 plan-closure commit；本 worker 不执行这些步骤。后续
+runtime-loading 应只在严格 preflight/control validation 成功后调用 `lock.Acquire`，只读流程
+不调用；嵌套 mutation 必须显式传递 `*lock.Ownership` 并用同一 root/path 创建 guard。
