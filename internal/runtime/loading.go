@@ -31,6 +31,13 @@ type LoadResult struct {
 	StateStatus   state.LoadStatus
 }
 
+// InitLoadResult 保存 init 配置阶段所需的 preflight 与 strict manifest，不包含 state。
+type InitLoadResult struct {
+	Context       InitContext
+	Compatibility Compatibility
+	Manifest      manifest.Repository
+}
+
 // Lease 表示当前 runtime 层持有的一份 mutation 锁引用。
 // 调用方必须在完整 mutation 周期结束时 Release。
 type Lease struct {
@@ -98,6 +105,23 @@ func LoadReadOnly(options Options, cliVersion string) (LoadResult, error) {
 	return loadFull(context, cliVersion, operations)
 }
 
+// LoadInitMutation 允许 config missing，在控制面校验后持锁加载 strict manifest，但不读 state。
+func LoadInitMutation(options Options, cliVersion string) (InitLoadResult, *Lease, error) {
+	return loadInitMutation(options, cliVersion, defaultLoadingOperations())
+}
+
+// LoadRecoveryMutation 为 dot git 与 update pull 等恢复 mutation 建立 repo/control 上下文并持锁。
+// 它有意不读取 requires、manifest 或 state；后续进入 apply 时应调用 LoadNestedMutation。
+func LoadRecoveryMutation(options Options) (ControlContext, *Lease, error) {
+	return loadRecoveryMutation(options, defaultLoadingOperations())
+}
+
+// LoadControlRecovery 为 self-update 等 control-only 恢复流程建立只读控制面上下文。
+// config missing 合法；已有 config 仍严格校验。本入口不获取锁，也不读取 manifest/state。
+func LoadControlRecovery(options Options) (ControlContext, error) {
+	return defaultLoadingOperations().preflightRepository(options)
+}
+
 func loadMutation(
 	options Options,
 	cliVersion string,
@@ -139,6 +163,46 @@ func loadNestedMutation(
 		return LoadResult{}, nil, releaseAfterFailure(err, lease)
 	}
 	return result, lease, nil
+}
+
+func loadInitMutation(
+	options Options,
+	cliVersion string,
+	operations loadingOperations,
+) (InitLoadResult, *Lease, error) {
+	context, err := operations.preflightInit(options)
+	if err != nil {
+		return InitLoadResult{}, nil, err
+	}
+	owner, err := operations.acquire(context.ControlPaths.StateRoot(), context.ControlPaths.StateLock())
+	if err != nil {
+		return InitLoadResult{}, nil, err
+	}
+	lease := newLease(owner, owner)
+	compatibility, repository, err := loadRepository(context.Repository, cliVersion, operations)
+	if err != nil {
+		return InitLoadResult{}, nil, releaseAfterFailure(err, lease)
+	}
+	return InitLoadResult{
+		Context:       context,
+		Compatibility: compatibility,
+		Manifest:      repository,
+	}, lease, nil
+}
+
+func loadRecoveryMutation(
+	options Options,
+	operations loadingOperations,
+) (ControlContext, *Lease, error) {
+	context, err := operations.preflightRepository(options)
+	if err != nil {
+		return ControlContext{}, nil, err
+	}
+	owner, err := operations.acquire(context.ControlPaths.StateRoot(), context.ControlPaths.StateLock())
+	if err != nil {
+		return ControlContext{}, nil, err
+	}
+	return context, newLease(owner, owner), nil
 }
 
 func loadFull(context Context, cliVersion string, operations loadingOperations) (LoadResult, error) {
@@ -250,6 +314,8 @@ func releaseAfterFailure(cause error, lease *Lease) error {
 
 type loadingOperations struct {
 	preflight                 func(Options) (Context, error)
+	preflightInit             func(Options) (InitContext, error)
+	preflightRepository       func(Options) (ControlContext, error)
 	acquire                   func(string, string) (*lock.Ownership, error)
 	reuse                     func(*lock.Ownership, string, string) (*lock.Guard, error)
 	readRequirement           func(string) (manifest.Requirement, error)
@@ -264,6 +330,8 @@ type loadingOperations struct {
 func defaultLoadingOperations() loadingOperations {
 	return loadingOperations{
 		preflight:                 Preflight,
+		preflightInit:             PreflightInit,
+		preflightRepository:       PreflightRepository,
 		acquire:                   lock.Acquire,
 		reuse:                     func(owner *lock.Ownership, root, path string) (*lock.Guard, error) { return owner.Reuse(root, path) },
 		readRequirement:           manifest.ReadRequirement,
