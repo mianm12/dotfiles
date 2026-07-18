@@ -81,6 +81,52 @@ other = ["other"]
 	}
 }
 
+func TestCheckManifest_ProfileResolveErrorsPreserveProfileProvenance(t *testing.T) {
+	root, repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "dot.toml"), `
+requires = ">=0.1.0"
+[profiles]
+alpha = ["app"]
+beta = ["app"]
+`)
+	otherOS := "darwin"
+	if runtime.GOOS == "darwin" {
+		otherOS = "linux"
+	}
+	writeFile(t, filepath.Join(repo, "modules", "app", "dot.toml"),
+		"target = { "+otherOS+" = \"~/app\" }\n")
+	writeFile(t, filepath.Join(repo, "modules", "app", "file"), "app")
+
+	all := CheckManifest(context.Background(), manifestOptions(t, root, repo, "v0.1.0"))
+	if got := findingChecks(all); !reflect.DeepEqual(got, []string{
+		"manifest.modules",
+		"manifest.profile",
+		"manifest.profile",
+	}) {
+		t.Fatalf("all-profile checks = %v, want module root cause and two profile impacts; findings = %#v", got, all.Findings())
+	}
+	allFindings := all.Findings()
+	for index, profile := range []string{"alpha", "beta"} {
+		if want := "profile \"" + profile + "\" resolve:"; !strings.Contains(allFindings[index+1].Message, want) {
+			t.Errorf("all-profile finding[%d] = %q, want containing %q", index+1, allFindings[index+1].Message, want)
+		}
+	}
+
+	selectedOptions := manifestOptions(t, root, repo, "v0.1.0")
+	selectedOptions.Profile = "beta"
+	selected := CheckManifest(context.Background(), selectedOptions)
+	if got := findingChecks(selected); !reflect.DeepEqual(got, []string{
+		"manifest.modules",
+		"manifest.profile",
+	}) {
+		t.Fatalf("selected-profile checks = %v, want module root cause and selected profile impact; findings = %#v", got, selected.Findings())
+	}
+	selectedMessage := selected.Findings()[1].Message
+	if !strings.Contains(selectedMessage, `profile "beta" resolve:`) || strings.Contains(selectedMessage, `profile "alpha"`) {
+		t.Fatalf("selected-profile finding = %q, want only beta provenance", selectedMessage)
+	}
+}
+
 func TestCheckManifest_UnsatisfiedRequirementStillRunsTemplatesAndPaths(t *testing.T) {
 	root, repo := newGitRepository(t)
 	writeFile(t, filepath.Join(repo, "dot.toml"), `

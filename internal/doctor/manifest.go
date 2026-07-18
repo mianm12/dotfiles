@@ -112,7 +112,7 @@ func checkRepository(
 	for _, name := range profiles {
 		resolved, err := repository.Resolve(name, options.GOOS)
 		if err != nil {
-			findings = appendError(findings, "manifest.profile", err)
+			findings = appendError(findings, "manifest.profile", fmt.Errorf("profile %q resolve: %w", name, err))
 			continue
 		}
 		if controlErr != nil {

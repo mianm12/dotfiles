@@ -155,10 +155,15 @@ Ubuntu 各运行一次 `make check`，因此预期只需把一次真实仓库 do
   `git diff main...HEAD --check`、完整 diff/stat/name-status 与 status 审计均通过；范围内只有本
   Goal 的 24 个文件，worktree clean。已收口 living sections，并在本 plan-closure commit 中把
   计划迁移至 `completed/`；远端 GitHub Actions 因未授权 push 而未触发。
-- [ ] 2026-07-18：推送前人工 review 复现一项 P2：同一模块局部错误既形成
+- [x] 2026-07-18：推送前人工 review 复现一项 P2：同一模块局部错误既形成
   `manifest.modules` 根因，又在每个受影响 profile 的 `manifest.profile` 中原样重复，后者没有
-  profile provenance。用户确认按最小方案修复；本 plan-reopen commit 将计划迁回 `active/`，
-  随后补充 profile 上下文、行为测试、完整门禁、必要独立复核与再次收口。
+  profile provenance。用户确认按最小方案修复；计划已由 `0ea9a61` 迁回 `active/`。
+- [x] 2026-07-18：新增共享坏模块的默认双 profile 与显式 profile 行为测试，修改前精确失败；
+  profile Resolve 错误边界仅用 `%w` 增加 profile 名，保留模块根因与 profile 影响两层语义。
+  定向测试连续 20 次、doctor/CLI 各连续 20 次、Linux amd64 runtime 5 次、Linux arm64 交叉编译
+  及 `make check BINARY=/private/tmp/dot-profile-provenance/dot` 均通过。
+- [ ] 由未参与本次修复的只读 subagent 复核 fix diff；处理意见后完成最终 diff/status 审计并再次
+  迁移计划至 `completed/`。
 
 ## Milestones
 
@@ -575,6 +580,15 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   Impact: Git 查询清除所有 `GIT_*` 环境覆盖，只用 `-C` 指定 repository；命令读取完整 NUL
   分隔 index，再由 Go 做 `.local` 后缀筛选，避免任何 pathspec 环境改变安全门禁语义。
 
+- Observation: `ValidateModuleRules` 与逐 profile `Resolve` 复用同一个 `resolveModule`，因此模块
+  局部错误会同时成为仓库级根因和每个相关 profile 无法继续路径校验的影响；原 profile finding
+  直接转发底层错误，没有 profile 名，多 profile 时形成不可区分的相同行。
+  Evidence: 同一 `app` 同时属于 `alpha`/`beta` 且 target table 缺当前 GOOS 时，修改前输出一个
+  `manifest.modules` 和两个消息完全相同的 `manifest.profile`；显式选择 `beta` 时后者仍不包含
+  `beta`。新增行为测试先失败并固定这两个场景。
+  Impact: 两层 finding 都是准确且必要的，不做机械去重；只在 profile Resolve 调用边界增加
+  `profile <name> resolve` 上下文，使根因与影响范围可区分并保持稳定排序。
+
 ## Decision Log
 
 - Decision: 将 goal 文件规定的默认语义边界分别保留为 ExecPlan、可选 paths fix、diagnostic
@@ -659,6 +673,13 @@ Repository。`internal/paths` 的严格 boundary 入口保持 mutation 安全语
   能力或真实私人配置写成已实现事实。
   Date: 2026-07-18
 
+- Decision: 保留 `manifest.modules` 的全仓库模块根因与 `manifest.profile` 的组合影响，只用
+  `fmt.Errorf("profile %q resolve: %w", name, err)` 补齐 profile provenance；不按错误字符串去重，
+  不新增 finding 字段、partial diagnostic snapshot 或 checker registry。
+  Rationale: 显式 profile 只缩小 profile-level 校验，不能隐藏其他模块根因；受影响 profile 也
+  需要可见。调用边界包装是最小、符合 Go error chain 的修复，并避免为 M2/M3 预建第二数据流。
+  Date: 2026-07-18
+
 ## Outcomes and Handoff
 
 M1 `dot doctor --manifest-only` 已在 `feat/doctor-manifest` 完成：确定性诊断聚合、完整 manifest/
@@ -671,6 +692,7 @@ module/template/profile/path 静态检查、严格只读 CLI、Git tracked `.loc
 最终 `make check BINARY=/private/tmp/dot-doctor-final/dot`、完整 `main...HEAD` diff/stat/name-status、
 whitespace 与工作区审计。独立终审发现的 Git 环境覆盖 false-clean P1 已由 `66a64c6` 修复并经
 原复核者再次确认 GO。推送前人工 review 随后发现 profile Resolve 错误缺少 profile provenance
-的 P2，当前计划已重新开启，等待最小修复、验证、复核与再次收口。GitHub Actions 未运行，
-因为本 Goal 不授权 push；没有声称远端 matrix 通过。merge、push、Pull Request、rebase、tag、
-发布和删除分支仍未执行。
+的 P2；计划已由 `0ea9a61` 重新开启，最小错误包装、默认/显式 profile 回归和本机/Linux 验证均
+已完成，等待 fix commit 的独立只读复核与再次收口。GitHub Actions 未运行，因为本 Goal 不授权
+push；没有声称远端 matrix 通过。merge、push、Pull Request、rebase、tag、发布和删除分支仍未
+执行。
