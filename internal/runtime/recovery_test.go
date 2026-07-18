@@ -152,6 +152,7 @@ func TestLoadControlRecovery_AllowsMissingConfigAndDoesNotLockOrReadState(t *tes
 	if err != nil {
 		t.Fatalf("os.ReadFile(state) error = %v", err)
 	}
+	beforeTree := snapshotFixtureTree(t, fixture.root)
 
 	context, err := LoadControlRecovery(fixture.options)
 	if err != nil {
@@ -166,6 +167,10 @@ func TestLoadControlRecovery_AllowsMissingConfigAndDoesNotLockOrReadState(t *tes
 	}
 	if !reflect.DeepEqual(after, before) {
 		t.Fatal("control recovery changed state bytes")
+	}
+	afterTree := snapshotFixtureTree(t, fixture.root)
+	if !reflect.DeepEqual(afterTree, beforeTree) {
+		t.Fatalf("LoadControlRecovery() changed fixture tree\nbefore: %#v\nafter:  %#v", beforeTree, afterTree)
 	}
 	assertMissing(t, fixture.paths.StateLock())
 }

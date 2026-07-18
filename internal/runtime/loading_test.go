@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,6 +19,7 @@ import (
 const validEmptyState = `{"version":1,"entries":{},"run_once":{}}`
 
 type loadingFixture struct {
+	root    string
 	home    string
 	repo    string
 	config  string
@@ -177,6 +179,7 @@ func TestLoadReadOnly_StateStatusesAreClassifiedWithoutLock(t *testing.T) {
 			if test.writeState {
 				writeState(t, fixture, test.state)
 			}
+			before := snapshotFixtureTree(t, fixture.root)
 			result, err := LoadReadOnly(fixture.options, "v1.0.0")
 			if test.wantErr != nil {
 				if !errors.Is(err, test.wantErr) {
@@ -189,6 +192,10 @@ func TestLoadReadOnly_StateStatusesAreClassifiedWithoutLock(t *testing.T) {
 				if result.StateStatus != test.wantStatus {
 					t.Fatalf("StateStatus = %v, want %v", result.StateStatus, test.wantStatus)
 				}
+			}
+			after := snapshotFixtureTree(t, fixture.root)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("LoadReadOnly() changed fixture tree\nbefore: %#v\nafter:  %#v", before, after)
 			}
 			assertMissing(t, fixture.paths.StateLock())
 		})
@@ -385,6 +392,7 @@ func newLoadingFixture(t *testing.T, configExists bool) loadingFixture {
 		t.Fatalf("ResolveControlPlanePaths() error = %v", err)
 	}
 	return loadingFixture{
+		root:   root,
 		home:   home,
 		repo:   repo,
 		config: config,
@@ -405,6 +413,48 @@ func newLoadingFixture(t *testing.T, configExists bool) loadingFixture {
 		},
 		paths: controlPaths,
 	}
+}
+
+type fixtureTreeEntry struct {
+	Mode fs.FileMode
+	Data []byte
+	Link string
+}
+
+func snapshotFixtureTree(t *testing.T, root string) map[string]fixtureTreeEntry {
+	t.Helper()
+
+	snapshot := make(map[string]fixtureTreeEntry)
+	err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		entry := fixtureTreeEntry{Mode: info.Mode()}
+		switch {
+		case info.Mode().IsRegular():
+			entry.Data, err = os.ReadFile(path)
+		case info.Mode()&fs.ModeSymlink != 0:
+			// 只记录 symlink 文本，绝不跟随到隔离临时根之外。
+			entry.Link, err = os.Readlink(path)
+		}
+		if err != nil {
+			return err
+		}
+		snapshot[filepath.ToSlash(relative)] = entry
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot fixture tree %q: %v", root, err)
+	}
+	return snapshot
 }
 
 func writeManifest(t *testing.T, repo, requirement, extra string) {
