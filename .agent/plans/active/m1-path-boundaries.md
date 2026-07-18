@@ -130,9 +130,15 @@ repo 路径本身是指向真实 repo 目录的 symlink 时，直接落在真实
   commit 或执行实现测试。
 - [x] 2026-07-18：完成草案独立只读复核；将 control leaf-symlink consumption 与 root 一并
   纳入 identity capability gate，并补齐 `.tmpl`、profile 分离和完整无 pathspec diff 验收。
-- [ ] 等待未来实施任务对 `feat/path-boundaries` 的 branch、stage、semantic commits、计划状态
-  迁移和必要失败恢复给出明确授权；当前计划文件本身不延续本次授权。
-- [ ] Milestone 1：复现并解除 identity capability gate，随后集中解析控制面路径家族。
+- [x] 2026-07-18：从干净 `main@8075a6c` 创建并切换到 `feat/path-boundaries`，只 stage 本计划，
+  以 `4f05174 docs(paths): 新建 path boundaries ExecPlan` 提交计划起点；提交后工作区 clean。
+- [x] 2026-07-18：执行 Milestone 1 capability gate 的现有回归：
+  `go test -count=1 ./internal/paths -run
+  'Test(ResolveControlPath|ResolveTarget_LeafSymlinkIsNotFollowed|ResolveTargetIdentity_BasicRejectsInvalidPath)'`
+  通过，确认 control path 接受绝对输入、target root 被拒绝且 leaf symlink 不跟随的当前契约。
+- [ ] Milestone 1：已复现 identity capability gate；等待维护者裁决是先独立扩展 path identity，
+  还是明确 control root/leaf 的规范语义。裁决前不得实现 boundary fallback；gate 解除后再建立
+  控制面路径家族。
 - [ ] Milestone 2：以共享 identity/topology 语义校验控制面家族两两隔离。
 - [ ] Milestone 3：校验完整 profile 的 target identity 与祖先拓扑不变量。
 - [ ] Milestone 4：合并 desired/control-plane 校验并证明部分作用域无法绕过完整 profile。
@@ -426,11 +432,11 @@ Commit 边界：
 
 ## Safety, Authorization, and Recovery
 
-本次用户任务只授权编写计划，不授权创建/switch `feat/path-boundaries`、stage、commit、push、
-PR、计划迁移或生产代码修改。未来执行任务必须明确授权达到 review-ready 所需的 branch、
-semantic commits、独立复核后的 fix commits、`active/` → `completed/` 迁移及 plan-closure
-commit；push/PR 和双平台 CI 若是验收必需，也需在执行任务中明确覆盖。缺少这些授权时保持
-本计划在 `active/`，不得以未提交 diff 或省略 CI 降低交付标准。
+当前实施任务已明确授权创建/切换 `feat/path-boundaries`，并在该分支 stage、commit 本 Goal
+的计划、实现、测试、复核修复和计划收口改动；已据此创建分支并提交计划起点。当前任务不
+授权 merge、push、PR、rebase、amend、tag、删除分支或访问真实私人数据。若双平台 CI 必须
+依赖 push/PR 才能执行，缺少相应授权时保持本计划在 `active/` 并报告未验证，不得以省略 CI
+降低交付标准。本节记录本次任务证据，不为后续任务延续权限。
 
 所有测试必须使用 `t.TempDir()` 下的合成 HOME、repo、config、state、backup、binary 和
 targets；不得读取或修改真实 `modules/`、真实 machine config、state、backup、`.env*` 或
@@ -475,7 +481,8 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
   Evidence: `internal/paths/paths.go:ResolveControlPath` 的 absolute 分支、
   `internal/paths/identity.go:cleanTargetPath` 的 filesystem-root guard、
   `internal/paths/identity_topology_test.go:TestResolveTarget_LeafSymlinkIsNotFollowed`，以及
-  `manifest.Load`/`config.Load` 对 repo/config 的跟随式 IO。
+  `manifest.Load`/`config.Load` 对 repo/config 的跟随式 IO；2026-07-18 在
+  `feat/path-boundaries` 运行相关现有回归通过。
   Impact: 当前 identity 未证明能覆盖全部规范允许的控制面输入与 filesystem alias；实施必须
   先暂停解除 capability gate，boundary 层不得添加 root/leaf-symlink/string fallback。
 - Observation: 当前没有 state family、installed binary 或控制面集合实现。
@@ -527,14 +534,14 @@ review 合入 main，再从更新的 main 继续本 Goal，避免在 boundary br
 
 ## Outcomes and Handoff
 
-当前仅完成规划。2026-07-18 基线审计确认 path identity 已合入本地 main，并发现 filesystem
-root 与 control leaf-symlink consumption capability 缺口；本计划已把它们设为 Milestone 1
-的硬 gate。没有生产代码、测试、分支、
-commit、外部服务或真实私人数据变更，也没有执行 `make check` 或双平台 CI。
+当前已完成计划起点与 Milestone 1 capability gate 的复现。2026-07-18 从干净
+`main@8075a6c` 创建 `feat/path-boundaries`，以 `4f05174` 提交本计划；随后现有 paths 窄测通过，
+确认 filesystem root 与 control leaf-symlink consumption capability 缺口。本计划按批准的
+停止条件暂停在 Milestone 1，尚未修改生产代码或测试，未执行 `make check`、双平台 CI、后续
+milestone 或最终独立实现复核，也未访问真实私人数据或进行未授权 Git/托管操作。
 
-后续接手者应先确认最新 main 仍包含 `feat/path-identity`，读取本计划的已知 gate，并在任何
-boundary 实现前复现 root 与 control leaf-symlink consumption 差距、请求 path-identity 前置
-修复或规范裁决。gate 解除后才按
+后续接手者应从 `feat/path-boundaries@4f05174` 及其后的计划暂停提交恢复，读取本计划的已知
+gate，并先取得 path-identity 前置修复或 control root/leaf 规范语义的裁决。gate 解除后才按
 Milestone 1–5 顺序推进，每个 milestone 同步更新 living sections、执行窄测与完整门禁、检查
 完整 diff 并创建独立 semantic commit。最终只有双平台 CI、独立复核、所有意见处理和计划
 生命周期收口均完成，且当次任务授权覆盖对应 Git 操作时，才能声称 `feat/path-boundaries`
