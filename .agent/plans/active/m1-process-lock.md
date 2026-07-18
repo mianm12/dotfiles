@@ -58,8 +58,12 @@ release，BSD-3-Clause，Go directive 为 1.24，pkg.go.dev 约有 1499 known im
 - [x] 2026-07-19：先以缺失 API 的失败测试固定 storage 权限边界，再实现 `internal/storage`；
   新建及现存 state root/私有文件收敛为 0700/0600，相对路径零写入，非目录/非普通文件明确
   拒绝；`go test ./internal/storage` 通过。
-- [ ] 用失败测试固定锁错误分类、真实进程竞争/崩溃恢复和嵌套 ownership。
-- [ ] 引入依赖并完成窄 adapter、storage 权限边界与首个真实锁实现，形成语义 commits。
+- [x] 2026-07-19：以缺失 API 的失败测试固定 busy/IO/ownership 语义；真实 helper 子进程覆盖
+  busy、release 与异常退出恢复，显式 owner/guard 覆盖路径绑定和嵌套不提前解锁。
+- [x] 2026-07-19：引入 `gofrs/flock v0.13.0`，用窄 adapter 首次真实使用；`go mod tidy`
+  后生产 module graph 仅新增 direct flock 与 indirect `x/sys v0.37.0`，依赖仓库测试模块只进入
+  checksum/graph。窄测、20 次重复、race、Darwin/Linux amd64 交叉编译和
+  `make check BINARY=/private/tmp/dot-cp2-process-lock-check` 均通过。
 - [ ] 完成重复窄测、双平台交叉编译、依赖图审计、diff check 与 `make check`，更新本计划后
   保持 active，等待独立复核。
 
@@ -169,7 +173,16 @@ guard；路径必须绑定，嵌套复用只能由已有 owner 发起。
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: `go mod tidy` 会下载并在 `go.sum` 记录 flock 自身测试依赖，但本项目的生产
+  `go.mod` 只新增 flock 与 indirect `x/sys`。
+  Evidence: `go mod graph` 显示 testify、go-spew、difflib、yaml 等仅位于 flock 的出边；项目
+  direct/indirect require 与调查一致。
+  Impact: 不构成依赖版本或传递图冲突，无需改变已锁定版本。
+
+- Observation: 首次完整门禁只发现 errorlint 要求 ownership 的底层校验错误也用 `%w` 保留。
+  Evidence: `make check` 首轮单一 finding 指向 `internal/lock/lock.go`，修正后 0 issues 且完整
+  race/build/doctor 门禁通过。
+  Impact: 错误分类同时保留 `ErrOwnership` 和底层校验 cause，未改变公开契约。
 
 ## Decision Log
 
