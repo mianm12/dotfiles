@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -229,11 +230,11 @@ func validateLinkAction(action planner.FileAction) error {
 		!action.Precondition.Leaf.Valid() {
 		return fmt.Errorf("%w: inconsistent link action identity or failure effect", ErrUnsupportedFileAction)
 	}
-	if action.OnSuccess.Kind != planner.StateUpsert ||
-		action.OnSuccess.Key != action.Desired.Target ||
-		action.OnSuccess.Entry.Kind != planner.StateSymlink ||
-		action.OnSuccess.Entry.LinkDest != action.Desired.SourcePath {
-		return fmt.Errorf("%w: inconsistent link state upsert", ErrUnsupportedFileAction)
+	if !filepath.IsAbs(action.Desired.SourcePath) {
+		return fmt.Errorf("%w: link source path is not absolute", ErrUnsupportedFileAction)
+	}
+	if err := validateFileUpsert(action, planner.StateSymlink, action.Desired.SourcePath); err != nil {
+		return err
 	}
 
 	switch action.Verb {
@@ -266,6 +267,21 @@ func validateLinkAction(action planner.FileAction) error {
 		}
 	default:
 		return fmt.Errorf("%w: verb %q is not a link execution action", ErrUnsupportedFileAction, action.Verb)
+	}
+	return nil
+}
+
+func validateFileUpsert(action planner.FileAction, kind planner.StateKind, linkDest string) error {
+	entry := action.OnSuccess.Entry
+	if action.Desired.Module == "" || action.Desired.Source == "" ||
+		action.OnSuccess.Kind != planner.StateUpsert ||
+		action.OnSuccess.Key != action.Desired.Target ||
+		entry.Key != action.Desired.Target ||
+		entry.Module != action.Desired.Module ||
+		entry.Kind != kind ||
+		entry.Source != path.Join("modules", action.Desired.Module, action.Desired.Source) ||
+		entry.LinkDest != linkDest {
+		return fmt.Errorf("%w: inconsistent %s state upsert", ErrUnsupportedFileAction, kind)
 	}
 	return nil
 }

@@ -121,6 +121,86 @@ func TestRun_RejectsUnsupportedScopeBeforeExecutor(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsMalformedLinkUpsertBeforeExecutor(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	action := seamLinkAction("~/.malformed-upsert")
+	action.OnSuccess.Entry.Key = ""
+	executed := false
+	operations := fixture.operations(executionPlan{files: []planner.FileAction{action}})
+	operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+		executed = true
+		return executor.FileResult{}, nil
+	}
+
+	result, err := runWithOperations(Options{}, operations)
+	if !errors.Is(err, ErrUnsupportedPlan) {
+		t.Fatalf("runWithOperations() error = %v, want ErrUnsupportedPlan", err)
+	}
+	if executed || result.FileAttempts != 0 || fixture.loaded.commitCalls != 0 {
+		t.Fatalf("preflight executed=%t result=%#v commitCalls=%d", executed, result, fixture.loaded.commitCalls)
+	}
+}
+
+func TestRun_RejectsExecutionResultsThatContradictActionClass(t *testing.T) {
+	tests := []struct {
+		name          string
+		stateOnly     bool
+		targetMutated bool
+		successEffect bool
+		executeErr    error
+	}{
+		{
+			name:          "target success without commit",
+			successEffect: true,
+		},
+		{
+			name:          "state-only reports target commit",
+			stateOnly:     true,
+			targetMutated: true,
+			successEffect: true,
+		},
+		{
+			name:          "target commit with failure effect",
+			targetMutated: true,
+			executeErr:    errors.New("executor failure"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRunSeamFixture(t)
+			action := seamLinkAction("~/.result-contract")
+			if test.stateOnly {
+				action = seamLinkAdoptAction("~/.result-contract")
+			}
+			effect := action.OnFailure
+			if test.successEffect {
+				effect = action.OnSuccess
+			}
+			operations := fixture.operations(executionPlan{files: []planner.FileAction{action}})
+			operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+				return executor.FileResult{
+					StateEffect:   effect,
+					TargetMutated: test.targetMutated,
+				}, test.executeErr
+			}
+
+			result, err := runWithOperations(Options{}, operations)
+			if !errors.Is(err, ErrExecutionProtocol) {
+				t.Fatalf("runWithOperations() error = %v, want ErrExecutionProtocol", err)
+			}
+			wantTargetCommits := 0
+			if test.targetMutated {
+				wantTargetCommits = 1
+			}
+			if result.FileAttempts != 1 || result.TargetCommits != wantTargetCommits ||
+				result.AdoptionEffects != 0 || result.StateCommitted || fixture.loaded.commitCalls != 0 {
+				t.Fatalf("inconsistent result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
+			}
+		})
+	}
+}
+
 func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	fixture := newRunIntegrationFixture(t)
 	operations := defaultRunOperations()

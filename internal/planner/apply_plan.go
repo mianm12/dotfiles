@@ -206,7 +206,7 @@ func planScopedFiles(
 	if options.Force {
 		for _, entry := range scoped.Entries() {
 			if entry.Kind == manifest.FileKindLink {
-				regularDigestTargets[entry.TargetPath] = struct{}{}
+				regularDigestTargets[filepath.Clean(entry.TargetPath)] = struct{}{}
 			}
 		}
 	}

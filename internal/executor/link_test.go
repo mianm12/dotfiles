@@ -71,6 +71,36 @@ func TestExecuteLink_AdoptIsStateOnly(t *testing.T) {
 	assertLinkText(t, target, fixture.source)
 }
 
+func TestValidateFileAction_RejectsIncompleteLinkUpsert(t *testing.T) {
+	fixture := newLinkFixture(t)
+	base := fixture.planLink(
+		t,
+		filepath.Join(fixture.home, "upsert-contract"),
+		fixture.source,
+		planner.HistoricalState{},
+		false,
+	)
+	tests := []struct {
+		name   string
+		mutate func(*planner.FileAction)
+	}{
+		{name: "entry key", mutate: func(action *planner.FileAction) { action.OnSuccess.Entry.Key = "" }},
+		{name: "entry module", mutate: func(action *planner.FileAction) { action.OnSuccess.Entry.Module = "other" }},
+		{name: "entry source", mutate: func(action *planner.FileAction) { action.OnSuccess.Entry.Source = "modules/other/file" }},
+		{name: "entry link destination", mutate: func(action *planner.FileAction) { action.OnSuccess.Entry.LinkDest = "/other" }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			action := base.Clone()
+			test.mutate(&action)
+			if err := ValidateFileAction(action); !errors.Is(err, ErrUnsupportedFileAction) {
+				t.Fatalf("ValidateFileAction() error = %v, want ErrUnsupportedFileAction", err)
+			}
+		})
+	}
+}
+
 func TestExecuteLink_PreconditionFailuresPreserveTarget(t *testing.T) {
 	t.Run("target appeared after L1 plan", func(t *testing.T) {
 		fixture := newLinkFixture(t)

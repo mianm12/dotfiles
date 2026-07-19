@@ -301,7 +301,8 @@ const (
 
 // StateEffect 保存一个结果分支的 state 处置。Entry 只对 upsert 有效，Key 对 upsert/delete
 // 有效；PreviousKey 在 alias 展示 key 变化时要求同一提交摘除旧 key，避免留下重复 identity。
-// upsert Entry 的 AppliedAt 由 executor 在动作成功时填入，不参与计划决策。
+// upsert Entry 的 AppliedAt 由 apply runner 接受成功 effect 并形成 state transition 时填入，
+// 不参与 planner 决策或 ownership。
 type StateEffect struct {
 	Kind        StateEffectKind
 	Key         string

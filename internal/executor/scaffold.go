@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path"
 	"path/filepath"
 
 	"github.com/mianm12/dotfiles/internal/paths"
@@ -207,7 +206,7 @@ func validateScaffoldAction(action planner.FileAction) error {
 
 	switch action.Verb {
 	case planner.FileAdopt:
-		if err := validateScaffoldUpsert(action); err != nil {
+		if err := validateFileUpsert(action, planner.StateScaffold, ""); err != nil {
 			return err
 		}
 		switch action.Reason {
@@ -227,7 +226,7 @@ func validateScaffoldAction(action planner.FileAction) error {
 			return fmt.Errorf("%w: reason %q is not a scaffold adopt", ErrUnsupportedFileAction, action.Reason)
 		}
 	case planner.FileScaffold:
-		if err := validateScaffoldUpsert(action); err != nil {
+		if err := validateFileUpsert(action, planner.StateScaffold, ""); err != nil {
 			return err
 		}
 		if action.Reason != planner.FileReasonTargetMissing &&
@@ -252,20 +251,6 @@ func validateScaffoldAction(action planner.FileAction) error {
 		}
 	default:
 		return fmt.Errorf("%w: verb %q is not a scaffold action", ErrUnsupportedFileAction, action.Verb)
-	}
-	return nil
-}
-
-func validateScaffoldUpsert(action planner.FileAction) error {
-	entry := action.OnSuccess.Entry
-	if action.OnSuccess.Kind != planner.StateUpsert ||
-		action.OnSuccess.Key != action.Desired.Target ||
-		entry.Key != action.Desired.Target ||
-		entry.Module != action.Desired.Module ||
-		entry.Kind != planner.StateScaffold ||
-		entry.Source != path.Join("modules", action.Desired.Module, action.Desired.Source) ||
-		entry.LinkDest != "" {
-		return fmt.Errorf("%w: inconsistent scaffold state upsert", ErrUnsupportedFileAction)
 	}
 	return nil
 }

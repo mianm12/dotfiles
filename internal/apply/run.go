@@ -114,9 +114,13 @@ func runWithOperations(options Options, operations runOperations) (result Result
 			result.TargetCommits++
 		}
 
-		success := fileResult.StateEffect == action.OnSuccess
-		failure := fileResult.StateEffect == action.OnFailure
+		success, failure, protocolErr := validateFileResult(action, fileResult)
+		if protocolErr != nil {
+			executeErr = errors.Join(executeErr, protocolErr)
+		}
 		switch {
+		case protocolErr != nil:
+			// 矛盾结果不能形成 state update；已报告的物理提交留给既定收养路径恢复。
 		case success:
 			update, updateErr := entryUpdate(action.OnSuccess, operations.now())
 			if updateErr != nil {
@@ -136,13 +140,6 @@ func runWithOperations(options Options, operations runOperations) (result Result
 					action.Target,
 				)
 			}
-		default:
-			executeErr = errors.Join(executeErr, fmt.Errorf(
-				"%w: file action %d for %q returned an unknown state effect",
-				ErrExecutionProtocol,
-				index,
-				action.Target,
-			))
 		}
 		if executeErr != nil {
 			resultErr = fmt.Errorf("execute file action %d for %q: %w", index, action.Target, executeErr)
@@ -165,6 +162,47 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	}
 	result.StateCommitted = true
 	return result, resultErr
+}
+
+func validateFileResult(
+	action planner.FileAction,
+	result executor.FileResult,
+) (success, failure bool, err error) {
+	success = result.StateEffect == action.OnSuccess
+	failure = result.StateEffect == action.OnFailure
+	if !success && !failure {
+		return false, false, fmt.Errorf(
+			"%w: file action %q returned an unknown state effect",
+			ErrExecutionProtocol,
+			action.Target,
+		)
+	}
+
+	switch action.Verb.ExecutionClass() {
+	case planner.FileStateOnly:
+		if result.TargetMutated {
+			return false, false, fmt.Errorf(
+				"%w: state-only file action %q reported a target commit",
+				ErrExecutionProtocol,
+				action.Target,
+			)
+		}
+	case planner.FileTargetMutation:
+		if result.TargetMutated != success {
+			return false, false, fmt.Errorf(
+				"%w: target-mutation file action %q returned inconsistent commit and state effect",
+				ErrExecutionProtocol,
+				action.Target,
+			)
+		}
+	default:
+		return false, false, fmt.Errorf(
+			"%w: file action %q has non-executable class",
+			ErrExecutionProtocol,
+			action.Target,
+		)
+	}
+	return success, failure, nil
 }
 
 func entryUpdate(effect planner.StateEffect, appliedAt time.Time) (state.EntryUpdate, error) {
