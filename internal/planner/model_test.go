@@ -2,7 +2,7 @@ package planner
 
 import "testing"
 
-func TestActionClone_DoesNotSharePlanBytes(t *testing.T) {
+func TestFileActionClone_DoesNotSharePlanBytes(t *testing.T) {
 	action := FileAction{
 		Verb: FileScaffold,
 		Desired: Desired{
