@@ -105,6 +105,7 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 	}
 
 	root.AddCommand(
+		newApplyCommand(env, &options),
 		newDiffCommand(env, &options),
 		newDoctorCommand(env, &options),
 		newVersionCommand(env, &options),

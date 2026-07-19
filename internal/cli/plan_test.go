@@ -109,6 +109,159 @@ func TestDiff_NoOpAndPlannerError(t *testing.T) {
 	})
 }
 
+func TestApplyDryRun_MatchesDiffProjection(t *testing.T) {
+	fixture := newPlanCLIFixture(t)
+	tests := []struct {
+		name    string
+		options []string
+	}{
+		{name: "partial verbose conflict", options: []string{"alpha", "--verbose"}},
+		{name: "partial force", options: []string{"alpha", "--force"}},
+		{name: "partial no-prune", options: []string{"alpha", "--no-prune"}},
+		{name: "full force yes", options: []string{"--force", "--yes"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diffArgs := append([]string{"diff"}, withoutOption(test.options, "--yes")...)
+			applyArgs := append([]string{"apply"}, test.options...)
+			applyArgs = append(applyArgs, "--dry-run")
+			diffStdout, diffStderr, diffCode := fixture.run(t, diffArgs...)
+			applyStdout, applyStderr, applyCode := fixture.run(t, applyArgs...)
+			if applyCode != diffCode || applyStdout != diffStdout || applyStderr != diffStderr {
+				t.Fatalf(
+					"apply dry-run = stdout %q, stderr %q, exit %d; diff = stdout %q, stderr %q, exit %d",
+					applyStdout,
+					applyStderr,
+					applyCode,
+					diffStdout,
+					diffStderr,
+					diffCode,
+				)
+			}
+		})
+	}
+
+	noPrune, noPruneStderr, noPruneCode := fixture.run(t, "apply", "alpha", "--dry-run", "--no-prune")
+	pruneFalse, pruneFalseStderr, pruneFalseCode := fixture.run(t, "apply", "alpha", "--dry-run", "--prune=false")
+	if noPruneCode != pruneFalseCode || noPrune != pruneFalse || noPruneStderr != pruneFalseStderr {
+		t.Fatalf("--prune=false = (%q, %q, %d), want --no-prune projection (%q, %q, %d)", pruneFalse, pruneFalseStderr, pruneFalseCode, noPrune, noPruneStderr, noPruneCode)
+	}
+}
+
+func TestApply_RejectsMutationAndAdoptBeforeRuntime(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "naked apply",
+			args: []string{"apply"},
+			want: "real apply is not available in M1; use dot apply --dry-run",
+		},
+		{
+			name: "module mutation flags",
+			args: []string{"apply", "alpha", "--force", "--no-prune"},
+			want: "real apply is not available in M1; use dot apply --dry-run",
+		},
+		{
+			name: "dry-run adopt",
+			args: []string{"apply", "alpha", "--dry-run", "--adopt"},
+			want: "--adopt requires M2 and is not supported in this build",
+		},
+		{
+			name: "mutation adopt",
+			args: []string{"apply", "--adopt"},
+			want: "--adopt requires M2 and is not supported in this build",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPlanCLIFixture(t)
+			writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), "invalid = [")
+			writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "invalid = [")
+			before := snapshotCLITree(t, fixture.root)
+
+			stdout, stderr, code := fixture.run(t, test.args...)
+			if code != exitError || stdout != "" || !strings.Contains(stderr, test.want) {
+				t.Fatalf("rejected apply = stdout %q, stderr %q, exit %d; want %q", stdout, stderr, code, test.want)
+			}
+			for _, forbidden := range []string{"machine config", "manifest", "repo=", "Already up to date."} {
+				if strings.Contains(stdout+stderr, forbidden) {
+					t.Errorf("rejected apply output %q contains runtime/success text %q", stdout+stderr, forbidden)
+				}
+			}
+			if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("rejected apply changed isolated tree\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func TestReadOnlyPlan_RejectsConflictingPruneFlagsBeforeRuntime(t *testing.T) {
+	for _, command := range []string{"diff", "apply"} {
+		t.Run(command, func(t *testing.T) {
+			fixture := newPlanCLIFixture(t)
+			writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), "invalid = [")
+			before := snapshotCLITree(t, fixture.root)
+			args := []string{command, "--prune", "--no-prune"}
+			if command == "apply" {
+				args = append(args, "--dry-run")
+			}
+			stdout, stderr, code := fixture.run(t, args...)
+			if code != exitError || stdout != "" || !strings.Contains(stderr, "--prune and --no-prune must not be used together") {
+				t.Fatalf("conflicting prune = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+			}
+			if strings.Contains(stderr, "machine config") {
+				t.Fatalf("conflicting prune read runtime: %q", stderr)
+			}
+			if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("conflicting prune changed isolated tree\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func TestPlanCommands_RegisterSpecifiedFlags(t *testing.T) {
+	root, err := newRootCommand(environment{})
+	if err != nil {
+		t.Fatalf("newRootCommand() error = %v", err)
+	}
+	for _, commandName := range []string{"diff", "apply"} {
+		command, _, err := root.Find([]string{commandName})
+		if err != nil || command.Name() != commandName {
+			t.Fatalf("root.Find(%q) = (%#v, %v)", commandName, command, err)
+		}
+		for _, flagName := range []string{forceFlagName, pruneFlagName, noPruneFlagName} {
+			if command.Flags().Lookup(flagName) == nil {
+				t.Errorf("%s flag %q is not registered", commandName, flagName)
+			}
+		}
+	}
+	apply, _, _ := root.Find([]string{"apply"})
+	for _, flagName := range []string{dryRunFlagName, adoptFlagName, yesFlagName} {
+		if apply.Flags().Lookup(flagName) == nil {
+			t.Errorf("apply flag %q is not registered", flagName)
+		}
+	}
+	if shorthand := apply.Flags().Lookup(dryRunFlagName).Shorthand; shorthand != "n" {
+		t.Errorf("--dry-run shorthand = %q, want n", shorthand)
+	}
+	if shorthand := apply.Flags().Lookup(yesFlagName).Shorthand; shorthand != "y" {
+		t.Errorf("--yes shorthand = %q, want y", shorthand)
+	}
+}
+
+func withoutOption(values []string, omitted string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != omitted {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
+}
+
 type planCLIFixture struct {
 	root       string
 	home       string

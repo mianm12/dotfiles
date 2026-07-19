@@ -13,6 +13,9 @@ const (
 	forceFlagName   = "force"
 	pruneFlagName   = "prune"
 	noPruneFlagName = "no-prune"
+	dryRunFlagName  = "dry-run"
+	adoptFlagName   = "adopt"
+	yesFlagName     = "yes"
 )
 
 type readOnlyPlanOptions struct {
@@ -29,6 +32,49 @@ type readOnlyPlanOptions struct {
 	profile       string
 	profileSet    bool
 	verbose       bool
+}
+
+func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
+	var dryRun bool
+	var force bool
+	var adopt bool
+	var prune bool
+	var noPrune bool
+	var yes bool
+	command := &cobra.Command{
+		Use:   "apply [module...]",
+		Short: "Apply the selected dotfiles modules",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(command *cobra.Command, modules []string) error {
+			if adopt {
+				return errors.New("--adopt requires M2 and is not supported in this build")
+			}
+			if !dryRun {
+				return errors.New("real apply is not available in M1; use dot apply --dry-run")
+			}
+			return runReadOnlyPlan(command, readOnlyPlanOptions{
+				modules:       append([]string(nil), modules...),
+				force:         force,
+				prune:         prune,
+				noPrune:       noPrune,
+				pruneSet:      command.Flags().Changed(pruneFlagName),
+				noPruneSet:    command.Flags().Changed(noPruneFlagName),
+				home:          global.home,
+				homeSet:       command.Flags().Changed(homeFlagName),
+				repository:    global.repo,
+				repositorySet: command.Flags().Changed(repoFlagName),
+				profile:       global.profile,
+				profileSet:    command.Flags().Changed(profileFlagName),
+				verbose:       global.verbose,
+			}, env)
+		},
+	}
+	flags := command.Flags()
+	flags.BoolVarP(&dryRun, dryRunFlagName, "n", false, "print the plan without mutation")
+	flags.BoolVar(&adopt, adoptFlagName, false, "adopt matching unmanaged rendered files (M2)")
+	flags.BoolVarP(&yes, yesFlagName, "y", false, "skip interactive confirmations")
+	bindReadOnlyPlanFlags(command, &force, &prune, &noPrune)
+	return command
 }
 
 func newDiffCommand(env environment, global *globalOptions) *cobra.Command {
