@@ -169,6 +169,27 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 	})
 }
 
+func TestValidateTargetSet_PreservesMutualSymlinkAncestorRelation(t *testing.T) {
+	root := t.TempDir()
+	left := filepath.Join(root, "left")
+	right := filepath.Join(root, "right")
+	if err := os.Symlink(root, left); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", root, left, err)
+	}
+	if err := os.Symlink(root, right); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", root, right, err)
+	}
+
+	assertTargetSetOverlap(
+		t,
+		[]LabeledTarget{
+			{Label: "left reached through right", Path: filepath.Join(right, "left")},
+			{Label: "right reached through left", Path: filepath.Join(left, "right")},
+		},
+		TargetRelationLeftAncestor|TargetRelationRightAncestor,
+	)
+}
+
 func TestValidateTargetSet_DoesNotInventRelations(t *testing.T) {
 	t.Run("string prefix siblings", func(t *testing.T) {
 		root := t.TempDir()

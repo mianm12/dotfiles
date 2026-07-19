@@ -3,20 +3,23 @@ package paths
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrTargetOverlap 表示两个 labeled target 的文件系统身份相等或互为祖先。
 var ErrTargetOverlap = errors.New("target paths overlap")
 
-// TargetRelation 描述冲突中 left/right target 的文件系统 identity 关系。
+// TargetRelation 描述冲突中 left/right target 的文件系统 identity 关系；
+// symlink traversal 可以让两个严格祖先方向同时成立。
 // left/right 始终对应 TargetConflictError 返回的原始输入顺序。
 type TargetRelation uint8
 
+// TargetRelationNone 表示零值或无冲突关系；有效 TargetConflictError 不返回它。
+const TargetRelationNone TargetRelation = 0
+
 const (
-	// TargetRelationNone 表示零值或无冲突关系；有效 TargetConflictError 不返回它。
-	TargetRelationNone TargetRelation = iota
 	// TargetRelationEqual 表示双方解析到同一 target identity。
-	TargetRelationEqual
+	TargetRelationEqual TargetRelation = 1 << iota
 	// TargetRelationLeftAncestor 表示 left 是 right 的严格祖先。
 	TargetRelationLeftAncestor
 	// TargetRelationRightAncestor 表示 right 是 left 的严格祖先。
@@ -25,16 +28,25 @@ const (
 
 // String 返回稳定的诊断名称。
 func (relation TargetRelation) String() string {
-	switch relation {
-	case TargetRelationEqual:
-		return "equal"
-	case TargetRelationLeftAncestor:
-		return "left-ancestor"
-	case TargetRelationRightAncestor:
-		return "right-ancestor"
-	default:
+	parts := make([]string, 0, 3)
+	if relation&TargetRelationEqual != 0 {
+		parts = append(parts, "equal")
+	}
+	if relation&TargetRelationLeftAncestor != 0 {
+		parts = append(parts, "left-ancestor")
+	}
+	if relation&TargetRelationRightAncestor != 0 {
+		parts = append(parts, "right-ancestor")
+	}
+	if len(parts) == 0 {
 		return "none"
 	}
+	return strings.Join(parts, ",")
+}
+
+// Has 报告 relation 是否包含指定的非空关系事实。
+func (relation TargetRelation) Has(candidate TargetRelation) bool {
+	return candidate != TargetRelationNone && relation&candidate == candidate
 }
 
 // TargetConflictError 保存 target-set 冲突的双方 provenance 和 identity relation。
@@ -126,14 +138,15 @@ func validateTargetSet(inputs []LabeledTarget, resolver *targetResolver) (Target
 }
 
 func exportedTargetRelation(relation pathRelation) TargetRelation {
-	switch relation {
-	case pathRelationEqual:
-		return TargetRelationEqual
-	case pathRelationLeftAncestor:
-		return TargetRelationLeftAncestor
-	case pathRelationRightAncestor:
-		return TargetRelationRightAncestor
-	default:
-		return TargetRelationNone
+	var result TargetRelation
+	if relation&pathRelationEqual != 0 {
+		result |= TargetRelationEqual
 	}
+	if relation&pathRelationLeftAncestor != 0 {
+		result |= TargetRelationLeftAncestor
+	}
+	if relation&pathRelationRightAncestor != 0 {
+		result |= TargetRelationRightAncestor
+	}
+	return result
 }

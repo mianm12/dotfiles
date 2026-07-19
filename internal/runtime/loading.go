@@ -170,7 +170,7 @@ func validateLoadedState(context RunContext, snapshot state.Snapshot, operations
 	}
 	if err := operations.validatePathBoundaries(control.Paths(), targets); err != nil {
 		var conflict *paths.TargetConflictError
-		if errors.As(err, &conflict) && conflict.Relation() == paths.TargetRelationEqual {
+		if errors.As(err, &conflict) && conflict.Relation().Has(paths.TargetRelationEqual) {
 			return fmt.Errorf(
 				"%w: %w: validate equal state target identities: %w",
 				state.ErrCorrupt,
