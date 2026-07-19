@@ -84,6 +84,11 @@ planner 或 diff/status/dry-run CLI。
   versioned fingerprint、scoped run_once 与自包含 action；独立复核 GO、无 P0–P3。closure 后
   main 以 `385dea8` fast-forward-only 集成，合入后 Hook 测试 20 次与
   `make check BINARY=/private/tmp/dot-cp3-main-after-hook` 通过，clean worktree 已移除。
+- [x] 2026-07-19：`feat/apply-planner` 完成唯一只读组合入口、完整 desired/scoped render、
+  file/prune/hook 组合与整体验证；首轮 review 的 active P2 删除完整 desired 祖先 P1 以
+  `864c828` 修复，round 2 完整复审 GO。closure 后 main 以 `83039c1` fast-forward-only 集成，
+  合入后相关五包 20 次与 `make check BINARY=/private/tmp/dot-cp3-main-after-apply` 通过，clean
+  worktree 已移除。
 - [ ] 按 DAG 完成七个 Milestone 的实现、复核、closure、freshness 和 main 集成。
 - [ ] 从 checkpoint base 完成三路独立 Acceptance，处理有效 finding，收口 coordinator 并
   fast-forward-only 合入 main。
@@ -227,6 +232,12 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
   Impact: 撤销 prune/hook 并行；prune 先补共享 orphan identity 并完成 review/main 门禁，hook 随后
   以非重写 freshness merge 消费该 contract，未通过 adapter 或复制逻辑强行并行。
 
+- Observation: 分别有效的 file plan 与 prune plan 仍可能在组合顺序上互相破坏。
+  Evidence: apply-planner 首轮 review 证明 active P2 orphan symlink 可成为完整 desired 的祖先；
+  create/adopt 后再 prune 会使刚满足的 desired 不可达，partial 还可能影响未请求 module。
+  Impact: combined validation 以完整 observed desired 与实际 `DeletesTarget()` 的 P2 resolution 做
+  cross-check；full/partial 与非 active 对照回归通过后，round 2 完整复审 GO。
+
 ## Decision Log
 
 - Decision: 不新增 `feat/planner-model` branch，把最小共享 model 纳入 `feat/target-observation`。
@@ -246,5 +257,5 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
 
 ## Outcomes and Handoff
 
-尚未完成。Plan Gate、target observation、decision、prune 与 hook 已完成独立 review、closure、
-main 集成及合入后门禁；下一节点为从 `main@385dea8` 创建 `feat/apply-planner`。
+尚未完成。Plan Gate、target observation、decision、prune、hook 与 apply planner 已完成独立
+review、closure、main 集成及合入后门禁；下一节点为从 `main@83039c1` 创建 `feat/plan-cli`。
