@@ -80,6 +80,9 @@ desired、scoped render、observation、file decisions、prune、hooks 与 combi
   stdout 的前置提交；正常字节契约不变。
 - [x] 2026-07-19：round 1 fix 后相关三包普通/20 次/race、Darwin/Linux amd64 交叉编译、完整
   branch diff check 与 `make check` 再次通过；等待 round 2 完整 branch review。
+- [x] 2026-07-19：未参与实现的 reviewer 从 `afd13c8...HEAD` 完整执行 round 2，确认首轮 P2、
+  正常 dev/release 输出与完整 taxonomy/零写入边界，结论 GO、无 P0–P3 finding；主线程随后
+  重复三包 20 次、完整 diff check 与 `make check`，全部通过。
 
 ## Milestones
 
@@ -226,7 +229,7 @@ DOT_CONFIG 与 DOT_REPO；不读取或修改真实 modules、machine config、st
 
 ## Outcomes and Handoff
 
-实现已完成，计划保持 active，等待 coordinator 安排未参与实现的独立 reviewer：
+实现、两轮独立 review 与主线程最终门禁已完成：
 
 - `dot status` 只调用唯一 `planner.PlanApply`，再消费 opaque context/observation/file/prune/hook
   getters；没有第二次 runtime/state/target 读取或 ownership/P 行/fingerprint 计算。
@@ -260,7 +263,7 @@ DOT_CONFIG 与 DOT_REPO；不读取或修改真实 modules、machine config、st
     make check BINARY=/private/tmp/dot-cp3-status-review-fix-check/dot
 
 双平台只完成编译，未执行交叉编译产物；精确 HEAD 的远端 macOS/Linux CI 未运行，本地验收通过、
-远端待验收。reviewer 应以 `afd13c84b8af90d3f6da5da597271bfa1de0c6ec...feat/status` 为
-有效 diff，重点复核 conflict/DRIFT/PENDING 分界、scaffold clean 例外、所有 orphan 无遗漏、
-unassigned-only Clean、notice/prerequisite 失败前零可信输出及全部只读路径零锁零写入。round 1
-P2 已修复并完成全部门禁；round 2 前不迁移本计划到 completed，也不创建 closure commit。
+远端待验收。独立 reviewer 已以 `afd13c84b8af90d3f6da5da597271bfa1de0c6ec...741fd17`
+为有效 diff 完整复核 conflict/DRIFT/PENDING 分界、scaffold clean 例外、所有 orphan、
+unassigned-only Clean、notice/prerequisite 失败前零可信输出及全部只读路径零锁零写入；round 2
+结论 GO、无 P0–P3 finding。本计划可迁移至 completed 并以纯计划 commit 收口。
