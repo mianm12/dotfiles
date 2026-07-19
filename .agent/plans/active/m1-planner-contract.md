@@ -60,8 +60,10 @@ requirement 的封闭形态；CLI presentation 能在后续映射错误前保持
 - [x] 2026-07-19：提交本 active ExecPlan，固定范围、里程碑、验证与停止边界。
 - [x] 2026-07-19：以 `cdb9868` 澄清跨 stream 非事务边界，以 `dee1db7` 固定 diff/dry-run
   clean/actionable development notice 写失败语义；CLI 窄测通过且隔离树不变。
-- [ ] 收窄完整 file action 类型族并更新所有生产调用方与测试。
-- [ ] 补齐 source Precondition 与封闭 reason 结构校验。
+- [x] 2026-07-19：以 `8025f91` 收窄完整 file action 类型族，移除残余 verb 与
+  `HasDesired`；planner/CLI 联合测试通过，旧类型族 `rg` 无残留。
+- [x] 2026-07-19：新增 mutation 回归先证明五类畸形 plan 均被旧校验接受，再以 `4751862`
+  闭合 file source、prune 零 source 与 file reason 结构校验；窄测和联合测试通过。
 - [ ] 完成窄测、重复测试、race、完整 diff check、`make check` 和独立只读复核。
 - [ ] 处理有效 finding，完成计划迁移和 plan-closure commit。
 
@@ -142,8 +144,8 @@ Commit 边界：
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
 | 正常 CLI 输出/退出码不变，写失败仍为 1 | CLI 窄测与新增 stderr failure 回归 | 通过 |
-| 三个 action family 边界明确且无兼容残余 | `rg`、planner/CLI 编译与测试 | 待验证 |
-| source Precondition/closed reason fail closed | combined validation mutation tests | 待验证 |
+| 三个 action family 边界明确且无兼容残余 | `rg`、planner/CLI 编译与测试 | 通过 |
+| source Precondition/closed reason fail closed | combined validation mutation tests | 通过 |
 | planner/diff/status 保持只读与完整数据流 | 既有隔离 fixture、重复测试、race | 待验证 |
 | 当前平台完整门禁 | `make check BINARY=/private/tmp/dot-m1-planner-contract-check` | 待验证 |
 | 完整任务 diff 可审阅 | `git diff 6322af4...HEAD --check` 与独立复核 | 待验证 |
@@ -183,6 +185,12 @@ package、循环或 IO helper。
   Evidence: create-link/backup-replace 要求 source 仍为普通文件，prune 只复用 target resolution 与
   observation；已有 ExecPlans 明确要求共享 Precondition。
   Impact: 保留共享类型，通过 combined validation 闭合 allowed shape，不预建新的类型层。
+
+- Observation: combined validation 只比较 target snapshot，确实会接受缺失/错配 source、未知
+  file reason 和 prune source 残留。
+  Evidence: `TestValidateApplyPlan_RejectsInvalidActionShape` 在修复前五个子场景均得到 nil error，
+  修复后全部稳定拒绝。
+  Impact: 这是 future executor 边界上的真实 contract bug，当前修复收益高且不改变任何正常计划。
 
 ## Decision Log
 
