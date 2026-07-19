@@ -377,7 +377,7 @@ func TestRoot_HelpListsSpecifiedCommandsAndFlags(t *testing.T) {
 	if exitCode != 0 {
 		t.Errorf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, want := range []string{"doctor", "version", "--repo", "--profile", "--verbose", "--no-color"} {
+	for _, want := range []string{"apply", "diff", "doctor", "status", "version", "--repo", "--profile", "--verbose", "--no-color"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("run() stdout = %q, want substring %q", stdout, want)
 		}
