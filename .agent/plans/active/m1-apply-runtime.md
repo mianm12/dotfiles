@@ -64,7 +64,9 @@ exact-input 公开接缝，也没有将三者连接的内部 orchestration packa
 - [x] 2026-07-20：测试先固定锁内顺序执行、scope gate 零 executor、部分成功、post-commit
   cleanup、Store/Close 错误合并和真实 Store 失败恢复；随后连接 `internal/apply.Run`，验证
   L2/S1b adopt 与第三次零 target mutation/adopt/Store。
-- [ ] 完成窄测、重复/race、CLI 拒绝回归、diff check 与 `make check`，保持计划 active 等待复核。
+- [x] 2026-07-20：state/planner/apply/executor/runtime 窄测、apply/state 20 次重复、相关包 race、
+  CLI 真实 apply 拒绝、Linux/amd64 test binary、基线 diff check 与完整 `make check` 通过；
+  更新 handoff，计划保持 active 等待独立复核。
 
 ## Milestones
 
@@ -161,5 +163,50 @@ executor、state，避免 runtime↔planner import cycle。operation seam 只覆
 
 ## Outcomes and Handoff
 
-实施中；完成实现、验证与自检后补充 commits、证据、风险和未验证项，并保持计划 active 交给
-未参与实现的 reviewer。
+Milestone 已达到 review-ready。branch 基线为 `061b783ee555`，已形成以下 commits：
+
+    140c931 docs(apply): 建立 apply runtime 执行计划
+    3b558a9 feat(state): 建立 apply entry transition
+    464c4f4 feat(planner): 支持 exact-input apply 规划
+    a7bf63f feat(apply): 连接锁内执行与部分成功记账
+    b08f52b fix(state): 保留 transition 校验错误链
+    d1bf9f6 test(apply): 覆盖真实 Precond 部分成功
+
+`state.TransitionEntries` 现在从 missing/loaded 严格基线形成完整 Snapshot，保留未涉及 entries 和
+全部 run_once，按一个 transition 处理多个 upsert 与 `PreviousKey`，验证 `AppliedAt`，并以
+changed 标志避免无变化 Store。`planner.PlanLoadedApply` 只消费调用方已有
+`LoadedMutation.Inputs()`；测试在 strict load 后改写磁盘 state，exact-input plan 仍采用旧输入，
+而普通 `PlanApply` 才看到重新加载结果。
+
+`internal/apply.Run` 在一个 MutationSession 中完成 load→exact-input plan→完整 scope gate→顺序
+file execute→一次 `CommitState`→Close。scope gate 在 executor 前拒绝 backup-replace、
+ScaffoldRebuild、active prune、HookRun 与未知 executable verb；skip/conflict/deferred/hook skip
+仅作为非执行计划事实。runner 只应用 executor 实际返回的成功 upsert：普通 error/Precond 保留
+失败项旧账并提交此前成功；post-commit cleanup error 同样先记当前成功；Store 失败不回滚 target，
+Close error 与主要错误合并。
+
+真实隔离证据覆盖：两个 target 均成功后故意让 state Store 路径变成普通文件，Store 失败而
+link/scaffold 保留；还原路径后重跑得到两个 state-only L2/S1b adopt；成功提交后的下一次运行为
+零 executor、零 adopt、零 target mutation、零 Store。另一个真实 Precond 用例在首项 scaffold
+成功后让第二项 target 出现并失败，最终 state 包含首项新账、第二项旧账与原 run_once。执行被
+阻塞期间第二个 `lock.Acquire` 返回 `ErrBusy`，Run Close 后可再次取得锁。
+
+本地证据：
+
+    go test ./internal/state ./internal/planner ./internal/apply ./internal/executor ./internal/runtime
+    go test ./internal/apply ./internal/state -count=20
+    go test -race ./internal/state ./internal/planner ./internal/apply ./internal/executor ./internal/runtime
+    go test ./internal/cli -run TestApply_RejectsMutationAndAdoptBeforeRuntime
+    GOOS=linux GOARCH=amd64 go test -c -o /private/tmp/dot-m1-cp4-runtime-linux-amd64.test ./internal/apply
+    git diff 061b783ee5553ced594f3004ccaed0854551f2ed...HEAD --check
+    make check BINARY=/private/tmp/dot-m1-cp4-runtime-check
+
+全部退出 0；`make check` 包含 tidy/fmt check、lint 0 issues、全仓 race、build 与隔离
+doctor-manifest。没有新增依赖、state v1/ownership/公开输出/CLI wiring 改动，也没有执行
+backup/force/prune/hooks/add/init/managed。当前原生平台为 Darwin/arm64；Linux 只完成交叉编译，
+远端 macOS/Linux CI 未运行：本地验收通过、远端待验收。
+
+独立 reviewer 应重点确认两个组合层取舍：runner 遇到第一个 executor error 后停止尚未开始的
+后续 file action，但仍一次提交已成功 effects；conflict 不作为 executor error，其他 file action
+继续执行。另需保留 `FileResult` 语义优先于 `err != nil` 的提交点判断，否则 link L3/scaffold
+S3 的 cleanup error 会丢账。
