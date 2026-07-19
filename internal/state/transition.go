@@ -72,7 +72,7 @@ func validateEntryUpdates(baseline Snapshot, updates []EntryUpdate) ([]Entry, er
 	previousKeys := make(map[string]struct{}, len(updates))
 	for index, update := range updates {
 		if err := validateTargetKey(update.Key); err != nil {
-			return nil, fmt.Errorf("%w: update %d key %q: %v", ErrTransition, index, update.Key, err)
+			return nil, fmt.Errorf("%w: update %d key %q: %w", ErrTransition, index, update.Key, err)
 		}
 		if _, exists := keys[update.Key]; exists {
 			return nil, fmt.Errorf("%w: duplicate update key %q", ErrTransition, update.Key)
@@ -82,7 +82,7 @@ func validateEntryUpdates(baseline Snapshot, updates []EntryUpdate) ([]Entry, er
 		if update.PreviousKey != "" {
 			if err := validateTargetKey(update.PreviousKey); err != nil {
 				return nil, fmt.Errorf(
-					"%w: update %d previous key %q: %v",
+					"%w: update %d previous key %q: %w",
 					ErrTransition,
 					index,
 					update.PreviousKey,
@@ -106,7 +106,7 @@ func validateEntryUpdates(baseline Snapshot, updates []EntryUpdate) ([]Entry, er
 
 		entry, err := entryFromUpdate(update)
 		if err != nil {
-			return nil, fmt.Errorf("%w: update %d key %q: %v", ErrTransition, index, update.Key, err)
+			return nil, fmt.Errorf("%w: update %d key %q: %w", ErrTransition, index, update.Key, err)
 		}
 		entries[index] = entry
 	}
