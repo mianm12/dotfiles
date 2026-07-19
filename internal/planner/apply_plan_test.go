@@ -471,6 +471,117 @@ func TestValidateApplyPlan_RejectsInvalidActionShape(t *testing.T) {
 	}
 }
 
+func TestValidateApplyPlan_RejectsNonCanonicalPrunePlan(t *testing.T) {
+	standardPlan := func(t *testing.T) ApplyPlan {
+		t.Helper()
+		fixture := newApplyIntegrationFixture(t)
+		fixture.redirectEnvironment(t)
+		plan, err := PlanApply(fixture.options())
+		if err != nil {
+			t.Fatalf("PlanApply() error = %v", err)
+		}
+		return plan
+	}
+	unownedPlan := func(t *testing.T) ApplyPlan {
+		t.Helper()
+		fixture := newApplyIntegrationFixture(t)
+		fixture.redirectEnvironment(t)
+		legacyTarget := filepath.Join(fixture.home, "legacy", "old")
+		if err := os.Remove(legacyTarget); err != nil {
+			t.Fatalf("Remove(legacy target) error = %v", err)
+		}
+		if err := os.Symlink(filepath.Join(fixture.root, "user-owned"), legacyTarget); err != nil {
+			t.Fatalf("Symlink(unowned legacy target) error = %v", err)
+		}
+		options := fixture.options()
+		options.Force = true
+		plan, err := PlanApply(options)
+		if err != nil {
+			t.Fatalf("PlanApply(unowned orphan) error = %v", err)
+		}
+		return plan
+	}
+
+	tests := []struct {
+		name   string
+		plan   func(*testing.T) ApplyPlan
+		mutate func(*testing.T, *ApplyPlan)
+	}{
+		{
+			name: "P3 promoted to target delete",
+			plan: unownedPlan,
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				index := pruneActionIndex(t, plan.prune.actions, PruneReasonUnowned)
+				action := &plan.prune.actions[index]
+				action.Mode = PruneTargetAndState
+				action.Reason = PruneReasonOwned
+				action.Warning = false
+			},
+		},
+		{
+			name: "deferred action made active",
+			plan: standardPlan,
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				t.Helper()
+				for index := range plan.prune.actions {
+					action := &plan.prune.actions[index]
+					if !action.Deferred {
+						continue
+					}
+					action.Deferred = false
+					action.DeferredReason = PruneDeferredNone
+					action.OnSuccess = StateEffect{Kind: StateDelete, Key: action.Target}
+					return
+				}
+				t.Fatal("fixture has no deferred prune action")
+			},
+		},
+		{
+			name: "action omitted",
+			plan: standardPlan,
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				t.Helper()
+				if len(plan.prune.actions) < 2 {
+					t.Fatalf("fixture prune actions = %d, want at least 2", len(plan.prune.actions))
+				}
+				plan.prune.actions = plan.prune.actions[:len(plan.prune.actions)-1]
+			},
+		},
+		{
+			name: "confirmation group omitted",
+			plan: standardPlan,
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				t.Helper()
+				if len(plan.prune.groups) == 0 {
+					t.Fatal("fixture has no prune confirmation group")
+				}
+				plan.prune.groups = nil
+			},
+		},
+		{
+			name: "confirmation deletion summary changed",
+			plan: unownedPlan,
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				t.Helper()
+				if len(plan.prune.groups) != 1 || len(plan.prune.groups[0].Targets) != 1 {
+					t.Fatalf("fixture prune groups = %#v, want one target", plan.prune.groups)
+				}
+				plan.prune.groups[0].Targets[0].WouldDeleteTarget = true
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := test.plan(t)
+			test.mutate(t, &plan)
+			if err := validateApplyPlan(plan); err == nil || !strings.Contains(err.Error(), "canonical prune plan") {
+				t.Fatalf("validateApplyPlan() error = %v, want canonical prune plan rejection", err)
+			}
+		})
+	}
+}
+
 func TestPlanApply_RejectsActivePruneAncestorOfCompleteDesired(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -777,6 +888,17 @@ func fileActionIndex(t *testing.T, actions []FileAction, verb FileVerb) int {
 		}
 	}
 	t.Fatalf("fixture has no %q file action", verb)
+	return -1
+}
+
+func pruneActionIndex(t *testing.T, actions []PruneAction, reason PruneReason) int {
+	t.Helper()
+	for index, action := range actions {
+		if action.Reason == reason {
+			return index
+		}
+	}
+	t.Fatalf("fixture has no %q prune action", reason)
 	return -1
 }
 

@@ -136,13 +136,7 @@ func planApplyInputs(inputs dotruntime.LoadedInputs, options ApplyOptions) (Appl
 	if err != nil {
 		return ApplyPlan{}, fmt.Errorf("%w: plan files: %w", ErrApplyPlan, err)
 	}
-	pruneOptions := PruneOptions{
-		Enabled: !options.NoPrune,
-		Full:    scoped.Full(),
-	}
-	if !scoped.Full() {
-		pruneOptions.Modules = scoped.Modules()
-	}
+	pruneOptions := pruneOptionsForScope(!options.NoPrune, scoped.Full(), scoped.Modules())
 	prune, err := PlanPrune(observed, fileActions, pruneOptions)
 	if err != nil {
 		return ApplyPlan{}, fmt.Errorf("%w: plan prune: %w", ErrApplyPlan, err)
@@ -325,6 +319,14 @@ func stringSet(values []string) map[string]struct{} {
 	return set
 }
 
+func pruneOptionsForScope(enabled, full bool, modules []string) PruneOptions {
+	options := PruneOptions{Enabled: enabled, Full: full}
+	if !full {
+		options.Modules = append([]string(nil), modules...)
+	}
+	return options
+}
+
 func cloneObservedProfile(profile ObservedProfile) ObservedProfile {
 	return ObservedProfile{targets: profile.Targets(), orphans: profile.Orphans()}
 }
@@ -358,7 +360,7 @@ func validateApplyPlan(plan ApplyPlan) error {
 	if err := validateFileActions(plan.context, plan.observed, plan.fileActions); err != nil {
 		return err
 	}
-	if err := validatePrunePlan(plan.context, plan.observed, plan.prune); err != nil {
+	if err := validatePrunePlan(plan.context, plan.observed, plan.fileActions, plan.prune); err != nil {
 		return err
 	}
 	if err := validateActivePruneTopology(plan.observed, plan.prune); err != nil {
@@ -524,7 +526,12 @@ func isSupportedFileReason(reason FileReason) bool {
 	}
 }
 
-func validatePrunePlan(context ApplyContext, profile ObservedProfile, plan PrunePlan) error {
+func validatePrunePlan(
+	context ApplyContext,
+	profile ObservedProfile,
+	fileActions []FileAction,
+	plan PrunePlan,
+) error {
 	actions := plan.Actions()
 	if !context.PruneEnabled {
 		if len(actions) != 0 || len(plan.ConfirmationGroups()) != 0 {
@@ -569,7 +576,75 @@ func validatePrunePlan(context ApplyContext, profile ObservedProfile, plan Prune
 			return fmt.Errorf("active prune action %q must delete its state key", action.Target)
 		}
 	}
-	return validatePruneGroups(plan.ConfirmationGroups())
+	if err := validatePruneGroups(plan.ConfirmationGroups()); err != nil {
+		return err
+	}
+	expected, err := PlanPrune(
+		profile,
+		fileActions,
+		pruneOptionsForScope(context.PruneEnabled, context.Full, context.Modules),
+	)
+	if err != nil {
+		return fmt.Errorf("derive canonical prune plan: %w", err)
+	}
+	return validateCanonicalPrunePlan(plan, expected)
+}
+
+func validateCanonicalPrunePlan(actual, expected PrunePlan) error {
+	actualActions := actual.Actions()
+	expectedActions := expected.Actions()
+	if len(actualActions) != len(expectedActions) {
+		return fmt.Errorf(
+			"canonical prune plan action count is %d, got %d",
+			len(expectedActions),
+			len(actualActions),
+		)
+	}
+	for index := range expectedActions {
+		if !samePruneAction(actualActions[index], expectedActions[index]) {
+			return fmt.Errorf(
+				"prune action %q does not match canonical prune plan",
+				actualActions[index].Target,
+			)
+		}
+	}
+
+	actualGroups := actual.ConfirmationGroups()
+	expectedGroups := expected.ConfirmationGroups()
+	if len(actualGroups) != len(expectedGroups) {
+		return fmt.Errorf(
+			"canonical prune plan confirmation group count is %d, got %d",
+			len(expectedGroups),
+			len(actualGroups),
+		)
+	}
+	for index := range expectedGroups {
+		if actualGroups[index].Module != expectedGroups[index].Module ||
+			!slices.Equal(actualGroups[index].Targets, expectedGroups[index].Targets) {
+			return fmt.Errorf(
+				"prune confirmation group %q does not match canonical prune plan",
+				actualGroups[index].Module,
+			)
+		}
+	}
+	return nil
+}
+
+func samePruneAction(left, right PruneAction) bool {
+	return left.Mode == right.Mode &&
+		left.Target == right.Target &&
+		left.Module == right.Module &&
+		left.Reason == right.Reason &&
+		left.Warning == right.Warning &&
+		left.Deferred == right.Deferred &&
+		left.DeferredReason == right.DeferredReason &&
+		left.Precondition.TargetPath == right.Precondition.TargetPath &&
+		left.Precondition.TargetResolution.Equal(right.Precondition.TargetResolution) &&
+		sameObservation(left.Precondition.Observed, right.Precondition.Observed) &&
+		left.Precondition.SourcePath == right.Precondition.SourcePath &&
+		left.Precondition.RequireRegularSource == right.Precondition.RequireRegularSource &&
+		left.OnSuccess == right.OnSuccess &&
+		left.OnFailure == right.OnFailure
 }
 
 func validatePruneGroups(groups []PruneConfirmationGroup) error {
