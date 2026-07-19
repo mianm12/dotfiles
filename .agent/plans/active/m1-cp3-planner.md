@@ -75,6 +75,15 @@ planner 或 diff/status/dry-run CLI。
   `1905b15`、`5ea7a91` 修复，第二轮完整复审 GO。Milestone closure 后 main 以 `f181f94`
   fast-forward-only 集成，合入后窄测与 `make check BINARY=/private/tmp/dot-cp3-main-after-decision`
   通过，worker worktree clean 后无 force 移除；共享 model 由此冻结供 Wave 3 消费。
+- [x] 2026-07-19：Wave 3 启动后发现 `OrphanTarget` 尚未保存计划时 target resolution；按并行
+  规则撤销并行并改为 prune→hook 串行。`feat/prune-planner` 补齐 orphan identity，完成 P1–P3、
+  partial scope、整模块组与 conflict/no-prune 门控；独立复核 GO。closure 后 main 以 `1a7e0fc`
+  fast-forward-only 集成，合入后窄测与 `make check BINARY=/private/tmp/dot-cp3-main-after-prune`
+  通过，clean worktree 已移除。
+- [x] 2026-07-19：`feat/hook-planner` 以 `1f11fcd` 非重写同步 prune 基线后，完成脚本分类、
+  versioned fingerprint、scoped run_once 与自包含 action；独立复核 GO、无 P0–P3。closure 后
+  main 以 `385dea8` fast-forward-only 集成，合入后 Hook 测试 20 次与
+  `make check BINARY=/private/tmp/dot-cp3-main-after-hook` 通过，clean worktree 已移除。
 - [ ] 按 DAG 完成七个 Milestone 的实现、复核、closure、freshness 和 main 集成。
 - [ ] 从 checkpoint base 完成三路独立 Acceptance，处理有效 finding，收口 coordinator 并
   fast-forward-only 合入 main。
@@ -95,9 +104,9 @@ target-observation → decision-engine → prune-planner ─┐
 1. Wave 1：`feat/target-observation`，包含最小共享 model、scope/render/hook descriptor 接缝与
    observation/alias join。
 2. Wave 2：`feat/decision-engine`，唯一拥有 owned、L/S、M1 kind migration、Precond/state effect。
-3. Wave 3：`feat/prune-planner` 与 `feat/hook-planner` 从同一 wave base 并行；固定先集成 prune，
-   再在 hook branch 非重写合入 current main、复测并完整复审。任一分支需要回改共享 model、
-   ownership 或同一文件时撤销并行，改为 prune→hook 串行。
+3. Wave 3：`feat/prune-planner` 与 `feat/hook-planner` 原从同一 wave base 启动；发现 prune 必须
+   回改共享 orphan identity contract 后立即撤销并行，实际按 prune→hook 串行。hook branch 以
+   明确 merge commit 非重写同步 current main，复测并完整复审后按预定顺序集成。
 4. Wave 4–6：`feat/apply-planner`、`feat/plan-cli`、`feat/status` 依次从当时 main 创建。
 
 每个 worker 先确认 `pwd` 与 Git 顶层均为分配 worktree，创建并先提交独立 active ExecPlan；
@@ -213,6 +222,11 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
   Impact: observation 的不透明 `paths.TargetResolution` 贯穿所有 action Precondition；executor 仍须
   重新解析并复核 control-plane boundary。
 
+- Observation: decision 完成后，orphan 计划对象仍未保存 plan-time target resolution。
+  Evidence: Wave 3 启动检查发现 P2 target delete 的 Precondition 无法从 `OrphanTarget` 自包含构造。
+  Impact: 撤销 prune/hook 并行；prune 先补共享 orphan identity 并完成 review/main 门禁，hook 随后
+  以非重写 freshness merge 消费该 contract，未通过 adapter 或复制逻辑强行并行。
+
 ## Decision Log
 
 - Decision: 不新增 `feat/planner-model` branch，把最小共享 model 纳入 `feat/target-observation`。
@@ -225,6 +239,12 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
   并行，不复制逻辑制造并行。
   Date: 2026-07-19
 
+- Decision: Wave 3 实际改为 prune→hook 串行。
+  Rationale: `OrphanTarget.Resolution` 属于共享 plan model 与 P2 Precondition；命中并行撤销条件后，
+  先由 prune branch 单一拥有 contract 变更，再让 hook 通过显式 freshness merge 消费 current main。
+  Date: 2026-07-19
+
 ## Outcomes and Handoff
 
-尚未完成。当前已通过 Plan Gate，等待 coordinator 起点 commit 后启动 Wave 1。
+尚未完成。Plan Gate、target observation、decision、prune 与 hook 已完成独立 review、closure、
+main 集成及合入后门禁；下一节点为从 `main@385dea8` 创建 `feat/apply-planner`。
