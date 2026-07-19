@@ -29,6 +29,29 @@ func TestExecuteScaffold_CreatePublishesCompleteFile(t *testing.T) {
 	}
 	assertRegularFile(t, target, fixture.content, fixture.mode)
 	assertNoScaffoldTemps(t, filepath.Dir(target))
+
+	before, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("os.Stat() before second run error = %v", err)
+	}
+	secondAction := fixture.planScaffold(t, target, action.OnSuccess.Entry, true, false)
+	if secondAction.Verb != planner.FileSkip || secondAction.Reason != planner.FileReasonScaffoldPresent {
+		t.Fatalf("second action = %q/%q, want S1a skip", secondAction.Verb, secondAction.Reason)
+	}
+	secondResult, err := ExecuteFile(fixture.control, secondAction)
+	if err != nil {
+		t.Fatalf("second ExecuteFile() error = %v", err)
+	}
+	if secondResult.TargetMutated || secondResult.StateEffect != secondAction.OnSuccess {
+		t.Fatalf("second ExecuteFile() result = %#v, want zero mutation", secondResult)
+	}
+	after, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("os.Stat() after second run error = %v", err)
+	}
+	if !os.SameFile(before, after) || before.Mode() != after.Mode() {
+		t.Fatalf("second run changed target identity/mode: before=%v after=%v", before.Mode(), after.Mode())
+	}
 }
 
 func TestExecuteScaffold_CreateDoesNotClobberCommitRace(t *testing.T) {
@@ -51,6 +74,60 @@ func TestExecuteScaffold_CreateDoesNotClobberCommitRace(t *testing.T) {
 		t.Fatalf("target after commit race = (%q, %v), want user data", content, readErr)
 	}
 	assertNoScaffoldTemps(t, filepath.Dir(target))
+}
+
+func TestExecuteScaffold_CreateCleanupFailureKeepsSuccessEffect(t *testing.T) {
+	fixture := newScaffoldFixture(t)
+	target := filepath.Join(fixture.home, "cleanup-failure")
+	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+	operations := defaultFileOperations()
+	realRemove := operations.remove
+	injected := errors.New("cleanup failed")
+	operations.remove = func(path string) error {
+		if strings.HasPrefix(filepath.Base(path), scaffoldTemporaryPrefix) {
+			return injected
+		}
+		return realRemove(path)
+	}
+
+	result, err := executeFile(fixture.control, action, operations)
+	if !errors.Is(err, injected) {
+		t.Fatalf("executeFile() error = %v, want cleanup failure", err)
+	}
+	if !result.TargetMutated || result.StateEffect != action.OnSuccess {
+		t.Fatalf("executeFile() result = %#v, want committed success", result)
+	}
+	assertRegularFile(t, target, fixture.content, fixture.mode)
+}
+
+func TestPrepareScaffoldFile_FailureRemovesCreatedTemporaryFile(t *testing.T) {
+	fixture := newScaffoldFixture(t)
+	operations := defaultFileOperations()
+	realCreateTemp := operations.createTemp
+	var temporaryPath string
+	operations.createTemp = func(directory, pattern string) (*os.File, error) {
+		file, err := realCreateTemp(directory, pattern)
+		if err != nil {
+			return nil, err
+		}
+		temporaryPath = file.Name()
+		if err := file.Close(); err != nil {
+			return nil, err
+		}
+		return file, nil
+	}
+
+	_, err := prepareScaffoldFile(operations, fixture.home, planner.Desired{
+		Mode:    fixture.mode,
+		Content: fixture.content,
+	})
+	if err == nil {
+		t.Fatal("prepareScaffoldFile() error = nil, want write failure from closed file")
+	}
+	if temporaryPath == "" {
+		t.Fatal("injected createTemp did not record a path")
+	}
+	assertMissing(t, temporaryPath)
 }
 
 func TestExecuteScaffold_AdoptIsStateOnly(t *testing.T) {

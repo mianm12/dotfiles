@@ -177,17 +177,21 @@ func prepareScaffoldFile(
 	}()
 
 	if _, err := io.Copy(file, bytes.NewReader(desired.Content)); err != nil {
-		return "", fmt.Errorf("write complete temporary scaffold file: %w", err)
+		resultErr = fmt.Errorf("write complete temporary scaffold file: %w", err)
+		return
 	}
 	if err := file.Chmod(desired.Mode.Perm()); err != nil {
-		return "", fmt.Errorf("set temporary scaffold mode: %w", err)
+		resultErr = fmt.Errorf("set temporary scaffold mode: %w", err)
+		return
 	}
 	if err := file.Sync(); err != nil {
-		return "", fmt.Errorf("sync temporary scaffold file: %w", err)
+		resultErr = fmt.Errorf("sync temporary scaffold file: %w", err)
+		return
 	}
 	if err := file.Close(); err != nil {
 		closed = true
-		return "", fmt.Errorf("close temporary scaffold file: %w", err)
+		resultErr = fmt.Errorf("close temporary scaffold file: %w", err)
+		return
 	}
 	closed = true
 	return temporaryPath, nil
