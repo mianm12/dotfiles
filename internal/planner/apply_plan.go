@@ -361,6 +361,9 @@ func validateApplyPlan(plan ApplyPlan) error {
 	if err := validatePrunePlan(plan.context, plan.observed, plan.prune); err != nil {
 		return err
 	}
+	if err := validateActivePruneTopology(plan.observed, plan.prune); err != nil {
+		return err
+	}
 	return validateHookPlan(plan.context, plan.hooks)
 }
 
@@ -503,6 +506,33 @@ func validatePruneGroups(groups []PruneConfirmationGroup) error {
 			if target.Target == "" ||
 				(targetIndex > 0 && group.Targets[targetIndex-1].Target >= target.Target) {
 				return fmt.Errorf("prune confirmation group %q targets are not strictly ordered", group.Module)
+			}
+		}
+	}
+	return nil
+}
+
+func validateActivePruneTopology(profile ObservedProfile, plan PrunePlan) error {
+	desiredTargets := profile.Targets()
+	for _, action := range plan.Actions() {
+		if !action.DeletesTarget() {
+			continue
+		}
+		pruneResolution := action.Precondition.TargetResolution
+		for _, desired := range desiredTargets {
+			switch {
+			case pruneResolution.Equal(desired.Resolution):
+				return fmt.Errorf(
+					"active prune target %q has the same identity as desired target %q",
+					action.Target,
+					desired.Desired.Target,
+				)
+			case pruneResolution.IsAncestorOf(desired.Resolution):
+				return fmt.Errorf(
+					"active prune target %q is an ancestor of desired target %q",
+					action.Target,
+					desired.Desired.Target,
+				)
 			}
 		}
 	}

@@ -370,6 +370,149 @@ func TestValidateApplyPlan_RejectsInconsistentAction(t *testing.T) {
 	}
 }
 
+func TestPlanApply_RejectsActivePruneAncestorOfCompleteDesired(t *testing.T) {
+	tests := []struct {
+		name        string
+		stateModule string
+		modules     []string
+	}{
+		{
+			name:        "full scope",
+			stateModule: "legacy",
+		},
+		{
+			name:        "partial scope protects unrequested desired",
+			stateModule: "cleanup",
+			modules:     []string{"cleanup"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPruneAncestorFixture(t, applyStateEntry{
+				Module:   test.stateModule,
+				Kind:     "symlink",
+				Source:   "modules/" + test.stateModule + "/old.txt",
+				LinkDest: "owned",
+			}, false)
+			fixture.redirectEnvironment(t)
+			options := fixture.options()
+			options.Modules = test.modules
+			before := snapshotObservationTree(t, fixture.root)
+			plan, err := PlanApply(options)
+			if err == nil || !strings.Contains(err.Error(), "prune") || !strings.Contains(err.Error(), "ancestor") {
+				t.Fatalf("PlanApply(active ancestor prune) error = %v, want prune ancestor rejection", err)
+			}
+			if !reflect.DeepEqual(plan, ApplyPlan{}) {
+				t.Fatalf("failed topology plan = %#v, want zero", plan)
+			}
+			if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("topology rejection changed fixture\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func TestPlanApply_PruneTopologyChecksOnlyActiveTargetDeletes(t *testing.T) {
+	tests := []struct {
+		name          string
+		state         applyStateEntry
+		childConflict bool
+		noPrune       bool
+		wantMode      PruneMode
+		wantDeferred  bool
+	}{
+		{
+			name: "P1 state-only",
+			state: applyStateEntry{
+				Module: "legacy",
+				Kind:   "scaffold",
+				Source: "modules/legacy/old.template",
+			},
+			wantMode: PruneStateOnly,
+		},
+		{
+			name: "P3 warning state-only",
+			state: applyStateEntry{
+				Module:   "legacy",
+				Kind:     "symlink",
+				Source:   "modules/legacy/old.txt",
+				LinkDest: "changed",
+			},
+			wantMode: PruneStateOnly,
+		},
+		{
+			name: "deferred P2",
+			state: applyStateEntry{
+				Module:   "legacy",
+				Kind:     "symlink",
+				Source:   "modules/legacy/old.txt",
+				LinkDest: "owned",
+			},
+			childConflict: true,
+			wantMode:      PruneTargetAndState,
+			wantDeferred:  true,
+		},
+		{
+			name: "no-prune",
+			state: applyStateEntry{
+				Module:   "legacy",
+				Kind:     "symlink",
+				Source:   "modules/legacy/old.txt",
+				LinkDest: "owned",
+			},
+			noPrune: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPruneAncestorFixture(t, test.state, test.childConflict)
+			fixture.redirectEnvironment(t)
+			options := fixture.options()
+			options.NoPrune = test.noPrune
+			plan, err := PlanApply(options)
+			if err != nil || !plan.Valid() {
+				t.Fatalf("PlanApply(%s) = (%#v, %v), want valid", test.name, plan, err)
+			}
+			actions := plan.Prune().Actions()
+			if test.noPrune {
+				if actions != nil {
+					t.Fatalf("no-prune actions = %#v, want nil", actions)
+				}
+				return
+			}
+			if len(actions) != 1 || actions[0].Mode != test.wantMode || actions[0].Deferred != test.wantDeferred || actions[0].DeletesTarget() {
+				t.Fatalf("non-active-delete prune actions = %#v", actions)
+			}
+		})
+	}
+}
+
+func TestValidateActivePruneTopology_RejectsEqualIdentity(t *testing.T) {
+	t.Parallel()
+
+	targetPath := filepath.Join(t.TempDir(), "target")
+	resolution, err := paths.ResolveTarget(targetPath)
+	if err != nil {
+		t.Fatalf("ResolveTarget() error = %v", err)
+	}
+	profile := ObservedProfile{targets: []ObservedTarget{{
+		Desired:    Desired{Module: "app", Source: "file", Target: "~/target", TargetPath: targetPath},
+		Resolution: resolution,
+	}}}
+	prune := PrunePlan{actions: []PruneAction{{
+		Mode:     PruneTargetAndState,
+		Target:   "~/alias",
+		Deferred: false,
+		Precondition: Precondition{
+			TargetPath:       targetPath,
+			TargetResolution: resolution,
+		},
+	}}}
+	if err := validateActivePruneTopology(profile, prune); err == nil || !strings.Contains(err.Error(), "same identity") {
+		t.Fatalf("validateActivePruneTopology(equal identity) error = %v", err)
+	}
+}
+
 type fileCompositionFixture struct {
 	root        string
 	home        string
@@ -385,6 +528,46 @@ type applyIntegrationFixture struct {
 	repository string
 	configPath string
 	statePath  string
+}
+
+func newPruneAncestorFixture(
+	t *testing.T,
+	historical applyStateEntry,
+	childConflict bool,
+) applyIntegrationFixture {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repository := filepath.Join(root, "repo")
+	configPath := filepath.Join(home, ".config", "dot", "config.toml")
+	statePath := filepath.Join(home, ".local", "state", "dot", "state.json")
+	writeApplyFile(t, configPath, "profile = \"all\"\n")
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+all = ["cleanup", "app"]
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "cleanup", "dot.toml"), `target = "~"
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~/dir"
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "app", "child"), "wanted\n")
+	if err := os.MkdirAll(filepath.Join(home, "owned"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(home/owned) error = %v", err)
+	}
+	if err := os.Symlink("owned", filepath.Join(home, "dir")); err != nil {
+		t.Fatalf("Symlink(home/dir) error = %v", err)
+	}
+	if childConflict {
+		writeApplyFile(t, filepath.Join(home, "owned", "child"), "user data\n")
+	}
+	writeApplyState(t, statePath, map[string]applyStateEntry{"~/dir": historical}, nil)
+	return applyIntegrationFixture{
+		root:       root,
+		home:       home,
+		repository: repository,
+		configPath: configPath,
+		statePath:  statePath,
+	}
 }
 
 func newApplyIntegrationFixture(t *testing.T) applyIntegrationFixture {
