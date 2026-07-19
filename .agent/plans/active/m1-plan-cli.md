@@ -64,11 +64,17 @@ partial 输出。
   `HEAD == base == 83039c1`。
 - [x] 2026-07-19：读取仓库规则、计划生命周期、coordinator/apply plan、README、指定规范与
   CLI/runtime/planner 实现测试；未发现 contract blocker。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先行接入 `dot diff` 的稳定计划输出、skip/no-op 与 3/2/0 映射。
-- [ ] 测试先行接入 `dot apply --dry-run` 的同投影、前置拒绝与 flag 契约。
-- [ ] 覆盖 full/partial、force/no-prune、occupied lock、success/error/refusal 完整树零写入。
-- [ ] 运行窄测、重复/race、双平台编译、branch diff check 与 `make check`，保持 active 等待 review。
+- [x] 2026-07-19：提交 active ExecPlan 起点（`c5f9e30`）。
+- [x] 2026-07-19：测试先行接入 `dot diff` 的稳定计划输出、skip/no-op 与 3/2/0 映射
+  （`f01354f`）。
+- [x] 2026-07-19：测试先行接入 `dot apply --dry-run` 的同投影、前置拒绝与 flag 契约
+  （`c0d871e`）。
+- [x] 2026-07-19：覆盖 full/partial、force/no-prune、occupied lock、success/error/refusal 完整树
+  零写入，并补充缺失 state root 和进程环境隔离回归（`cb6225b`、`9fbab8b`、`fd70d67`）。
+- [x] 2026-07-19：更新 README 当前实现状态与真实 apply 的 build 边界文案
+  （`67c9aa1`、`e7c69e1`）。
+- [x] 2026-07-19：运行窄测、重复/race、双平台交叉编译、branch diff check 与 `make check`；
+  worktree clean，计划保持 active 等待独立 review。
 
 ## Milestones
 
@@ -150,7 +156,20 @@ writer 输出；它不暴露新的 planner 入口或可执行能力。
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: `planner.PlanApply` 的 public 入口使用 production environment resolver，CLI 测试即使
+  注入了 `Environment.LookupEnv`，若不同时重定向真实测试进程的 `DOT_CONFIG`、`DOT_REPO`、
+  `HOME` 和 `XDG_*`，仍可能读取开发机配置。
+  Evidence: 增加进程环境隔离后，所有 plan CLI fixture 的 runtime 来源与完整树快照均只位于
+  `t.TempDir()`。
+
+- Observation: 规范中的 M1 包含后续真实 apply，因此拒绝文案不能笼统声称“真实 apply 不在 M1”。
+  Evidence: 文案和测试改为精确说明“当前 build 尚未提供真实 apply”，仍引导使用
+  `dot apply --dry-run`。
+
+- Observation: S2 scaffold-deleted 与 P3 deferred prune 都可能只有普通 `skip` 动作；非 verbose
+  不能因此静默成 no-op。
+  Evidence: presentation 将普通 skip 保持隐藏，同时在 stderr 输出 warning，并以 actionable 2
+  收口。
 
 ## Decision Log
 
@@ -163,6 +182,45 @@ writer 输出；它不暴露新的 planner 入口或可执行能力。
   Rationale: 同一事实源和投影是防止两条公开只读路径行为漂移的最小实现。
   Date: 2026-07-19
 
+- Decision: 先完整构造并校验 presentation projection，再输出 context 和动作行。
+  Rationale: 未知 action/reason 等 mapping 错误必须按运行错误 1 fail closed，不能泄漏半段成功输出。
+  Date: 2026-07-19
+
+- Decision: `--prune` 与 `--no-prune` 只要同时显式出现就拒绝，不根据最终布尔值猜测用户意图。
+  Rationale: 两个互斥公开开关同时出现是输入错误；在 runtime/planner 前拒绝最清晰且可测试。
+  Date: 2026-07-19
+
+- Decision: `--adopt` 的 M2 拒绝优先于非 dry-run apply 的当前 build 拒绝。
+  Rationale: unsupported capability 应稳定指出真正的契约边界，并保证两者都不进入 runtime、planner
+  或 mutation 路径。
+  Date: 2026-07-19
+
 ## Outcomes and Handoff
 
-尚未完成。计划保持 active，等待实现、验证和独立 review。
+实现已完成，计划保持 active，等待 coordinator 安排独立 reviewer：
+
+- `dot diff` 与 `dot apply --dry-run` 共享唯一 `planner.PlanApply` 调用和 presentation projection；
+  full/partial scope、force、prune 选择和输出/退出码不会形成双重事实源。
+- context、file/prune/hook/warning/no-op 输出和 1 > 3 > 2 > 0 优先级由真实隔离 fixture 覆盖；
+  `--adopt`、裸 apply 和互斥 prune flag 在 runtime/planner 前拒绝。
+- success、planner error、前置拒绝、missing state root 和 occupied lock 均以完整树快照验证零 mutation；
+  production path 不获取 lock，不写 target/state/backup/temp，也不执行 hook。
+- 无新依赖；没有修改 runtime/planner contract、持久化格式、executor、status、unified diff、workflow
+  或 M2/M3 能力。
+- 本地通过窄测、`-count=20`、race、darwin/linux amd64 交叉编译、完整 branch diff check 和
+  `make check`。交叉编译只证明构建；远端 macOS/Linux CI 未运行，仍待验收。
+
+提交序列：
+
+    c5f9e30 docs(plan): 建立 plan CLI 执行计划
+    f01354f feat(cli): 接入 diff 只读计划
+    c0d871e feat(cli): 接入 apply dry-run 拒绝边界
+    cb6225b test(cli): 固定只读计划零写入边界
+    9fbab8b fix(test): 隔离计划 CLI 进程环境
+    fd70d67 test(cli): 覆盖缺失 state 的错误拒绝路径
+    67c9aa1 docs(readme): 更新只读计划命令状态
+    e7c69e1 fix(cli): 准确说明真实 apply 当前边界
+
+独立 reviewer 应以 `83039c1565d795c38df82a531041d859af14a484...feat/plan-cli` 为有效 diff，
+重点复核 presentation 是否纯消费可信 plan、错误前零成功输出、只读路径零锁零写入、partial scope
+和 warning/exit 聚合。review 前不迁移本计划到 completed，也不创建 closure commit。
