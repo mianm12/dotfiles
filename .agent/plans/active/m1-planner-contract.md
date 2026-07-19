@@ -72,9 +72,12 @@ requirement 的封闭形态；CLI presentation 能在后续映射错误前保持
   复用纯 `Decide` 校验 canonical tuple 和完整 state effect，新增三项先失败 mutation 回归；
   reviewer 第二轮重审完整分支 GO，无 P0–P3 finding。
 - [x] 2026-07-19：完成 Outcomes/Handoff，将本计划迁入 `completed/`，进入纯计划收口 commit。
-- [ ] 2026-07-19：合并前独立复核发现 prune canonical validation P1 与一个 FileAction 测试
-  命名 P3；按用户授权将计划 reopen，在原分支以新 commits 完成 test→fix→review，不先合入 main。
-- [ ] 补齐 canonical prune actions/groups 校验与 mutation 回归，修正测试命名。
+- [x] 2026-07-19：合并前独立复核发现 prune canonical validation P1 与一个 FileAction 测试
+  命名 P3；按用户授权以 `3f9348b` reopen，在原分支以新 commits 完成 test→fix→review，
+  不先合入 main。
+- [x] 新增五项 mutation 回归，先证明旧校验会接受 P3 target delete、deferred action 激活、
+  action/group 丢失和错误 `WouldDeleteTarget`；以 `69609c5` 重算并校验 canonical prune plan，
+  以 `4930503` 修正 `FileActionClone` 测试命名。
 - [ ] 重新完成重复测试、完整门禁、独立复审和 plan closure。
 
 ## Milestones
@@ -156,6 +159,7 @@ Commit 边界：
 | 正常 CLI 输出/退出码不变，写失败仍为 1 | CLI 窄测与新增 stderr failure 回归 | 通过 |
 | 三个 action family 边界明确且无兼容残余 | `rg`、planner/CLI 编译与测试 | 通过 |
 | source Precondition/closed reason fail closed | combined validation mutation tests | 通过 |
+| prune action/group 与 canonical plan 完全一致 | 五项 mutation 回归与纯 `PlanPrune` 重算 | 窄测通过 |
 | planner/diff/status 保持只读与完整数据流 | 既有隔离 fixture、重复测试、race | 通过 |
 | 当前平台完整门禁 | `make check BINARY=/private/tmp/dot-m1-planner-contract-check` | 通过 |
 | 完整任务 diff 可审阅 | `git diff 6322af4...HEAD --check` 与独立复核 | 通过 |
@@ -209,6 +213,14 @@ package、循环或 IO helper。
   Impact: 以纯 `Decide` 作为唯一 semantic oracle，并保留独立 payload shape 校验；三项 mutation
   回归在修复前失败、`5e931be` 后通过，第二轮完整 review GO。
 
+- Observation: prune 的字段级结构校验没有证明 action 集合、deferred 状态和 confirmation groups
+  是输入的唯一合法投影，因而会接受危险升级或不完整计划。
+  Evidence: `TestValidateApplyPlan_RejectsNonCanonicalPrunePlan` 的五个场景在修复前都得到 nil error：
+  P3 unowned 被改成 target delete、deferred action 被激活、action 被遗漏、group 被遗漏，以及
+  `WouldDeleteTarget` 被改写。
+  Impact: validation 保留独立 payload shape 检查，再调用纯 `PlanPrune` 重算 canonical actions/groups
+  并逐项比较；不复制 prune ownership、P1/P2/P3 或 grouping 规则。
+
 ## Decision Log
 
 - Decision: 保持 command-specific output semantics，不建立跨 stream 事务抽象。
@@ -226,6 +238,13 @@ package、循环或 IO helper。
   Rationale: 只检查 closed enum 不能阻止不可能组合；直接复用 `Decide` 保持 ownership、L/S/P
   单一真相源，也避免手写 verb/reason/kind 矩阵。`Decide` 无 IO、mutation 或 validation 回调，
   不形成递归或 executor 重解释。
+  Date: 2026-07-19
+
+- Decision: planning 与 validation 共用 `pruneOptionsForScope`，validation 以纯 `PlanPrune` 作为
+  canonical oracle，并继续保留 plan 自身的结构检查。
+  Rationale: 这样让 prune ownership、P1/P2/P3、deferred 与 confirmation grouping 只有一个业务
+  真相源，同时仍能给畸形 payload 明确报错；`PlanPrune` 无 IO、mutation 或 validation 回调，
+  不形成递归，当前规模下重算成本可忽略。
   Date: 2026-07-19
 
 ## Outcomes and Handoff
