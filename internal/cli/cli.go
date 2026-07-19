@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	exitOK    = 0
-	exitError = 1
+	exitOK         = 0
+	exitError      = 1
+	exitActionable = 2
+	exitConflict   = 3
 )
 
 type commandExitError struct {
@@ -103,6 +105,7 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 	}
 
 	root.AddCommand(
+		newDiffCommand(env, &options),
 		newDoctorCommand(env, &options),
 		newVersionCommand(env, &options),
 	)
