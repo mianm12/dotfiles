@@ -3,8 +3,14 @@ package planner
 import (
 	"errors"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/mianm12/dotfiles/internal/manifest"
+	"github.com/mianm12/dotfiles/internal/paths"
+	"github.com/mianm12/dotfiles/internal/state"
 )
 
 func TestOwned_M1Kinds(t *testing.T) {
@@ -452,6 +458,73 @@ func TestDecide_M1KindMigration(t *testing.T) {
 	}
 }
 
+func TestDecide_PreconditionRetainsPlanTimeTargetResolution(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	root := filepath.Join(home, "root")
+	left := filepath.Join(root, "A")
+	right := filepath.Join(root, "B")
+	for _, directory := range []string{left, right} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", directory, err)
+		}
+	}
+	sourcePath := filepath.Join(root, "source")
+	if err := os.WriteFile(sourcePath, []byte("source"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	ancestor := filepath.Join(home, "current")
+	if err := os.Symlink(left, ancestor); err != nil {
+		t.Fatalf("Symlink(A) error = %v", err)
+	}
+	targetPath := filepath.Join(ancestor, "config")
+	loaded, err := state.Load(filepath.Join(home, "missing-state.json"))
+	if err != nil {
+		t.Fatalf("state.Load(missing) error = %v", err)
+	}
+	profile, err := ObserveProfileTargets(home, []manifest.DesiredEntry{{
+		Module:     "test",
+		Source:     "source",
+		SourcePath: sourcePath,
+		Target:     "~/current/config",
+		TargetPath: targetPath,
+		Kind:       manifest.FileKindLink,
+	}}, loaded)
+	if err != nil {
+		t.Fatalf("ObserveProfileTargets() error = %v", err)
+	}
+	targets := profile.Targets()
+	if len(targets) != 1 {
+		t.Fatalf("Targets() count = %d, want 1", len(targets))
+	}
+	action, err := Decide(targets[0], DecisionOptions{})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if err := os.Remove(ancestor); err != nil {
+		t.Fatalf("Remove(ancestor symlink) error = %v", err)
+	}
+	if err := os.Symlink(right, ancestor); err != nil {
+		t.Fatalf("Symlink(B) error = %v", err)
+	}
+
+	observedAfter, err := ObserveTarget(targetPath)
+	if err != nil {
+		t.Fatalf("ObserveTarget(after retarget) error = %v", err)
+	}
+	if !reflect.DeepEqual(observedAfter, action.Precondition.Observed) {
+		t.Fatalf("leaf observation changed unexpectedly: got %#v, planned %#v", observedAfter, action.Precondition.Observed)
+	}
+	resolvedAfter, err := paths.ResolveTarget(targetPath)
+	if err != nil {
+		t.Fatalf("ResolveTarget(after retarget) error = %v", err)
+	}
+	if action.Precondition.TargetResolution.Equal(resolvedAfter) {
+		t.Fatal("plan-time target resolution still matches after ancestor symlink retarget")
+	}
+}
+
 type decisionWant struct {
 	verb        ActionVerb
 	reason      ActionReason
@@ -471,7 +544,11 @@ func assertDecision(t *testing.T, target ObservedTarget, action Action, want dec
 	if action.Target != target.Desired.Target || !action.HasDesired || !reflect.DeepEqual(action.Desired, target.Desired) {
 		t.Fatalf("action desired payload = %#v, want target desired %#v", action, target.Desired)
 	}
-	wantPrecondition := Precondition{TargetPath: target.Desired.TargetPath, Observed: target.Observed}
+	wantPrecondition := Precondition{
+		TargetPath:       target.Desired.TargetPath,
+		TargetResolution: target.Resolution,
+		Observed:         target.Observed,
+	}
 	if action.Verb == ActionCreateLink || action.Verb == ActionBackupReplace {
 		wantPrecondition.SourcePath = target.Desired.SourcePath
 		wantPrecondition.RequireRegularSource = true

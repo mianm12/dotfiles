@@ -1,7 +1,11 @@
 // Package planner 形成 dot 只读计划阶段的自包含事实与动作模型。
 package planner
 
-import "io/fs"
+import (
+	"io/fs"
+
+	"github.com/mianm12/dotfiles/internal/paths"
+)
 
 // DesiredKind 描述 M1 planner 支持的期望文件行为。
 type DesiredKind string
@@ -85,10 +89,11 @@ type HistoricalState struct {
 
 // ObservedTarget 把一个完整 desired 与其 current leaf 快照、可选历史 state 对齐。
 type ObservedTarget struct {
-	Desired  Desired
-	Observed Observation
-	State    HistoricalState
-	HasState bool
+	Desired    Desired
+	Resolution paths.TargetResolution
+	Observed   Observation
+	State      HistoricalState
+	HasState   bool
 }
 
 // OrphanTarget 保存不匹配任何 current desired 的历史 entry 及其 current leaf 快照。
@@ -104,7 +109,8 @@ type ObservedProfile struct {
 	orphans []OrphanTarget
 }
 
-// Targets 返回不共享 desired/observed bytes 的副本。
+// Targets 返回不共享 desired/observed bytes 的副本。Resolution 是 paths 提供的不可变值快照，
+// 值复制不会向调用方暴露其 identity/ancestor 内部存储。
 func (profile ObservedProfile) Targets() []ObservedTarget {
 	cloned := append([]ObservedTarget(nil), profile.targets...)
 	for index := range cloned {
@@ -179,9 +185,12 @@ const (
 	ReasonReleaseOwnershipToScaffold ActionReason = "release-ownership-to-scaffold"
 )
 
-// Precondition 固定一个动作提交前必须仍成立的 target 快照。
+// Precondition 固定一个动作提交前必须仍成立的 target 快照。未来 executor 必须重新解析
+// TargetPath 并与 TargetResolution 比较，同时重新执行 control-plane boundary 校验；leaf
+// Observation 相同不能替代祖先拓扑证明。
 type Precondition struct {
 	TargetPath           string
+	TargetResolution     paths.TargetResolution
 	Observed             Observation
 	SourcePath           string
 	RequireRegularSource bool

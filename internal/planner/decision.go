@@ -158,8 +158,9 @@ func plannedAction(
 	success StateEffectKind,
 ) Action {
 	precondition := Precondition{
-		TargetPath: target.Desired.TargetPath,
-		Observed:   target.Observed.Clone(),
+		TargetPath:       target.Desired.TargetPath,
+		TargetResolution: target.Resolution,
+		Observed:         target.Observed.Clone(),
 	}
 	if verb == ActionCreateLink || verb == ActionBackupReplace {
 		precondition.SourcePath = target.Desired.SourcePath

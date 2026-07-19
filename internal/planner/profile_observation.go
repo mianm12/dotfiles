@@ -56,7 +56,11 @@ func ObserveProfileTargets(
 		if err != nil {
 			return ObservedProfile{}, err
 		}
-		target := ObservedTarget{Desired: candidate.desired, Observed: observed}
+		target := ObservedTarget{
+			Desired:    candidate.desired,
+			Resolution: candidate.resolution,
+			Observed:   observed,
+		}
 		for index, historical := range history {
 			if !candidate.resolution.Equal(historical.resolution) {
 				continue
