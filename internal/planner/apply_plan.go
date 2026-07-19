@@ -454,6 +454,30 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 		default:
 			return fmt.Errorf("file action %q uses unsupported verb %q", action.Target, action.Verb)
 		}
+		if err := validateCanonicalFileDecision(context.Force, target, action); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCanonicalFileDecision(force bool, target ObservedTarget, action FileAction) error {
+	expected, err := Decide(target, DecisionOptions{Force: force})
+	if err != nil {
+		return fmt.Errorf("derive canonical decision for file action %q: %w", action.Target, err)
+	}
+	if action.Verb != expected.Verb || action.Reason != expected.Reason {
+		return fmt.Errorf(
+			"file action %q does not match canonical decision: got %q/%q, want %q/%q",
+			action.Target,
+			action.Verb,
+			action.Reason,
+			expected.Verb,
+			expected.Reason,
+		)
+	}
+	if action.OnSuccess != expected.OnSuccess || action.OnFailure != expected.OnFailure {
+		return fmt.Errorf("file action %q state effects do not match canonical decision", action.Target)
 	}
 	return nil
 }

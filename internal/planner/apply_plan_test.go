@@ -413,6 +413,33 @@ func TestValidateApplyPlan_RejectsInvalidActionShape(t *testing.T) {
 			want: "unsupported reason",
 		},
 		{
+			name: "closed enums forming impossible decision",
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				index := fileActionIndex(t, plan.fileActions, FileConflict)
+				plan.fileActions[index].Verb = FileSkip
+				plan.fileActions[index].Reason = FileReasonTargetMissing
+			},
+			want: "does not match canonical decision",
+		},
+		{
+			name: "file verb crossing desired kind",
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				index := fileActionIndex(t, plan.fileActions, FileCreateLink)
+				plan.fileActions[index].Verb = FileScaffold
+				plan.fileActions[index].Precondition.SourcePath = ""
+				plan.fileActions[index].Precondition.RequireRegularSource = false
+			},
+			want: "does not match canonical decision",
+		},
+		{
+			name: "state payload diverging from decision",
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				index := fileActionIndex(t, plan.fileActions, FileCreateLink)
+				plan.fileActions[index].OnSuccess.Entry.Source = "modules/wrong-source"
+			},
+			want: "state effects do not match canonical decision",
+		},
+		{
 			name: "prune with source requirement",
 			mutate: func(t *testing.T, plan *ApplyPlan) {
 				t.Helper()
