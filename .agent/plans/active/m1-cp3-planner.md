@@ -100,6 +100,10 @@ planner 或 diff/status/dry-run CLI。
   fast-forward-only 集成，合入后 CLI/planner/runtime 三包 20 次与
   `make check BINARY=/private/tmp/dot-cp3-main-after-status` 通过，clean worktree 已移除。
 - [x] 按 DAG 完成七个 Milestone 的实现、复核、closure、freshness 和 main 集成。
+- [x] 2026-07-19：三路 Checkpoint Acceptance 首轮完成：平台/架构与数据保护 reviewer GO；规范
+  reviewer 发现 1 个有效 P2——status 仅将 `ReasonLinkDrift` 归 DRIFT，其他
+  `ActionConflict` 错归 PENDING，偏离 CLI spec 的公开 taxonomy。main 保持 `f30645e` clean，
+  已从 current main 创建 `fix/m1-planner-acceptance` 做单一根因修复。
 - [ ] 从 checkpoint base 完成三路独立 Acceptance，处理有效 finding，收口 coordinator 并
   fast-forward-only 合入 main。
 
@@ -248,6 +252,12 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
   Impact: combined validation 以完整 observed desired 与实际 `DeletesTarget()` 的 P2 resolution 做
   cross-check；full/partial 与非 active 对照回归通过后，round 2 完整复审 GO。
 
+- Observation: status 按单一 reason 而非 action verb 区分 DRIFT/PENDING 会遗漏同类 conflict。
+  Evidence: Checkpoint Acceptance 证明 L5 unowned link 与 L6 regular/directory/special blockers 都是
+  `ActionConflict`，但旧 projection 仅把 `ReasonLinkDrift` 归 DRIFT。
+  Impact: acceptance fix 按封闭 action verb 统一 `ActionConflict`→DRIFT，保持其他 non-skip file
+  action→PENDING；退出码、planner/state contract 与 mutation 边界不变。
+
 ## Decision Log
 
 - Decision: 不新增 `feat/planner-model` branch，把最小共享 model 纳入 `feat/target-observation`。
@@ -268,5 +278,5 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
 ## Outcomes and Handoff
 
 尚未完成。Plan Gate 与七个 Milestone 已完成独立 review、closure、main 集成及合入后门禁；
-当前进入 checkpoint-base...main 的三路独立 Acceptance。若无有效 finding，不创建 acceptance-fix
-branch；若有，则只在 `fix/m1-planner-acceptance` 按共享根因修复并复审。
+首轮 Acceptance 有 1 个有效 taxonomy P2；当前在 `fix/m1-planner-acceptance` 按共享根因测试先行
+修复。修复完成后必须从 checkpoint base 重新进行完整独立 Acceptance，不能只复核局部 fix。
