@@ -64,7 +64,12 @@ planner 或 diff/status/dry-run CLI。
 - [x] 2026-07-19：三名只读 subagent 完成规范缺口、DAG/共享契约及测试/依赖/双平台审计；
   主 agent 核对后无停止条件。
 - [x] 2026-07-19：从 checkpoint base 创建 coordinator branch/worktree，并建立本计划。
-- [ ] 提交 coordinator ExecPlan 起点，启动 Wave 1。
+- [x] 2026-07-19：以 `6969d01` 提交 coordinator ExecPlan 起点并启动 Wave 1。
+- [x] 2026-07-19：`feat/target-observation` 完成共享 model、validated scope/scoped render、
+  leaf observation 与 desired/state identity join；首轮 review 的 HOME capability P1 以
+  `584473c` 修复，第二轮完整复审 GO。Milestone closure 后 main 以 `712ab85` fast-forward-only
+  集成，合入后窄测与 `make check BINARY=/private/tmp/dot-cp3-main-after-observation` 通过，
+  worker worktree clean 后无 force 移除。
 - [ ] 按 DAG 完成七个 Milestone 的实现、复核、closure、freshness 和 main 集成。
 - [ ] 从 checkpoint base 完成三路独立 Acceptance，处理有效 finding，收口 coordinator 并
   fast-forward-only 合入 main。
@@ -193,6 +198,10 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
 - Observation: 沙箱内 Go 1.26 module stat cache 写入被拒会让 golangci-lint 误报无 Go 文件。
   Evidence: 首次基线门禁日志与 `go list`；最小 runtime approval 后相同 `make check` 通过。
   Impact: 后续完整门禁使用已获批的 `make check` 路径，不把环境限制误判为代码失败。
+
+- Observation: 只保存 profile/GOOS/data/modules 仍不足以让 validated capability 约束 scoped render。
+  Evidence: Wave 1 首轮 reviewer 证明 HOME A validation 后可用 HOME B 形成混域 template/hook 输入。
+  Impact: `ValidatedProfile` 同时绑定完成全局路径校验时的 clean HOME；后续 scope 必须精确匹配。
 
 ## Decision Log
 
