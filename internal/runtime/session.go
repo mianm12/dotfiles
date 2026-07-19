@@ -116,6 +116,21 @@ func BeginMutation(overrides Overrides) (*MutationSession, error) {
 	return systemResolver().BeginMutation(overrides)
 }
 
+// BeginMutationWithStateStore 建立与 BeginMutation 相同的 production mutation session，只把
+// 最终 state Store 依赖显式替换为调用方提供的实现。它供 internal orchestration 的确定性
+// Store-stage 故障测试使用；依赖只绑定本 session，不写全局状态。
+func BeginMutationWithStateStore(
+	overrides Overrides,
+	store func(root, path string, snapshot state.Snapshot) error,
+) (*MutationSession, error) {
+	if store == nil {
+		return nil, fmt.Errorf("state store dependency is required")
+	}
+	operations := loadingOperationsWithResolver(systemResolver())
+	operations.storeState = store
+	return beginMutation(overrides, operations)
+}
+
 // BeginMutation 使用 resolver 的明确系统来源建立 mutation session。
 func (resolver Resolver) BeginMutation(overrides Overrides) (*MutationSession, error) {
 	return beginMutation(overrides, loadingOperationsWithResolver(resolver))

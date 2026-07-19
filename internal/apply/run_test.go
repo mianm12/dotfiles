@@ -118,33 +118,77 @@ func TestRun_RejectsUnsupportedScopeBeforeExecutor(t *testing.T) {
 func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	fixture := newRunIntegrationFixture(t)
 	operations := defaultRunOperations()
-	realExecute := operations.execute
-	executeCount := 0
-	movedStateRoot := fixture.stateRoot + ".moved"
-	operations.execute = func(control paths.ControlPlanePaths, action planner.FileAction) (executor.FileResult, error) {
-		result, err := realExecute(control, action)
-		executeCount++
-		if executeCount == 2 {
-			if renameErr := os.Rename(fixture.stateRoot, movedStateRoot); renameErr != nil {
-				t.Fatalf("os.Rename(state root) error = %v", renameErr)
-			}
-			if writeErr := os.WriteFile(fixture.stateRoot, []byte("block state store"), 0o600); writeErr != nil {
-				t.Fatalf("os.WriteFile(blocking state root) error = %v", writeErr)
-			}
+	storePublishErr := errors.New("injected state publish failure")
+	storeCalls := 0
+	publishCalls := 0
+	operations.begin = func(overrides dotruntime.Overrides) (mutationSession, error) {
+		session, err := dotruntime.BeginMutationWithStateStore(
+			overrides,
+			func(root, path string, snapshot state.Snapshot) error {
+				storeCalls++
+				return state.StoreWithPublisher(root, path, snapshot, func(prepared, destination string) error {
+					publishCalls++
+					if root != fixture.stateRoot || destination != fixture.stateFile || path != fixture.stateFile {
+						t.Fatalf(
+							"Store paths = root %q path %q destination %q",
+							root,
+							path,
+							destination,
+						)
+					}
+					info, statErr := os.Stat(prepared)
+					if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+						t.Fatalf("prepared Store file = (%#v, %v), want closed regular 0600", info, statErr)
+					}
+					data, readErr := os.ReadFile(prepared)
+					if readErr != nil {
+						t.Fatalf("os.ReadFile(prepared Store file) error = %v", readErr)
+					}
+					preparedSnapshot, decodeErr := state.Decode(data)
+					if decodeErr != nil {
+						t.Fatalf("state.Decode(prepared Store file) error = %v", decodeErr)
+					}
+					for _, key := range []string{"~/config", "~/zshrc"} {
+						if _, exists := preparedSnapshot.Entry(key); !exists {
+							t.Fatalf("prepared Store Snapshot omits successful entry %q", key)
+						}
+					}
+					return storePublishErr
+				})
+			},
+		)
+		if err != nil {
+			return nil, err
 		}
-		return result, err
+		return runtimeMutationSession{session: session}, nil
 	}
 
 	first, err := runWithOperations(fixture.options(), operations)
-	if err == nil || first.Executed != 2 || first.TargetMutations != 2 || first.StateCommitted {
-		t.Fatalf("first run = (%#v, %v), want two committed targets and Store failure", first, err)
+	if !errors.Is(err, storePublishErr) || !strings.Contains(err.Error(), "publish state") ||
+		!strings.Contains(err.Error(), "commit runtime state") {
+		t.Fatalf("first run error = %v, want identifiable Store publish failure", err)
+	}
+	if first.Executed != 2 || first.TargetMutations != 2 || first.StateCommitted ||
+		storeCalls != 1 || publishCalls != 1 {
+		t.Fatalf(
+			"first run = %#v, storeCalls=%d publishCalls=%d; want two targets and one failed Store publish",
+			first,
+			storeCalls,
+			publishCalls,
+		)
 	}
 	assertRunTargets(t, fixture)
-	if removeErr := os.Remove(fixture.stateRoot); removeErr != nil {
-		t.Fatalf("os.Remove(blocking state root) error = %v", removeErr)
+	if _, statErr := os.Lstat(fixture.stateFile); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("failed Store state file Lstat error = %v, want missing", statErr)
 	}
-	if renameErr := os.Rename(movedStateRoot, fixture.stateRoot); renameErr != nil {
-		t.Fatalf("os.Rename(restore state root) error = %v", renameErr)
+	entries, readDirErr := os.ReadDir(fixture.stateRoot)
+	if readDirErr != nil {
+		t.Fatalf("os.ReadDir(state root) error = %v", readDirErr)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".state.json-") {
+			t.Fatalf("failed Store left temporary file %q", entry.Name())
+		}
 	}
 
 	second, err := Run(fixture.options())
