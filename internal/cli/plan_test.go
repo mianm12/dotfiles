@@ -312,6 +312,7 @@ func TestReadOnlyPlan_MissingStateRootRemainsMissing(t *testing.T) {
 
 func TestReadOnlyPlan_OutputErrorOverridesConflict(t *testing.T) {
 	fixture := newPlanCLIFixture(t)
+	fixture.redirectEnvironment(t)
 	var stderr bytes.Buffer
 	code := run([]string{
 		"diff", "alpha", "--home", fixture.home, "--repo", fixture.repository,
@@ -495,6 +496,7 @@ run_once = ["hooks/setup.sh"]
 
 func (fixture planCLIFixture) run(t *testing.T, commandArgs ...string) (string, string, int) {
 	t.Helper()
+	fixture.redirectEnvironment(t)
 	args := append([]string(nil), commandArgs...)
 	args = append(args, "--home", fixture.home, "--repo", fixture.repository)
 	var stdout bytes.Buffer
@@ -508,6 +510,17 @@ func (fixture planCLIFixture) run(t *testing.T, commandArgs ...string) (string, 
 		goos:        runtime.GOOS,
 	})
 	return stdout.String(), stderr.String(), code
+}
+
+func (fixture planCLIFixture) redirectEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", fixture.home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(fixture.home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(fixture.home, ".local", "state"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(fixture.home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(fixture.home, ".cache"))
+	t.Setenv("DOT_CONFIG", filepath.Join(fixture.home, ".config", "dot", "config.toml"))
+	t.Setenv("DOT_REPO", fixture.repository)
 }
 
 type planStateDocument struct {
