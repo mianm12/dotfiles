@@ -75,6 +75,9 @@ partial 输出。
   （`67c9aa1`、`e7c69e1`）。
 - [x] 2026-07-19：运行窄测、重复/race、双平台交叉编译、branch diff check 与 `make check`；
   worktree clean，计划保持 active 等待独立 review。
+- [x] 2026-07-19：未参与实现的 reviewer 完整审查 `83039c1...431f22b`，结论 GO、无
+  P0–P3 finding；独立窄测、`make check` 与 diff check 通过。主线程随后重复三包 20 次、完整
+  diff check 与 `make check`，全部通过。
 
 ## Milestones
 
@@ -140,6 +143,9 @@ Commit 边界：
 无新依赖、无 runtime/planner contract 或 mutation 代码。交叉编译只证明构建；远端 macOS/Linux
 CI 未实际运行时明确待验收。
 
+独立完整复核结论为 GO、无 P0–P3 finding；reviewer 确认输出原子性、1 > 3 > 2 > 0、warning、
+前置拒绝、环境隔离、README 当前事实与全部只读路径零写入均符合本 Milestone scope。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权在本 branch/worktree 创建 active plan、修改、stage、commit 和验证当前 Milestone。
@@ -197,7 +203,7 @@ writer 输出；它不暴露新的 planner 入口或可执行能力。
 
 ## Outcomes and Handoff
 
-实现已完成，计划保持 active，等待 coordinator 安排独立 reviewer：
+实现、独立 review 与主线程最终门禁已完成：
 
 - `dot diff` 与 `dot apply --dry-run` 共享唯一 `planner.PlanApply` 调用和 presentation projection；
   full/partial scope、force、prune 选择和输出/退出码不会形成双重事实源。
@@ -221,6 +227,6 @@ writer 输出；它不暴露新的 planner 入口或可执行能力。
     67c9aa1 docs(readme): 更新只读计划命令状态
     e7c69e1 fix(cli): 准确说明真实 apply 当前边界
 
-独立 reviewer 应以 `83039c1565d795c38df82a531041d859af14a484...feat/plan-cli` 为有效 diff，
-重点复核 presentation 是否纯消费可信 plan、错误前零成功输出、只读路径零锁零写入、partial scope
-和 warning/exit 聚合。review 前不迁移本计划到 completed，也不创建 closure commit。
+独立 reviewer 已以 `83039c1565d795c38df82a531041d859af14a484...431f22b` 为有效 diff，完整
+复核 presentation、错误前零成功输出、只读路径零锁零写入、partial scope、warning/exit 聚合与
+README，结论 GO、无 P0–P3 finding。计划可迁移至 completed 并以纯计划 commit 收口。
