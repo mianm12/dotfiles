@@ -70,6 +70,11 @@ planner 或 diff/status/dry-run CLI。
   `584473c` 修复，第二轮完整复审 GO。Milestone closure 后 main 以 `712ab85` fast-forward-only
   集成，合入后窄测与 `make check BINARY=/private/tmp/dot-cp3-main-after-observation` 通过，
   worker worktree clean 后无 force 移除。
+- [x] 2026-07-19：`feat/decision-engine` 完成 Owned、L/S、force、M1 kind migration 与自包含
+  Precondition/state effects；首轮 review 的 target resolution P1 与 scaffold force P2 分别以
+  `1905b15`、`5ea7a91` 修复，第二轮完整复审 GO。Milestone closure 后 main 以 `f181f94`
+  fast-forward-only 集成，合入后窄测与 `make check BINARY=/private/tmp/dot-cp3-main-after-decision`
+  通过，worker worktree clean 后无 force 移除；共享 model 由此冻结供 Wave 3 消费。
 - [ ] 按 DAG 完成七个 Milestone 的实现、复核、closure、freshness 和 main 集成。
 - [ ] 从 checkpoint base 完成三路独立 Acceptance，处理有效 finding，收口 coordinator 并
   fast-forward-only 合入 main。
@@ -202,6 +207,11 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
 - Observation: 只保存 profile/GOOS/data/modules 仍不足以让 validated capability 约束 scoped render。
   Evidence: Wave 1 首轮 reviewer 证明 HOME A validation 后可用 HOME B 形成混域 template/hook 输入。
   Impact: `ValidatedProfile` 同时绑定完成全局路径校验时的 clean HOME；后续 scope 必须精确匹配。
+
+- Observation: 仅保存 leaf object snapshot 不足以表达未来 executor 的完整提交前提。
+  Evidence: Wave 2 reviewer 用祖先 symlink A→B 改指证明两个 leaf 均 missing 时仍可能换了逻辑 target。
+  Impact: observation 的不透明 `paths.TargetResolution` 贯穿所有 action Precondition；executor 仍须
+  重新解析并复核 control-plane boundary。
 
 ## Decision Log
 
