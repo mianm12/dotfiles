@@ -39,18 +39,21 @@ func runVersion(command *cobra.Command, options versionOptions, env environment)
 	command.Printf("commit=%s\n", env.build.Commit)
 	command.Printf("build_time=%s\n", env.build.BuildTime)
 
-	context, err := runtimecontext.PreflightRepository(runtimecontext.Options{
-		Home:        options.home,
-		HomeSet:     options.homeSet,
-		Repo:        options.repo,
-		RepoSet:     options.repoSet,
-		LookupEnv:   env.lookupEnv,
-		UserHomeDir: env.userHomeDir,
+	resolver := runtimecontext.NewResolver(env.lookupEnv, env.userHomeDir)
+	context, err := resolver.PreflightRepository(runtimecontext.Overrides{
+		Home: runtimecontext.Override{
+			Value: options.home,
+			Set:   options.homeSet,
+		},
+		Repository: runtimecontext.Override{
+			Value: options.repo,
+			Set:   options.repoSet,
+		},
 	})
 	if err != nil {
 		return reportVersionError(command, err)
 	}
-	requirement, err := manifest.ReadRequirement(context.Repository)
+	requirement, err := manifest.ReadRequirement(context.RepositoryPath())
 	if errors.Is(err, manifest.ErrRepositoryUnavailable) {
 		// 尚未安装仓库时仍允许 version 成功，并明确报告 requires 不可用。
 		command.Println("requires=unavailable")

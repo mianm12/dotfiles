@@ -18,18 +18,19 @@ func TestLoad_DistinguishesMissingLoadedAndInvalidStates(t *testing.T) {
 	missingPath := filepath.Join(root, "missing.json")
 	before := snapshotFiles(t, root)
 
-	snapshot, status, err := Load(missingPath)
-	if err != nil || status != StatusMissing || snapshot.Version() != 0 {
-		t.Fatalf("Load(missing) = (%#v, %v, %v), want zero, StatusMissing, nil", snapshot, status, err)
+	loaded, err := Load(missingPath)
+	if _, ok := loaded.Snapshot(); err != nil || loaded.Status() != StatusMissing || !loaded.Missing() || ok {
+		t.Fatalf("Load(missing) = (%#v, %v), want missing without Snapshot", loaded, err)
 	}
 	if after := snapshotFiles(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("Load(missing) changed tree: before=%v after=%v", before, after)
 	}
 
 	validPath := writeStateFile(t, root, "valid.json", marshalDocument(t, testDocument()))
-	snapshot, status, err = Load(validPath)
-	if err != nil || status != StatusLoaded || snapshot.Version() != 1 {
-		t.Fatalf("Load(valid) = (%#v, %v, %v), want v1, StatusLoaded, nil", snapshot, status, err)
+	loaded, err = Load(validPath)
+	snapshot, ok := loaded.Snapshot()
+	if err != nil || loaded.Status() != StatusLoaded || loaded.Missing() || !ok || snapshot.Version() != 1 {
+		t.Fatalf("Load(valid) = (%#v, %v), want loaded v1 Snapshot", loaded, err)
 	}
 
 	tests := []struct {
@@ -44,16 +45,16 @@ func TestLoad_DistinguishesMissingLoadedAndInvalidStates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeStateFile(t, root, tt.name+".json", []byte(tt.raw))
-			snapshot, status, err := Load(path)
-			if !errors.Is(err, tt.want) || status != StatusInvalid || snapshot.Version() != 0 {
-				t.Fatalf("Load() = (%#v, %v, %v), want zero, StatusInvalid, errors.Is(%v)", snapshot, status, err, tt.want)
+			loaded, err := Load(path)
+			if snapshot, ok := loaded.Snapshot(); !errors.Is(err, tt.want) || loaded.Status() != StatusInvalid || ok || snapshot.Version() != 0 {
+				t.Fatalf("Load() = (%#v, %v), want invalid without Snapshot and errors.Is(%v)", loaded, err, tt.want)
 			}
 		})
 	}
 }
 
 func TestLoad_RejectsPathAndReadErrorsWithoutClassifyingStateCorrupt(t *testing.T) {
-	if _, _, err := Load("relative/state.json"); err == nil || errors.Is(err, ErrCorrupt) {
+	if _, err := Load("relative/state.json"); err == nil || errors.Is(err, ErrCorrupt) {
 		t.Fatalf("Load(relative) error = %v, want non-corrupt input path error", err)
 	}
 
@@ -62,8 +63,8 @@ func TestLoad_RejectsPathAndReadErrorsWithoutClassifyingStateCorrupt(t *testing.
 	if err := os.Symlink(filepath.Join(root, "missing-target"), dangling); err != nil {
 		t.Fatalf("os.Symlink() error = %v", err)
 	}
-	if _, status, err := Load(dangling); err == nil || status != StatusInvalid || errors.Is(err, ErrCorrupt) {
-		t.Fatalf("Load(dangling) = (%v, %v), want StatusInvalid non-corrupt read error", status, err)
+	if loaded, err := Load(dangling); err == nil || loaded.Status() != StatusInvalid || errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Load(dangling) = (%v, %v), want StatusInvalid non-corrupt read error", loaded.Status(), err)
 	}
 }
 

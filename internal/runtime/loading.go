@@ -18,25 +18,53 @@ var ErrRequiresUnsatisfied = errors.New("CLI does not satisfy manifest requires"
 
 // Compatibility 是 strict manifest 实际 requirement 的兼容性结果。
 type Compatibility struct {
-	Requirement      manifest.Requirement
-	DevelopmentBuild bool
+	requirement      manifest.Requirement
+	developmentBuild bool
 }
 
-// LoadResult 保存完整 runtime 加载后的可信只读输入。
-type LoadResult struct {
-	Context       Context
-	Compatibility Compatibility
-	Manifest      manifest.Repository
-	State         state.Snapshot
-	StateStatus   state.LoadStatus
+// Requirement 返回 strict manifest 实际声明的版本要求。
+func (compatibility Compatibility) Requirement() manifest.Requirement {
+	return compatibility.requirement
 }
 
-// InitLoadResult 保存 init 配置阶段所需的 preflight 与 strict manifest，不包含 state。
-type InitLoadResult struct {
-	Context       InitContext
-	Compatibility Compatibility
-	Manifest      manifest.Repository
+// DevelopmentBuild 报告当前构建是否按 dev 规则跳过版本大小比较。
+func (compatibility Compatibility) DevelopmentBuild() bool { return compatibility.developmentBuild }
+
+// LoadedInputs 保存完整 runtime 加载后的可信只读输入。
+type LoadedInputs struct {
+	context       RunContext
+	compatibility Compatibility
+	repository    manifest.Repository
+	state         state.Loaded
 }
+
+// Context 返回本次运行的严格 preflight 结果。
+func (inputs LoadedInputs) Context() RunContext { return inputs.context }
+
+// Compatibility 返回 strict manifest 的兼容性结果。
+func (inputs LoadedInputs) Compatibility() Compatibility { return inputs.compatibility }
+
+// Manifest 返回严格加载的仓库 manifest。
+func (inputs LoadedInputs) Manifest() manifest.Repository { return inputs.repository }
+
+// State 返回缺失或严格加载的 state 联合结果。
+func (inputs LoadedInputs) State() state.Loaded { return inputs.state }
+
+// InitInputs 保存 init 配置阶段所需的 preflight 与 strict manifest，不包含 state。
+type InitInputs struct {
+	context       InitContext
+	compatibility Compatibility
+	repository    manifest.Repository
+}
+
+// Context 返回 init 的严格 preflight 结果。
+func (inputs InitInputs) Context() InitContext { return inputs.context }
+
+// Compatibility 返回 strict manifest 的兼容性结果。
+func (inputs InitInputs) Compatibility() Compatibility { return inputs.compatibility }
+
+// Manifest 返回严格加载的仓库 manifest。
+func (inputs InitInputs) Manifest() manifest.Repository { return inputs.repository }
 
 // Lease 表示当前 runtime 层持有的一份 mutation 锁引用。
 // 调用方必须在完整 mutation 周期结束时 Release。
@@ -82,149 +110,153 @@ func (lease *Lease) Release() error {
 }
 
 // LoadMutation 在可信 preflight 后获取锁，并加载完整 manifest 与 state。
-func LoadMutation(options Options, cliVersion string) (LoadResult, *Lease, error) {
+func LoadMutation(options Overrides, cliVersion string) (LoadedInputs, *Lease, error) {
 	return loadMutation(options, cliVersion, defaultLoadingOperations())
 }
 
 // LoadNestedMutation 在可信 preflight 后复用显式 ownership，再加载完整 manifest 与 state。
 func LoadNestedMutation(
-	options Options,
+	options Overrides,
 	cliVersion string,
 	owner *lock.Ownership,
-) (LoadResult, *Lease, error) {
+) (LoadedInputs, *Lease, error) {
 	return loadNestedMutation(options, cliVersion, owner, defaultLoadingOperations())
 }
 
 // LoadReadOnly 加载与完整 mutation 相同的只读输入，但从不获取或创建 lock。
-func LoadReadOnly(options Options, cliVersion string) (LoadResult, error) {
+func LoadReadOnly(options Overrides, cliVersion string) (LoadedInputs, error) {
 	operations := defaultLoadingOperations()
 	context, err := operations.preflight(options)
 	if err != nil {
-		return LoadResult{}, err
+		return LoadedInputs{}, err
 	}
 	return loadFull(context, cliVersion, operations)
 }
 
 // LoadInitMutation 允许 config missing，在控制面校验后持锁加载 strict manifest，但不读 state。
-func LoadInitMutation(options Options, cliVersion string) (InitLoadResult, *Lease, error) {
+func LoadInitMutation(options Overrides, cliVersion string) (InitInputs, *Lease, error) {
 	return loadInitMutation(options, cliVersion, defaultLoadingOperations())
 }
 
 // LoadRecoveryMutation 为 dot git 与 update pull 等恢复 mutation 建立 repo/control 上下文并持锁。
 // 它有意不读取 requires、manifest 或 state；后续进入 apply 时应调用 LoadNestedMutation。
-func LoadRecoveryMutation(options Options) (ControlContext, *Lease, error) {
+func LoadRecoveryMutation(options Overrides) (ControlContext, *Lease, error) {
 	return loadRecoveryMutation(options, defaultLoadingOperations())
 }
 
 // LoadControlRecovery 为 self-update 等 control-only 恢复流程建立只读控制面上下文。
 // config missing 合法；已有 config 仍严格校验。本入口不获取锁，也不读取 manifest/state。
-func LoadControlRecovery(options Options) (ControlContext, error) {
+func LoadControlRecovery(options Overrides) (ControlContext, error) {
 	return defaultLoadingOperations().preflightRepository(options)
 }
 
 func loadMutation(
-	options Options,
+	options Overrides,
 	cliVersion string,
 	operations loadingOperations,
-) (LoadResult, *Lease, error) {
+) (LoadedInputs, *Lease, error) {
 	context, err := operations.preflight(options)
 	if err != nil {
-		return LoadResult{}, nil, err
+		return LoadedInputs{}, nil, err
 	}
-	owner, err := operations.acquire(context.ControlPaths.StateRoot(), context.ControlPaths.StateLock())
+	controlPaths := context.Control().Paths()
+	owner, err := operations.acquire(controlPaths.StateRoot(), controlPaths.StateLock())
 	if err != nil {
-		return LoadResult{}, nil, err
+		return LoadedInputs{}, nil, err
 	}
 	lease := newLease(owner, owner)
 	result, err := loadFull(context, cliVersion, operations)
 	if err != nil {
-		return LoadResult{}, nil, releaseAfterFailure(err, lease)
+		return LoadedInputs{}, nil, releaseAfterFailure(err, lease)
 	}
 	return result, lease, nil
 }
 
 func loadNestedMutation(
-	options Options,
+	options Overrides,
 	cliVersion string,
 	owner *lock.Ownership,
 	operations loadingOperations,
-) (LoadResult, *Lease, error) {
+) (LoadedInputs, *Lease, error) {
 	context, err := operations.preflight(options)
 	if err != nil {
-		return LoadResult{}, nil, err
+		return LoadedInputs{}, nil, err
 	}
-	guard, err := operations.reuse(owner, context.ControlPaths.StateRoot(), context.ControlPaths.StateLock())
+	controlPaths := context.Control().Paths()
+	guard, err := operations.reuse(owner, controlPaths.StateRoot(), controlPaths.StateLock())
 	if err != nil {
-		return LoadResult{}, nil, err
+		return LoadedInputs{}, nil, err
 	}
 	lease := newLease(owner, guard)
 	result, err := loadFull(context, cliVersion, operations)
 	if err != nil {
-		return LoadResult{}, nil, releaseAfterFailure(err, lease)
+		return LoadedInputs{}, nil, releaseAfterFailure(err, lease)
 	}
 	return result, lease, nil
 }
 
 func loadInitMutation(
-	options Options,
+	options Overrides,
 	cliVersion string,
 	operations loadingOperations,
-) (InitLoadResult, *Lease, error) {
+) (InitInputs, *Lease, error) {
 	context, err := operations.preflightInit(options)
 	if err != nil {
-		return InitLoadResult{}, nil, err
+		return InitInputs{}, nil, err
 	}
-	owner, err := operations.acquire(context.ControlPaths.StateRoot(), context.ControlPaths.StateLock())
+	controlPaths := context.Control().Paths()
+	owner, err := operations.acquire(controlPaths.StateRoot(), controlPaths.StateLock())
 	if err != nil {
-		return InitLoadResult{}, nil, err
+		return InitInputs{}, nil, err
 	}
 	lease := newLease(owner, owner)
-	compatibility, repository, err := loadRepository(context.Repository, cliVersion, operations)
+	compatibility, repository, err := loadRepository(context.Control().RepositoryPath(), cliVersion, operations)
 	if err != nil {
-		return InitLoadResult{}, nil, releaseAfterFailure(err, lease)
+		return InitInputs{}, nil, releaseAfterFailure(err, lease)
 	}
-	return InitLoadResult{
-		Context:       context,
-		Compatibility: compatibility,
-		Manifest:      repository,
+	return InitInputs{
+		context:       context,
+		compatibility: compatibility,
+		repository:    repository,
 	}, lease, nil
 }
 
 func loadRecoveryMutation(
-	options Options,
+	options Overrides,
 	operations loadingOperations,
 ) (ControlContext, *Lease, error) {
 	context, err := operations.preflightRepository(options)
 	if err != nil {
 		return ControlContext{}, nil, err
 	}
-	owner, err := operations.acquire(context.ControlPaths.StateRoot(), context.ControlPaths.StateLock())
+	controlPaths := context.Paths()
+	owner, err := operations.acquire(controlPaths.StateRoot(), controlPaths.StateLock())
 	if err != nil {
 		return ControlContext{}, nil, err
 	}
 	return context, newLease(owner, owner), nil
 }
 
-func loadFull(context Context, cliVersion string, operations loadingOperations) (LoadResult, error) {
-	compatibility, repository, err := loadRepository(context.Repository, cliVersion, operations)
+func loadFull(context RunContext, cliVersion string, operations loadingOperations) (LoadedInputs, error) {
+	control := context.Control()
+	compatibility, repository, err := loadRepository(control.RepositoryPath(), cliVersion, operations)
 	if err != nil {
-		return LoadResult{}, err
+		return LoadedInputs{}, err
 	}
-	snapshot, status, err := operations.loadState(context.ControlPaths.StateFile())
+	loadedState, err := operations.loadState(control.Paths().StateFile())
 	if err != nil {
-		return LoadResult{}, err
+		return LoadedInputs{}, err
 	}
-	if status == state.StatusLoaded {
+	if snapshot, ok := loadedState.Snapshot(); ok {
 		if err := validateLoadedState(context, snapshot, operations); err != nil {
-			return LoadResult{}, err
+			return LoadedInputs{}, err
 		}
 	}
-	return LoadResult{
-		Context:       context,
-		Compatibility: compatibility,
-		Manifest:      repository,
-		State:         snapshot,
-		StateStatus:   status,
+	return LoadedInputs{
+		context:       context,
+		compatibility: compatibility,
+		repository:    repository,
+		state:         loadedState,
 	}, nil
 }
 
@@ -237,7 +269,7 @@ func loadRepository(
 	if err != nil {
 		return Compatibility{}, manifest.Repository{}, err
 	}
-	if _, _, err := checkRequirement(cliVersion, preRead, operations); err != nil {
+	if _, err := checkRequirement(cliVersion, preRead, operations); err != nil {
 		return Compatibility{}, manifest.Repository{}, err
 	}
 	repository, err := operations.loadManifest(repositoryPath)
@@ -245,13 +277,13 @@ func loadRepository(
 		return Compatibility{}, manifest.Repository{}, err
 	}
 	strictRequirement := repository.Requirement()
-	_, developmentBuild, err := checkRequirement(cliVersion, strictRequirement, operations)
+	developmentBuild, err := checkRequirement(cliVersion, strictRequirement, operations)
 	if err != nil {
 		return Compatibility{}, manifest.Repository{}, err
 	}
 	return Compatibility{
-		Requirement:      strictRequirement,
-		DevelopmentBuild: developmentBuild,
+		requirement:      strictRequirement,
+		developmentBuild: developmentBuild,
 	}, repository, nil
 }
 
@@ -259,31 +291,32 @@ func checkRequirement(
 	cliVersion string,
 	requirement manifest.Requirement,
 	operations loadingOperations,
-) (bool, bool, error) {
+) (bool, error) {
 	satisfied, developmentBuild, err := operations.satisfies(cliVersion, requirement)
 	if err != nil {
-		return false, false, err
+		return false, err
 	}
 	if !satisfied {
-		return false, developmentBuild, fmt.Errorf(
+		return developmentBuild, fmt.Errorf(
 			"%w: build %q does not satisfy %s",
 			ErrRequiresUnsatisfied,
 			cliVersion,
 			requirement.String(),
 		)
 	}
-	return true, developmentBuild, nil
+	return developmentBuild, nil
 }
 
-func validateLoadedState(context Context, snapshot state.Snapshot, operations loadingOperations) error {
-	targets := stateTargets(context.Home, snapshot)
-	if err := operations.validateLexicalBoundaries(context.ControlPaths, targets); err != nil {
+func validateLoadedState(context RunContext, snapshot state.Snapshot, operations loadingOperations) error {
+	control := context.Control()
+	targets := stateTargets(control.Home(), snapshot)
+	if err := operations.validateLexicalBoundaries(control.Paths(), targets); err != nil {
 		return fmt.Errorf("%w: validate state target lexical boundaries: %w", state.ErrCorrupt, err)
 	}
-	if err := operations.validateStateIdentities(snapshot, context.Home); err != nil {
+	if err := operations.validateStateIdentities(snapshot, control.Home()); err != nil {
 		return err
 	}
-	if err := operations.validatePathBoundaries(context.ControlPaths, targets); err != nil {
+	if err := operations.validatePathBoundaries(control.Paths(), targets); err != nil {
 		return fmt.Errorf("%w: validate state target runtime boundaries: %w", state.ErrPathValidation, err)
 	}
 	return nil
@@ -313,15 +346,15 @@ func releaseAfterFailure(cause error, lease *Lease) error {
 }
 
 type loadingOperations struct {
-	preflight                 func(Options) (Context, error)
-	preflightInit             func(Options) (InitContext, error)
-	preflightRepository       func(Options) (ControlContext, error)
+	preflight                 func(Overrides) (RunContext, error)
+	preflightInit             func(Overrides) (InitContext, error)
+	preflightRepository       func(Overrides) (ControlContext, error)
 	acquire                   func(string, string) (*lock.Ownership, error)
 	reuse                     func(*lock.Ownership, string, string) (*lock.Guard, error)
 	readRequirement           func(string) (manifest.Requirement, error)
 	satisfies                 func(string, manifest.Requirement) (bool, bool, error)
 	loadManifest              func(string) (manifest.Repository, error)
-	loadState                 func(string) (state.Snapshot, state.LoadStatus, error)
+	loadState                 func(string) (state.Loaded, error)
 	validateLexicalBoundaries func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 	validateStateIdentities   func(state.Snapshot, string) error
 	validatePathBoundaries    func(paths.ControlPlanePaths, []paths.LabeledTarget) error

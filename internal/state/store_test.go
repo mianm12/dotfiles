@@ -349,9 +349,10 @@ func assertStoredSnapshot(t *testing.T, root, path string, snapshot Snapshot) {
 	if got := readFile(t, path); !reflect.DeepEqual(got, want) {
 		t.Fatalf("stored state = %q, want %q", got, want)
 	}
-	loaded, status, err := Load(path)
-	if err != nil || status != StatusLoaded || loaded.Version() != 1 {
-		t.Fatalf("Load(stored state) = (%#v, %v, %v), want loaded v1", loaded, status, err)
+	loaded, err := Load(path)
+	snapshot, ok := loaded.Snapshot()
+	if err != nil || loaded.Status() != StatusLoaded || !ok || snapshot.Version() != 1 {
+		t.Fatalf("Load(stored state) = (%#v, %v), want loaded v1", loaded, err)
 	}
 }
 

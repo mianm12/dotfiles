@@ -65,44 +65,36 @@ func TestPreflight_ResolvesRepositoryAndProfilePriority(t *testing.T) {
 			for key, value := range tt.environment {
 				environment[key] = value
 			}
-			context, err := Preflight(Options{
-				Home:        home,
-				HomeSet:     true,
-				Repo:        tt.repo,
-				RepoSet:     tt.repoSet,
-				Profile:     tt.profile,
-				ProfileSet:  tt.profileSet,
-				LookupEnv:   lookup(environment),
-				UserHomeDir: fixedHome(home),
+			resolver := NewResolver(lookup(environment), fixedHome(home))
+			context, err := resolver.Preflight(Overrides{
+				Home:       Override{Value: home, Set: true},
+				Repository: Override{Value: tt.repo, Set: tt.repoSet},
+				Profile:    Override{Value: tt.profile, Set: tt.profileSet},
 			})
 			if err != nil {
 				t.Fatalf("Preflight() error = %v", err)
 			}
-			if context.Repository != tt.wantRepo {
-				t.Errorf("Preflight().Repository = %q, want %q", context.Repository, tt.wantRepo)
+			if context.Control().RepositoryPath() != tt.wantRepo {
+				t.Errorf("Preflight().RepositoryPath() = %q, want %q", context.Control().RepositoryPath(), tt.wantRepo)
 			}
-			if context.Profile != tt.wantProfile {
-				t.Errorf("Preflight().Profile = %q, want %q", context.Profile, tt.wantProfile)
+			if context.Profile() != tt.wantProfile {
+				t.Errorf("Preflight().Profile() = %q, want %q", context.Profile(), tt.wantProfile)
 			}
-			if context.Data["email"] != "me@example.com" {
-				t.Errorf("Preflight().Data[email] = %q, want machine value", context.Data["email"])
+			data := context.Data()
+			if data["email"] != "me@example.com" {
+				t.Errorf("Preflight().Data()[email] = %q, want machine value", data["email"])
 			}
-			context.Data["email"] = "changed"
-			second, err := Preflight(Options{
-				Home:        home,
-				HomeSet:     true,
-				Repo:        tt.repo,
-				RepoSet:     tt.repoSet,
-				Profile:     tt.profile,
-				ProfileSet:  tt.profileSet,
-				LookupEnv:   lookup(environment),
-				UserHomeDir: fixedHome(home),
+			data["email"] = "changed"
+			second, err := resolver.Preflight(Overrides{
+				Home:       Override{Value: home, Set: true},
+				Repository: Override{Value: tt.repo, Set: tt.repoSet},
+				Profile:    Override{Value: tt.profile, Set: tt.profileSet},
 			})
 			if err != nil {
 				t.Fatalf("second Preflight() error = %v", err)
 			}
-			if second.Data["email"] != "me@example.com" {
-				t.Errorf("Preflight() retained caller data mutation: %q", second.Data["email"])
+			if second.Data()["email"] != "me@example.com" || context.Data()["email"] != "me@example.com" {
+				t.Errorf("Preflight() retained caller data mutation: second=%q original=%q", second.Data()["email"], context.Data()["email"])
 			}
 		})
 	}
@@ -116,18 +108,37 @@ func TestPreflight_UsesDefaultRepository(t *testing.T) {
 	}
 	configPath := writeMachineConfig(t, root, "machine.toml", `profile = "mac"`)
 
-	context, err := Preflight(Options{
-		Home:        home,
-		HomeSet:     true,
-		LookupEnv:   lookup(map[string]string{"DOT_CONFIG": configPath}),
-		UserHomeDir: fixedHome(home),
+	resolver := NewResolver(lookup(map[string]string{"DOT_CONFIG": configPath}), fixedHome(home))
+	context, err := resolver.Preflight(Overrides{
+		Home: Override{Value: home, Set: true},
 	})
 	if err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
 	want := filepath.Join(home, ".local", "share", "dot", "repo")
-	if context.Repository != want {
-		t.Errorf("Preflight().Repository = %q, want %q", context.Repository, want)
+	if context.Control().RepositoryPath() != want {
+		t.Errorf("Preflight().RepositoryPath() = %q, want %q", context.Control().RepositoryPath(), want)
+	}
+}
+
+func TestPreflight_DefaultSourcesDoNotRequireCallerInjection(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", home, err)
+	}
+	configPath := writeMachineConfig(t, root, "machine.toml", `profile = "mac"`)
+	t.Setenv("DOT_CONFIG", configPath)
+
+	context, err := Preflight(Overrides{
+		Home:       Override{Value: home, Set: true},
+		Repository: Override{Value: filepath.Join(root, "repo"), Set: true},
+	})
+	if err != nil {
+		t.Fatalf("Preflight() error = %v", err)
+	}
+	if context.Control().ConfigPath() != configPath {
+		t.Fatalf("Preflight().ConfigPath() = %q, want %q", context.Control().ConfigPath(), configPath)
 	}
 }
 
@@ -154,15 +165,11 @@ func TestPreflight_RejectsInvalidConfigAndExplicitProfile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configPath := writeMachineConfig(t, root, strings.ReplaceAll(tt.name, " ", "-")+".toml", tt.content)
-			_, err := Preflight(Options{
-				Home:        home,
-				HomeSet:     true,
-				Repo:        validRepo,
-				RepoSet:     true,
-				Profile:     tt.profile,
-				ProfileSet:  tt.profileSet,
-				LookupEnv:   lookup(map[string]string{"DOT_CONFIG": configPath}),
-				UserHomeDir: fixedHome(home),
+			resolver := NewResolver(lookup(map[string]string{"DOT_CONFIG": configPath}), fixedHome(home))
+			_, err := resolver.Preflight(Overrides{
+				Home:       Override{Value: home, Set: true},
+				Repository: Override{Value: validRepo, Set: true},
+				Profile:    Override{Value: tt.profile, Set: tt.profileSet},
 			})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Preflight() error = %v, want containing %q", err, tt.want)
@@ -179,13 +186,10 @@ func TestPreflight_RejectsInvalidConfiguredRepositoryDespiteOverride(t *testing.
 	}
 	configPath := writeMachineConfig(t, root, "machine.toml", "profile = \"mac\"\nrepo = \"relative/repo\"")
 
-	_, err := Preflight(Options{
-		Home:        home,
-		HomeSet:     true,
-		Repo:        filepath.Join(root, "override-repo"),
-		RepoSet:     true,
-		LookupEnv:   lookup(map[string]string{"DOT_CONFIG": configPath}),
-		UserHomeDir: fixedHome(home),
+	resolver := NewResolver(lookup(map[string]string{"DOT_CONFIG": configPath}), fixedHome(home))
+	_, err := resolver.Preflight(Overrides{
+		Home:       Override{Value: home, Set: true},
+		Repository: Override{Value: filepath.Join(root, "override-repo"), Set: true},
 	})
 	if err == nil || !strings.Contains(err.Error(), "machine config repo") {
 		t.Fatalf("Preflight() error = %v, want invalid machine config repo", err)
@@ -198,33 +202,76 @@ func TestPreflight_ConfigMissingPolicies(t *testing.T) {
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatalf("os.Mkdir(%q) error = %v", home, err)
 	}
-	options := Options{
-		Home:        home,
-		HomeSet:     true,
-		LookupEnv:   lookup(nil),
-		UserHomeDir: fixedHome(home),
+	overrides := Overrides{
+		Home: Override{Value: home, Set: true},
 	}
+	resolver := NewResolver(lookup(nil), fixedHome(home))
 
-	if _, err := Preflight(options); err == nil || !strings.Contains(err.Error(), "run dot init") {
+	if _, err := resolver.Preflight(overrides); err == nil || !strings.Contains(err.Error(), "run dot init") {
 		t.Fatalf("Preflight() error = %v, want missing config guidance", err)
 	}
-	initContext, err := PreflightInit(options)
+	initContext, err := resolver.PreflightInit(overrides)
 	if err != nil {
 		t.Fatalf("PreflightInit() error = %v", err)
 	}
-	if !initContext.ConfigMissing {
-		t.Error("PreflightInit().ConfigMissing = false, want true")
+	if !initContext.ConfigMissing() {
+		t.Error("PreflightInit().ConfigMissing() = false, want true")
 	}
-	if initContext.Profile != "" || len(initContext.Data) != 0 {
-		t.Errorf("PreflightInit() identity = (%q, %#v), want empty", initContext.Profile, initContext.Data)
+	if _, ok := initContext.ExistingMachine(); ok {
+		t.Error("PreflightInit().ExistingMachine() ok = true, want false")
 	}
-	repository, err := PreflightRepository(options)
+	repository, err := resolver.PreflightRepository(overrides)
 	if err != nil {
 		t.Fatalf("PreflightRepository() error = %v", err)
 	}
 	wantRepo := filepath.Join(home, ".local", "share", "dot", "repo")
-	if repository.Repository != wantRepo {
-		t.Errorf("PreflightRepository().Repository = %q, want %q", repository.Repository, wantRepo)
+	if repository.RepositoryPath() != wantRepo {
+		t.Errorf("PreflightRepository().RepositoryPath() = %q, want %q", repository.RepositoryPath(), wantRepo)
+	}
+}
+
+func TestPreflightInit_PreservesExistingMachineAndExplicitProfileSeparately(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", home, err)
+	}
+	configPath := writeMachineConfig(t, root, "machine.toml", strings.Join([]string{
+		`profile = "configured"`,
+		`[data]`,
+		`email = "me@example.com"`,
+	}, "\n"))
+	resolver := NewResolver(lookup(map[string]string{"DOT_CONFIG": configPath}), fixedHome(home))
+
+	context, err := resolver.PreflightInit(Overrides{
+		Home:    Override{Value: home, Set: true},
+		Profile: Override{Value: "requested", Set: true},
+	})
+	if err != nil {
+		t.Fatalf("PreflightInit() error = %v", err)
+	}
+	if context.ConfigMissing() {
+		t.Fatal("ConfigMissing() = true, want false")
+	}
+	machine, ok := context.ExistingMachine()
+	if !ok || machine.Profile() != "configured" || machine.Data()["email"] != "me@example.com" {
+		t.Fatalf("ExistingMachine() = (%#v, %t), want configured machine", machine, ok)
+	}
+	profile, ok := context.ProfileOverride()
+	if !ok || profile != "requested" {
+		t.Fatalf("ProfileOverride() = (%q, %t), want requested, true", profile, ok)
+	}
+	data := machine.Data()
+	data["email"] = "changed"
+	if machine.Data()["email"] != "me@example.com" {
+		t.Fatal("MachineContext.Data() exposed mutable internal state")
+	}
+}
+
+func TestResolver_RejectsMissingSourcesWithoutPanic(t *testing.T) {
+	_, err := NewResolver(nil, nil).PreflightRepository(Overrides{})
+	if err == nil || !strings.Contains(err.Error(), "source is nil") {
+		t.Fatalf("PreflightRepository() error = %v, want missing source", err)
 	}
 }
 
@@ -244,17 +291,16 @@ func TestPreflight_IsCWDIndependent(t *testing.T) {
 	}
 	t.Chdir(cwd)
 
-	context, err := Preflight(Options{
-		Home:        home,
-		HomeSet:     true,
-		LookupEnv:   lookup(map[string]string{"DOT_CONFIG": "~/machine/config.toml"}),
-		UserHomeDir: fixedHome(home),
+	resolver := NewResolver(lookup(map[string]string{"DOT_CONFIG": "~/machine/config.toml"}), fixedHome(home))
+	context, err := resolver.Preflight(Overrides{
+		Home: Override{Value: home, Set: true},
 	})
 	if err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
-	if context.Config != configPath || context.Repository != filepath.Join(home, "repo") {
-		t.Errorf("Preflight() paths = (%q, %q), want HOME-relative absolute paths", context.Config, context.Repository)
+	control := context.Control()
+	if control.ConfigPath() != configPath || control.RepositoryPath() != filepath.Join(home, "repo") {
+		t.Errorf("Preflight() paths = (%q, %q), want HOME-relative absolute paths", control.ConfigPath(), control.RepositoryPath())
 	}
 }
 
@@ -267,13 +313,10 @@ func TestPreflight_RejectsControlPlaneOverlap(t *testing.T) {
 	}
 	configPath := writeMachineConfig(t, repo, "config.toml", `profile = "mac"`)
 
-	_, err := Preflight(Options{
-		Home:        home,
-		HomeSet:     true,
-		Repo:        repo,
-		RepoSet:     true,
-		LookupEnv:   lookup(map[string]string{"DOT_CONFIG": configPath}),
-		UserHomeDir: fixedHome(home),
+	resolver := NewResolver(lookup(map[string]string{"DOT_CONFIG": configPath}), fixedHome(home))
+	_, err := resolver.Preflight(Overrides{
+		Home:       Override{Value: home, Set: true},
+		Repository: Override{Value: repo, Set: true},
 	})
 	if err == nil || !strings.Contains(err.Error(), "control-plane paths overlap") {
 		t.Fatalf("Preflight() error = %v, want control-plane overlap", err)
@@ -289,13 +332,10 @@ func TestPreflight_IsReadOnlyAndDoesNotCreateStateOrLock(t *testing.T) {
 	configPath := writeMachineConfig(t, root, "machine.toml", `profile = "mac"`)
 	before := snapshotTree(t, root)
 
-	if _, err := Preflight(Options{
-		Home:        home,
-		HomeSet:     true,
-		Repo:        filepath.Join(root, "repo"),
-		RepoSet:     true,
-		LookupEnv:   lookup(map[string]string{"DOT_CONFIG": configPath}),
-		UserHomeDir: fixedHome(home),
+	resolver := NewResolver(lookup(map[string]string{"DOT_CONFIG": configPath}), fixedHome(home))
+	if _, err := resolver.Preflight(Overrides{
+		Home:       Override{Value: home, Set: true},
+		Repository: Override{Value: filepath.Join(root, "repo"), Set: true},
 	}); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}

@@ -20,22 +20,43 @@ const (
 	StatusLoaded
 )
 
+// Loaded 保存一次成功 state 读取的完整联合结果。
+// 零值无效；missing 不携带 Snapshot，loaded 必须携带通过严格校验的 Snapshot。
+type Loaded struct {
+	status   LoadStatus
+	snapshot Snapshot
+}
+
+// Status 返回 state 文件是确认缺失还是已经成功加载。
+func (loaded Loaded) Status() LoadStatus { return loaded.status }
+
+// Missing 报告 state 文件是否确认缺失。
+func (loaded Loaded) Missing() bool { return loaded.status == StatusMissing }
+
+// Snapshot 返回严格加载的 Snapshot；missing 或无效结果返回 ok=false。
+func (loaded Loaded) Snapshot() (snapshot Snapshot, ok bool) {
+	if loaded.status != StatusLoaded || !loaded.snapshot.valid {
+		return Snapshot{}, false
+	}
+	return loaded.snapshot, true
+}
+
 // Load 从绝对路径只读加载 state。确认缺失返回 StatusMissing 且 error 为 nil；
 // dangling symlink、权限及其他读取错误不得伪装成缺失或持久格式损坏。
-func Load(path string) (Snapshot, LoadStatus, error) {
+func Load(path string) (Loaded, error) {
 	if path == "" || !filepath.IsAbs(path) {
-		return Snapshot{}, StatusInvalid, fmt.Errorf("state path %q must be a non-empty absolute path", path)
+		return Loaded{}, fmt.Errorf("state path %q must be a non-empty absolute path", path)
 	}
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		if paths.IsMissing(path, err) {
-			return Snapshot{}, StatusMissing, nil
+			return Loaded{status: StatusMissing}, nil
 		}
-		return Snapshot{}, StatusInvalid, fmt.Errorf("read state %q: %w", path, err)
+		return Loaded{}, fmt.Errorf("read state %q: %w", path, err)
 	}
 	snapshot, err := Decode(data)
 	if err != nil {
-		return Snapshot{}, StatusInvalid, fmt.Errorf("load state %q: %w", path, err)
+		return Loaded{}, fmt.Errorf("load state %q: %w", path, err)
 	}
-	return snapshot, StatusLoaded, nil
+	return Loaded{status: StatusLoaded, snapshot: snapshot}, nil
 }

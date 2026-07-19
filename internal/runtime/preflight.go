@@ -4,81 +4,164 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/mianm12/dotfiles/internal/config"
 	"github.com/mianm12/dotfiles/internal/paths"
 )
 
-// Options 保存本次进程的路径和 profile 覆盖，以及解析平台默认值所需的只读来源。
-// *Set 字段区分未提供与显式空值；调用方不得把环境变量预先折叠进 flag 值。
-type Options struct {
-	Home       string
-	HomeSet    bool
-	Repo       string
-	RepoSet    bool
-	Profile    string
-	ProfileSet bool
+// Override 保存一个可选的字符串覆盖。Set 区分未提供与显式空值。
+type Override struct {
+	Value string
+	Set   bool
+}
 
-	LookupEnv   func(string) (string, bool)
-	UserHomeDir func() (string, error)
+// Overrides 只保存本次调用的路径和 profile 覆盖，不混入环境或平台来源。
+type Overrides struct {
+	Home       Override
+	Repository Override
+	Profile    Override
+}
+
+// Resolver 保存 preflight 解析所需的窄系统来源。
+// 它是 CLI 测试与 production 共享真实解析逻辑的具体接缝，不承载策略。
+type Resolver struct {
+	lookupEnv   func(string) (string, bool)
+	userHomeDir func() (string, error)
+}
+
+// NewResolver 使用明确来源建立 preflight resolver。nil 来源会在消费前返回错误，不会 panic。
+func NewResolver(
+	lookupEnv func(string) (string, bool),
+	userHomeDir func() (string, error),
+) Resolver {
+	return Resolver{lookupEnv: lookupEnv, userHomeDir: userHomeDir}
 }
 
 // ControlContext 是已经完成路径解析和控制面隔离校验的只读运行前置。
+// 所有路径均由同一个 opaque ControlPlanePaths 派生，避免重复真相漂移。
 type ControlContext struct {
-	Home         string
-	Config       string
-	Repository   string
-	ControlPaths paths.ControlPlanePaths
-	ControlPlane paths.ControlPlane
+	paths paths.ControlPlanePaths
 }
 
-// Context 是普通 profile/data 消费者的完整 preflight 结果。
-type Context struct {
-	ControlContext
-	Profile string
-	Data    map[string]string
+// Paths 返回本次运行已校验的整组控制面路径。
+func (context ControlContext) Paths() paths.ControlPlanePaths { return context.paths }
+
+// Home 返回本次运行的 effective HOME。
+func (context ControlContext) Home() string { return context.paths.EffectiveHome() }
+
+// ConfigPath 返回本次运行的机器配置文件路径。
+func (context ControlContext) ConfigPath() string { return context.paths.Config() }
+
+// RepositoryPath 返回本次运行的仓库路径。
+func (context ControlContext) RepositoryPath() string { return context.paths.Repository() }
+
+// MachineContext 是严格机器配置形成的不可变 profile/data 快照。
+type MachineContext struct {
+	profile string
+	data    map[string]string
 }
 
-// InitContext 额外保留配置是否缺失，供未来 init 将初次读取结果作为提交 Precond。
+// Profile 返回该机器上下文的 profile。
+func (context MachineContext) Profile() string { return context.profile }
+
+// Data 返回机器 data 的独立副本。
+func (context MachineContext) Data() map[string]string { return cloneData(context.data) }
+
+// RunContext 是普通 profile/data 消费者的完整 preflight 结果。
+type RunContext struct {
+	control ControlContext
+	machine MachineContext
+}
+
+// Control 返回已校验的控制面上下文。
+func (context RunContext) Control() ControlContext { return context.control }
+
+// Profile 返回本次运行的 effective profile。
+func (context RunContext) Profile() string { return context.machine.Profile() }
+
+// Data 返回本次运行 machine data 的独立副本。
+func (context RunContext) Data() map[string]string { return context.machine.Data() }
+
+// InitContext 保存 init 配置选择所需的控制面、已有机器配置和显式 profile 覆盖。
+// 配置缺失时不会向调用方暴露伪造的普通 RunContext。
 type InitContext struct {
-	Context
-	ConfigMissing bool
+	control         ControlContext
+	existing        MachineContext
+	configExists    bool
+	profileOverride Override
+}
+
+// Control 返回 init 已校验的控制面上下文。
+func (context InitContext) Control() ControlContext { return context.control }
+
+// ConfigMissing 报告初次严格读取时机器配置是否确认缺失。
+func (context InitContext) ConfigMissing() bool { return !context.configExists }
+
+// ExistingMachine 返回已有机器配置的不可变快照；配置缺失时 ok 为 false。
+func (context InitContext) ExistingMachine() (machine MachineContext, ok bool) {
+	if !context.configExists {
+		return MachineContext{}, false
+	}
+	return context.existing, true
+}
+
+// ProfileOverride 返回 init 调用显式提供的 profile；未提供时 ok 为 false。
+func (context InitContext) ProfileOverride() (profile string, ok bool) {
+	return context.profileOverride.Value, context.profileOverride.Set
+}
+
+// Preflight 使用 production 系统来源完成严格、完整的机器运行前置。
+func Preflight(overrides Overrides) (RunContext, error) {
+	return systemResolver().Preflight(overrides)
+}
+
+// PreflightInit 使用 production 系统来源完成允许 config missing 的 init 前置。
+func PreflightInit(overrides Overrides) (InitContext, error) {
+	return systemResolver().PreflightInit(overrides)
+}
+
+// PreflightRepository 使用 production 系统来源解析 repo 和控制面。
+func PreflightRepository(overrides Overrides) (ControlContext, error) {
+	return systemResolver().PreflightRepository(overrides)
 }
 
 // Preflight 要求严格、完整的机器配置，并解析本次 profile/data 和控制面。
-func Preflight(options Options) (Context, error) {
-	if err := validateProfileOverride(options); err != nil {
-		return Context{}, err
+func (resolver Resolver) Preflight(overrides Overrides) (RunContext, error) {
+	if err := validateProfileOverride(overrides); err != nil {
+		return RunContext{}, err
 	}
-	loaded, err := load(options)
+	loaded, err := resolver.load(overrides)
 	if err != nil {
-		return Context{}, err
+		return RunContext{}, err
 	}
 	if !loaded.configExists {
-		return Context{}, fmt.Errorf("machine config %q is missing; run dot init", loaded.control.Config)
+		return RunContext{}, fmt.Errorf("machine config %q is missing; run dot init", loaded.control.ConfigPath())
 	}
-	return contextFromLoaded(loaded, options), nil
+	return runContextFromLoaded(loaded, overrides), nil
 }
 
-// PreflightInit 允许机器配置缺失，并只在此结果中保留 missing 状态。
-func PreflightInit(options Options) (InitContext, error) {
-	if err := validateProfileOverride(options); err != nil {
+// PreflightInit 允许机器配置缺失，并只在该结果中保留 missing 提交前提。
+func (resolver Resolver) PreflightInit(overrides Overrides) (InitContext, error) {
+	if err := validateProfileOverride(overrides); err != nil {
 		return InitContext{}, err
 	}
-	loaded, err := load(options)
+	loaded, err := resolver.load(overrides)
 	if err != nil {
 		return InitContext{}, err
 	}
 	return InitContext{
-		Context:       contextFromLoaded(loaded, options),
-		ConfigMissing: !loaded.configExists,
+		control:         loaded.control,
+		existing:        machineContext(loaded.machine),
+		configExists:    loaded.configExists,
+		profileOverride: overrides.Profile,
 	}, nil
 }
 
-// PreflightRepository 为 version 等不消费 profile/data 的只读入口解析 repo 和控制面。
+// PreflightRepository 为 version 等不消费 profile/data 的入口解析 repo 和控制面。
 // 配置缺失时继续使用环境或默认 repo，但已有配置仍须完整严格校验。
-func PreflightRepository(options Options) (ControlContext, error) {
-	loaded, err := load(options)
+func (resolver Resolver) PreflightRepository(overrides Overrides) (ControlContext, error) {
+	loaded, err := resolver.load(overrides)
 	if err != nil {
 		return ControlContext{}, err
 	}
@@ -91,12 +174,19 @@ type loadedContext struct {
 	configExists bool
 }
 
-func load(options Options) (loadedContext, error) {
-	home, err := paths.EffectiveHome(options.Home, options.HomeSet, options.UserHomeDir)
+func (resolver Resolver) load(overrides Overrides) (loadedContext, error) {
+	if err := resolver.validate(); err != nil {
+		return loadedContext{}, err
+	}
+	home, err := paths.EffectiveHome(
+		overrides.Home.Value,
+		overrides.Home.Set,
+		resolver.userHomeDir,
+	)
 	if err != nil {
 		return loadedContext{}, err
 	}
-	configPath, err := paths.Config(home, options.LookupEnv)
+	configPath, err := paths.Config(home, resolver.lookupEnv)
 	if err != nil {
 		return loadedContext{}, err
 	}
@@ -112,9 +202,9 @@ func load(options Options) (loadedContext, error) {
 	}
 	repository, err := paths.Repository(
 		home,
-		options.Repo,
-		options.RepoSet,
-		options.LookupEnv,
+		overrides.Repository.Value,
+		overrides.Repository.Set,
+		resolver.lookupEnv,
 		machine.Repo,
 	)
 	if err != nil {
@@ -124,41 +214,52 @@ func load(options Options) (loadedContext, error) {
 	if err != nil {
 		return loadedContext{}, err
 	}
-	controlPlane, err := paths.ValidateControlPlane(controlPaths)
-	if err != nil {
+	if _, err := paths.ValidateControlPlane(controlPaths); err != nil {
 		return loadedContext{}, err
 	}
 	return loadedContext{
-		control: ControlContext{
-			Home:         home,
-			Config:       configPath,
-			Repository:   repository,
-			ControlPaths: controlPaths,
-			ControlPlane: controlPlane,
-		},
+		control:      ControlContext{paths: controlPaths},
 		machine:      machine,
 		configExists: exists,
 	}, nil
 }
 
-func contextFromLoaded(loaded loadedContext, options Options) Context {
-	profile := loaded.machine.Profile
-	if options.ProfileSet {
-		profile = options.Profile
+func (resolver Resolver) validate() error {
+	if resolver.lookupEnv == nil {
+		return errors.New("runtime environment lookup source is nil")
 	}
-	data := make(map[string]string, len(loaded.machine.Data))
-	for key, value := range loaded.machine.Data {
-		data[key] = value
+	if resolver.userHomeDir == nil {
+		return errors.New("runtime user HOME source is nil")
 	}
-	return Context{
-		ControlContext: loaded.control,
-		Profile:        profile,
-		Data:           data,
-	}
+	return nil
 }
 
-func validateProfileOverride(options Options) error {
-	if options.ProfileSet && options.Profile == "" {
+func systemResolver() Resolver {
+	return NewResolver(os.LookupEnv, os.UserHomeDir)
+}
+
+func runContextFromLoaded(loaded loadedContext, overrides Overrides) RunContext {
+	machine := machineContext(loaded.machine)
+	if overrides.Profile.Set {
+		machine.profile = overrides.Profile.Value
+	}
+	return RunContext{control: loaded.control, machine: machine}
+}
+
+func machineContext(machine config.Machine) MachineContext {
+	return MachineContext{profile: machine.Profile, data: cloneData(machine.Data)}
+}
+
+func cloneData(data map[string]string) map[string]string {
+	cloned := make(map[string]string, len(data))
+	for key, value := range data {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func validateProfileOverride(overrides Overrides) error {
+	if overrides.Profile.Set && overrides.Profile.Value == "" {
 		return errors.New("--profile must not be empty")
 	}
 	return nil

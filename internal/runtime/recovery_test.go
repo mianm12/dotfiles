@@ -17,15 +17,15 @@ func TestLoadInitMutation_ConfigMissingLoadsManifestAfterLockAndSkipsState(t *te
 
 	operations := defaultLoadingOperations()
 	events := wrapInitEvents(&operations)
-	result, lease, err := loadInitMutation(fixture.options, "v1.0.0", operations)
+	result, lease, err := loadInitMutation(fixture.overrides, "v1.0.0", operations)
 	if err != nil {
 		t.Fatalf("loadInitMutation() error = %v", err)
 	}
 	t.Cleanup(func() { releaseLease(t, lease) })
-	if !result.Context.ConfigMissing {
+	if !result.Context().ConfigMissing() {
 		t.Fatal("ConfigMissing = false, want true")
 	}
-	if got := result.Compatibility.Requirement.String(); got != ">=1.0.0" {
+	if got := result.Compatibility().Requirement().String(); got != ">=1.0.0" {
 		t.Fatalf("Requirement = %q", got)
 	}
 	want := []string{"init-preflight", "acquire", "requires", "satisfies", "manifest", "satisfies"}
@@ -38,7 +38,7 @@ func TestLoadInitMutation_ExistingInvalidConfigFailsBeforeLock(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
 
-	_, lease, err := LoadInitMutation(fixture.options, "v1.0.0")
+	_, lease, err := LoadInitMutation(fixture.overrides, "v1.0.0")
 	if err == nil {
 		t.Fatal("LoadInitMutation() error = nil")
 	}
@@ -53,7 +53,7 @@ func TestLoadInitMutation_ManifestFailureReleasesLockAndSkipsState(t *testing.T)
 	writeManifest(t, fixture.repo, ">=1.0.0", "unknown = true\n")
 	writeState(t, fixture, "{")
 
-	_, lease, err := LoadInitMutation(fixture.options, "v1.0.0")
+	_, lease, err := LoadInitMutation(fixture.overrides, "v1.0.0")
 	if err == nil || errors.Is(err, state.ErrCorrupt) {
 		t.Fatalf("LoadInitMutation() error = %v, want manifest error before state", err)
 	}
@@ -70,13 +70,13 @@ func TestLoadRecoveryMutation_SkipsManifestAndStateButHoldsLock(t *testing.T) {
 
 	operations := defaultLoadingOperations()
 	events := wrapRecoveryEvents(&operations)
-	context, lease, err := loadRecoveryMutation(fixture.options, operations)
+	context, lease, err := loadRecoveryMutation(fixture.overrides, operations)
 	if err != nil {
 		t.Fatalf("loadRecoveryMutation() error = %v", err)
 	}
 	t.Cleanup(func() { releaseLease(t, lease) })
-	if context.Repository != fixture.repo {
-		t.Fatalf("Repository = %q, want %q", context.Repository, fixture.repo)
+	if context.RepositoryPath() != fixture.repo {
+		t.Fatalf("RepositoryPath() = %q, want %q", context.RepositoryPath(), fixture.repo)
 	}
 	if want := []string{"repository-preflight", "acquire"}; !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
@@ -108,7 +108,7 @@ func TestLoadRecoveryMutation_StateFailClosedVariantsDoNotBlockRecovery(t *testi
 			fixture := newLoadingFixture(t, false)
 			writeState(t, fixture, test.state)
 
-			_, lease, err := LoadRecoveryMutation(fixture.options)
+			_, lease, err := LoadRecoveryMutation(fixture.overrides)
 			if err != nil {
 				t.Fatalf("LoadRecoveryMutation() error = %v", err)
 			}
@@ -120,13 +120,13 @@ func TestLoadRecoveryMutation_StateFailClosedVariantsDoNotBlockRecovery(t *testi
 func TestLoadRecoveryMutation_AllowsMissingConfig(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
 
-	context, lease, err := LoadRecoveryMutation(fixture.options)
+	context, lease, err := LoadRecoveryMutation(fixture.overrides)
 	if err != nil {
 		t.Fatalf("LoadRecoveryMutation() error = %v", err)
 	}
 	t.Cleanup(func() { releaseLease(t, lease) })
-	if context.Repository != fixture.repo {
-		t.Fatalf("Repository = %q, want %q", context.Repository, fixture.repo)
+	if context.RepositoryPath() != fixture.repo {
+		t.Fatalf("RepositoryPath() = %q, want %q", context.RepositoryPath(), fixture.repo)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestLoadRecoveryMutation_ExistingInvalidConfigFailsBeforeLock(t *testing.T)
 	fixture := newLoadingFixture(t, true)
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
 
-	_, lease, err := LoadRecoveryMutation(fixture.options)
+	_, lease, err := LoadRecoveryMutation(fixture.overrides)
 	if err == nil {
 		t.Fatal("LoadRecoveryMutation() error = nil")
 	}
@@ -154,12 +154,12 @@ func TestLoadControlRecovery_AllowsMissingConfigAndDoesNotLockOrReadState(t *tes
 	}
 	beforeTree := snapshotFixtureTree(t, fixture.root)
 
-	context, err := LoadControlRecovery(fixture.options)
+	context, err := LoadControlRecovery(fixture.overrides)
 	if err != nil {
 		t.Fatalf("LoadControlRecovery() error = %v", err)
 	}
-	if context.Repository != fixture.repo {
-		t.Fatalf("Repository = %q, want %q", context.Repository, fixture.repo)
+	if context.RepositoryPath() != fixture.repo {
+		t.Fatalf("RepositoryPath() = %q, want %q", context.RepositoryPath(), fixture.repo)
 	}
 	after, err := os.ReadFile(fixture.paths.StateFile())
 	if err != nil {
@@ -179,7 +179,7 @@ func TestLoadControlRecovery_ExistingInvalidConfigFailsWithoutLock(t *testing.T)
 	fixture := newLoadingFixture(t, true)
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
 
-	_, err := LoadControlRecovery(fixture.options)
+	_, err := LoadControlRecovery(fixture.overrides)
 	if err == nil {
 		t.Fatal("LoadControlRecovery() error = nil")
 	}
@@ -190,7 +190,7 @@ func TestRecoveryThenNestedMutation_CorruptStateReleasesOnlyNestedLease(t *testi
 	fixture := newLoadingFixture(t, true)
 	writeState(t, fixture, "{")
 
-	_, outerLease, err := LoadRecoveryMutation(fixture.options)
+	_, outerLease, err := LoadRecoveryMutation(fixture.overrides)
 	if err != nil {
 		t.Fatalf("LoadRecoveryMutation() error = %v", err)
 	}
@@ -201,7 +201,7 @@ func TestRecoveryThenNestedMutation_CorruptStateReleasesOnlyNestedLease(t *testi
 		}
 	})
 
-	_, nestedLease, err := LoadNestedMutation(fixture.options, "v1.0.0", outerLease.Ownership())
+	_, nestedLease, err := LoadNestedMutation(fixture.overrides, "v1.0.0", outerLease.Ownership())
 	if !errors.Is(err, state.ErrCorrupt) {
 		t.Fatalf("LoadNestedMutation() error = %v, want ErrCorrupt", err)
 	}
@@ -225,9 +225,9 @@ func TestRecoveryThenNestedMutation_CorruptStateReleasesOnlyNestedLease(t *testi
 func wrapInitEvents(operations *loadingOperations) *[]string {
 	events := make([]string, 0, 8)
 	preflightInit := operations.preflightInit
-	operations.preflightInit = func(options Options) (InitContext, error) {
+	operations.preflightInit = func(overrides Overrides) (InitContext, error) {
 		events = append(events, "init-preflight")
-		return preflightInit(options)
+		return preflightInit(overrides)
 	}
 	wrapRepositoryEvents(operations, &events)
 	return &events
@@ -236,9 +236,9 @@ func wrapInitEvents(operations *loadingOperations) *[]string {
 func wrapRecoveryEvents(operations *loadingOperations) *[]string {
 	events := make([]string, 0, 2)
 	preflightRepository := operations.preflightRepository
-	operations.preflightRepository = func(options Options) (ControlContext, error) {
+	operations.preflightRepository = func(overrides Overrides) (ControlContext, error) {
 		events = append(events, "repository-preflight")
-		return preflightRepository(options)
+		return preflightRepository(overrides)
 	}
 	acquire := operations.acquire
 	operations.acquire = func(root, path string) (*lock.Ownership, error) {

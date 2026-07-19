@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/lock"
@@ -19,12 +18,12 @@ import (
 const validEmptyState = `{"version":1,"entries":{},"run_once":{}}`
 
 type loadingFixture struct {
-	root    string
-	home    string
-	repo    string
-	config  string
-	options Options
-	paths   paths.ControlPlanePaths
+	root      string
+	home      string
+	repo      string
+	config    string
+	overrides Overrides
+	paths     paths.ControlPlanePaths
 }
 
 func TestLoadMutation_OrdersTrustedStagesAndReleasesFailure(t *testing.T) {
@@ -33,13 +32,13 @@ func TestLoadMutation_OrdersTrustedStagesAndReleasesFailure(t *testing.T) {
 
 	operations := defaultLoadingOperations()
 	events := wrapLoadingEvents(&operations)
-	result, lease, err := loadMutation(fixture.options, "v1.0.0", operations)
+	result, lease, err := loadMutation(fixture.overrides, "v1.0.0", operations)
 	if err != nil {
 		t.Fatalf("loadMutation() error = %v", err)
 	}
 	t.Cleanup(func() { releaseLease(t, lease) })
-	if result.StateStatus != state.StatusLoaded {
-		t.Fatalf("StateStatus = %v, want StatusLoaded", result.StateStatus)
+	if result.State().Status() != state.StatusLoaded {
+		t.Fatalf("State().Status() = %v, want StatusLoaded", result.State().Status())
 	}
 	want := []string{
 		"preflight", "acquire", "requires", "satisfies", "manifest", "satisfies",
@@ -54,7 +53,7 @@ func TestLoadMutation_PreflightFailureDoesNotCreateLock(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
 
-	_, lease, err := LoadMutation(fixture.options, "v1.0.0")
+	_, lease, err := LoadMutation(fixture.overrides, "v1.0.0")
 	if err == nil {
 		t.Fatal("LoadMutation() error = nil")
 	}
@@ -74,7 +73,7 @@ func TestLoadMutation_BusyStopsBeforeRepositoryAndState(t *testing.T) {
 
 	operations := defaultLoadingOperations()
 	events := wrapLoadingEvents(&operations)
-	_, lease, err := loadMutation(fixture.options, "v1.0.0", operations)
+	_, lease, err := loadMutation(fixture.overrides, "v1.0.0", operations)
 	if !errors.Is(err, lock.ErrBusy) {
 		t.Fatalf("loadMutation() error = %v, want ErrBusy", err)
 	}
@@ -91,7 +90,7 @@ func TestLoadMutation_RepositoryFailuresShortCircuitAndRelease(t *testing.T) {
 		fixture := newLoadingFixture(t, true)
 		writeManifest(t, fixture.repo, ">=9.0.0", "")
 
-		_, lease, err := LoadMutation(fixture.options, "v1.0.0")
+		_, lease, err := LoadMutation(fixture.overrides, "v1.0.0")
 		if !errors.Is(err, ErrRequiresUnsatisfied) {
 			t.Fatalf("LoadMutation() error = %v, want ErrRequiresUnsatisfied", err)
 		}
@@ -106,7 +105,7 @@ func TestLoadMutation_RepositoryFailuresShortCircuitAndRelease(t *testing.T) {
 		writeManifest(t, fixture.repo, ">=1.0.0", "unknown = true\n")
 		writeState(t, fixture, "{")
 
-		_, lease, err := LoadMutation(fixture.options, "v1.0.0")
+		_, lease, err := LoadMutation(fixture.overrides, "v1.0.0")
 		if err == nil || errors.Is(err, state.ErrCorrupt) {
 			t.Fatalf("LoadMutation() error = %v, want strict manifest error before state", err)
 		}
@@ -128,7 +127,7 @@ func TestLoadMutation_RepositoryFailuresShortCircuitAndRelease(t *testing.T) {
 			return requirement, err
 		}
 
-		_, lease, err := loadMutation(fixture.options, "v1.0.0", operations)
+		_, lease, err := loadMutation(fixture.overrides, "v1.0.0", operations)
 		if !errors.Is(err, ErrRequiresUnsatisfied) {
 			t.Fatalf("loadMutation() error = %v, want strict ErrRequiresUnsatisfied", err)
 		}
@@ -143,7 +142,7 @@ func TestLoadMutation_StateFailureReleasesAndPreservesCause(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeState(t, fixture, "{")
 
-	_, lease, err := LoadMutation(fixture.options, "v1.0.0")
+	_, lease, err := LoadMutation(fixture.overrides, "v1.0.0")
 	if !errors.Is(err, state.ErrCorrupt) {
 		t.Fatalf("LoadMutation() error = %v, want ErrCorrupt", err)
 	}
@@ -180,7 +179,7 @@ func TestLoadReadOnly_StateStatusesAreClassifiedWithoutLock(t *testing.T) {
 				writeState(t, fixture, test.state)
 			}
 			before := snapshotFixtureTree(t, fixture.root)
-			result, err := LoadReadOnly(fixture.options, "v1.0.0")
+			result, err := LoadReadOnly(fixture.overrides, "v1.0.0")
 			if test.wantErr != nil {
 				if !errors.Is(err, test.wantErr) {
 					t.Fatalf("LoadReadOnly() error = %v, want %v", err, test.wantErr)
@@ -189,8 +188,8 @@ func TestLoadReadOnly_StateStatusesAreClassifiedWithoutLock(t *testing.T) {
 				if err != nil {
 					t.Fatalf("LoadReadOnly() error = %v", err)
 				}
-				if result.StateStatus != test.wantStatus {
-					t.Fatalf("StateStatus = %v, want %v", result.StateStatus, test.wantStatus)
+				if result.State().Status() != test.wantStatus {
+					t.Fatalf("State().Status() = %v, want %v", result.State().Status(), test.wantStatus)
 				}
 			}
 			after := snapshotFixtureTree(t, fixture.root)
@@ -206,14 +205,14 @@ func TestLoadReadOnly_DevelopmentBuildReturnsCompatibility(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeManifest(t, fixture.repo, ">=999.0.0", "")
 
-	result, err := LoadReadOnly(fixture.options, "dev")
+	result, err := LoadReadOnly(fixture.overrides, "dev")
 	if err != nil {
 		t.Fatalf("LoadReadOnly() error = %v", err)
 	}
-	if !result.Compatibility.DevelopmentBuild {
+	if !result.Compatibility().DevelopmentBuild() {
 		t.Fatal("DevelopmentBuild = false, want true")
 	}
-	if got := result.Compatibility.Requirement.String(); got != ">=999.0.0" {
+	if got := result.Compatibility().Requirement().String(); got != ">=999.0.0" {
 		t.Fatalf("Requirement = %q", got)
 	}
 	assertMissing(t, fixture.paths.StateRoot())
@@ -227,7 +226,7 @@ func TestLoadReadOnly_StatePathClassification(t *testing.T) {
 			"modules/app/state.json",
 		))
 
-		_, err := LoadReadOnly(fixture.options, "v1.0.0")
+		_, err := LoadReadOnly(fixture.overrides, "v1.0.0")
 		if !errors.Is(err, state.ErrCorrupt) || !errors.Is(err, paths.ErrTargetControlOverlap) {
 			t.Fatalf("LoadReadOnly() error = %v, want corrupt target/control overlap", err)
 		}
@@ -245,7 +244,7 @@ func TestLoadReadOnly_StatePathClassification(t *testing.T) {
 		}
 		writeState(t, fixture, stateWithSymlinkEntry("~/managed/file", "modules/app/file"))
 
-		_, err := LoadReadOnly(fixture.options, "v1.0.0")
+		_, err := LoadReadOnly(fixture.overrides, "v1.0.0")
 		if !errors.Is(err, state.ErrPathValidation) || !errors.Is(err, paths.ErrTargetControlOverlap) {
 			t.Fatalf("LoadReadOnly() error = %v, want runtime target/control overlap", err)
 		}
@@ -268,7 +267,7 @@ func TestLoadNestedMutation_ReusesOwnershipWithoutEarlyRelease(t *testing.T) {
 		}
 	})
 
-	_, nestedLease, err := LoadNestedMutation(fixture.options, "v1.0.0", owner)
+	_, nestedLease, err := LoadNestedMutation(fixture.overrides, "v1.0.0", owner)
 	if err != nil {
 		t.Fatalf("LoadNestedMutation() error = %v", err)
 	}
@@ -303,7 +302,7 @@ func TestLoadNestedMutation_PreflightFailureDoesNotReuseOwnership(t *testing.T) 
 
 	operations := defaultLoadingOperations()
 	events := wrapLoadingEvents(&operations)
-	_, lease, err := loadNestedMutation(fixture.options, "v1.0.0", owner, operations)
+	_, lease, err := loadNestedMutation(fixture.overrides, "v1.0.0", owner, operations)
 	if err == nil {
 		t.Fatal("loadNestedMutation() error = nil")
 	}
@@ -318,9 +317,9 @@ func TestLoadNestedMutation_PreflightFailureDoesNotReuseOwnership(t *testing.T) 
 func wrapLoadingEvents(operations *loadingOperations) *[]string {
 	events := make([]string, 0, 10)
 	preflight := operations.preflight
-	operations.preflight = func(options Options) (Context, error) {
+	operations.preflight = func(overrides Overrides) (RunContext, error) {
 		events = append(events, "preflight")
-		return preflight(options)
+		return preflight(overrides)
 	}
 	acquire := operations.acquire
 	operations.acquire = func(root, path string) (*lock.Ownership, error) {
@@ -348,7 +347,7 @@ func wrapLoadingEvents(operations *loadingOperations) *[]string {
 		return loadManifest(repo)
 	}
 	loadState := operations.loadState
-	operations.loadState = func(path string) (state.Snapshot, state.LoadStatus, error) {
+	operations.loadState = func(path string) (state.Loaded, error) {
 		events = append(events, "state")
 		return loadState(path)
 	}
@@ -387,6 +386,7 @@ func newLoadingFixture(t *testing.T, configExists bool) loadingFixture {
 	if configExists {
 		writeFile(t, config, []byte("profile = \"mac\"\n\n[data]\nemail = \"test@example.com\"\n"), 0o600)
 	}
+	t.Setenv(paths.ConfigEnvironment, config)
 	controlPaths, err := paths.ResolveControlPlanePaths(home, repo, config)
 	if err != nil {
 		t.Fatalf("ResolveControlPlanePaths() error = %v", err)
@@ -396,20 +396,9 @@ func newLoadingFixture(t *testing.T, configExists bool) loadingFixture {
 		home:   home,
 		repo:   repo,
 		config: config,
-		options: Options{
-			Home:    home,
-			HomeSet: true,
-			Repo:    repo,
-			RepoSet: true,
-			LookupEnv: func(name string) (string, bool) {
-				if name == "DOT_CONFIG" {
-					return config, true
-				}
-				return "", false
-			},
-			UserHomeDir: func() (string, error) {
-				return "", errors.New("unexpected real HOME lookup")
-			},
+		overrides: Overrides{
+			Home:       Override{Value: home, Set: true},
+			Repository: Override{Value: repo, Set: true},
 		},
 		paths: controlPaths,
 	}
@@ -520,15 +509,10 @@ func assertMissing(t *testing.T, path string) {
 	}
 }
 
-func TestLoadingFixtureDoesNotUseProcessEnvironment(t *testing.T) {
+func TestLoadingFixtureUsesSyntheticConfigEnvironment(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
-	for _, key := range []string{"DOT_CONFIG", "DOT_REPO"} {
-		value, ok := fixture.options.LookupEnv(key)
-		if key == "DOT_CONFIG" && (!ok || value != fixture.config) {
-			t.Fatalf("DOT_CONFIG lookup = %q, %v", value, ok)
-		}
-		if key == "DOT_REPO" && (ok || strings.TrimSpace(value) != "") {
-			t.Fatalf("DOT_REPO lookup = %q, %v", value, ok)
-		}
+	value, ok := os.LookupEnv(paths.ConfigEnvironment)
+	if !ok || value != fixture.config {
+		t.Fatalf("DOT_CONFIG lookup = %q, %v", value, ok)
 	}
 }
