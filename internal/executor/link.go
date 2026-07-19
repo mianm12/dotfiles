@@ -27,11 +27,13 @@ const (
 )
 
 type fileOperations struct {
-	mkdirAll  func(string, fs.FileMode) error
-	mkdirTemp func(string, string) (string, error)
-	symlink   func(string, string) error
-	rename    func(string, string) error
-	remove    func(string) error
+	mkdirAll   func(string, fs.FileMode) error
+	mkdirTemp  func(string, string) (string, error)
+	createTemp func(string, string) (*os.File, error)
+	symlink    func(string, string) error
+	hardLink   func(string, string) error
+	rename     func(string, string) error
+	remove     func(string) error
 }
 
 // FileResult 保存单个动作供 runtime 消费的结果。StateEffect 已按成功或失败分支选择；
@@ -48,6 +50,26 @@ func ExecuteFile(control paths.ControlPlanePaths, action planner.FileAction) (Fi
 }
 
 func executeFile(
+	control paths.ControlPlanePaths,
+	action planner.FileAction,
+	operations fileOperations,
+) (FileResult, error) {
+	failure := FileResult{StateEffect: action.OnFailure}
+	switch action.Desired.Kind {
+	case planner.DesiredLink:
+		return executeLinkFile(control, action, operations)
+	case planner.DesiredScaffold:
+		return executeScaffoldFile(control, action, operations)
+	default:
+		return failure, fmt.Errorf(
+			"%w: desired kind %q is not implemented",
+			ErrUnsupportedFileAction,
+			action.Desired.Kind,
+		)
+	}
+}
+
+func executeLinkFile(
 	control paths.ControlPlanePaths,
 	action planner.FileAction,
 	operations fileOperations,
@@ -87,11 +109,13 @@ func executeFile(
 
 func defaultFileOperations() fileOperations {
 	return fileOperations{
-		mkdirAll:  os.MkdirAll,
-		mkdirTemp: os.MkdirTemp,
-		symlink:   os.Symlink,
-		rename:    os.Rename,
-		remove:    os.Remove,
+		mkdirAll:   os.MkdirAll,
+		mkdirTemp:  os.MkdirTemp,
+		createTemp: os.CreateTemp,
+		symlink:    os.Symlink,
+		hardLink:   os.Link,
+		rename:     os.Rename,
+		remove:     os.Remove,
 	}
 }
 
