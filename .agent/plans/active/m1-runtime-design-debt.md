@@ -69,8 +69,12 @@
   main 为 `bf530d2ed4ce`、相对 origin/main ahead 45、工作树 clean，未 fetch/pull。
 - [x] 2026-07-19：创建 `fix/m1-runtime-design-debt`，读取仓库规则、相关规范、当前实现/测试及
   completed runtime/preflight/path/state plans，未发现规范冲突或任务外改动。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 完成 runtime 值模型、session 生命周期、单次路径证明和 CI/整洁度 milestones。
+- [x] 2026-07-19：以 `918b6fd` 提交 active ExecPlan 起点。
+- [x] 2026-07-19：先增加 production preflight 无 callback 回归，确认原实现 nil dereference；
+  随后以 `de3af79` 分离 `Overrides` 与 concrete `Resolver`，把 control/run/init/compatibility/
+  loaded state 改为不可变值对象，并移除 requirement 检查的无意义 bool。runtime/CLI/state
+  20 次重复与完整 `make check BINARY=/private/tmp/dot-runtime-design-value-model-check` 通过。
+- [ ] 完成 session 生命周期、单次路径证明和 CI/整洁度 milestones。
 - [ ] 运行完整门禁，完成独立复核、必要 fix commit、复审与计划收口。
 
 ## Milestones
@@ -219,7 +223,12 @@ runtime/state 决定事实对应 corrupt 还是当前路径不可安全消费。
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: CLI 自身已有可替换 environment，用于不读取测试进程的真实 HOME/环境；仅保留
+  package-private sources 会迫使 CLI 测试 mock 整个 preflight 或改读真实环境。
+  Evidence: `internal/cli.environment` 同时服务 version 与 manifest-only doctor，version 测试以
+  合成 lookup/HOME 验证真实 runtime 解析。
+  Impact: runtime 暴露只有 lookup/HOME 两个函数的 concrete `Resolver`，用户覆盖仍只存在于
+  `Overrides`；nil 来源显式报错，不建立通用 DI/interface。
 
 ## Decision Log
 
