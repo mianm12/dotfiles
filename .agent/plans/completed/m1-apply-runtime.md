@@ -67,6 +67,8 @@ exact-input 公开接缝，也没有将三者连接的内部 orchestration packa
 - [x] 2026-07-20：state/planner/apply/executor/runtime 窄测、apply/state 20 次重复、相关包 race、
   CLI 真实 apply 拒绝、Linux/amd64 test binary、基线 diff check 与完整 `make check` 通过；
   更新 handoff，计划保持 active 等待独立复核。
+- [x] 2026-07-20：未参与实现的 reviewer 对 `061b783...fcefa15` 完整复核 GO，无 P0–P3；
+  主 agent 复核完整 diff，并重跑窄测、CLI 拒绝回归、diff check 与最终 `make check` 通过。
 
 ## Milestones
 
@@ -163,7 +165,8 @@ executor、state，避免 runtime↔planner import cycle。operation seam 只覆
 
 ## Outcomes and Handoff
 
-Milestone 已达到 review-ready。branch 基线为 `061b783ee555`，已形成以下 commits：
+Milestone 已达到 review-ready。branch 基线为 `061b783ee555`，未参与实现的 reviewer 完整复核
+GO，无 P0–P3 finding；主 agent 复核完整 diff 与提交边界后重跑最终门禁。已形成以下 commits：
 
     140c931 docs(apply): 建立 apply runtime 执行计划
     3b558a9 feat(state): 建立 apply entry transition
@@ -199,14 +202,13 @@ link/scaffold 保留；还原路径后重跑得到两个 state-only L2/S1b adopt
     go test ./internal/cli -run TestApply_RejectsMutationAndAdoptBeforeRuntime
     GOOS=linux GOARCH=amd64 go test -c -o /private/tmp/dot-m1-cp4-runtime-linux-amd64.test ./internal/apply
     git diff 061b783ee5553ced594f3004ccaed0854551f2ed...HEAD --check
-    make check BINARY=/private/tmp/dot-m1-cp4-runtime-check
+    make check BINARY=/private/tmp/dot-m1-cp4-runtime-final-gate
 
 全部退出 0；`make check` 包含 tidy/fmt check、lint 0 issues、全仓 race、build 与隔离
 doctor-manifest。没有新增依赖、state v1/ownership/公开输出/CLI wiring 改动，也没有执行
 backup/force/prune/hooks/add/init/managed。当前原生平台为 Darwin/arm64；Linux 只完成交叉编译，
 远端 macOS/Linux CI 未运行：本地验收通过、远端待验收。
 
-独立 reviewer 应重点确认两个组合层取舍：runner 遇到第一个 executor error 后停止尚未开始的
-后续 file action，但仍一次提交已成功 effects；conflict 不作为 executor error，其他 file action
-继续执行。另需保留 `FileResult` 语义优先于 `err != nil` 的提交点判断，否则 link L3/scaffold
-S3 的 cleanup error 会丢账。
+独立 reviewer 已确认两个组合层取舍：runner 遇到第一个 executor error 后停止尚未开始的后续
+file action，但仍一次提交已成功 effects；conflict 不作为 executor error，其他 file action 继续
+执行。`FileResult` 语义优先于 `err != nil`，因此 link L3/scaffold S3 的 cleanup error 不会丢账。
