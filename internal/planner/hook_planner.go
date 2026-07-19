@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/mianm12/dotfiles/internal/manifest"
+	"github.com/mianm12/dotfiles/internal/state"
 )
 
 // ErrHookPlan 表示 hook planner 无法形成完整、可信的只读计划。
@@ -93,6 +94,23 @@ type HookAction struct {
 	OnFailure      HookStateEffect
 }
 
+// HookPlan 是按 manifest scope 顺序形成的不可变 run_once 计划。
+type HookPlan struct {
+	actions []HookAction
+}
+
+// Actions 返回不共享 invocation 参数 backing array 的动作副本。
+func (plan HookPlan) Actions() []HookAction {
+	if len(plan.actions) == 0 {
+		return nil
+	}
+	actions := make([]HookAction, len(plan.actions))
+	for index := range plan.actions {
+		actions[index] = plan.actions[index].Clone()
+	}
+	return actions
+}
+
 // Clone 返回不共享 invocation 参数 backing array 的副本。
 func (action HookAction) Clone() HookAction {
 	action.Invocation.Arguments = append([]string(nil), action.Invocation.Arguments...)
@@ -104,6 +122,57 @@ type hookRuntime struct {
 	GOOS       string
 	Home       string
 	Repository string
+}
+
+// PlanHooks 只读取 scoped manifest、严格 state 与 hook script，形成完整计划；任一候选失败时
+// 返回零计划，不暴露已形成的部分动作。
+func PlanHooks(profile manifest.ScopedProfile, loaded state.Loaded, repository string) (HookPlan, error) {
+	runtime := hookRuntime{
+		Profile:    profile.Name(),
+		GOOS:       profile.GOOS(),
+		Home:       profile.Home(),
+		Repository: repository,
+	}
+	if err := validateHookRuntime(runtime); err != nil {
+		return HookPlan{}, err
+	}
+	runtime.Repository = filepath.Clean(runtime.Repository)
+
+	history, err := hookHistory(loaded)
+	if err != nil {
+		return HookPlan{}, err
+	}
+	hooks := profile.Hooks()
+	actions := make([]HookAction, 0, len(hooks))
+	for _, descriptor := range hooks {
+		key := descriptor.Module + "/" + descriptor.Script
+		fingerprint, exists := history[key]
+		action, err := planHook(descriptor, runtime, fingerprint, exists)
+		if err != nil {
+			return HookPlan{}, err
+		}
+		actions = append(actions, action)
+	}
+	return HookPlan{actions: actions}, nil
+}
+
+func hookHistory(loaded state.Loaded) (map[string]string, error) {
+	if loaded.Missing() {
+		return nil, nil
+	}
+	snapshot, ok := loaded.Snapshot()
+	if !ok {
+		return nil, fmt.Errorf("%w: state load result is invalid", ErrHookPlan)
+	}
+	history := make(map[string]string, len(snapshot.RunOnceKeys()))
+	for _, key := range snapshot.RunOnceKeys() {
+		record, ok := snapshot.RunOnce(key)
+		if !ok {
+			return nil, fmt.Errorf("%w: state run_once key %q has no record", ErrHookPlan, key)
+		}
+		history[key] = record.Hash()
+	}
+	return history, nil
 }
 
 func planHook(
@@ -193,6 +262,25 @@ func validateHookInputs(descriptor manifest.HookDescriptor, runtime hookRuntime)
 		{name: "module path", value: descriptor.ModulePath},
 		{name: "script path", value: descriptor.ScriptPath},
 		{name: "target root path", value: descriptor.TargetRootPath},
+	}
+	for _, candidate := range paths {
+		if candidate.value == "" || !filepath.IsAbs(candidate.value) {
+			return fmt.Errorf(
+				"%w: %s %q must be a non-empty absolute path",
+				ErrHookPlan,
+				candidate.name,
+				candidate.value,
+			)
+		}
+	}
+	return validateHookRuntime(runtime)
+}
+
+func validateHookRuntime(runtime hookRuntime) error {
+	paths := []struct {
+		name  string
+		value string
+	}{
 		{name: "HOME", value: runtime.Home},
 		{name: "repository", value: runtime.Repository},
 	}
