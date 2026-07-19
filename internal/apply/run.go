@@ -114,7 +114,7 @@ func runWithOperations(options Options, operations runOperations) (result Result
 			result.TargetCommits++
 		}
 
-		success, failure, protocolErr := validateFileResult(action, fileResult)
+		success, failure, protocolErr := validateFileResult(action, fileResult, executeErr)
 		if protocolErr != nil {
 			executeErr = errors.Join(executeErr, protocolErr)
 		}
@@ -167,6 +167,7 @@ func runWithOperations(options Options, operations runOperations) (result Result
 func validateFileResult(
 	action planner.FileAction,
 	result executor.FileResult,
+	executeErr error,
 ) (success, failure bool, err error) {
 	success = result.StateEffect == action.OnSuccess
 	failure = result.StateEffect == action.OnFailure
@@ -183,6 +184,13 @@ func validateFileResult(
 		if result.TargetMutated {
 			return false, false, fmt.Errorf(
 				"%w: state-only file action %q reported a target commit",
+				ErrExecutionProtocol,
+				action.Target,
+			)
+		}
+		if success && executeErr != nil {
+			return false, false, fmt.Errorf(
+				"%w: state-only file action %q returned success with an error",
 				ErrExecutionProtocol,
 				action.Target,
 			)

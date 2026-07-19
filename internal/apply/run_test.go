@@ -160,6 +160,12 @@ func TestRun_RejectsExecutionResultsThatContradictActionClass(t *testing.T) {
 			successEffect: true,
 		},
 		{
+			name:          "state-only success with error",
+			stateOnly:     true,
+			successEffect: true,
+			executeErr:    errors.New("state-only executor failure"),
+		},
+		{
 			name:          "target commit with failure effect",
 			targetMutated: true,
 			executeErr:    errors.New("executor failure"),
