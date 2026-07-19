@@ -72,7 +72,7 @@ func TestDecide_LinkTable(t *testing.T) {
 		{
 			name:   "L1 missing creates link",
 			target: linkTarget(Observation{Kind: ObjectMissing}, HistoricalState{}, false),
-			want:   wantAction(ActionCreateLink, ReasonTargetMissing, StateUpsert),
+			want:   wantAction(FileCreateLink, FileReasonTargetMissing, StateUpsert),
 		},
 		{
 			name: "L2 exact current link skips",
@@ -81,7 +81,7 @@ func TestDecide_LinkTable(t *testing.T) {
 				currentLinkState(),
 				true,
 			),
-			want: wantAction(ActionSkip, ReasonExpectedLink, StatePreserve),
+			want: wantAction(FileSkip, FileReasonExpectedLink, StatePreserve),
 		},
 		{
 			name: "L2 exact link without state adopts",
@@ -90,7 +90,7 @@ func TestDecide_LinkTable(t *testing.T) {
 				HistoricalState{},
 				false,
 			),
-			want: wantAction(ActionAdopt, ReasonStateMetadata, StateUpsert),
+			want: wantAction(FileAdopt, FileReasonStateMetadata, StateUpsert),
 		},
 		{
 			name: "L2 stale metadata replaces historical alias",
@@ -107,8 +107,8 @@ func TestDecide_LinkTable(t *testing.T) {
 				true,
 			),
 			want: decisionWant{
-				verb:        ActionAdopt,
-				reason:      ReasonStateMetadata,
+				verb:        FileAdopt,
+				reason:      FileReasonStateMetadata,
 				success:     StateUpsert,
 				previousKey: "~/.ZSHRC",
 			},
@@ -126,7 +126,7 @@ func TestDecide_LinkTable(t *testing.T) {
 				},
 				true,
 			),
-			want: wantAction(ActionCreateLink, ReasonOwnedLinkStale, StateUpsert),
+			want: wantAction(FileCreateLink, FileReasonOwnedLinkStale, StateUpsert),
 		},
 		{
 			name: "L4 drifted recorded link conflicts",
@@ -135,7 +135,7 @@ func TestDecide_LinkTable(t *testing.T) {
 				currentLinkState(),
 				true,
 			),
-			want: wantAction(ActionConflict, ReasonLinkDrift, StatePreserve),
+			want: wantAction(FileConflict, FileReasonLinkDrift, StatePreserve),
 		},
 		{
 			name: "L4 force backs up drifted link",
@@ -145,7 +145,7 @@ func TestDecide_LinkTable(t *testing.T) {
 				true,
 			),
 			force: true,
-			want:  wantAction(ActionBackupReplace, ReasonLinkDrift, StateUpsert),
+			want:  wantAction(FileBackupReplace, FileReasonLinkDrift, StateUpsert),
 		},
 		{
 			name: "L5 unrecorded link conflicts",
@@ -154,7 +154,7 @@ func TestDecide_LinkTable(t *testing.T) {
 				HistoricalState{},
 				false,
 			),
-			want: wantAction(ActionConflict, ReasonUnownedLink, StatePreserve),
+			want: wantAction(FileConflict, FileReasonUnownedLink, StatePreserve),
 		},
 		{
 			name: "L5 force backs up unrecorded link",
@@ -164,30 +164,30 @@ func TestDecide_LinkTable(t *testing.T) {
 				false,
 			),
 			force: true,
-			want:  wantAction(ActionBackupReplace, ReasonUnownedLink, StateUpsert),
+			want:  wantAction(FileBackupReplace, FileReasonUnownedLink, StateUpsert),
 		},
 		{
 			name:   "L6 regular file conflicts",
 			target: linkTarget(Observation{Kind: ObjectRegular, Mode: 0o644, Hash: "sha256:abc"}, HistoricalState{}, false),
-			want:   wantAction(ActionConflict, ReasonRegularConflict, StatePreserve),
+			want:   wantAction(FileConflict, FileReasonRegularConflict, StatePreserve),
 		},
 		{
 			name:   "L6 force backs up regular file",
 			target: linkTarget(Observation{Kind: ObjectRegular, Mode: 0o644, Hash: "sha256:abc"}, HistoricalState{}, false),
 			force:  true,
-			want:   wantAction(ActionBackupReplace, ReasonRegularConflict, StateUpsert),
+			want:   wantAction(FileBackupReplace, FileReasonRegularConflict, StateUpsert),
 		},
 		{
 			name:   "L6 force still rejects directory",
 			target: linkTarget(Observation{Kind: ObjectDirectory, Mode: fs.ModeDir | 0o755}, HistoricalState{}, false),
 			force:  true,
-			want:   wantAction(ActionConflict, ReasonDirectoryConflict, StatePreserve),
+			want:   wantAction(FileConflict, FileReasonDirectoryConflict, StatePreserve),
 		},
 		{
 			name:   "L6 force still rejects special object",
 			target: linkTarget(Observation{Kind: ObjectSpecial, Mode: fs.ModeNamedPipe | 0o600}, HistoricalState{}, false),
 			force:  true,
-			want:   wantAction(ActionConflict, ReasonSpecialConflict, StatePreserve),
+			want:   wantAction(FileConflict, FileReasonSpecialConflict, StatePreserve),
 		},
 	}
 
@@ -216,13 +216,13 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 		{
 			name:   "S1a existing target with current record skips",
 			target: scaffoldTarget(Observation{Kind: ObjectRegular, Mode: 0o600, Hash: "sha256:user"}, current, true),
-			want:   wantAction(ActionSkip, ReasonScaffoldPresent, StatePreserve),
+			want:   wantAction(FileSkip, FileReasonScaffoldPresent, StatePreserve),
 		},
 		{
 			name:   "S1a force does not replace existing target with current record",
 			target: scaffoldTarget(Observation{Kind: ObjectRegular, Mode: 0o600, Hash: "sha256:user"}, current, true),
 			force:  true,
-			want:   wantAction(ActionSkip, ReasonScaffoldPresent, StatePreserve),
+			want:   wantAction(FileSkip, FileReasonScaffoldPresent, StatePreserve),
 		},
 		{
 			name: "S1a existing target with stale metadata adopts",
@@ -231,7 +231,7 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 				HistoricalState{Key: "~/.zshrc.local", Module: "old", Kind: StateScaffold, Source: "modules/old/local.template"},
 				true,
 			),
-			want: wantAction(ActionAdopt, ReasonStateMetadata, StateUpsert),
+			want: wantAction(FileAdopt, FileReasonStateMetadata, StateUpsert),
 		},
 		{
 			name: "S1a force only refreshes stale metadata without replacing target",
@@ -241,38 +241,38 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 				true,
 			),
 			force: true,
-			want:  wantAction(ActionAdopt, ReasonStateMetadata, StateUpsert),
+			want:  wantAction(FileAdopt, FileReasonStateMetadata, StateUpsert),
 		},
 		{
 			name:   "S1b regular target without record adopts",
 			target: scaffoldTarget(Observation{Kind: ObjectRegular, Mode: 0o600, Hash: "sha256:user"}, HistoricalState{}, false),
-			want:   wantAction(ActionAdopt, ReasonScaffoldPresent, StateUpsert),
+			want:   wantAction(FileAdopt, FileReasonScaffoldPresent, StateUpsert),
 		},
 		{
 			name:   "S1b symlink target without record adopts",
 			target: scaffoldTarget(Observation{Kind: ObjectSymlink, LinkDest: "/user/link"}, HistoricalState{}, false),
-			want:   wantAction(ActionAdopt, ReasonScaffoldPresent, StateUpsert),
+			want:   wantAction(FileAdopt, FileReasonScaffoldPresent, StateUpsert),
 		},
 		{
 			name:   "S1b directory target without record adopts",
 			target: scaffoldTarget(Observation{Kind: ObjectDirectory, Mode: fs.ModeDir | 0o755}, HistoricalState{}, false),
-			want:   wantAction(ActionAdopt, ReasonScaffoldPresent, StateUpsert),
+			want:   wantAction(FileAdopt, FileReasonScaffoldPresent, StateUpsert),
 		},
 		{
 			name:   "S1b special target without record adopts",
 			target: scaffoldTarget(Observation{Kind: ObjectSpecial, Mode: fs.ModeNamedPipe | 0o600}, HistoricalState{}, false),
-			want:   wantAction(ActionAdopt, ReasonScaffoldPresent, StateUpsert),
+			want:   wantAction(FileAdopt, FileReasonScaffoldPresent, StateUpsert),
 		},
 		{
 			name:   "S1b force still adopts existing target without replacing it",
 			target: scaffoldTarget(Observation{Kind: ObjectSymlink, LinkDest: "/user/link"}, HistoricalState{}, false),
 			force:  true,
-			want:   wantAction(ActionAdopt, ReasonScaffoldPresent, StateUpsert),
+			want:   wantAction(FileAdopt, FileReasonScaffoldPresent, StateUpsert),
 		},
 		{
 			name:   "S2 deleted scaffold stays deleted",
 			target: scaffoldTarget(Observation{Kind: ObjectMissing}, current, true),
-			want:   wantAction(ActionSkip, ReasonScaffoldDeleted, StatePreserve),
+			want:   wantAction(FileSkip, FileReasonScaffoldDeleted, StatePreserve),
 		},
 		{
 			name: "S2 deleted scaffold refreshes stale metadata without rebuilding",
@@ -282,8 +282,8 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 				true,
 			),
 			want: decisionWant{
-				verb:        ActionAdopt,
-				reason:      ReasonStateMetadata,
+				verb:        FileAdopt,
+				reason:      FileReasonStateMetadata,
 				success:     StateUpsert,
 				previousKey: "~/.old-local",
 			},
@@ -292,7 +292,7 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 			name:   "S2 force rebuilds missing scaffold without backup",
 			target: scaffoldTarget(Observation{Kind: ObjectMissing}, current, true),
 			force:  true,
-			want:   wantAction(ActionScaffold, ReasonScaffoldRebuild, StateUpsert),
+			want:   wantAction(FileScaffold, FileReasonScaffoldRebuild, StateUpsert),
 		},
 		{
 			name: "S2 force rebuilds missing scaffold and refreshes stale metadata",
@@ -303,8 +303,8 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 			),
 			force: true,
 			want: decisionWant{
-				verb:        ActionScaffold,
-				reason:      ReasonScaffoldRebuild,
+				verb:        FileScaffold,
+				reason:      FileReasonScaffoldRebuild,
 				success:     StateUpsert,
 				previousKey: "~/.old-local",
 			},
@@ -312,7 +312,7 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 		{
 			name:   "S3 first missing scaffold is created",
 			target: scaffoldTarget(Observation{Kind: ObjectMissing}, HistoricalState{}, false),
-			want:   wantAction(ActionScaffold, ReasonTargetMissing, StateUpsert),
+			want:   wantAction(FileScaffold, FileReasonTargetMissing, StateUpsert),
 		},
 	}
 
@@ -367,7 +367,7 @@ func TestDecide_RejectsUnsupportedInputs(t *testing.T) {
 			if !errors.Is(err, ErrUnsupportedDecisionInput) {
 				t.Fatalf("Decide() error = %v, want ErrUnsupportedDecisionInput", err)
 			}
-			if !reflect.DeepEqual(action, Action{}) {
+			if !reflect.DeepEqual(action, FileAction{}) {
 				t.Fatalf("Decide() action = %#v, want zero action", action)
 			}
 		})
@@ -405,7 +405,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				ownedSymlink,
 				true,
 			),
-			want: wantAction(ActionScaffold, ReasonOwnedLinkToScaffold, StateUpsert),
+			want: wantAction(FileScaffold, FileReasonOwnedLinkToScaffold, StateUpsert),
 		},
 		{
 			name: "drifted symlink releases ownership without touching target",
@@ -414,7 +414,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				ownedSymlink,
 				true,
 			),
-			want: wantAction(ActionAdopt, ReasonReleaseOwnershipToScaffold, StateUpsert),
+			want: wantAction(FileAdopt, FileReasonReleaseOwnershipToScaffold, StateUpsert),
 		},
 		{
 			name: "missing former symlink records deletion as scaffold lifecycle",
@@ -423,7 +423,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				ownedSymlink,
 				true,
 			),
-			want: wantAction(ActionAdopt, ReasonReleaseOwnershipToScaffold, StateUpsert),
+			want: wantAction(FileAdopt, FileReasonReleaseOwnershipToScaffold, StateUpsert),
 		},
 		{
 			name: "force cannot replace non-owned object while migrating into scaffold",
@@ -433,7 +433,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				true,
 			),
 			force: true,
-			want:  wantAction(ActionAdopt, ReasonReleaseOwnershipToScaffold, StateUpsert),
+			want:  wantAction(FileAdopt, FileReasonReleaseOwnershipToScaffold, StateUpsert),
 		},
 		{
 			name: "scaffold to link missing target follows L1 without-record semantics",
@@ -442,7 +442,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				oldScaffold,
 				true,
 			),
-			want: wantAction(ActionCreateLink, ReasonTargetMissing, StateUpsert),
+			want: wantAction(FileCreateLink, FileReasonTargetMissing, StateUpsert),
 		},
 		{
 			name: "scaffold to exact link follows L2 automatic adoption",
@@ -451,7 +451,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				oldScaffold,
 				true,
 			),
-			want: wantAction(ActionAdopt, ReasonStateMetadata, StateUpsert),
+			want: wantAction(FileAdopt, FileReasonStateMetadata, StateUpsert),
 		},
 		{
 			name: "scaffold to other link follows L5 conflict and preserves old record",
@@ -460,7 +460,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				oldScaffold,
 				true,
 			),
-			want: wantAction(ActionConflict, ReasonUnownedLink, StatePreserve),
+			want: wantAction(FileConflict, FileReasonUnownedLink, StatePreserve),
 		},
 		{
 			name: "scaffold to regular link target needs explicit force",
@@ -469,7 +469,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				oldScaffold,
 				true,
 			),
-			want: wantAction(ActionConflict, ReasonRegularConflict, StatePreserve),
+			want: wantAction(FileConflict, FileReasonRegularConflict, StatePreserve),
 		},
 		{
 			name: "scaffold to regular link target force plans backup replace",
@@ -479,7 +479,7 @@ func TestDecide_M1KindMigration(t *testing.T) {
 				true,
 			),
 			force: true,
-			want:  wantAction(ActionBackupReplace, ReasonRegularConflict, StateUpsert),
+			want:  wantAction(FileBackupReplace, FileReasonRegularConflict, StateUpsert),
 		},
 	}
 
@@ -563,22 +563,22 @@ func TestDecide_PreconditionRetainsPlanTimeTargetResolution(t *testing.T) {
 }
 
 type decisionWant struct {
-	verb        ActionVerb
-	reason      ActionReason
+	verb        FileVerb
+	reason      FileReason
 	success     StateEffectKind
 	previousKey string
 }
 
-func wantAction(verb ActionVerb, reason ActionReason, success StateEffectKind) decisionWant {
+func wantAction(verb FileVerb, reason FileReason, success StateEffectKind) decisionWant {
 	return decisionWant{verb: verb, reason: reason, success: success}
 }
 
-func assertDecision(t *testing.T, target ObservedTarget, action Action, want decisionWant) {
+func assertDecision(t *testing.T, target ObservedTarget, action FileAction, want decisionWant) {
 	t.Helper()
 	if action.Verb != want.verb || action.Reason != want.reason {
 		t.Fatalf("action verb/reason = %q/%q, want %q/%q", action.Verb, action.Reason, want.verb, want.reason)
 	}
-	if action.Target != target.Desired.Target || !action.HasDesired || !reflect.DeepEqual(action.Desired, target.Desired) {
+	if action.Target != target.Desired.Target || !reflect.DeepEqual(action.Desired, target.Desired) {
 		t.Fatalf("action desired payload = %#v, want target desired %#v", action, target.Desired)
 	}
 	wantPrecondition := Precondition{
@@ -586,7 +586,7 @@ func assertDecision(t *testing.T, target ObservedTarget, action Action, want dec
 		TargetResolution: target.Resolution,
 		Observed:         target.Observed,
 	}
-	if action.Verb == ActionCreateLink || action.Verb == ActionBackupReplace {
+	if action.Verb == FileCreateLink || action.Verb == FileBackupReplace {
 		wantPrecondition.SourcePath = target.Desired.SourcePath
 		wantPrecondition.RequireRegularSource = true
 	}

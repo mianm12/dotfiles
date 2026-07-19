@@ -77,9 +77,9 @@ func TestPlanPrune_FileConflictDefersEveryCandidate(t *testing.T) {
 		pruneTestOrphan(t, "~/scaffold", "app", StateScaffold, "", Observation{Kind: ObjectRegular}),
 		pruneTestOrphan(t, "~/unowned", "app", StateSymlink, "/repo/source", Observation{Kind: ObjectMissing}),
 	}}
-	fileActions := []Action{
-		{Verb: ActionSkip},
-		{Verb: ActionConflict, Target: "~/blocking"},
+	fileActions := []FileAction{
+		{Verb: FileSkip},
+		{Verb: FileConflict, Target: "~/blocking"},
 	}
 
 	plan, err := PlanPrune(profile, fileActions, PruneOptions{Enabled: true, Full: true})
@@ -107,7 +107,7 @@ func TestPlanPrune_NoPruneReturnsEmptyWithoutConsumingCandidates(t *testing.T) {
 	profile := ObservedProfile{orphans: []OrphanTarget{{
 		State: HistoricalState{Kind: StateKind("rendered")},
 	}}}
-	plan, err := PlanPrune(profile, []Action{{Verb: ActionConflict}}, PruneOptions{Enabled: false})
+	plan, err := PlanPrune(profile, []FileAction{{Verb: FileConflict}}, PruneOptions{Enabled: false})
 	if err != nil {
 		t.Fatalf("PlanPrune(no-prune) error = %v", err)
 	}

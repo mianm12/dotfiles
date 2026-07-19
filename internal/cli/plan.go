@@ -178,10 +178,10 @@ func projectApplyPlan(plan planner.ApplyPlan, verbose bool) (planProjection, err
 			return planProjection{}, err
 		}
 		switch action.Verb {
-		case planner.ActionConflict:
+		case planner.FileConflict:
 			conflict = true
-		case planner.ActionSkip:
-			if action.Reason == planner.ReasonScaffoldDeleted {
+		case planner.FileSkip:
+			if action.Reason == planner.FileReasonScaffoldDeleted {
 				actionable = true
 				projection.warnings = append(
 					projection.warnings,
@@ -191,7 +191,7 @@ func projectApplyPlan(plan planner.ApplyPlan, verbose bool) (planProjection, err
 		default:
 			actionable = true
 		}
-		if action.Verb != planner.ActionSkip || verbose {
+		if action.Verb != planner.FileSkip || verbose {
 			projection.actionLines = append(projection.actionLines, planActionLine(verb, action.Target, string(action.Reason)))
 		}
 	}
@@ -241,19 +241,19 @@ func projectApplyPlan(plan planner.ApplyPlan, verbose bool) (planProjection, err
 	return projection, nil
 }
 
-func filePresentationVerb(verb planner.ActionVerb) (string, error) {
+func filePresentationVerb(verb planner.FileVerb) (string, error) {
 	switch verb {
-	case planner.ActionSkip:
+	case planner.FileSkip:
 		return "skip", nil
-	case planner.ActionCreateLink:
+	case planner.FileCreateLink:
 		return "link", nil
-	case planner.ActionScaffold:
+	case planner.FileScaffold:
 		return "scaffold", nil
-	case planner.ActionAdopt:
+	case planner.FileAdopt:
 		return "adopt", nil
-	case planner.ActionBackupReplace:
+	case planner.FileBackupReplace:
 		return "backup+replace", nil
-	case planner.ActionConflict:
+	case planner.FileConflict:
 		return "CONFLICT", nil
 	default:
 		return "", fmt.Errorf("unsupported file presentation verb %q", verb)

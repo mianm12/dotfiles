@@ -51,7 +51,7 @@ func (plan PrunePlan) ConfirmationGroups() []PruneConfirmationGroup {
 
 // PlanPrune 按完整 observation、file decision 与显式 scope 形成 P1/P2/P3 计划。只要 file
 // decision 含 conflict，全部候选都会显式 deferred，避免在 unresolved 决策旁提交 prune。
-func PlanPrune(profile ObservedProfile, fileActions []Action, options PruneOptions) (PrunePlan, error) {
+func PlanPrune(profile ObservedProfile, fileActions []FileAction, options PruneOptions) (PrunePlan, error) {
 	if !options.Enabled {
 		return PrunePlan{}, nil
 	}
@@ -71,8 +71,8 @@ func PlanPrune(profile ObservedProfile, fileActions []Action, options PruneOptio
 		return strings.Compare(left.State.Key, right.State.Key)
 	})
 
-	deferred := slices.ContainsFunc(fileActions, func(action Action) bool {
-		return action.Verb == ActionConflict
+	deferred := slices.ContainsFunc(fileActions, func(action FileAction) bool {
+		return action.Verb == FileConflict
 	})
 	actions := make([]PruneAction, 0, len(selected))
 	for _, orphan := range selected {

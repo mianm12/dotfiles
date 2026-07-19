@@ -50,7 +50,7 @@ func TestPlanScopedFiles_UsesCompleteObservationAndScopeDecisions(t *testing.T) 
 	if got, want := string(action.Desired.Content), "profile=all"; got != want {
 		t.Fatalf("scope scaffold content = %q, want %q", got, want)
 	}
-	if action.Verb != ActionScaffold || action.Reason != ReasonOwnedLinkToScaffold {
+	if action.Verb != FileScaffold || action.Reason != FileReasonOwnedLinkToScaffold {
 		t.Fatalf("alias migration action = (%q, %q), want scaffold/owned-link-to-scaffold", action.Verb, action.Reason)
 	}
 	if action.OnSuccess.PreviousKey != "~/real/item" || action.OnSuccess.Key != "~/alias/item" {
@@ -115,7 +115,7 @@ func TestPlanApply_ComposesDeterministicFullAndPartialPlansWithoutWrites(t *test
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("partial file action order = %v, want %v", got, want)
 	}
-	if fileActions[0].Verb != ActionConflict {
+	if fileActions[0].Verb != FileConflict {
 		t.Fatalf("conflicting file action = %#v", fileActions[0])
 	}
 	pruneActions := partial.Prune().Actions()
@@ -136,7 +136,7 @@ func TestPlanApply_ComposesDeterministicFullAndPartialPlansWithoutWrites(t *test
 	if err != nil {
 		t.Fatalf("PlanApply(partial force) error = %v", err)
 	}
-	if forced.FileActions()[0].Verb != ActionBackupReplace || forced.Prune().Actions()[0].Deferred {
+	if forced.FileActions()[0].Verb != FileBackupReplace || forced.Prune().Actions()[0].Deferred {
 		t.Fatalf("forced file/prune plan = file %#v prune %#v", forced.FileActions(), forced.Prune().Actions())
 	}
 	noPruneOptions := options
@@ -660,7 +660,7 @@ func (fixture applyIntegrationFixture) options() ApplyOptions {
 	}
 }
 
-func applyFileActionKeys(actions []Action) []string {
+func applyFileActionKeys(actions []FileAction) []string {
 	keys := make([]string, len(actions))
 	for index, action := range actions {
 		keys[index] = action.Desired.Module + "/" + action.Desired.Source

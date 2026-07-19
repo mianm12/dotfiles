@@ -57,7 +57,7 @@ type ApplyPlan struct {
 	valid       bool
 	context     ApplyContext
 	observed    ObservedProfile
-	fileActions []Action
+	fileActions []FileAction
 	prune       PrunePlan
 	hooks       HookPlan
 }
@@ -72,8 +72,8 @@ func (plan ApplyPlan) Context() ApplyContext { return plan.context.Clone() }
 func (plan ApplyPlan) Observed() ObservedProfile { return cloneObservedProfile(plan.observed) }
 
 // FileActions 返回不共享 desired/Precondition bytes 的 scope file action。
-func (plan ApplyPlan) FileActions() []Action {
-	actions := append([]Action(nil), plan.fileActions...)
+func (plan ApplyPlan) FileActions() []FileAction {
+	actions := append([]FileAction(nil), plan.fileActions...)
 	for index := range actions {
 		actions[index] = actions[index].Clone()
 	}
@@ -170,7 +170,7 @@ func planApplyInputs(inputs dotruntime.LoadedInputs, options ApplyOptions) (Appl
 			PruneEnabled:      !options.NoPrune,
 		},
 		observed:    cloneObservedProfile(observed),
-		fileActions: cloneActions(fileActions),
+		fileActions: cloneFileActions(fileActions),
 		prune:       clonePrunePlan(prune),
 		hooks:       cloneHookPlan(hooks),
 	}
@@ -185,7 +185,7 @@ func planScopedFiles(
 	scoped manifest.ScopedProfile,
 	loaded state.Loaded,
 	options DecisionOptions,
-) (ObservedProfile, []Action, error) {
+) (ObservedProfile, []FileAction, error) {
 	if err := validateScopedProfile(validated, scoped); err != nil {
 		return ObservedProfile{}, nil, err
 	}
@@ -199,7 +199,7 @@ func planScopedFiles(
 	}
 
 	selected := stringSet(scoped.Modules())
-	actions := make([]Action, 0, len(scoped.Entries()))
+	actions := make([]FileAction, 0, len(scoped.Entries()))
 	for _, target := range observed.Targets() {
 		if _, ok := selected[target.Desired.Module]; !ok {
 			continue
@@ -329,8 +329,8 @@ func cloneObservedProfile(profile ObservedProfile) ObservedProfile {
 	return ObservedProfile{targets: profile.Targets(), orphans: profile.Orphans()}
 }
 
-func cloneActions(actions []Action) []Action {
-	cloned := append([]Action(nil), actions...)
+func cloneFileActions(actions []FileAction) []FileAction {
+	cloned := append([]FileAction(nil), actions...)
 	for index := range cloned {
 		cloned[index] = cloned[index].Clone()
 	}
@@ -409,7 +409,7 @@ func validateObservedOrder(profile ObservedProfile) error {
 	return nil
 }
 
-func validateFileActions(context ApplyContext, profile ObservedProfile, actions []Action) error {
+func validateFileActions(context ApplyContext, profile ObservedProfile, actions []FileAction) error {
 	selected := stringSet(context.Modules)
 	expected := make([]ObservedTarget, 0, len(actions))
 	for _, target := range profile.Targets() {
@@ -422,7 +422,7 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 	}
 	for index, action := range actions {
 		target := expected[index]
-		if !action.HasDesired || !samePlannerDesired(action.Desired, target.Desired) {
+		if !samePlannerDesired(action.Desired, target.Desired) {
 			return fmt.Errorf("file action %d does not match scoped desired", index)
 		}
 		if action.Target != target.Desired.Target || action.Reason == "" {
@@ -437,11 +437,11 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 			return fmt.Errorf("file action %q failure effect must preserve state", action.Target)
 		}
 		switch action.Verb {
-		case ActionSkip, ActionConflict:
+		case FileSkip, FileConflict:
 			if action.OnSuccess.Kind != StatePreserve {
 				return fmt.Errorf("file action %q %q must preserve state", action.Target, action.Verb)
 			}
-		case ActionCreateLink, ActionScaffold, ActionAdopt, ActionBackupReplace:
+		case FileCreateLink, FileScaffold, FileAdopt, FileBackupReplace:
 			if action.OnSuccess.Kind != StateUpsert || action.OnSuccess.Key != action.Desired.Target {
 				return fmt.Errorf("file action %q %q has invalid state upsert", action.Target, action.Verb)
 			}

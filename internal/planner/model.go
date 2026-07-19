@@ -130,60 +130,56 @@ func (profile ObservedProfile) Orphans() []OrphanTarget {
 	return cloned
 }
 
-// ActionVerb 是纯计划中的稳定动作词汇；它不提供执行能力。
-type ActionVerb string
+// FileVerb 是 file decision 中的稳定动作词汇；它不提供执行能力。
+type FileVerb string
 
 const (
-	// ActionSkip 不触碰 target 或 state。
-	ActionSkip ActionVerb = "skip"
-	// ActionCreateLink 创建或重建精确 symlink。
-	ActionCreateLink ActionVerb = "create-link"
-	// ActionScaffold 写入一次性渲染蓝本。
-	ActionScaffold ActionVerb = "scaffold"
-	// ActionAdopt 只更新 state，不触碰 target。
-	ActionAdopt ActionVerb = "adopt"
-	// ActionBackupReplace 先建立可用备份再替换普通对象。
-	ActionBackupReplace ActionVerb = "backup-replace"
-	// ActionPrune 清理历史孤儿 target 或 state 条目。
-	ActionPrune ActionVerb = "prune"
-	// ActionRunHook 表示待执行的 run_once hook。
-	ActionRunHook ActionVerb = "run-hook"
-	// ActionConflict 保留 unresolved 用户决策。
-	ActionConflict ActionVerb = "conflict"
+	// FileSkip 不触碰 target 或 state。
+	FileSkip FileVerb = "skip"
+	// FileCreateLink 创建或重建精确 symlink。
+	FileCreateLink FileVerb = "create-link"
+	// FileScaffold 写入一次性渲染蓝本。
+	FileScaffold FileVerb = "scaffold"
+	// FileAdopt 只更新 state，不触碰 target。
+	FileAdopt FileVerb = "adopt"
+	// FileBackupReplace 先建立可用备份再替换普通对象。
+	FileBackupReplace FileVerb = "backup-replace"
+	// FileConflict 保留 unresolved 用户决策。
+	FileConflict FileVerb = "conflict"
 )
 
-// ActionReason 是供 presentation/status 稳定分类的决策原因，不把人类文案当内部协议。
-type ActionReason string
+// FileReason 是供 presentation/status 稳定分类的 file decision 原因，不把人类文案当内部协议。
+type FileReason string
 
 const (
-	// ReasonTargetMissing 表示 target 缺失，需要创建 desired 产物。
-	ReasonTargetMissing ActionReason = "target-missing"
-	// ReasonExpectedLink 表示 target 已是精确期望 symlink。
-	ReasonExpectedLink ActionReason = "expected-link"
-	// ReasonStateMetadata 表示 target 证据已满足，只需刷新非所有权 metadata。
-	ReasonStateMetadata ActionReason = "state-metadata"
-	// ReasonOwnedLinkStale 表示 target 仍是 owned 旧链，但期望 source 已变化。
-	ReasonOwnedLinkStale ActionReason = "owned-link-stale"
-	// ReasonLinkDrift 表示有 symlink 记录，但 target 已被改指。
-	ReasonLinkDrift ActionReason = "link-drift"
-	// ReasonUnownedLink 表示未被当前记录拥有的 symlink 阻挡 link desired。
-	ReasonUnownedLink ActionReason = "unowned-link"
-	// ReasonRegularConflict 表示普通文件阻挡 link desired。
-	ReasonRegularConflict ActionReason = "regular-conflict"
-	// ReasonDirectoryConflict 表示目录阻挡 link desired，不能 force 替换。
-	ReasonDirectoryConflict ActionReason = "directory-conflict"
-	// ReasonSpecialConflict 表示特殊对象阻挡 link desired，不能 force 替换。
-	ReasonSpecialConflict ActionReason = "special-conflict"
-	// ReasonScaffoldPresent 表示 target 已满足 scaffold 的一次性生命周期。
-	ReasonScaffoldPresent ActionReason = "scaffold-present"
-	// ReasonScaffoldDeleted 表示已有 scaffold 记录且 target 缺失，应保留用户删除决定。
-	ReasonScaffoldDeleted ActionReason = "scaffold-deleted"
-	// ReasonScaffoldRebuild 表示显式 force 要求重建仍缺失的 scaffold。
-	ReasonScaffoldRebuild ActionReason = "scaffold-rebuild"
-	// ReasonOwnedLinkToScaffold 表示把仍 owned 的 symlink 转成独立 scaffold 文件。
-	ReasonOwnedLinkToScaffold ActionReason = "owned-link-to-scaffold"
-	// ReasonReleaseOwnershipToScaffold 表示只改记 scaffold，立即释放旧所有权。
-	ReasonReleaseOwnershipToScaffold ActionReason = "release-ownership-to-scaffold"
+	// FileReasonTargetMissing 表示 target 缺失，需要创建 desired 产物。
+	FileReasonTargetMissing FileReason = "target-missing"
+	// FileReasonExpectedLink 表示 target 已是精确期望 symlink。
+	FileReasonExpectedLink FileReason = "expected-link"
+	// FileReasonStateMetadata 表示 target 证据已满足，只需刷新非所有权 metadata。
+	FileReasonStateMetadata FileReason = "state-metadata"
+	// FileReasonOwnedLinkStale 表示 target 仍是 owned 旧链，但期望 source 已变化。
+	FileReasonOwnedLinkStale FileReason = "owned-link-stale"
+	// FileReasonLinkDrift 表示有 symlink 记录，但 target 已被改指。
+	FileReasonLinkDrift FileReason = "link-drift"
+	// FileReasonUnownedLink 表示未被当前记录拥有的 symlink 阻挡 link desired。
+	FileReasonUnownedLink FileReason = "unowned-link"
+	// FileReasonRegularConflict 表示普通文件阻挡 link desired。
+	FileReasonRegularConflict FileReason = "regular-conflict"
+	// FileReasonDirectoryConflict 表示目录阻挡 link desired，不能 force 替换。
+	FileReasonDirectoryConflict FileReason = "directory-conflict"
+	// FileReasonSpecialConflict 表示特殊对象阻挡 link desired，不能 force 替换。
+	FileReasonSpecialConflict FileReason = "special-conflict"
+	// FileReasonScaffoldPresent 表示 target 已满足 scaffold 的一次性生命周期。
+	FileReasonScaffoldPresent FileReason = "scaffold-present"
+	// FileReasonScaffoldDeleted 表示已有 scaffold 记录且 target 缺失，应保留用户删除决定。
+	FileReasonScaffoldDeleted FileReason = "scaffold-deleted"
+	// FileReasonScaffoldRebuild 表示显式 force 要求重建仍缺失的 scaffold。
+	FileReasonScaffoldRebuild FileReason = "scaffold-rebuild"
+	// FileReasonOwnedLinkToScaffold 表示把仍 owned 的 symlink 转成独立 scaffold 文件。
+	FileReasonOwnedLinkToScaffold FileReason = "owned-link-to-scaffold"
+	// FileReasonReleaseOwnershipToScaffold 表示只改记 scaffold，立即释放旧所有权。
+	FileReasonReleaseOwnershipToScaffold FileReason = "release-ownership-to-scaffold"
 )
 
 // Precondition 固定一个动作提交前必须仍成立的 target 快照。未来 executor 必须重新解析
@@ -219,20 +215,19 @@ type StateEffect struct {
 	Entry       HistoricalState
 }
 
-// Action 是 planner 与未来 executor 之间的自包含值；当前 package 只形成和展示它。
-type Action struct {
-	Verb         ActionVerb
+// FileAction 是 file planner 与未来 executor 之间的自包含值；当前 package 只形成和展示它。
+type FileAction struct {
+	Verb         FileVerb
 	Target       string
-	Reason       ActionReason
+	Reason       FileReason
 	Desired      Desired
-	HasDesired   bool
 	Precondition Precondition
 	OnSuccess    StateEffect
 	OnFailure    StateEffect
 }
 
 // Clone 返回不共享 desired/observed bytes 的动作副本。
-func (action Action) Clone() Action {
+func (action FileAction) Clone() FileAction {
 	action.Desired = action.Desired.Clone()
 	action.Precondition.Observed = action.Precondition.Observed.Clone()
 	return action

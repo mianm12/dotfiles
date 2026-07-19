@@ -3,9 +3,8 @@ package planner
 import "testing"
 
 func TestActionClone_DoesNotSharePlanBytes(t *testing.T) {
-	action := Action{
-		Verb:       ActionScaffold,
-		HasDesired: true,
+	action := FileAction{
+		Verb: FileScaffold,
 		Desired: Desired{
 			Kind:    DesiredScaffold,
 			Content: []byte("desired"),

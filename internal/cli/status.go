@@ -82,7 +82,7 @@ func projectStatus(plan planner.ApplyPlan) (statusProjection, error) {
 	}
 
 	for _, action := range plan.FileActions() {
-		if action.Verb == planner.ActionSkip {
+		if action.Verb == planner.FileSkip {
 			continue
 		}
 		description, err := statusFileDescription(action)
@@ -90,7 +90,7 @@ func projectStatus(plan planner.ApplyPlan) (statusProjection, error) {
 			return statusProjection{}, err
 		}
 		finding := statusFinding{target: action.Target, description: description}
-		if action.Verb == planner.ActionConflict {
+		if action.Verb == planner.FileConflict {
 			projection.drift = append(projection.drift, finding)
 		} else {
 			projection.pending = append(projection.pending, finding)
@@ -138,9 +138,9 @@ func projectStatus(plan planner.ApplyPlan) (statusProjection, error) {
 	return projection, nil
 }
 
-func statusFileDescription(action planner.Action) (string, error) {
+func statusFileDescription(action planner.FileAction) (string, error) {
 	switch action.Reason {
-	case planner.ReasonTargetMissing:
+	case planner.FileReasonTargetMissing:
 		switch action.Desired.Kind {
 		case planner.DesiredLink:
 			return "desired symlink missing", nil
@@ -149,29 +149,29 @@ func statusFileDescription(action planner.Action) (string, error) {
 		default:
 			return "", fmt.Errorf("unsupported status desired kind %q", action.Desired.Kind)
 		}
-	case planner.ReasonStateMetadata:
+	case planner.FileReasonStateMetadata:
 		return "state metadata needs refresh", nil
-	case planner.ReasonOwnedLinkStale:
+	case planner.FileReasonOwnedLinkStale:
 		return "owned symlink points to previous source", nil
-	case planner.ReasonLinkDrift:
+	case planner.FileReasonLinkDrift:
 		return "symlink re-pointed elsewhere", nil
-	case planner.ReasonUnownedLink:
+	case planner.FileReasonUnownedLink:
 		return "unowned symlink blocks desired link", nil
-	case planner.ReasonRegularConflict:
+	case planner.FileReasonRegularConflict:
 		return "regular file blocks desired link", nil
-	case planner.ReasonDirectoryConflict:
+	case planner.FileReasonDirectoryConflict:
 		return "directory blocks desired link", nil
-	case planner.ReasonSpecialConflict:
+	case planner.FileReasonSpecialConflict:
 		return "special file blocks desired link", nil
-	case planner.ReasonScaffoldPresent:
+	case planner.FileReasonScaffoldPresent:
 		return "scaffold lifecycle not recorded", nil
-	case planner.ReasonScaffoldRebuild:
+	case planner.FileReasonScaffoldRebuild:
 		return "scaffold rebuild pending", nil
-	case planner.ReasonOwnedLinkToScaffold:
+	case planner.FileReasonOwnedLinkToScaffold:
 		return "owned symlink pending scaffold migration", nil
-	case planner.ReasonReleaseOwnershipToScaffold:
+	case planner.FileReasonReleaseOwnershipToScaffold:
 		return "scaffold ownership release pending", nil
-	case planner.ReasonExpectedLink, planner.ReasonScaffoldDeleted:
+	case planner.FileReasonExpectedLink, planner.FileReasonScaffoldDeleted:
 		return "", fmt.Errorf("status received non-actionable reason %q for verb %q", action.Reason, action.Verb)
 	default:
 		return "", fmt.Errorf("unsupported status file reason %q", action.Reason)
