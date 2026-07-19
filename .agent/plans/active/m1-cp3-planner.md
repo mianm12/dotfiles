@@ -104,6 +104,10 @@ planner 或 diff/status/dry-run CLI。
   reviewer 发现 1 个有效 P2——status 仅将 `ReasonLinkDrift` 归 DRIFT，其他
   `ActionConflict` 错归 PENDING，偏离 CLI spec 的公开 taxonomy。main 保持 `f30645e` clean，
   已从 current main 创建 `fix/m1-planner-acceptance` 做单一根因修复。
+- [x] 2026-07-19：`fix/m1-planner-acceptance` 以 `b1de0fa` 按 action verb 统一全部 file
+  conflict→DRIFT，新增 L5/L6 四类 blocker × 有/无历史 state 回归；round 2 从 checkpoint base
+  完整复审 GO。freshness 确认 main 未前进后 fast-forward-only 集成，合入后三包 20 次与
+  `make check BINARY=/private/tmp/dot-cp3-main-after-acceptance-fix` 通过，clean worktree 已移除。
 - [ ] 从 checkpoint base 完成三路独立 Acceptance，处理有效 finding，收口 coordinator 并
   fast-forward-only 合入 main。
 
@@ -278,5 +282,5 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
 ## Outcomes and Handoff
 
 尚未完成。Plan Gate 与七个 Milestone 已完成独立 review、closure、main 集成及合入后门禁；
-首轮 Acceptance 有 1 个有效 taxonomy P2；当前在 `fix/m1-planner-acceptance` 按共享根因测试先行
-修复。修复完成后必须从 checkpoint base 重新进行完整独立 Acceptance，不能只复核局部 fix。
+首轮 Acceptance 的 taxonomy P2 已以 `b1de0fa` 修复、完整复审并集成。当前从
+`checkpoint_base...main@b1de0fa` 重新进行三路完整 Acceptance；不能只沿用 fix 局部结论。
