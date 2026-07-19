@@ -10,7 +10,8 @@
 完整形成后才输出，两个 stream 不伪装成可回滚事务，任一写失败仍稳定退出 1，`status` 的可信
 verdict 前置规则和 `doctor`/`version` 的诊断例外保持不变。同时，planner 与未来 executor 之间
 不再暴露含 prune/hook 残余分支的泛化 `Action`；file、prune、hook 三个执行阶段分别使用明确的
-concrete action contract，组合校验会拒绝不完整的 source Precondition。
+concrete action contract，组合校验会拒绝不完整的 source Precondition、矛盾的 file decision
+和错误的 state effect。
 
 ## Scope / Non-goals
 
@@ -22,7 +23,8 @@ concrete action contract，组合校验会拒绝不完整的 source Precondition
   `FileAction`/`FileVerb`/`FileReason` 类型族，移除已经由 `PruneAction`、`HookAction` 取代的
   verb 和不再表示真实分支的 `HasDesired`。
 - 保持 `Precondition`、`StateEffect` 作为 file/prune 的真实共享 contract，并补齐 file verb 的
-  source requirement、prune 的零 source requirement 和封闭 file reason 校验。
+  source requirement、prune 的零 source requirement、封闭 file reason 与 canonical decision
+  校验。
 - 更新 planner/CLI 测试与调用方，保持所有公开计划内容、退出码、排序、纯只读和数据保护性质。
 
 明确不做：
@@ -64,8 +66,12 @@ requirement 的封闭形态；CLI presentation 能在后续映射错误前保持
   `HasDesired`；planner/CLI 联合测试通过，旧类型族 `rg` 无残留。
 - [x] 2026-07-19：新增 mutation 回归先证明五类畸形 plan 均被旧校验接受，再以 `4751862`
   闭合 file source、prune 零 source 与 file reason 结构校验；窄测和联合测试通过。
-- [ ] 完成窄测、重复测试、race、完整 diff check、`make check` 和独立只读复核。
-- [ ] 处理有效 finding，完成计划迁移和 plan-closure commit。
+- [x] 2026-07-19：完成窄测、planner/CLI 20 次重复、全仓 race、完整 diff check 与两次
+  `make check`；本地 Darwin/arm64 全部门禁通过。
+- [x] 2026-07-19：独立 reviewer 首轮发现合法 enum 可组成矛盾 decision 的 P2；以 `5e931be`
+  复用纯 `Decide` 校验 canonical tuple 和完整 state effect，新增三项先失败 mutation 回归；
+  reviewer 第二轮重审完整分支 GO，无 P0–P3 finding。
+- [x] 2026-07-19：完成 Outcomes/Handoff，将本计划迁入 `completed/`，进入纯计划收口 commit。
 
 ## Milestones
 
@@ -120,8 +126,8 @@ Commit 边界：
 目标是让 future executor 只消费结构完整的 valid `ApplyPlan`。先增加内部 mutation 回归，证明
 create-link/backup-replace 缺少或错配 regular source requirement、其他 file verb 携带 source
 requirement、prune 携带 source requirement、未知 non-empty file reason 都被 combined validation
-拒绝；再在 `internal/planner/apply_plan.go` 集中实现形态校验。校验只核对封闭 enum 和结构一致性，
-不复制 L/S/P 决策表或重新计算 ownership。
+拒绝；再在 `internal/planner/apply_plan.go` 集中实现形态校验。独立 review 进一步证明封闭 enum
+仍能组成矛盾 tuple；最终组合层调用纯 `Decide` 复核语义与 state effect，不手写第二份 L/S/P。
 
 Concrete steps：
 
@@ -133,7 +139,7 @@ Concrete steps：
 
 - source requirement 仅出现于规范允许的 file verb，路径与 desired source 一致。
 - prune source requirement 始终为空；未知 file reason 不能进入 valid plan。
-- combined validation 不重新执行 decision/prune/hook 业务规则。
+- combined validation 不复制 decision/prune/hook 业务规则；file 语义一致性直接复用纯 `Decide`。
 
 Commit 边界：
 
@@ -146,9 +152,9 @@ Commit 边界：
 | 正常 CLI 输出/退出码不变，写失败仍为 1 | CLI 窄测与新增 stderr failure 回归 | 通过 |
 | 三个 action family 边界明确且无兼容残余 | `rg`、planner/CLI 编译与测试 | 通过 |
 | source Precondition/closed reason fail closed | combined validation mutation tests | 通过 |
-| planner/diff/status 保持只读与完整数据流 | 既有隔离 fixture、重复测试、race | 待验证 |
-| 当前平台完整门禁 | `make check BINARY=/private/tmp/dot-m1-planner-contract-check` | 待验证 |
-| 完整任务 diff 可审阅 | `git diff 6322af4...HEAD --check` 与独立复核 | 待验证 |
+| planner/diff/status 保持只读与完整数据流 | 既有隔离 fixture、重复测试、race | 通过 |
+| 当前平台完整门禁 | `make check BINARY=/private/tmp/dot-m1-planner-contract-check` | 通过 |
+| 完整任务 diff 可审阅 | `git diff 6322af4...HEAD --check` 与独立复核 | 通过 |
 
 最终在 Darwin/arm64 运行窄测、`-count=20`、race、完整 diff check 与 `make check`。远端 macOS/
 Linux CI 未由本任务运行时，准确记录“本地验收通过、远端待验收”，不以交叉编译代替实机证据。
@@ -192,6 +198,13 @@ package、循环或 IO helper。
   修复后全部稳定拒绝。
   Impact: 这是 future executor 边界上的真实 contract bug，当前修复收益高且不改变任何正常计划。
 
+- Observation: 封闭 `FileVerb` 与 `FileReason` 仍不足以证明二者与 desired/observation 构成同一个
+  决策；错误的合法组合甚至可以把真实 conflict 伪装成 presentation 会忽略的 skip。
+  Evidence: 独立 reviewer 构造 `FileSkip + FileReasonTargetMissing` 后，首轮 combined validation
+  仍返回 nil；跨 desired kind verb 和被污染的 state entry 同样可通过。
+  Impact: 以纯 `Decide` 作为唯一 semantic oracle，并保留独立 payload shape 校验；三项 mutation
+  回归在修复前失败、`5e931be` 后通过，第二轮完整 review GO。
+
 ## Decision Log
 
 - Decision: 保持 command-specific output semantics，不建立跨 stream 事务抽象。
@@ -204,11 +217,40 @@ package、循环或 IO helper。
   union 更清晰，当前尚无 executor 消费者，是消除早期泛化残余的最低迁移成本时点。
   Date: 2026-07-19
 
-- Decision: 只强化 action shape validation，不把 combined validation 变成第二套决策引擎。
-  Rationale: ownership、L/S/P 与 hook fingerprint 已有单一真相源；组合层只应证明下游可安全消费的
-  payload 完整一致。
+- Decision: combined validation 独立校验 payload shape，并调用纯 `Decide` 证明 file semantic
+  tuple 与完整 state effect 一致。
+  Rationale: 只检查 closed enum 不能阻止不可能组合；直接复用 `Decide` 保持 ownership、L/S/P
+  单一真相源，也避免手写 verb/reason/kind 矩阵。`Decide` 无 IO、mutation 或 validation 回调，
+  不形成递归或 executor 重解释。
   Date: 2026-07-19
 
 ## Outcomes and Handoff
 
-尚未实施。完成后记录实际 commits、验证、独立复核、偏差和未验证项。
+本任务已在 `refactor/m1-planner-contract` 完成本地交付，main 保持 clean 且仍位于基线
+`6322af40e3b256f96e228b3a126a181ce2989f5b`；本计划未自行扩大授权合入 main。实现提交为：
+
+    cdb9868 docs(cli): 明确跨流输出失败边界
+    dee1db7 test(cli): 固定计划输出失败语义
+    8025f91 refactor(planner): 收窄 file action contract
+    4751862 fix(planner): 闭合 action 前提结构校验
+    5e931be fix(planner): 校验 canonical file decision
+
+交付结果是三个明确的 concrete action family；`FileAction` 不再携带 prune/hook 残余或冗余
+`HasDesired`。正常 plan/diff/dry-run/status 输出与退出码不变；跨 stream 写失败边界得到规范和
+零写入回归。combined validation 会拒绝 source shape、prune source、未知 reason、不可能
+verb/reason/kind tuple 及错误 state effect，同时不复制 L/S/P 决策表。
+
+最终本地证据：
+
+    go test ./internal/planner -run 'TestValidateApplyPlan' -count=1
+    go test ./internal/planner ./internal/cli -count=20
+    git diff 6322af40e3b256f96e228b3a126a181ce2989f5b...HEAD --check
+    make check BINARY=/private/tmp/dot-m1-planner-contract-check
+
+以上均退出 0；`make check` 包含 tidy/fmt check、lint 0 issues、全仓 race、build 与隔离
+doctor-manifest。未参与实现的 reviewer 从基线审查完整分支，首轮 P2 以新 commit 修复，第二轮
+完整重审 GO，无 unresolved P0–P3 finding；其独立 `make check` 也通过。本机实际运行平台为
+Darwin/arm64；未 push，远端 macOS/Linux CI 与 Linux 实机未运行：本地验收通过、远端待验收。
+
+未实现 executor、mutation、state builder、backup、真实 apply/add、M2/M3 能力或新依赖；这些
+仍按 roadmap 留待后续 Checkpoint。
