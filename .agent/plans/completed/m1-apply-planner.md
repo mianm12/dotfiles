@@ -77,6 +77,9 @@ path validation 与 HOME，`ScopedProfile` 只渲染 module scope；`ObservedPro
   `864c828` 增加完整 desired × active delete topology 校验。
 - [x] 2026-07-19：P1 fix 后相关五包 20 次/race、darwin/linux amd64 编译、完整 branch diff
   check 与 `make check` 再次通过；等待 round 2 完整 branch review。
+- [x] 2026-07-19：未参与实现的 reviewer 从 `385dea8...HEAD` 完整执行 round 2，确认首轮 P1
+  与 full/partial/非 active 对照边界均正确，结论 GO、无 P0–P3 finding；主线程随后重复五包
+  20 次、完整 diff check 与 `make check`，全部通过。
 
 ## Milestones
 
@@ -158,6 +161,7 @@ Commit 边界：
 | deterministic、自包含、getter 深拷贝 | repeated plan、getter mutation、combined validation tests | 通过 |
 | 全部路径零锁零写入 | 每个 success/error fixture tree snapshot；missing state root/lock 断言 | 通过 |
 | active prune 不删除 desired leaf/祖先 | full/partial ancestor、equal identity 与非 active 对照 tests | 通过（round 1 fix） |
+| 独立完整复审 | round 2 重审 `385dea8...HEAD`、重复/race/双平台编译与完整门禁 | GO，无 P0–P3 finding |
 | 当前平台完整门禁 | Darwin/arm64 `make check BINARY=/private/tmp/dot-cp3-apply-planner-review-check/dot` | 通过 |
 | 双平台编译证据 | darwin/amd64、linux/amd64 planner test binary | 通过（未执行二进制） |
 | 远端 macOS/Linux CI | 精确 branch HEAD | 待验收（本 worker 不 push） |
@@ -236,10 +240,10 @@ no-prune，并返回 opaque `ApplyPlan`。结果 getters 给出独立 context/sl
 
 ## Outcomes and Handoff
 
-实现和 worker 本地门禁已完成，计划保持 active，等待 coordinator 安排未参与实现的完整 branch
-review round 2。相对 base `385dea8` 的 commits 为计划 `ccf487a`、完整 desired/scope file 组合
+实现、两轮独立 review 与主线程最终门禁已完成。相对 base `385dea8` 的 commits 为计划
+`ccf487a`、完整 desired/scope file 组合
 `c71fd7d`、唯一入口/整体 validation `3565be4`、首轮交接计划 `239b67b`，以及 review P1 fix
-`864c828`。
+`864c828` 与 review 记录 `b961c36`。round 2 结论为 GO、无 P0–P3 finding。
 
 本地验证（2026-07-19，均退出 0）：
 
@@ -255,4 +259,5 @@ file actions、prune 与 hooks；结果稳定、getter 深拷贝，所有 error 
 shared ownership/manifest/runtime/state contract，也没有 CLI/executor/mutation。双平台只完成编译，
 精确 HEAD 远端 macOS/Linux CI 未运行；本地验收通过、远端待验收。实际 file/prune/hook execute、
 state 持久化、输出和退出码属于后续 Milestone，未在本分支验证。review round 1 的 blocking P1
-已修复并重跑全部门禁；仍需 round 2 对完整 branch 复审，当前不满足 lifecycle closure 条件。
+已修复并重跑全部门禁，round 2 已对完整 branch 复审通过；本计划迁移到 completed 后可由纯计划
+commit 收口。
