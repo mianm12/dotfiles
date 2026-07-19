@@ -27,6 +27,14 @@ type ApplyOptions struct {
 	NoPrune    bool
 }
 
+// ApplyScopeOptions 保存从已严格加载输入形成 canonical plan 所需的纯决策选项。
+// 它不携带 runtime 路径或版本，避免 exact-input 调用方误以为 planner 会再次加载。
+type ApplyScopeOptions struct {
+	Modules []string
+	Force   bool
+	NoPrune bool
+}
+
 // ApplyContext 保存 presentation/status 所需的稳定运行上下文。
 type ApplyContext struct {
 	Profile           string
@@ -86,21 +94,27 @@ func (plan ApplyPlan) Prune() PrunePlan { return clonePrunePlan(plan.prune) }
 // Hooks 返回不共享 invocation 参数的 hook plan。
 func (plan ApplyPlan) Hooks() HookPlan { return cloneHookPlan(plan.hooks) }
 
-// PlanApply 是 M1 apply/diff/dry-run/status 的唯一纯只读组合入口。它复用 runtime strict load，
+// PlanApply 是 M1 apply/diff/dry-run/status 的纯只读加载入口。它复用 runtime strict load，
 // 不获取 lock；任一阶段失败都返回零值 plan。
 func PlanApply(options ApplyOptions) (ApplyPlan, error) {
 	inputs, err := dotruntime.LoadReadOnly(options.Runtime, options.CLIVersion)
 	if err != nil {
 		return ApplyPlan{}, fmt.Errorf("%w: load runtime: %w", ErrApplyPlan, err)
 	}
-	plan, err := planApplyInputs(inputs, options)
+	plan, err := PlanLoadedApply(inputs, ApplyScopeOptions{
+		Modules: options.Modules,
+		Force:   options.Force,
+		NoPrune: options.NoPrune,
+	})
 	if err != nil {
 		return ApplyPlan{}, err
 	}
 	return plan, nil
 }
 
-func planApplyInputs(inputs dotruntime.LoadedInputs, options ApplyOptions) (ApplyPlan, error) {
+// PlanLoadedApply 只消费调用方已严格加载的不可变 inputs，不读取 config、manifest 或 state 文件。
+// mutation 调用方用它保证计划与持锁 `LoadedMutation.Inputs()` 来自同一份精确输入。
+func PlanLoadedApply(inputs dotruntime.LoadedInputs, options ApplyScopeOptions) (ApplyPlan, error) {
 	runContext := inputs.Context()
 	control := runContext.Control()
 	resolved, err := inputs.Manifest().Resolve(runContext.Profile(), goruntime.GOOS)

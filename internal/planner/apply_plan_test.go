@@ -211,6 +211,55 @@ func TestPlanApply_ComposesDeterministicFullAndPartialPlansWithoutWrites(t *test
 	}
 }
 
+func TestPlanLoadedApply_UsesExactLoadedStateWithoutReload(t *testing.T) {
+	fixture := newApplyIntegrationFixture(t)
+	fixture.redirectEnvironment(t)
+	options := fixture.options()
+	inputs, err := dotruntime.LoadReadOnly(options.Runtime, options.CLIVersion)
+	if err != nil {
+		t.Fatalf("LoadReadOnly() error = %v", err)
+	}
+
+	target := filepath.Join(fixture.home, "alpha", "stable.txt")
+	source := filepath.Join(fixture.repository, "modules", "alpha", "stable.txt")
+	if err := os.Symlink(source, target); err != nil {
+		t.Fatalf("os.Symlink(expected target) error = %v", err)
+	}
+	writeApplyState(t, fixture.statePath, map[string]applyStateEntry{
+		"~/alpha/stable.txt": {
+			Module:   "alpha",
+			Kind:     "symlink",
+			Source:   "modules/alpha/stable.txt",
+			LinkDest: source,
+		},
+	}, nil)
+
+	loadedPlan, err := PlanLoadedApply(inputs, ApplyScopeOptions{
+		Modules: []string{"alpha"},
+		NoPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("PlanLoadedApply() error = %v", err)
+	}
+	loadedAction := loadedPlan.FileActions()[1]
+	if loadedAction.Desired.Source != "stable.txt" ||
+		loadedAction.Verb != FileAdopt || loadedAction.Reason != FileReasonStateMetadata {
+		t.Fatalf("exact-input stable action = %#v, want L2 adopt from originally loaded missing record", loadedAction)
+	}
+
+	freshOptions := options
+	freshOptions.Modules = []string{"alpha"}
+	freshOptions.NoPrune = true
+	freshPlan, err := PlanApply(freshOptions)
+	if err != nil {
+		t.Fatalf("PlanApply(fresh) error = %v", err)
+	}
+	freshAction := freshPlan.FileActions()[1]
+	if freshAction.Desired.Source != "stable.txt" || freshAction.Verb != FileSkip {
+		t.Fatalf("fresh stable action = %#v, want skip from reloaded state", freshAction)
+	}
+}
+
 func TestPlanApply_PartialScopeSkipsUnrequestedTemplateRenderButNotFullCollision(t *testing.T) {
 	t.Run("unrequested template failure", func(t *testing.T) {
 		fixture := newApplyIntegrationFixture(t)
