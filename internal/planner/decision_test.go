@@ -219,6 +219,12 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 			want:   wantAction(ActionSkip, ReasonScaffoldPresent, StatePreserve),
 		},
 		{
+			name:   "S1a force does not replace existing target with current record",
+			target: scaffoldTarget(Observation{Kind: ObjectRegular, Mode: 0o600, Hash: "sha256:user"}, current, true),
+			force:  true,
+			want:   wantAction(ActionSkip, ReasonScaffoldPresent, StatePreserve),
+		},
+		{
 			name: "S1a existing target with stale metadata adopts",
 			target: scaffoldTarget(
 				Observation{Kind: ObjectDirectory, Mode: fs.ModeDir | 0o755},
@@ -226,6 +232,16 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 				true,
 			),
 			want: wantAction(ActionAdopt, ReasonStateMetadata, StateUpsert),
+		},
+		{
+			name: "S1a force only refreshes stale metadata without replacing target",
+			target: scaffoldTarget(
+				Observation{Kind: ObjectDirectory, Mode: fs.ModeDir | 0o755},
+				HistoricalState{Key: "~/.zshrc.local", Module: "old", Kind: StateScaffold, Source: "modules/old/local.template"},
+				true,
+			),
+			force: true,
+			want:  wantAction(ActionAdopt, ReasonStateMetadata, StateUpsert),
 		},
 		{
 			name:   "S1b regular target without record adopts",
@@ -245,6 +261,12 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 		{
 			name:   "S1b special target without record adopts",
 			target: scaffoldTarget(Observation{Kind: ObjectSpecial, Mode: fs.ModeNamedPipe | 0o600}, HistoricalState{}, false),
+			want:   wantAction(ActionAdopt, ReasonScaffoldPresent, StateUpsert),
+		},
+		{
+			name:   "S1b force still adopts existing target without replacing it",
+			target: scaffoldTarget(Observation{Kind: ObjectSymlink, LinkDest: "/user/link"}, HistoricalState{}, false),
+			force:  true,
 			want:   wantAction(ActionAdopt, ReasonScaffoldPresent, StateUpsert),
 		},
 		{
@@ -271,6 +293,21 @@ func TestDecide_ScaffoldTable(t *testing.T) {
 			target: scaffoldTarget(Observation{Kind: ObjectMissing}, current, true),
 			force:  true,
 			want:   wantAction(ActionScaffold, ReasonScaffoldRebuild, StateUpsert),
+		},
+		{
+			name: "S2 force rebuilds missing scaffold and refreshes stale metadata",
+			target: scaffoldTarget(
+				Observation{Kind: ObjectMissing},
+				HistoricalState{Key: "~/.old-local", Module: "old", Kind: StateScaffold, Source: "modules/old/local.template"},
+				true,
+			),
+			force: true,
+			want: decisionWant{
+				verb:        ActionScaffold,
+				reason:      ReasonScaffoldRebuild,
+				success:     StateUpsert,
+				previousKey: "~/.old-local",
+			},
 		},
 		{
 			name:   "S3 first missing scaffold is created",
