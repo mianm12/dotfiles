@@ -27,7 +27,8 @@ func (w *errorTrackingWriter) Write(data []byte) (int, error) {
 	return written, err
 }
 
-// commandOutput 分别跟踪 stdout 和 stderr 的首次写入错误。
+// commandOutput 分别跟踪 stdout 和 stderr 的首次写入错误。两个 stream 不构成事务，已经成功
+// 写出的内容不会回滚；需要在可信 verdict 前提交某项输出的命令必须自行检查对应 Write error。
 type commandOutput struct {
 	stdout errorTrackingWriter
 	stderr errorTrackingWriter
