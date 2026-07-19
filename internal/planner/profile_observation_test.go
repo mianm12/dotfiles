@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/manifest"
+	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/state"
 )
 
@@ -77,16 +78,27 @@ func TestObserveProfileTargets_MatchesHistoricalAliasAndKeepsOrphans(t *testing.
 	if len(orphans) != 1 || orphans[0].State.Key != "~/orphan" || orphans[0].Observed.Kind != ObjectRegular {
 		t.Fatalf("Orphans() = %#v, want only historical orphan", orphans)
 	}
+	wantOrphanResolution, err := paths.ResolveTarget(orphanTarget)
+	if err != nil {
+		t.Fatalf("paths.ResolveTarget(orphan) error = %v", err)
+	}
+	if !orphans[0].Resolution.Equal(wantOrphanResolution) {
+		t.Fatalf("orphan resolution does not match plan-time target identity: %#v", orphans[0])
+	}
 	if after := snapshotObservationTree(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("ObserveProfileTargets() changed fixture: before=%v after=%v", before, after)
 	}
 
 	targets[0].Observed.LinkDest = "changed"
 	orphans[0].Observed.Content[0] = 'X'
+	orphans[0].Resolution = paths.TargetResolution{}
 	againTargets := observed.Targets()
 	againOrphans := observed.Orphans()
 	if againTargets[0].Observed.LinkDest != "../../repository/source" || string(againOrphans[0].Observed.Content) != "user scaffold\n" {
 		t.Fatalf("mutating accessors changed observed set: targets=%#v orphans=%#v", againTargets, againOrphans)
+	}
+	if !againOrphans[0].Resolution.Equal(wantOrphanResolution) {
+		t.Fatalf("mutating orphan resolution copy changed observed set: %#v", againOrphans)
 	}
 }
 

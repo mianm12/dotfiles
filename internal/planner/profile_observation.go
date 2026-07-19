@@ -84,6 +84,7 @@ func ObserveProfileTargets(
 		}
 		orphans = append(orphans, OrphanTarget{
 			TargetPath: historical.targetPath,
+			Resolution: historical.resolution,
 			State:      historical.state,
 			Observed:   observed,
 		})

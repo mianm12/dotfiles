@@ -99,6 +99,7 @@ type ObservedTarget struct {
 // OrphanTarget 保存不匹配任何 current desired 的历史 entry 及其 current leaf 快照。
 type OrphanTarget struct {
 	TargetPath string
+	Resolution paths.TargetResolution
 	State      HistoricalState
 	Observed   Observation
 }
