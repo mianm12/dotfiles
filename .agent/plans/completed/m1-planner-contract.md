@@ -78,7 +78,8 @@ requirement 的封闭形态；CLI presentation 能在后续映射错误前保持
 - [x] 新增五项 mutation 回归，先证明旧校验会接受 P3 target delete、deferred action 激活、
   action/group 丢失和错误 `WouldDeleteTarget`；以 `69609c5` 重算并校验 canonical prune plan，
   以 `4930503` 修正 `FileActionClone` 测试命名。
-- [ ] 重新完成重复测试、完整门禁、独立复审和 plan closure。
+- [x] planner/CLI 20 次重复测试、完整 `make check`、Linux/amd64 交叉编译和 diff check 通过；
+  未参与实现的 reviewer 修复后重审完整分支 GO，无 unresolved P0–P3，完成第二次 plan closure。
 
 ## Milestones
 
@@ -152,6 +153,25 @@ Commit 边界：
 
     fix(planner): 闭合 action 前提结构校验
 
+### Milestone 4：校验 canonical prune plan
+
+合并前独立复核证明，既有 prune 校验只能拒绝局部畸形字段，不能证明 actions/groups 是同一
+observation、file decisions 与 scope 的唯一合法投影。先以五项 mutation 回归固定 P3 升级、
+deferred 激活、action/group 遗漏和 confirmation 摘要漂移，再让首次 planning 与 validation
+共用 scope options；validation 保留结构检查，并调用纯 `PlanPrune` 重算完整 canonical plan，
+逐项比较当前 `PruneAction` 全部字段和 confirmation groups，不手写第二份 P1/P2/P3 表。
+
+验收：
+
+- full、partial 与 no-prune 的 context 到 `PruneOptions` 映射一致。
+- P1/P2/P3、deferred、state effects、Precondition 与 confirmation 摘要不能独立漂移。
+- `PlanPrune` 重算无 IO、mutation 或 validation 回调，不产生递归或新依赖。
+
+Commit 边界：
+
+    fix(planner): 校验 canonical prune plan
+    test(planner): 明确 FileAction clone 测试名称
+
 ## Validation and Acceptance
 
 | 必须成立的性质 | 验证证据 | 状态 |
@@ -159,7 +179,7 @@ Commit 边界：
 | 正常 CLI 输出/退出码不变，写失败仍为 1 | CLI 窄测与新增 stderr failure 回归 | 通过 |
 | 三个 action family 边界明确且无兼容残余 | `rg`、planner/CLI 编译与测试 | 通过 |
 | source Precondition/closed reason fail closed | combined validation mutation tests | 通过 |
-| prune action/group 与 canonical plan 完全一致 | 五项 mutation 回归与纯 `PlanPrune` 重算 | 窄测通过 |
+| prune action/group 与 canonical plan 完全一致 | 五项 mutation 回归与纯 `PlanPrune` 重算 | 通过 |
 | planner/diff/status 保持只读与完整数据流 | 既有隔离 fixture、重复测试、race | 通过 |
 | 当前平台完整门禁 | `make check BINARY=/private/tmp/dot-m1-planner-contract-check` | 通过 |
 | 完整任务 diff 可审阅 | `git diff 6322af4...HEAD --check` 与独立复核 | 通过 |
@@ -249,35 +269,39 @@ package、循环或 IO helper。
 
 ## Outcomes and Handoff
 
-本计划因合并前复核发现有效 P1/P3 于 2026-07-19 reopen。下述内容是首次 closure 时的历史
-handoff；在 canonical prune plan 修复、完整复审与第二次 closure 完成前，本分支不再是
-merge-ready，main 继续保持在既有基线。
-
-本任务已在 `refactor/m1-planner-contract` 完成本地交付，main 保持 clean 且仍位于基线
-`6322af40e3b256f96e228b3a126a181ce2989f5b`；本计划未自行扩大授权合入 main。实现提交为：
+本任务已在 `refactor/m1-planner-contract` 完成第二次本地收口。main 与任务 worktree 均 clean，
+main 仍位于基线 `6322af40e3b256f96e228b3a126a181ce2989f5b`；本计划未自行扩大授权合入
+main。实现与回归提交为：
 
     cdb9868 docs(cli): 明确跨流输出失败边界
     dee1db7 test(cli): 固定计划输出失败语义
     8025f91 refactor(planner): 收窄 file action contract
     4751862 fix(planner): 闭合 action 前提结构校验
     5e931be fix(planner): 校验 canonical file decision
+    69609c5 fix(planner): 校验 canonical prune plan
+    4930503 test(planner): 明确 FileAction clone 测试名称
 
 交付结果是三个明确的 concrete action family；`FileAction` 不再携带 prune/hook 残余或冗余
 `HasDesired`。正常 plan/diff/dry-run/status 输出与退出码不变；跨 stream 写失败边界得到规范和
 零写入回归。combined validation 会拒绝 source shape、prune source、未知 reason、不可能
-verb/reason/kind tuple 及错误 state effect，同时不复制 L/S/P 决策表。
+verb/reason/kind tuple 及错误 state effect；prune validation 还会以纯 `PlanPrune` 拒绝
+P1/P2/P3、deferred、action/group 集合和 confirmation 摘要漂移。file 与 prune 都复用已有纯
+planner 作为 semantic oracle，没有复制 L/S/P 或 P1/P2/P3 决策表。
 
 最终本地证据：
 
-    go test ./internal/planner -run 'TestValidateApplyPlan' -count=1
     go test ./internal/planner ./internal/cli -count=20
     git diff 6322af40e3b256f96e228b3a126a181ce2989f5b...HEAD --check
     make check BINARY=/private/tmp/dot-m1-planner-contract-check
+    GOOS=linux GOARCH=amd64 go build -trimpath -o /private/tmp/dot-m1-planner-contract-linux-amd64 ./cmd/dot
 
 以上均退出 0；`make check` 包含 tidy/fmt check、lint 0 issues、全仓 race、build 与隔离
-doctor-manifest。未参与实现的 reviewer 从基线审查完整分支，首轮 P2 以新 commit 修复，第二轮
-完整重审 GO，无 unresolved P0–P3 finding；其独立 `make check` 也通过。本机实际运行平台为
-Darwin/arm64；未 push，远端 macOS/Linux CI 与 Linux 实机未运行：本地验收通过、远端待验收。
+doctor-manifest。合并前独立复核发现的 prune canonical P1 与测试命名 P3 均以新 commits 修复；
+未参与实现的 reviewer 随后从基线重审完整分支，独立覆盖 mutation、full/partial/no-prune、
+planner/CLI 与输出失败回归并给出 GO，无 unresolved P0–P3 finding。
+
+本机实际运行平台为 Darwin/arm64；Linux/amd64 只完成交叉编译，未 push，远端 macOS/Linux CI
+与 Linux 实机未运行：本地验收通过、远端待验收。
 
 未实现 executor、mutation、state builder、backup、真实 apply/add、M2/M3 能力或新依赖；这些
 仍按 roadmap 留待后续 Checkpoint。
