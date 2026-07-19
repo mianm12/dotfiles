@@ -370,6 +370,80 @@ func TestValidateApplyPlan_RejectsInconsistentAction(t *testing.T) {
 	}
 }
 
+func TestValidateApplyPlan_RejectsInvalidActionShape(t *testing.T) {
+	tests := []struct {
+		name   string
+		force  bool
+		mutate func(*testing.T, *ApplyPlan)
+		want   string
+	}{
+		{
+			name: "create-link without regular source requirement",
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				index := fileActionIndex(t, plan.fileActions, FileCreateLink)
+				plan.fileActions[index].Precondition.SourcePath = ""
+				plan.fileActions[index].Precondition.RequireRegularSource = false
+			},
+			want: "regular source",
+		},
+		{
+			name:  "backup-replace with mismatched source",
+			force: true,
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				index := fileActionIndex(t, plan.fileActions, FileBackupReplace)
+				plan.fileActions[index].Precondition.SourcePath = filepath.Join(plan.context.Repository, "wrong-source")
+			},
+			want: "regular source",
+		},
+		{
+			name: "conflict with source requirement",
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				index := fileActionIndex(t, plan.fileActions, FileConflict)
+				plan.fileActions[index].Precondition.SourcePath = plan.fileActions[index].Desired.SourcePath
+				plan.fileActions[index].Precondition.RequireRegularSource = true
+			},
+			want: "must not require source",
+		},
+		{
+			name: "unknown file reason",
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				index := fileActionIndex(t, plan.fileActions, FileConflict)
+				plan.fileActions[index].Reason = FileReason("future")
+			},
+			want: "unsupported reason",
+		},
+		{
+			name: "prune with source requirement",
+			mutate: func(t *testing.T, plan *ApplyPlan) {
+				t.Helper()
+				if len(plan.prune.actions) == 0 {
+					t.Fatal("fixture has no prune action")
+				}
+				plan.prune.actions[0].Precondition.SourcePath = filepath.Join(plan.context.Repository, "unexpected-source")
+				plan.prune.actions[0].Precondition.RequireRegularSource = true
+			},
+			want: "must not require source",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newApplyIntegrationFixture(t)
+			fixture.redirectEnvironment(t)
+			options := fixture.options()
+			options.Force = test.force
+			plan, err := PlanApply(options)
+			if err != nil {
+				t.Fatalf("PlanApply() error = %v", err)
+			}
+			test.mutate(t, &plan)
+			if err := validateApplyPlan(plan); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateApplyPlan() error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestPlanApply_RejectsActivePruneAncestorOfCompleteDesired(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -666,6 +740,17 @@ func applyFileActionKeys(actions []FileAction) []string {
 		keys[index] = action.Desired.Module + "/" + action.Desired.Source
 	}
 	return keys
+}
+
+func fileActionIndex(t *testing.T, actions []FileAction, verb FileVerb) int {
+	t.Helper()
+	for index, action := range actions {
+		if action.Verb == verb {
+			return index
+		}
+	}
+	t.Fatalf("fixture has no %q file action", verb)
+	return -1
 }
 
 func applyHookActionKeys(actions []HookAction) []string {

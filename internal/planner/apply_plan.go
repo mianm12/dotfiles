@@ -425,13 +425,19 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 		if !samePlannerDesired(action.Desired, target.Desired) {
 			return fmt.Errorf("file action %d does not match scoped desired", index)
 		}
-		if action.Target != target.Desired.Target || action.Reason == "" {
-			return fmt.Errorf("file action %d has invalid target or reason", index)
+		if action.Target != target.Desired.Target {
+			return fmt.Errorf("file action %d has invalid target", index)
+		}
+		if !isSupportedFileReason(action.Reason) {
+			return fmt.Errorf("file action %q uses unsupported reason %q", action.Target, action.Reason)
 		}
 		if action.Precondition.TargetPath != target.Desired.TargetPath ||
 			!action.Precondition.TargetResolution.Equal(target.Resolution) ||
 			!sameObservation(action.Precondition.Observed, target.Observed) {
 			return fmt.Errorf("file action %q has inconsistent Precondition", action.Target)
+		}
+		if err := validateFileSourcePrecondition(action); err != nil {
+			return err
 		}
 		if action.OnFailure.Kind != StatePreserve {
 			return fmt.Errorf("file action %q failure effect must preserve state", action.Target)
@@ -450,6 +456,48 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 		}
 	}
 	return nil
+}
+
+func validateFileSourcePrecondition(action FileAction) error {
+	switch action.Verb {
+	case FileCreateLink, FileBackupReplace:
+		if !action.Precondition.RequireRegularSource ||
+			action.Precondition.SourcePath != action.Desired.SourcePath ||
+			!filepath.IsAbs(action.Precondition.SourcePath) {
+			return fmt.Errorf(
+				"file action %q %q must require its desired regular source",
+				action.Target,
+				action.Verb,
+			)
+		}
+	case FileSkip, FileScaffold, FileAdopt, FileConflict:
+		if action.Precondition.RequireRegularSource || action.Precondition.SourcePath != "" {
+			return fmt.Errorf("file action %q %q must not require source", action.Target, action.Verb)
+		}
+	}
+	return nil
+}
+
+func isSupportedFileReason(reason FileReason) bool {
+	switch reason {
+	case FileReasonTargetMissing,
+		FileReasonExpectedLink,
+		FileReasonStateMetadata,
+		FileReasonOwnedLinkStale,
+		FileReasonLinkDrift,
+		FileReasonUnownedLink,
+		FileReasonRegularConflict,
+		FileReasonDirectoryConflict,
+		FileReasonSpecialConflict,
+		FileReasonScaffoldPresent,
+		FileReasonScaffoldDeleted,
+		FileReasonScaffoldRebuild,
+		FileReasonOwnedLinkToScaffold,
+		FileReasonReleaseOwnershipToScaffold:
+		return true
+	default:
+		return false
+	}
 }
 
 func validatePrunePlan(context ApplyContext, profile ObservedProfile, plan PrunePlan) error {
@@ -482,6 +530,9 @@ func validatePrunePlan(context ApplyContext, profile ObservedProfile, plan Prune
 			!action.Precondition.TargetResolution.Equal(orphan.Resolution) ||
 			!sameObservation(action.Precondition.Observed, orphan.Observed) {
 			return fmt.Errorf("prune action %q has inconsistent Precondition", action.Target)
+		}
+		if action.Precondition.RequireRegularSource || action.Precondition.SourcePath != "" {
+			return fmt.Errorf("prune action %q must not require source", action.Target)
 		}
 		if action.OnFailure.Kind != StatePreserve {
 			return fmt.Errorf("prune action %q failure effect must preserve state", action.Target)
