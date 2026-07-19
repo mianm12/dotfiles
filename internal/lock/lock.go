@@ -20,19 +20,28 @@ var (
 )
 
 // Ownership 表示一次 mutation 周期持有的排他锁所有权。
-// 调用方必须显式传递它来复用嵌套流程，零值无效。
+// 调用方必须显式传递它来复用嵌套流程；值副本共享同一根引用，零值无效。
 type Ownership struct {
-	mu           sync.Mutex
-	backend      backend
-	root         string
-	path         string
-	references   int
-	rootReleased bool
+	reference *ownershipReference
 }
 
-// Guard 表示从 Ownership 复用的一份嵌套所有权引用。
+// Guard 表示从 Ownership 复用的一份嵌套所有权引用；值副本共享同一引用。
 type Guard struct {
-	owner    *Ownership
+	reference *ownershipReference
+}
+
+type ownershipState struct {
+	mu         sync.Mutex
+	backend    backend
+	root       string
+	path       string
+	references int
+}
+
+// ownershipReference 是一个只能成功释放一次的逻辑引用。
+// 外层 handle 的值副本共享该 token，不能各自消费 owner 的引用计数。
+type ownershipReference struct {
+	owner    *ownershipState
 	released bool
 }
 
@@ -58,17 +67,22 @@ func Acquire(root, path string) (*Ownership, error) {
 	if !locked {
 		return nil, fmt.Errorf("%w: %q", ErrBusy, cleanPath)
 	}
-	return &Ownership{
+	return newOwnership(fileLock, cleanRoot, cleanPath), nil
+}
+
+func newOwnership(fileLock backend, root, path string) *Ownership {
+	state := &ownershipState{
 		backend:    fileLock,
-		root:       cleanRoot,
-		path:       cleanPath,
+		root:       root,
+		path:       path,
 		references: 1,
-	}, nil
+	}
+	return &Ownership{reference: &ownershipReference{owner: state}}
 }
 
 // Reuse 为同一 root/path 的嵌套流程创建 guard，不再次获取 OS lock。
 func (owner *Ownership) Reuse(root, path string) (*Guard, error) {
-	if owner == nil {
+	if owner == nil || owner.reference == nil || owner.reference.owner == nil {
 		return nil, ErrOwnership
 	}
 	cleanRoot, cleanPath, err := cleanPair(root, path)
@@ -76,50 +90,56 @@ func (owner *Ownership) Reuse(root, path string) (*Guard, error) {
 		return nil, fmt.Errorf("%w: %w", ErrOwnership, err)
 	}
 
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	if owner.rootReleased || owner.references < 1 || owner.backend == nil {
+	reference := owner.reference
+	state := reference.owner
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if reference.released || state.references < 1 || state.backend == nil {
 		return nil, ErrOwnership
 	}
-	if cleanRoot != owner.root || cleanPath != owner.path {
-		return nil, fmt.Errorf("%w: owner is bound to %q and %q", ErrOwnership, owner.root, owner.path)
+	if cleanRoot != state.root || cleanPath != state.path {
+		return nil, fmt.Errorf("%w: owner is bound to %q and %q", ErrOwnership, state.root, state.path)
 	}
-	owner.references++
-	return &Guard{owner: owner}, nil
+	state.references++
+	return &Guard{reference: &ownershipReference{owner: state}}, nil
 }
 
 // Release 释放外层 owner 的引用；仍有嵌套 guard 时不会提前解除 OS lock。
 func (owner *Ownership) Release() error {
-	if owner == nil {
+	if owner == nil || owner.reference == nil {
 		return ErrOwnership
 	}
-	return owner.release(&owner.rootReleased)
+	return owner.reference.release()
 }
 
 // Release 释放一份嵌套引用；只有最后一份所有权释放时才解除 OS lock。
 func (guard *Guard) Release() error {
-	if guard == nil || guard.owner == nil {
+	if guard == nil || guard.reference == nil {
 		return ErrOwnership
 	}
-	return guard.owner.release(&guard.released)
+	return guard.reference.release()
 }
 
-func (owner *Ownership) release(released *bool) error {
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	if *released || owner.references < 1 || owner.backend == nil {
+func (reference *ownershipReference) release() error {
+	if reference == nil || reference.owner == nil {
 		return ErrOwnership
 	}
-	if owner.references > 1 {
-		*released = true
-		owner.references--
+	state := reference.owner
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if reference.released || state.references < 1 || state.backend == nil {
+		return ErrOwnership
+	}
+	if state.references > 1 {
+		reference.released = true
+		state.references--
 		return nil
 	}
-	if err := owner.backend.Unlock(); err != nil {
-		return fmt.Errorf("%w: release process lock %q: %w", ErrIO, owner.path, err)
+	if err := state.backend.Unlock(); err != nil {
+		return fmt.Errorf("%w: release process lock %q: %w", ErrIO, state.path, err)
 	}
-	*released = true
-	owner.references = 0
+	reference.released = true
+	state.references = 0
 	return nil
 }
 
