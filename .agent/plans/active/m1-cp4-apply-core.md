@@ -65,7 +65,11 @@ executor、可验证 state transition，以及基于同一 locked `LoadedInputs`
 - [x] 2026-07-20：`feat/apply-link` 完成 L1/L2、L3、source 模块边界与最终 no-clobber；
   独立完整复核 GO、无 P0–P3。closure 后 main 以 `f4522b0` fast-forward-only 集成，合入后
   窄测与 `make check BINARY=/private/tmp/dot-m1-cp4-main-after-link` 通过。
-- [ ] 按 DAG 完成剩余两个 Milestone 的实现、review → fix → review、freshness、closure 与 main 集成。
+- [x] 2026-07-20：`feat/apply-scaffold` 完成 S1a–S3 当前子集、state-only 补录、双向 kind
+  migration、no-clobber 完整发布与 hard-link 隔离；独立完整复核 GO、无 P0–P3。closure 后
+  main 以 `061b783` fast-forward-only 集成，合入后窄测与
+  `make check BINARY=/private/tmp/dot-m1-cp4-main-after-scaffold` 通过。
+- [ ] 按 DAG 完成 `feat/apply-runtime` 的实现、review → fix → review、freshness、closure 与 main 集成。
 - [ ] 从 checkpoint base 完成三路独立 Checkpoint Acceptance，处理有效 finding。
 - [ ] 将最终 main 合入 coordinator、更新 Outcomes/Handoff、迁移计划并以纯计划 commit 收口，
   再 fast-forward-only 合入 main。
