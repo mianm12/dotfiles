@@ -4,10 +4,12 @@
 它的数据保护目标是避免工具自身的 bug 误删或误覆盖用户数据，不把恶意仓库、恶意 hook、
 被攻陷的本机或主动并发篡改当作需要对抗的环境。
 
-项目正在实现 M1。目前已提供只读的 `dot version` 和 `dot doctor --manifest-only`；后者
-检查仓库 manifest、当前 GOOS 下各 profile 的 effective 路径边界、模板和 Git index 中已跟踪的
-`*.local`，不读取机器配置或 state，也不取锁。裸 `dot doctor` 的完整环境巡检属于 M2；当前会
-明确提示改用 `--manifest-only` 并失败，不把静态子集伪装成完整检查。其他命令以
+项目正在实现 M1。目前已提供只读的 `dot version`、`dot doctor --manifest-only`、`dot diff`
+和 `dot apply --dry-run`。后两者通过同一个严格 planner 展示 file、prune 与 run_once hook 计划，
+不取锁，也不写 target、state 或 backup；真实 `dot apply` 在 executor 交付前会明确拒绝。
+`doctor --manifest-only` 检查仓库 manifest、当前 GOOS 下各 profile 的 effective 路径边界、模板和
+Git index 中已跟踪的 `*.local`，不读取机器配置或 state。裸 `dot doctor` 的完整环境巡检属于
+M2；当前会明确提示改用 `--manifest-only` 并失败，不把静态子集伪装成完整检查。其他命令以
 [路线图](docs/09-roadmap.md)为准，未实现能力不会以静默降级替代。
 
 当前受版本管理的根 `dot.toml` 只有空的 `mac` profile，`modules/` 尚未建立。`mac` 只是 profile
