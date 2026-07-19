@@ -61,6 +61,12 @@ observation、history 与 action 骨架；`ObserveProfileTargets` 已完成 desi
 - [x] 2026-07-19：planner 20 次重复与 race、Darwin/Linux amd64 测试二进制交叉编译、
   `git diff 712ab85...HEAD --check` 和完整 `make check` 全部通过；worker handoff 保持计划 active，
   等待 coordinator 安排独立复核。
+- [x] 2026-07-19：Wave 2 首轮 reviewer 提出两项有效 finding：action Precondition 丢失 plan-time
+  target identity，且 scaffold force 短路缺少显式回归。先以真实 ancestor symlink A→B 改指测试
+  复现 leaf 表象相同但 identity 已变化，以 `1905b15` 把不透明 `TargetResolution` 从 observation
+  传到所有 action；再以 `5ea7a91` 固定 S1a/S1b force 不替换和 S2 stale+force 优先重建。
+- [x] 2026-07-19：review fix 后 planner/paths 20 次重复与 race、Darwin/Linux amd64 planner
+  交叉编译、完整 branch diff check 与 `make check` 再次全部通过；等待完整 branch 复审。
 
 ## Milestones
 
@@ -130,6 +136,8 @@ Commit 边界：
 | metadata adopt、force 与 state effect | action payload tests | 本机通过 |
 | symlink↔scaffold M1 migration | migration table tests | 本机通过 |
 | managed/rendered fail closed | invalid-kind tests | 本机通过 |
+| 祖先 symlink 改指使 target identity Precondition 失配 | real filesystem regression | 本机通过 |
+| S1a/S1b/S2 force 短路 | scaffold decision matrix | 本机通过 |
 | 当前平台完整门禁 | `make check` | 本机通过 |
 | Darwin/Linux 构建 | amd64 planner test binaries | 交叉编译通过，Linux 未实机运行 |
 | 远端 macOS/Linux CI | 精确 branch HEAD | 待验收（本 worker 不 push） |
@@ -137,15 +145,16 @@ Commit 边界：
 ## Safety, Authorization, and Recovery
 
 本任务授权仅覆盖 `/private/tmp/dot-cp3-decision-engine-019f795e` 中当前 branch 的计划、planner
-代码、测试、stage 与语义 commits。实现是纯函数；测试不需要 HOME/repo/state fixture，不读取
-私人数据。失败保留最近成功 commit，以新 commit 修复；不切 branch，不 merge、amend、rebase、
-reset、force，不操作 main/coordinator/其他 worktree。
+代码、测试、stage 与语义 commits。实现是纯函数；测试只在 `t.TempDir()` 合成 HOME/root 内
+创建目录、普通文件和 symlink，state 路径保持缺失，不读取私人数据。失败保留最近
+成功 commit，以新 commit 修复；不切 branch，不 merge、amend、rebase、reset、force，不操作
+main/coordinator/其他 worktree。
 
 ## Interfaces and Dependencies
 
 decision 消费 `ObservedTarget`，返回自包含 `Action` 与 error。`Owned` 是 decision 与后续 prune
 共享的唯一所有权入口；action 的 state effect 表达计划语义，不负责构造或持久化 `state.Snapshot`。
-只依赖标准库及当前 `internal/planner` model。
+只依赖标准库、当前 `internal/planner` model 与既有 `internal/paths` 不透明 resolution。
 
 ## Surprises & Discoveries
 
@@ -160,6 +169,13 @@ decision 消费 `ObservedTarget`，返回自包含 `Action` 与 error。`Owned` 
   只 upsert 新展示 key，旧 key 会残留并在下次 strict load 形成重复 target identity。
   Evidence: `ObservedTarget.State.Key` 可以与 `Desired.Target` 不同，二者仍是同一 identity。
   Impact: `StateEffect.PreviousKey` 明确要求 upsert 同一提交摘除旧 alias；失败分支仍 preserve。
+
+- Observation: leaf 的 kind/link text/content/mode 全部不变，仍不能证明 plan-time target 的逻辑
+  位置未改变；既有祖先 symlink 可以在 plan 后从目录 A 改指目录 B，而两侧 leaf 都同为 missing。
+  Evidence: reviewer finding 的真实文件系统回归在 `HOME/root/A`、`B` 与 `HOME/current` ancestor
+  symlink 上稳定复现；改指前后 `Observation` 相同而 `paths.TargetResolution.Equal` 为 false。
+  Impact: `ObservedTarget` 和所有 `Action.Precondition` 保存同一个不透明 plan-time resolution；
+  executor 必须执行时重新解析并比较，同时重新运行 control-plane boundary，不能只复核 leaf。
 
 ## Decision Log
 
@@ -182,11 +198,17 @@ decision 消费 `ObservedTarget`，返回自包含 `Action` 与 error。`Owned` 
   迁入 scaffold 的安全原则则要求非-owned 对象永不因 force 被替换。
   Date: 2026-07-19
 
+- Decision: 直接携带 `paths.TargetResolution` 不透明值，不在 planner 复制 identity/ancestor 字段。
+  Rationale: paths 是 target identity 与遍历拓扑的单一真相源；该类型不暴露可变内部存储，值复制
+  保持只读 snapshot 语义，也避免 planner 建立第二套路径表示。
+  Date: 2026-07-19
+
 ## Outcomes and Handoff
 
 worker 实现与本地验证完成，计划按 Checkpoint 流程保持 active，等待独立 review。branch base 为
 `712ab85`；语义 commits 为计划起点 `e5e4730`、完整 M1 ownership/L/S 决策与 action model
-`118f98e`、M1 kind migration `e6fe61b`，以及本次验证记录。
+`118f98e`、M1 kind migration `e6fe61b`、首轮验证 `4d9cadd`、target identity Precondition 修复
+`1905b15` 与 scaffold force 回归 `5ea7a91`，以及本次 review fix 验证记录。
 
 实现新增纯函数 `Owned` 与 `Decide`。完整 L1–L6、S1a–S3 及 force 分支均产生带稳定 reason、
 target/source Precondition、desired payload 和成功/失败 state effect 的 action；metadata adopt
@@ -194,8 +216,13 @@ target/source Precondition、desired payload 和成功/失败 state effect 的 a
 scaffold state 释放所有权；scaffold→link 按无记录 L 表决策且冲突/失败保留旧记录。不支持的
 managed/rendered/未知 object kind 返回 `ErrUnsupportedDecisionInput` 和零值 action。
 
-本机 Darwin/arm64 上 planner 20 次重复与 race、全仓
-`make check BINARY=/private/tmp/dot-cp3-decision-engine-check/dot`、完整 branch diff check 均通过；
-Darwin/Linux amd64 planner 测试二进制交叉编译通过，Linux 未实机运行。未新增依赖，未修改
+首轮 review 的 P1 已通过 plan-time `TargetResolution` 闭合：所有 decision action 保存
+observation 阶段的同一 identity snapshot，真实 ancestor symlink 改指即使 leaf 表象相同也会使
+执行时重新解析结果失配；未来 executor 仍须重新校验 control-plane boundary。P2 以独立测试
+证明 S1a/S1b 的 force 不触碰现有 target，只有 S2 target 缺失时 force 才优先重建。
+
+本机 Darwin/arm64 上 review fix 后 planner/paths 20 次重复与 race、全仓
+`make check BINARY=/private/tmp/dot-cp3-decision-engine-review-fix-check/dot`、完整 branch diff check
+均通过；Darwin/Linux amd64 planner 测试二进制交叉编译通过，Linux 未实机运行。未新增依赖，未修改
 manifest/runtime/state store、CLI 或 executor。精确 branch HEAD 的远端 macOS/Linux CI 未运行，
 因此结论为“本地验收通过、远端待验收”。
