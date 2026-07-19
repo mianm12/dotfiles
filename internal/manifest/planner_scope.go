@@ -23,6 +23,7 @@ type HookDescriptor struct {
 type ScopedProfile struct {
 	name    string
 	goos    string
+	home    string
 	full    bool
 	modules []string
 	entries []DesiredEntry
@@ -34,6 +35,9 @@ func (profile ValidatedProfile) Name() string { return profile.name }
 
 // GOOS 返回 effective profile 的目标 GOOS。
 func (profile ValidatedProfile) GOOS() string { return profile.goos }
+
+// Home 返回完整路径校验绑定的 clean effective HOME。
+func (profile ValidatedProfile) Home() string { return profile.home }
 
 // Modules 返回当前 GOOS 上按字节序排列的 effective module 名。
 func (profile ValidatedProfile) Modules() []string {
@@ -49,15 +53,22 @@ func (profile ValidatedProfile) RenderScope(
 	if profile.name == "" || !isSupportedGOOS(profile.goos) {
 		return ScopedProfile{}, fmt.Errorf("validated profile is invalid")
 	}
-	effective := profile.Modules()
-	selected, full, err := selectEffectiveModules(effective, requested)
-	if err != nil {
-		return ScopedProfile{}, fmt.Errorf("profile %q scope: %w", profile.name, err)
-	}
 	renderProfile := ResolvedProfile{name: profile.name, goos: profile.goos, dataKeys: profile.dataKeys}
 	renderContext, err := renderProfile.validateRuntimeContext(context)
 	if err != nil {
 		return ScopedProfile{}, err
+	}
+	if renderContext.Home != profile.home {
+		return ScopedProfile{}, fmt.Errorf(
+			"runtime HOME %q does not match validated HOME %q",
+			renderContext.Home,
+			profile.home,
+		)
+	}
+	effective := profile.Modules()
+	selected, full, err := selectEffectiveModules(effective, requested)
+	if err != nil {
+		return ScopedProfile{}, fmt.Errorf("profile %q scope: %w", profile.name, err)
 	}
 	selectedSet := make(map[string]struct{}, len(selected))
 	for _, module := range selected {
@@ -76,6 +87,7 @@ func (profile ValidatedProfile) RenderScope(
 	return ScopedProfile{
 		name:    profile.name,
 		goos:    profile.goos,
+		home:    profile.home,
 		full:    full,
 		modules: selected,
 		entries: rendered,
@@ -88,6 +100,9 @@ func (profile ScopedProfile) Name() string { return profile.name }
 
 // GOOS 返回 effective profile 的目标 GOOS。
 func (profile ScopedProfile) GOOS() string { return profile.goos }
+
+// Home 返回完整路径校验和 scope render 共用的 clean effective HOME。
+func (profile ScopedProfile) Home() string { return profile.home }
 
 // Full 报告调用方是否选择完整 effective profile，而非显式 module scope。
 func (profile ScopedProfile) Full() bool { return profile.full }

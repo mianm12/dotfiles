@@ -54,6 +54,48 @@ func TestValidatedProfileRenderScope_RendersOnlyRequestedModule(t *testing.T) {
 	}
 }
 
+func TestValidatedProfileRenderScope_RejectsDifferentValidatedHomeWithoutWrites(t *testing.T) {
+	root := t.TempDir()
+	validatedHome := filepath.Join(root, "home-a")
+	otherHome := filepath.Join(root, "home-b")
+	repository := filepath.Join(root, "repository")
+	control := writeGlobalControlFixture(t, validatedHome, repository)
+	if err := os.Mkdir(otherHome, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", otherHome, err)
+	}
+	moduleRoot := filepath.Join(repository, "modules", "app")
+	writeSourceFile(t, moduleRoot, "config.template", "home={{ .Home }}\n")
+	writeSourceFile(t, moduleRoot, "hooks/setup", "#!/bin/sh\n")
+	profile := testResolvedProfile(ResolvedModule{
+		Name:       "app",
+		SourceDir:  moduleRoot,
+		TargetRoot: "~/app",
+		RunOnce:    []string{"hooks/setup"},
+	})
+	validated, err := profile.ValidatePathBoundaries(control)
+	if err != nil {
+		t.Fatalf("ValidatePathBoundaries() error = %v", err)
+	}
+	before := snapshotTree(t, root)
+	context := testRuntimeContext(otherHome)
+	copyOfValidated := validated
+	copyOfValidated.home = otherHome
+	if validated.Home() != filepath.Clean(validatedHome) {
+		t.Fatalf("mutating capability copy changed validated HOME: %q", validated.Home())
+	}
+
+	scoped, err := validated.RenderScope(nil, context)
+	if err == nil || !strings.Contains(err.Error(), "does not match validated HOME") {
+		t.Fatalf("RenderScope(other HOME) = (%#v, %v), want validated HOME mismatch", scoped, err)
+	}
+	if scoped.Entries() != nil || scoped.Hooks() != nil || scoped.Modules() != nil {
+		t.Fatalf("RenderScope(other HOME) returned partial scope: %#v", scoped)
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("RenderScope(other HOME) changed fixture: before=%v after=%v", before, after)
+	}
+}
+
 func TestValidatedProfileRenderScope_ValidatesEffectiveModules(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")

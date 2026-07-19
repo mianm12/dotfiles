@@ -43,6 +43,7 @@ type RuntimeContext struct {
 type ValidatedProfile struct {
 	name     string
 	goos     string
+	home     string
 	dataKeys []string
 	modules  []ResolvedModule
 	entries  []DesiredEntry
@@ -115,7 +116,11 @@ func (p ResolvedProfile) validateTargetStructure(home string) ([]DesiredEntry, e
 func (p ResolvedProfile) ValidatePathBoundaries(
 	controlPaths paths.ControlPlanePaths,
 ) (ValidatedProfile, error) {
-	entries, targets, err := p.targetStructure(controlPaths.EffectiveHome())
+	home, err := cleanEffectiveHome(controlPaths.EffectiveHome())
+	if err != nil {
+		return ValidatedProfile{}, err
+	}
+	entries, targets, err := p.targetStructure(home)
 	if err != nil {
 		return ValidatedProfile{}, err
 	}
@@ -125,6 +130,7 @@ func (p ResolvedProfile) ValidatePathBoundaries(
 	return ValidatedProfile{
 		name:     p.name,
 		goos:     p.goos,
+		home:     home,
 		dataKeys: append([]string(nil), p.dataKeys...),
 		modules:  cloneResolvedModules(p.modules),
 		entries:  entries,
