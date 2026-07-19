@@ -88,6 +88,7 @@ func (context RunContext) Data() map[string]string { return context.machine.Data
 type InitContext struct {
 	control         ControlContext
 	existing        MachineContext
+	valid           bool
 	configExists    bool
 	profileOverride Override
 }
@@ -96,11 +97,11 @@ type InitContext struct {
 func (context InitContext) Control() ControlContext { return context.control }
 
 // ConfigMissing 报告初次严格读取时机器配置是否确认缺失。
-func (context InitContext) ConfigMissing() bool { return !context.configExists }
+func (context InitContext) ConfigMissing() bool { return context.valid && !context.configExists }
 
 // ExistingMachine 返回已有机器配置的不可变快照；配置缺失时 ok 为 false。
 func (context InitContext) ExistingMachine() (machine MachineContext, ok bool) {
-	if !context.configExists {
+	if !context.valid || !context.configExists {
 		return MachineContext{}, false
 	}
 	return context.existing, true
@@ -108,6 +109,9 @@ func (context InitContext) ExistingMachine() (machine MachineContext, ok bool) {
 
 // ProfileOverride 返回 init 调用显式提供的 profile；未提供时 ok 为 false。
 func (context InitContext) ProfileOverride() (profile string, ok bool) {
+	if !context.valid {
+		return "", false
+	}
 	return context.profileOverride.Value, context.profileOverride.Set
 }
 
@@ -153,6 +157,7 @@ func (resolver Resolver) PreflightInit(overrides Overrides) (InitContext, error)
 	return InitContext{
 		control:         loaded.control,
 		existing:        machineContext(loaded.machine),
+		valid:           true,
 		configExists:    loaded.configExists,
 		profileOverride: overrides.Profile,
 	}, nil

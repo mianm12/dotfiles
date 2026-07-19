@@ -9,8 +9,14 @@ import (
 	"github.com/mianm12/dotfiles/internal/state"
 )
 
-// ErrSessionClosed 表示调用方试图消费已经关闭或无效的 runtime session。
-var ErrSessionClosed = errors.New("runtime session is closed")
+var (
+	// ErrSessionClosed 表示调用方试图消费已经关闭或无效的 runtime session。
+	ErrSessionClosed = errors.New("runtime session is closed")
+	// ErrSessionOrder 表示调用方没有按 role session 规定的阶段顺序消费 capability。
+	ErrSessionOrder = errors.New("runtime session operation is out of order")
+	// ErrNestedMutationActive 表示同一外层 ownership 已有一个未成功关闭的 child mutation。
+	ErrNestedMutationActive = errors.New("nested mutation session is already active")
+)
 
 type leaseReleaser interface {
 	Release() error
@@ -23,6 +29,9 @@ type sessionLease struct {
 	owner    *lock.Ownership
 	releaser leaseReleaser
 	closed   bool
+
+	childActive bool
+	onClose     func()
 }
 
 func newSessionLease(owner *lock.Ownership, releaser leaseReleaser) *sessionLease {
@@ -54,7 +63,18 @@ func (lease *sessionLease) close() error {
 		return fmt.Errorf("close runtime session: %w", err)
 	}
 	lease.closed = true
+	if lease.onClose != nil {
+		onClose := lease.onClose
+		lease.onClose = nil
+		onClose()
+	}
 	return nil
+}
+
+func (lease *sessionLease) childClosed() {
+	lease.mu.Lock()
+	lease.childActive = false
+	lease.mu.Unlock()
 }
 
 // MutationSession 持有普通 mutation 完整周期的锁和可信运行上下文。
@@ -62,6 +82,21 @@ type MutationSession struct {
 	lease      *sessionLease
 	context    RunContext
 	operations loadingOperations
+
+	loaded         *LoadedMutation
+	stateCommitted bool
+}
+
+// LoadedMutation 是成功完成 requires、strict manifest、state 与路径校验后获得的提交 capability。
+// 它只由 MutationSession.Load 创建；零值或加载失败不会获得 state 提交权限。
+type LoadedMutation struct {
+	session *MutationSession
+	inputs  LoadedInputs
+}
+
+// Inputs 返回本次成功加载的不可变输入。
+func (mutation *LoadedMutation) Inputs() LoadedInputs {
+	return mutation.inputs
 }
 
 // BeginMutation 在严格 preflight 后取得 mutation 锁，但不读取 requires、manifest 或 state。
@@ -93,32 +128,53 @@ func beginMutation(overrides Overrides, operations loadingOperations) (*Mutation
 
 // Load 在 session 已持锁的前提下按 requires、strict manifest、state 顺序加载可信输入。
 // 失败不会自动关闭 session；调用方仍负责 Close 并处理其错误。
-func (session *MutationSession) Load(cliVersion string) (LoadedInputs, error) {
+func (session *MutationSession) Load(cliVersion string) (*LoadedMutation, error) {
 	if session == nil {
-		return LoadedInputs{}, ErrSessionClosed
+		return nil, ErrSessionClosed
 	}
 	unlock, err := session.lease.lockActive()
 	if err != nil {
-		return LoadedInputs{}, err
+		return nil, err
 	}
 	defer unlock()
-	return loadFull(session.context, cliVersion, session.operations)
+	if session.loaded != nil {
+		return nil, fmt.Errorf("%w: mutation inputs already loaded", ErrSessionOrder)
+	}
+	inputs, err := loadFull(session.context, cliVersion, session.operations)
+	if err != nil {
+		return nil, err
+	}
+	mutation := &LoadedMutation{session: session, inputs: inputs}
+	session.loaded = mutation
+	return mutation, nil
 }
 
-// CommitState 在同一活动 mutation session 下把 Snapshot 原子发布到可信 state 路径。
-func (session *MutationSession) CommitState(snapshot state.Snapshot) error {
-	if session == nil {
-		return ErrSessionClosed
+// CommitState 在授予 capability 的活动 session 下校验并原子发布 Snapshot。
+// 发布失败可以重试；发布成功后同一 mutation 不得再次提交 state。
+func (mutation *LoadedMutation) CommitState(snapshot state.Snapshot) error {
+	if mutation == nil || mutation.session == nil {
+		return fmt.Errorf("%w: mutation inputs were not loaded", ErrSessionOrder)
 	}
+	session := mutation.session
 	unlock, err := session.lease.lockActive()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if session.loaded != mutation {
+		return fmt.Errorf("%w: state commit capability does not belong to this mutation", ErrSessionOrder)
+	}
+	if session.stateCommitted {
+		return fmt.Errorf("%w: mutation state already committed", ErrSessionOrder)
+	}
+	if err := validateLoadedState(session.context, snapshot, session.operations); err != nil {
+		return err
+	}
 	controlPaths := session.context.Control().Paths()
 	if err := session.operations.storeState(controlPaths.StateRoot(), controlPaths.StateFile(), snapshot); err != nil {
 		return fmt.Errorf("commit runtime state: %w", err)
 	}
+	session.stateCommitted = true
 	return nil
 }
 
@@ -135,6 +191,7 @@ type InitSession struct {
 	lease      *sessionLease
 	context    InitContext
 	operations loadingOperations
+	loaded     bool
 }
 
 // BeginInit 在 init preflight 后取得锁，但不读取 manifest 或 state。
@@ -164,19 +221,6 @@ func beginInit(overrides Overrides, operations loadingOperations) (*InitSession,
 	}, nil
 }
 
-// Context 返回 init 初次严格读取形成的不可变上下文。
-func (session *InitSession) Context() (InitContext, error) {
-	if session == nil {
-		return InitContext{}, ErrSessionClosed
-	}
-	unlock, err := session.lease.lockActive()
-	if err != nil {
-		return InitContext{}, err
-	}
-	defer unlock()
-	return session.context, nil
-}
-
 // Load 在 init session 已持锁时加载 requires 与 strict manifest，但不读取 state。
 func (session *InitSession) Load(cliVersion string) (InitInputs, error) {
 	if session == nil {
@@ -187,6 +231,9 @@ func (session *InitSession) Load(cliVersion string) (InitInputs, error) {
 		return InitInputs{}, err
 	}
 	defer unlock()
+	if session.loaded {
+		return InitInputs{}, fmt.Errorf("%w: init inputs already loaded", ErrSessionOrder)
+	}
 	compatibility, repository, err := loadRepository(
 		session.context.Control().RepositoryPath(),
 		cliVersion,
@@ -195,11 +242,29 @@ func (session *InitSession) Load(cliVersion string) (InitInputs, error) {
 	if err != nil {
 		return InitInputs{}, err
 	}
+	session.loaded = true
 	return InitInputs{
 		context:       session.context,
 		compatibility: compatibility,
 		repository:    repository,
 	}, nil
+}
+
+// BeginMutation 在 init 配置成功提交后，以同一 ownership 和更新后的严格 preflight
+// 建立可选 apply 的 child mutation。必须先成功 Load init manifest。
+func (session *InitSession) BeginMutation(overrides Overrides) (*MutationSession, error) {
+	if session == nil {
+		return nil, ErrSessionClosed
+	}
+	unlock, err := session.lease.lockActive()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if !session.loaded {
+		return nil, fmt.Errorf("%w: init inputs must load before nested mutation", ErrSessionOrder)
+	}
+	return beginNestedMutationLocked(overrides, session.lease, session.operations)
 }
 
 // Close 释放 init session；失败时可以重试。
@@ -268,25 +333,7 @@ func (session *RecoverySession) BeginMutation(overrides Overrides) (*MutationSes
 		return nil, err
 	}
 	defer unlock()
-
-	context, err := session.operations.preflight(overrides)
-	if err != nil {
-		return nil, err
-	}
-	controlPaths := context.Control().Paths()
-	guard, err := session.operations.reuse(
-		session.lease.owner,
-		controlPaths.StateRoot(),
-		controlPaths.StateLock(),
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &MutationSession{
-		lease:      newSessionLease(session.lease.owner, guard),
-		context:    context,
-		operations: session.operations,
-	}, nil
+	return beginNestedMutationLocked(overrides, session.lease, session.operations)
 }
 
 // Close 释放 recovery session；已有 nested session 时只释放外层引用。
@@ -295,4 +342,35 @@ func (session *RecoverySession) Close() error {
 		return ErrSessionClosed
 	}
 	return session.lease.close()
+}
+
+func beginNestedMutationLocked(
+	overrides Overrides,
+	parent *sessionLease,
+	operations loadingOperations,
+) (*MutationSession, error) {
+	if parent.childActive {
+		return nil, ErrNestedMutationActive
+	}
+	context, err := operations.preflight(overrides)
+	if err != nil {
+		return nil, err
+	}
+	controlPaths := context.Control().Paths()
+	guard, err := operations.reuse(
+		parent.owner,
+		controlPaths.StateRoot(),
+		controlPaths.StateLock(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	childLease := newSessionLease(parent.owner, guard)
+	childLease.onClose = parent.childClosed
+	parent.childActive = true
+	return &MutationSession{
+		lease:      childLease,
+		context:    context,
+		operations: operations,
+	}, nil
 }

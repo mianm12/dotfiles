@@ -42,8 +42,8 @@ func TestMutationSession_OrdersTrustedStages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MutationSession.Load() error = %v", err)
 	}
-	if result.State().Status() != state.StatusLoaded {
-		t.Fatalf("State().Status() = %v, want StatusLoaded", result.State().Status())
+	if result.Inputs().State().Status() != state.StatusLoaded {
+		t.Fatalf("State().Status() = %v, want StatusLoaded", result.Inputs().State().Status())
 	}
 	want := []string{
 		"preflight", "acquire", "requires", "satisfies", "manifest", "satisfies",
@@ -191,43 +191,6 @@ func TestMutationSession_LoadAndCloseFailuresKeepRetryableSession(t *testing.T) 
 	}
 	if err := session.Close(); !errors.Is(err, ErrSessionClosed) {
 		t.Fatalf("MutationSession.Close() after success error = %v, want ErrSessionClosed", err)
-	}
-}
-
-func TestMutationSession_CommitStateUsesTrustedPathAndRequiresActiveSession(t *testing.T) {
-	fixture := newLoadingFixture(t, true)
-	snapshot, err := state.Decode([]byte(validEmptyState))
-	if err != nil {
-		t.Fatalf("state.Decode() error = %v", err)
-	}
-	session, err := BeginMutation(fixture.overrides)
-	if err != nil {
-		t.Fatalf("BeginMutation() error = %v", err)
-	}
-	if err := session.CommitState(snapshot); err != nil {
-		t.Fatalf("MutationSession.CommitState() error = %v", err)
-	}
-	loaded, err := state.Load(fixture.paths.StateFile())
-	if _, ok := loaded.Snapshot(); err != nil || !ok {
-		t.Fatalf("state.Load(committed) = (%#v, %v), want loaded Snapshot", loaded, err)
-	}
-	closeMutationSession(t, session)
-	before, err := os.ReadFile(fixture.paths.StateFile())
-	if err != nil {
-		t.Fatalf("os.ReadFile(state) error = %v", err)
-	}
-	if err := session.CommitState(snapshot); !errors.Is(err, ErrSessionClosed) {
-		t.Fatalf("CommitState() after Close error = %v, want ErrSessionClosed", err)
-	}
-	if _, err := session.Load("v1.0.0"); !errors.Is(err, ErrSessionClosed) {
-		t.Fatalf("Load() after Close error = %v, want ErrSessionClosed", err)
-	}
-	after, err := os.ReadFile(fixture.paths.StateFile())
-	if err != nil {
-		t.Fatalf("os.ReadFile(state) after error = %v", err)
-	}
-	if !reflect.DeepEqual(after, before) {
-		t.Fatal("CommitState() after Close changed state")
 	}
 }
 

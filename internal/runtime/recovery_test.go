@@ -270,11 +270,11 @@ func TestClosedRoleSessionsRejectFurtherUse(t *testing.T) {
 			t.Fatalf("BeginInit() error = %v", err)
 		}
 		closeInitSession(t, session)
-		if _, err := session.Context(); !errors.Is(err, ErrSessionClosed) {
-			t.Fatalf("InitSession.Context() error = %v, want ErrSessionClosed", err)
-		}
 		if _, err := session.Load("v1.0.0"); !errors.Is(err, ErrSessionClosed) {
 			t.Fatalf("InitSession.Load() error = %v, want ErrSessionClosed", err)
+		}
+		if _, err := session.BeginMutation(fixture.overrides); !errors.Is(err, ErrSessionClosed) {
+			t.Fatalf("InitSession.BeginMutation() error = %v, want ErrSessionClosed", err)
 		}
 	})
 
