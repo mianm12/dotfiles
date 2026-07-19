@@ -407,6 +407,57 @@ func TestStatus_OutputErrorOverridesClean(t *testing.T) {
 	}
 }
 
+func TestStatus_DevelopmentNoticeFailureDoesNotPublishVerdict(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture func(*testing.T) planCLIFixture
+	}{
+		{name: "clean", fixture: newNoOpPlanCLIFixture},
+		{name: "actionable", fixture: newPlanCLIFixture},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := test.fixture(t)
+			fixture.redirectEnvironment(t)
+			var stdout bytes.Buffer
+			code := run([]string{"status", "--home", fixture.home, "--repo", fixture.repository}, environment{
+				stdout:      &stdout,
+				stderr:      failingWriter{err: os.ErrClosed},
+				lookupEnv:   os.LookupEnv,
+				userHomeDir: os.UserHomeDir,
+				build:       buildinfo.Info{Version: "dev"},
+				goos:        runtime.GOOS,
+			})
+			if code != exitError || stdout.String() != "" {
+				t.Fatalf("dev status with failed notice = stdout %q, exit %d; want no trusted stdout and exit 1", stdout.String(), code)
+			}
+		})
+	}
+}
+
+func TestStatus_DevelopmentNoticePreservesNormalOutput(t *testing.T) {
+	fixture := newNoOpPlanCLIFixture(t)
+	fixture.redirectEnvironment(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"status", "--home", fixture.home, "--repo", fixture.repository}, environment{
+		stdout:      &stdout,
+		stderr:      &stderr,
+		lookupEnv:   os.LookupEnv,
+		userHomeDir: os.UserHomeDir,
+		build:       buildinfo.Info{Version: "dev"},
+		goos:        runtime.GOOS,
+	})
+	wantStdout := "Profile: clean (1 modules, 1 files managed)\n\nClean.\n"
+	wantStderr := "notice: development build skipped the requires version comparison\n"
+	if code != exitOK || stdout.String() != wantStdout || stderr.String() != wantStderr {
+		t.Fatalf(
+			"dev status = stdout %q, stderr %q, exit %d; want stdout %q, stderr %q, exit 0",
+			stdout.String(), stderr.String(), code, wantStdout, wantStderr,
+		)
+	}
+}
+
 func newAliasStatusFixture(t *testing.T) planCLIFixture {
 	t.Helper()
 	root := t.TempDir()

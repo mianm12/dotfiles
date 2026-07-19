@@ -55,7 +55,9 @@ func newStatusCommand(env environment, global *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printStatusProjection(command, projection)
+			if err := printStatusProjection(command, projection); err != nil {
+				return err
+			}
 			return commandExit(projection.exitCode)
 		},
 	}
@@ -194,7 +196,12 @@ func statusOrphanDescription(action planner.PruneAction) (string, error) {
 	return description, nil
 }
 
-func printStatusProjection(command *cobra.Command, projection statusProjection) {
+func printStatusProjection(command *cobra.Command, projection statusProjection) error {
+	for _, notice := range projection.notices {
+		if _, err := fmt.Fprintf(command.ErrOrStderr(), "notice: %s\n", notice); err != nil {
+			return fmt.Errorf("write status notice: %w", err)
+		}
+	}
 	command.Println(projection.summary)
 	printStatusSection(command, "DRIFT", projection.drift)
 	printStatusSection(command, "PENDING", projection.pending)
@@ -204,9 +211,7 @@ func printStatusProjection(command *cobra.Command, projection statusProjection) 
 		command.Println()
 		command.Println("Clean.")
 	}
-	for _, notice := range projection.notices {
-		command.PrintErrf("notice: %s\n", notice)
-	}
+	return nil
 }
 
 func printStatusSection(command *cobra.Command, title string, findings []statusFinding) {
