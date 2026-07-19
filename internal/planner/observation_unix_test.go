@@ -2,8 +2,8 @@
 
 package planner
 
-import "golang.org/x/sys/unix"
+import "syscall"
 
 func makeFIFO(path string) error {
-	return unix.Mkfifo(path, 0o600)
+	return syscall.Mkfifo(path, 0o600)
 }
