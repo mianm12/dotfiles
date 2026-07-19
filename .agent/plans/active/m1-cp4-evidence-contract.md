@@ -81,7 +81,7 @@ release ownership 前恢复为 owned 时仍拒绝。随后拆分完整 identity 
 
 Concrete steps：
 
-    在 repo root 运行：go test ./internal/planner ./internal/executor -run 'Test.*(Unreadable|Precondition|Partial)'
+    在 repo root 运行：go test ./internal/planner ./internal/executor -run 'TestPlanApply_ReadsRegularDigestOnlyWhenRequired|Test.*(Precondition|Partial)'
     预期：新增测试在旧实现失败，完成实现后退出 0。
 
 验收：
