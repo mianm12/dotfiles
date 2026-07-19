@@ -134,8 +134,7 @@ func TestPlanPrune_RejectsAmbiguousOrEmptyPartialScope(t *testing.T) {
 func TestPrunePlanAccessors_ReturnIndependentCopies(t *testing.T) {
 	profile := ObservedProfile{orphans: []OrphanTarget{
 		pruneTestOrphan(t, "~/target", "gone", StateSymlink, "/repo/source", Observation{
-			Kind:    ObjectRegular,
-			Content: []byte("user data"),
+			Kind: ObjectRegular,
 		}),
 	}}
 	plan, err := PlanPrune(profile, nil, PruneOptions{Enabled: true, Full: true})
@@ -144,11 +143,11 @@ func TestPrunePlanAccessors_ReturnIndependentCopies(t *testing.T) {
 	}
 	actions := plan.Actions()
 	groups := plan.ConfirmationGroups()
-	actions[0].Precondition.Observed.Content[0] = 'X'
+	actions[0].Precondition.Leaf.LinkDest = "changed"
 	groups[0].Targets[0].Target = "changed"
 
-	if got := string(plan.Actions()[0].Precondition.Observed.Content); got != "user data" {
-		t.Fatalf("mutating Actions() changed plan content to %q", got)
+	if got := plan.Actions()[0].Precondition.Leaf.LinkDest; got != "/repo/source" {
+		t.Fatalf("mutating Actions() changed plan leaf destination to %q", got)
 	}
 	if got := plan.ConfirmationGroups()[0].Targets[0].Target; got != "~/target" {
 		t.Fatalf("mutating ConfirmationGroups() changed plan target to %q", got)

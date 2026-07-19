@@ -66,12 +66,6 @@ func (action PruneAction) WouldDeleteTarget() bool {
 	return action.Mode == PruneTargetAndState
 }
 
-// Clone 返回不共享 Precondition observation bytes 的副本。
-func (action PruneAction) Clone() PruneAction {
-	action.Precondition.Observed = action.Precondition.Observed.Clone()
-	return action
-}
-
 func planOrphanPrune(orphan OrphanTarget, deferred bool) (PruneAction, error) {
 	if orphan.TargetPath == "" || !filepath.IsAbs(orphan.TargetPath) {
 		return PruneAction{}, fmt.Errorf("%w: orphan target path %q", ErrUnsupportedPruneInput, orphan.TargetPath)
@@ -96,7 +90,6 @@ func planOrphanPrune(orphan OrphanTarget, deferred bool) (PruneAction, error) {
 		Precondition: Precondition{
 			TargetPath:       orphan.TargetPath,
 			TargetResolution: orphan.Resolution,
-			Observed:         orphan.Observed.Clone(),
 		},
 		OnSuccess: StateEffect{Kind: StateDelete, Key: orphan.State.Key},
 		OnFailure: StateEffect{Kind: StatePreserve},
@@ -105,14 +98,23 @@ func planOrphanPrune(orphan OrphanTarget, deferred bool) (PruneAction, error) {
 	case StateScaffold: // P1
 		action.Mode = PruneStateOnly
 		action.Reason = PruneReasonScaffold
+		action.Precondition.Leaf = LeafCondition{Kind: LeafAny}
 	case StateSymlink:
 		if Owned(orphan.State, orphan.Observed) { // P2
 			action.Mode = PruneTargetAndState
 			action.Reason = PruneReasonOwned
+			action.Precondition.Leaf = LeafCondition{
+				Kind:     LeafExactSymlink,
+				LinkDest: orphan.State.LinkDest,
+			}
 		} else { // P3
 			action.Mode = PruneStateOnly
 			action.Reason = PruneReasonUnowned
 			action.Warning = true
+			action.Precondition.Leaf = LeafCondition{
+				Kind:     LeafNotOwnedSymlink,
+				LinkDest: orphan.State.LinkDest,
+			}
 		}
 	default:
 		return PruneAction{}, fmt.Errorf(

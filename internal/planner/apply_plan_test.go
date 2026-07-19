@@ -136,7 +136,10 @@ func TestPlanApply_ComposesDeterministicFullAndPartialPlansWithoutWrites(t *test
 	if err != nil {
 		t.Fatalf("PlanApply(partial force) error = %v", err)
 	}
-	if forced.FileActions()[0].Verb != FileBackupReplace || forced.Prune().Actions()[0].Deferred {
+	if forced.FileActions()[0].Verb != FileBackupReplace ||
+		forced.FileActions()[0].Precondition.Leaf.Kind != LeafExactRegular ||
+		forced.FileActions()[0].Precondition.Leaf.Hash == "" ||
+		forced.Prune().Actions()[0].Deferred {
 		t.Fatalf("forced file/prune plan = file %#v prune %#v", forced.FileActions(), forced.Prune().Actions())
 	}
 	noPruneOptions := options
@@ -192,14 +195,14 @@ func TestPlanApply_ComposesDeterministicFullAndPartialPlansWithoutWrites(t *test
 	mutableContext := partial.Context()
 	mutableContext.Modules[0] = "changed"
 	mutableObserved := partial.Observed().Targets()
-	mutableObserved[0].Observed.Content[0] = 'X'
+	mutableObserved[0].Observed.Hash = "changed"
 	mutableFiles := partial.FileActions()
-	mutableFiles[0].Precondition.Observed.Content[0] = 'Y'
+	mutableFiles[0].Precondition.Leaf.Kind = LeafPresent
 	mutableHooks := full.Hooks().Actions()
 	mutableHooks[1].Invocation.Arguments[0] = "changed"
 	if partial.Context().Modules[0] != "alpha" ||
-		string(partial.Observed().Targets()[0].Observed.Content) != "user data\n" ||
-		string(partial.FileActions()[0].Precondition.Observed.Content) != "user data\n" ||
+		partial.Observed().Targets()[0].Observed.Hash != "" ||
+		partial.FileActions()[0].Precondition.Leaf.Kind != LeafAny ||
 		full.Hooks().Actions()[1].Invocation.Arguments[0] == "changed" {
 		t.Fatal("mutating ApplyPlan getter result changed stored plan")
 	}
@@ -300,6 +303,97 @@ run_once = ["hooks/setup.sh"]
 		}
 		if !reflect.DeepEqual(plan, ApplyPlan{}) {
 			t.Fatalf("failed collision plan = %#v, want zero", plan)
+		}
+	})
+}
+
+func TestPlanApply_ReadsRegularDigestOnlyWhenRequired(t *testing.T) {
+	t.Run("force ignores unrequested regular payload", func(t *testing.T) {
+		fixture := newApplyIntegrationFixture(t)
+		fixture.redirectEnvironment(t)
+		target := filepath.Join(fixture.home, "beta", "other.txt")
+		writeApplyFile(t, target, "private beta data\n")
+		makeUnreadableRegular(t, target)
+
+		options := fixture.options()
+		options.Modules = []string{"alpha"}
+		options.Force = true
+		plan, err := PlanApply(options)
+		if err != nil {
+			t.Fatalf("PlanApply(partial alpha) error = %v", err)
+		}
+		if !plan.Valid() || len(plan.FileActions()) != 2 {
+			t.Fatalf("PlanApply(partial alpha) = %#v, want valid alpha-only plan", plan)
+		}
+	})
+
+	t.Run("non-force L6 regular", func(t *testing.T) {
+		fixture := newApplyIntegrationFixture(t)
+		fixture.redirectEnvironment(t)
+		target := filepath.Join(fixture.home, "alpha", "conflict.txt")
+		makeUnreadableRegular(t, target)
+
+		options := fixture.options()
+		options.Modules = []string{"alpha"}
+		options.NoPrune = true
+		plan, err := PlanApply(options)
+		if err != nil {
+			t.Fatalf("PlanApply(non-force L6) error = %v", err)
+		}
+		action := plan.FileActions()[0]
+		if action.Verb != FileConflict || action.Reason != FileReasonRegularConflict {
+			t.Fatalf("L6 action = %q/%q, want regular conflict", action.Verb, action.Reason)
+		}
+	})
+
+	t.Run("force L6 requires regular digest", func(t *testing.T) {
+		fixture := newApplyIntegrationFixture(t)
+		fixture.redirectEnvironment(t)
+		target := filepath.Join(fixture.home, "alpha", "conflict.txt")
+		makeUnreadableRegular(t, target)
+
+		options := fixture.options()
+		options.Modules = []string{"alpha"}
+		options.NoPrune = true
+		options.Force = true
+		plan, err := PlanApply(options)
+		if err == nil || !strings.Contains(err.Error(), "digest") {
+			t.Fatalf("PlanApply(force L6) = (%#v, %v), want digest read failure", plan, err)
+		}
+		if !reflect.DeepEqual(plan, ApplyPlan{}) {
+			t.Fatalf("failed force plan = %#v, want zero", plan)
+		}
+	})
+
+	t.Run("S1b scaffold present", func(t *testing.T) {
+		fixture := newApplyIntegrationFixture(t)
+		fixture.redirectEnvironment(t)
+		writeApplyFile(
+			t,
+			filepath.Join(fixture.repository, "modules", "alpha", "local.template"),
+			"scaffold bytes\n",
+		)
+		target := filepath.Join(fixture.home, "alpha", "local")
+		writeApplyFile(t, target, "private user data\n")
+		makeUnreadableRegular(t, target)
+
+		options := fixture.options()
+		options.Modules = []string{"alpha"}
+		options.NoPrune = true
+		plan, err := PlanApply(options)
+		if err != nil {
+			t.Fatalf("PlanApply(S1b) error = %v", err)
+		}
+		var found *FileAction
+		for _, action := range plan.FileActions() {
+			if action.Desired.Source == "local.template" {
+				candidate := action
+				found = &candidate
+				break
+			}
+		}
+		if found == nil || found.Verb != FileAdopt || found.Reason != FileReasonScaffoldPresent {
+			t.Fatalf("S1b action = %#v, want scaffold-present adopt", found)
 		}
 	})
 }
@@ -1114,5 +1208,27 @@ func writeApplyFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func makeUnreadableRegular(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("os.Lstat(%q) error = %v", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("fixture %q mode = %v, want regular", path, info.Mode())
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatalf("os.Chmod(%q, 0) error = %v", path, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, info.Mode().Perm()); err != nil && !os.IsNotExist(err) {
+			t.Errorf("restore %q mode: %v", path, err)
+		}
+	})
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("current process can read mode-000 files; unreadable payload scenario unavailable")
 	}
 }

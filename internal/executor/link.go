@@ -2,7 +2,6 @@
 package executor
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -204,7 +203,8 @@ func validateLinkAction(action planner.FileAction) error {
 		action.Target == "" || action.Target != action.Desired.Target ||
 		action.Precondition.TargetPath == "" ||
 		action.Precondition.TargetPath != action.Desired.TargetPath ||
-		action.OnFailure.Kind != planner.StatePreserve {
+		action.OnFailure.Kind != planner.StatePreserve ||
+		!action.Precondition.Leaf.Valid() {
 		return fmt.Errorf("%w: inconsistent link action identity or failure effect", ErrUnsupportedFileAction)
 	}
 	if action.OnSuccess.Kind != planner.StateUpsert ||
@@ -219,8 +219,8 @@ func validateLinkAction(action planner.FileAction) error {
 		if action.Reason != planner.FileReasonStateMetadata ||
 			action.Precondition.RequireRegularSource ||
 			action.Precondition.SourcePath != "" ||
-			action.Precondition.Observed.Kind != planner.ObjectSymlink ||
-			action.Precondition.Observed.LinkDest != action.Desired.SourcePath {
+			action.Precondition.Leaf.Kind != planner.LeafExactSymlink ||
+			action.Precondition.Leaf.LinkDest != action.Desired.SourcePath {
 			return fmt.Errorf("%w: inconsistent link adopt", ErrUnsupportedFileAction)
 		}
 	case planner.FileCreateLink:
@@ -231,12 +231,12 @@ func validateLinkAction(action planner.FileAction) error {
 		}
 		switch action.Reason {
 		case planner.FileReasonTargetMissing:
-			if action.Precondition.Observed.Kind != planner.ObjectMissing {
+			if action.Precondition.Leaf.Kind != planner.LeafMissing {
 				return fmt.Errorf("%w: L1 create-link target was not planned missing", ErrUnsupportedFileAction)
 			}
 		case planner.FileReasonOwnedLinkStale:
-			if action.Precondition.Observed.Kind != planner.ObjectSymlink ||
-				action.Precondition.Observed.LinkDest == action.Desired.SourcePath {
+			if action.Precondition.Leaf.Kind != planner.LeafExactSymlink ||
+				action.Precondition.Leaf.LinkDest == action.Desired.SourcePath {
 				return fmt.Errorf("%w: L3 create-link lacks an owned stale link snapshot", ErrUnsupportedFileAction)
 			}
 		default:
@@ -249,6 +249,9 @@ func validateLinkAction(action planner.FileAction) error {
 }
 
 func validatePrecondition(control paths.ControlPlanePaths, action planner.FileAction) error {
+	if !action.Precondition.Leaf.Valid() {
+		return fmt.Errorf("%w: leaf condition is invalid", ErrPrecondition)
+	}
 	target := paths.LabeledTarget{Label: "file action " + action.Target, Path: action.Precondition.TargetPath}
 	if _, err := paths.ValidatePathBoundaries(control, []paths.LabeledTarget{target}); err != nil {
 		return fmt.Errorf("%w: validate target/control boundary: %w", ErrPrecondition, err)
@@ -260,12 +263,16 @@ func validatePrecondition(control paths.ControlPlanePaths, action planner.FileAc
 	if !resolution.Equal(action.Precondition.TargetResolution) {
 		return fmt.Errorf("%w: target identity changed", ErrPrecondition)
 	}
-	observed, err := planner.ObserveTarget(action.Precondition.TargetPath)
+	observe := planner.ObserveTarget
+	if action.Precondition.Leaf.RequiresRegularDigest() {
+		observe = planner.ObserveTargetWithDigest
+	}
+	observed, err := observe(action.Precondition.TargetPath)
 	if err != nil {
 		return fmt.Errorf("%w: observe target: %w", ErrPrecondition, err)
 	}
-	if !sameObservation(observed, action.Precondition.Observed) {
-		return fmt.Errorf("%w: target observation changed", ErrPrecondition)
+	if !action.Precondition.Leaf.Matches(observed) {
+		return fmt.Errorf("%w: target leaf condition no longer holds", ErrPrecondition)
 	}
 	if action.Precondition.RequireRegularSource {
 		if err := validateRegularModuleSource(control.Repository(), action); err != nil {
@@ -308,12 +315,4 @@ func validateRegularModuleSource(repository string, action planner.FileAction) e
 		}
 	}
 	return nil
-}
-
-func sameObservation(left, right planner.Observation) bool {
-	return left.Kind == right.Kind &&
-		left.Mode == right.Mode &&
-		left.LinkDest == right.LinkDest &&
-		left.Hash == right.Hash &&
-		bytes.Equal(left.Content, right.Content)
 }

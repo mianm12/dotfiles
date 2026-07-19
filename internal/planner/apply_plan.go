@@ -76,7 +76,7 @@ func (plan ApplyPlan) Valid() bool { return plan.valid }
 // Context 返回不共享 slice 的运行上下文副本。
 func (plan ApplyPlan) Context() ApplyContext { return plan.context.Clone() }
 
-// Observed 返回不共享 desired/observation bytes 的完整 profile 快照。
+// Observed 返回不共享 desired bytes 的完整 profile 快照。
 func (plan ApplyPlan) Observed() ObservedProfile { return cloneObservedProfile(plan.observed) }
 
 // FileActions 返回不共享 desired/Precondition bytes 的 scope file action。
@@ -88,7 +88,7 @@ func (plan ApplyPlan) FileActions() []FileAction {
 	return actions
 }
 
-// Prune 返回不共享 action observation 与确认组 slice 的 prune plan。
+// Prune 返回不共享 action 与确认组 slice 的 prune plan。
 func (plan ApplyPlan) Prune() PrunePlan { return clonePrunePlan(plan.prune) }
 
 // Hooks 返回不共享 invocation 参数的 hook plan。
@@ -201,12 +201,20 @@ func planScopedFiles(
 	if err != nil {
 		return ObservedProfile{}, nil, err
 	}
-	observed, err := ObserveProfileTargets(validated.Home(), entries, loaded)
+	selected := stringSet(scoped.Modules())
+	regularDigestTargets := make(map[string]struct{})
+	if options.Force {
+		for _, entry := range scoped.Entries() {
+			if entry.Kind == manifest.FileKindLink {
+				regularDigestTargets[entry.TargetPath] = struct{}{}
+			}
+		}
+	}
+	observed, err := observeProfileTargets(validated.Home(), entries, loaded, regularDigestTargets)
 	if err != nil {
 		return ObservedProfile{}, nil, fmt.Errorf("observe complete profile: %w", err)
 	}
 
-	selected := stringSet(scoped.Modules())
 	actions := make([]FileAction, 0, len(scoped.Entries()))
 	for _, target := range observed.Targets() {
 		if _, ok := selected[target.Desired.Module]; !ok {
@@ -449,7 +457,7 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 		}
 		if action.Precondition.TargetPath != target.Desired.TargetPath ||
 			!action.Precondition.TargetResolution.Equal(target.Resolution) ||
-			!sameObservation(action.Precondition.Observed, target.Observed) {
+			!action.Precondition.Leaf.Valid() {
 			return fmt.Errorf("file action %q has inconsistent Precondition", action.Target)
 		}
 		if err := validateFileSourcePrecondition(action); err != nil {
@@ -494,6 +502,9 @@ func validateCanonicalFileDecision(force bool, target ObservedTarget, action Fil
 	}
 	if action.OnSuccess != expected.OnSuccess || action.OnFailure != expected.OnFailure {
 		return fmt.Errorf("file action %q state effects do not match canonical decision", action.Target)
+	}
+	if action.Precondition.Leaf != expected.Precondition.Leaf {
+		return fmt.Errorf("file action %q leaf Precondition does not match canonical decision", action.Target)
 	}
 	return nil
 }
@@ -573,7 +584,7 @@ func validatePrunePlan(
 		}
 		if action.Precondition.TargetPath != orphan.TargetPath ||
 			!action.Precondition.TargetResolution.Equal(orphan.Resolution) ||
-			!sameObservation(action.Precondition.Observed, orphan.Observed) {
+			!action.Precondition.Leaf.Valid() {
 			return fmt.Errorf("prune action %q has inconsistent Precondition", action.Target)
 		}
 		if action.Precondition.RequireRegularSource || action.Precondition.SourcePath != "" {
@@ -654,7 +665,7 @@ func samePruneAction(left, right PruneAction) bool {
 		left.DeferredReason == right.DeferredReason &&
 		left.Precondition.TargetPath == right.Precondition.TargetPath &&
 		left.Precondition.TargetResolution.Equal(right.Precondition.TargetResolution) &&
-		sameObservation(left.Precondition.Observed, right.Precondition.Observed) &&
+		left.Precondition.Leaf == right.Precondition.Leaf &&
 		left.Precondition.SourcePath == right.Precondition.SourcePath &&
 		left.Precondition.RequireRegularSource == right.Precondition.RequireRegularSource &&
 		left.OnSuccess == right.OnSuccess &&
@@ -795,14 +806,6 @@ func samePlannerDesired(left, right Desired) bool {
 		left.TargetPath == right.TargetPath &&
 		left.Kind == right.Kind &&
 		left.Mode == right.Mode &&
-		bytes.Equal(left.Content, right.Content)
-}
-
-func sameObservation(left, right Observation) bool {
-	return left.Kind == right.Kind &&
-		left.Mode == right.Mode &&
-		left.LinkDest == right.LinkDest &&
-		left.Hash == right.Hash &&
 		bytes.Equal(left.Content, right.Content)
 }
 

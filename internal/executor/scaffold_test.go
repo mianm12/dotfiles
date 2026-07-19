@@ -165,6 +165,95 @@ func TestExecuteScaffold_AdoptIsStateOnly(t *testing.T) {
 	}
 }
 
+func TestExecuteScaffold_S1bPreconditionRequiresPresenceNotExactContent(t *testing.T) {
+	t.Run("content and mode may change", func(t *testing.T) {
+		fixture := newScaffoldFixture(t)
+		target := filepath.Join(fixture.home, "existing")
+		if err := os.WriteFile(target, []byte("plan-time data"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(plan-time target) error = %v", err)
+		}
+		action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+		if action.Verb != planner.FileAdopt || action.Reason != planner.FileReasonScaffoldPresent {
+			t.Fatalf("planned action = %q/%q, want S1b adopt", action.Verb, action.Reason)
+		}
+		if err := os.WriteFile(target, []byte("edited after plan"), 0o640); err != nil {
+			t.Fatalf("os.WriteFile(changed target) error = %v", err)
+		}
+		if err := os.Chmod(target, 0o640); err != nil {
+			t.Fatalf("os.Chmod(changed target) error = %v", err)
+		}
+		before, err := os.Lstat(target)
+		if err != nil {
+			t.Fatalf("os.Lstat(before execute) error = %v", err)
+		}
+
+		result, err := ExecuteFile(fixture.control, action)
+		if err != nil {
+			t.Fatalf("ExecuteFile() error = %v", err)
+		}
+		if result.TargetMutated || result.StateEffect != action.OnSuccess {
+			t.Fatalf("ExecuteFile() result = %#v, want state-only success", result)
+		}
+		after, err := os.Lstat(target)
+		if err != nil {
+			t.Fatalf("os.Lstat(after execute) error = %v", err)
+		}
+		content, err := os.ReadFile(target)
+		if err != nil || string(content) != "edited after plan" || !os.SameFile(before, after) || after.Mode().Perm() != 0o640 {
+			t.Fatalf("target after adopt = content %q mode %v same=%t error=%v", content, after.Mode(), os.SameFile(before, after), err)
+		}
+	})
+
+	t.Run("missing target is rejected", func(t *testing.T) {
+		fixture := newScaffoldFixture(t)
+		target := filepath.Join(fixture.home, "removed")
+		if err := os.WriteFile(target, []byte("plan-time data"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(plan-time target) error = %v", err)
+		}
+		action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+		if err := os.Remove(target); err != nil {
+			t.Fatalf("os.Remove(target) error = %v", err)
+		}
+
+		result, err := ExecuteFile(fixture.control, action)
+		assertPreconditionFailure(t, result, action, err)
+		assertMissing(t, target)
+	})
+}
+
+func TestExecuteScaffold_ReleaseOwnershipRejectsRestoredOwnedLink(t *testing.T) {
+	fixture := newScaffoldFixture(t)
+	target := filepath.Join(fixture.home, "restored-owned")
+	oldSource := filepath.Join(fixture.root, "old-source")
+	if err := os.WriteFile(oldSource, []byte("old source"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(old source) error = %v", err)
+	}
+	if err := os.Symlink(filepath.Join(fixture.root, "intruder"), target); err != nil {
+		t.Fatalf("os.Symlink(intruder) error = %v", err)
+	}
+	historical := planner.HistoricalState{
+		Key:      fixture.targetKey(t, target),
+		Module:   "old",
+		Kind:     planner.StateSymlink,
+		Source:   "modules/old/config",
+		LinkDest: oldSource,
+	}
+	action := fixture.planScaffold(t, target, historical, true, false)
+	if action.Verb != planner.FileAdopt || action.Reason != planner.FileReasonReleaseOwnershipToScaffold {
+		t.Fatalf("planned action = %q/%q, want release-ownership adopt", action.Verb, action.Reason)
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("os.Remove(nonowned target) error = %v", err)
+	}
+	if err := os.Symlink(oldSource, target); err != nil {
+		t.Fatalf("os.Symlink(restored owned target) error = %v", err)
+	}
+
+	result, err := ExecuteFile(fixture.control, action)
+	assertPreconditionFailure(t, result, action, err)
+	assertLinkText(t, target, oldSource)
+}
+
 func TestExecuteScaffold_SkipPreservesPresentAndDeletedTargets(t *testing.T) {
 	t.Run("S1a present", func(t *testing.T) {
 		fixture := newScaffoldFixture(t)

@@ -90,11 +90,11 @@ func TestObserveProfileTargets_MatchesHistoricalAliasAndKeepsOrphans(t *testing.
 	}
 
 	targets[0].Observed.LinkDest = "changed"
-	orphans[0].Observed.Content[0] = 'X'
+	orphans[0].Observed.Hash = "changed"
 	orphans[0].Resolution = paths.TargetResolution{}
 	againTargets := observed.Targets()
 	againOrphans := observed.Orphans()
-	if againTargets[0].Observed.LinkDest != "../../repository/source" || string(againOrphans[0].Observed.Content) != "user scaffold\n" {
+	if againTargets[0].Observed.LinkDest != "../../repository/source" || againOrphans[0].Observed.Hash != "" {
 		t.Fatalf("mutating accessors changed observed set: targets=%#v orphans=%#v", againTargets, againOrphans)
 	}
 	if !againOrphans[0].Resolution.Equal(wantOrphanResolution) {

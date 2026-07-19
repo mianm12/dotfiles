@@ -51,20 +51,13 @@ const (
 	ObjectSpecial ObjectKind = "special"
 )
 
-// Observation 是 target leaf 的显式只读快照。LinkDest 只对 symlink 有效；Content 与 Hash
-// 只对 regular 有效。Mode 保存 Lstat 报告的完整 mode，供最终 Precond 精确复核。
+// Observation 是 target leaf 的显式只读事实。LinkDest 只对 symlink 有效；Hash 只在调用方
+// 明确请求 regular digest 时有效。Mode 保存 Lstat 报告的完整 mode。
 type Observation struct {
 	Kind     ObjectKind
 	Mode     fs.FileMode
 	LinkDest string
-	Content  []byte
 	Hash     string
-}
-
-// Clone 返回不共享 Content backing array 的副本。
-func (observed Observation) Clone() Observation {
-	observed.Content = append([]byte(nil), observed.Content...)
-	return observed
 }
 
 // StateKind 描述 planner 可消费的 M1 历史产物类型。
@@ -110,24 +103,19 @@ type ObservedProfile struct {
 	orphans []OrphanTarget
 }
 
-// Targets 返回不共享 desired/observed bytes 的副本。Resolution 是 paths 提供的不可变值快照，
+// Targets 返回不共享 desired bytes 的副本。Resolution 是 paths 提供的不可变值快照，
 // 值复制不会向调用方暴露其 identity/ancestor 内部存储。
 func (profile ObservedProfile) Targets() []ObservedTarget {
 	cloned := append([]ObservedTarget(nil), profile.targets...)
 	for index := range cloned {
 		cloned[index].Desired = cloned[index].Desired.Clone()
-		cloned[index].Observed = cloned[index].Observed.Clone()
 	}
 	return cloned
 }
 
-// Orphans 返回不共享 observed bytes 的副本。
+// Orphans 返回独立的 orphan slice。
 func (profile ObservedProfile) Orphans() []OrphanTarget {
-	cloned := append([]OrphanTarget(nil), profile.orphans...)
-	for index := range cloned {
-		cloned[index].Observed = cloned[index].Observed.Clone()
-	}
-	return cloned
+	return append([]OrphanTarget(nil), profile.orphans...)
 }
 
 // FileVerb 是 file decision 中的稳定动作词汇；它不提供执行能力。
@@ -182,13 +170,93 @@ const (
 	FileReasonReleaseOwnershipToScaffold FileReason = "release-ownership-to-scaffold"
 )
 
-// Precondition 固定一个动作提交前必须仍成立的 target 快照。未来 executor 必须重新解析
-// TargetPath 并与 TargetResolution 比较，同时重新执行 control-plane boundary 校验；leaf
-// Observation 相同不能替代祖先拓扑证明。
+// LeafConditionKind 描述 action 执行前必须仍成立的 leaf 谓词。
+type LeafConditionKind string
+
+const (
+	// LeafAny 不约束 leaf 形态；target identity 与路径边界仍必须复核。
+	LeafAny LeafConditionKind = "any"
+	// LeafMissing 要求 leaf 仍安全缺失。
+	LeafMissing LeafConditionKind = "missing"
+	// LeafPresent 要求 leaf 存在，但不约束其 kind、内容或 mode。
+	LeafPresent LeafConditionKind = "present"
+	// LeafExactSymlink 要求 raw symlink destination 精确相等。
+	LeafExactSymlink LeafConditionKind = "exact-symlink"
+	// LeafNotOwnedSymlink 要求 leaf 不是指向记录目标的 owned symlink。
+	LeafNotOwnedSymlink LeafConditionKind = "not-owned-symlink"
+	// LeafExactRegular 要求 regular digest 与普通权限位精确相等。
+	LeafExactRegular LeafConditionKind = "exact-regular"
+)
+
+// LeafCondition 保存一个封闭 leaf 谓词所需的最小证据。LinkDest 只用于 symlink 条件；Hash
+// 与 Permissions 只用于 exact-regular。
+type LeafCondition struct {
+	Kind        LeafConditionKind
+	LinkDest    string
+	Hash        string
+	Permissions fs.FileMode
+}
+
+// Valid 报告条件字段组合是否封闭且无歧义。
+func (condition LeafCondition) Valid() bool {
+	switch condition.Kind {
+	case LeafAny, LeafMissing, LeafPresent:
+		return condition.LinkDest == "" && condition.Hash == "" && condition.Permissions == 0
+	case LeafExactSymlink, LeafNotOwnedSymlink:
+		return condition.LinkDest != "" && condition.Hash == "" && condition.Permissions == 0
+	case LeafExactRegular:
+		return condition.LinkDest == "" && condition.Hash != "" && condition.Permissions&^fs.ModePerm == 0
+	default:
+		return false
+	}
+}
+
+// RequiresRegularDigest 报告复核该条件是否必须读取 regular 内容摘要。
+func (condition LeafCondition) RequiresRegularDigest() bool {
+	return condition.Kind == LeafExactRegular
+}
+
+// Matches 报告可信 leaf observation 是否满足当前条件。无效条件或未知 observation 永不匹配。
+func (condition LeafCondition) Matches(observed Observation) bool {
+	if !condition.Valid() || !validObjectKind(observed.Kind) {
+		return false
+	}
+	switch condition.Kind {
+	case LeafAny:
+		return true
+	case LeafMissing:
+		return observed.Kind == ObjectMissing
+	case LeafPresent:
+		return observed.Kind != ObjectMissing
+	case LeafExactSymlink:
+		return observed.Kind == ObjectSymlink && observed.LinkDest == condition.LinkDest
+	case LeafNotOwnedSymlink:
+		return observed.Kind != ObjectSymlink || observed.LinkDest != condition.LinkDest
+	case LeafExactRegular:
+		return observed.Kind == ObjectRegular &&
+			observed.Hash == condition.Hash &&
+			observed.Mode.Perm() == condition.Permissions
+	default:
+		return false
+	}
+}
+
+func validObjectKind(kind ObjectKind) bool {
+	switch kind {
+	case ObjectMissing, ObjectSymlink, ObjectRegular, ObjectDirectory, ObjectSpecial:
+		return true
+	default:
+		return false
+	}
+}
+
+// Precondition 固定一个动作提交前必须仍成立的 target identity 与最小 leaf 谓词。executor 必须
+// 重新解析 TargetPath、比较 TargetResolution 并重做 control-plane boundary 校验；leaf 条件成立
+// 不能替代祖先拓扑证明。
 type Precondition struct {
 	TargetPath           string
 	TargetResolution     paths.TargetResolution
-	Observed             Observation
+	Leaf                 LeafCondition
 	SourcePath           string
 	RequireRegularSource bool
 }
@@ -207,7 +275,7 @@ const (
 
 // StateEffect 保存一个结果分支的 state 处置。Entry 只对 upsert 有效，Key 对 upsert/delete
 // 有效；PreviousKey 在 alias 展示 key 变化时要求同一提交摘除旧 key，避免留下重复 identity。
-// upsert Entry 的 AppliedAt 由未来 executor 在动作成功时填入，不参与计划决策。
+// upsert Entry 的 AppliedAt 由 executor 在动作成功时填入，不参与计划决策。
 type StateEffect struct {
 	Kind        StateEffectKind
 	Key         string
@@ -215,7 +283,7 @@ type StateEffect struct {
 	Entry       HistoricalState
 }
 
-// FileAction 是 file planner 与未来 executor 之间的自包含值；当前 package 只形成和展示它。
+// FileAction 是 file planner 与 executor 之间的自包含值；planner 只形成和校验它。
 type FileAction struct {
 	Verb         FileVerb
 	Target       string
@@ -226,9 +294,8 @@ type FileAction struct {
 	OnFailure    StateEffect
 }
 
-// Clone 返回不共享 desired/observed bytes 的动作副本。
+// Clone 返回不共享 desired bytes 的动作副本。
 func (action FileAction) Clone() FileAction {
 	action.Desired = action.Desired.Clone()
-	action.Precondition.Observed = action.Precondition.Observed.Clone()
 	return action
 }

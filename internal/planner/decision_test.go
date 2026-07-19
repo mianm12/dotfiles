@@ -550,8 +550,8 @@ func TestDecide_PreconditionRetainsPlanTimeTargetResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ObserveTarget(after retarget) error = %v", err)
 	}
-	if !reflect.DeepEqual(observedAfter, action.Precondition.Observed) {
-		t.Fatalf("leaf observation changed unexpectedly: got %#v, planned %#v", observedAfter, action.Precondition.Observed)
+	if !action.Precondition.Leaf.Matches(observedAfter) {
+		t.Fatalf("leaf condition %#v no longer matches unchanged leaf %#v", action.Precondition.Leaf, observedAfter)
 	}
 	resolvedAfter, err := paths.ResolveTarget(targetPath)
 	if err != nil {
@@ -584,7 +584,7 @@ func assertDecision(t *testing.T, target ObservedTarget, action FileAction, want
 	wantPrecondition := Precondition{
 		TargetPath:       target.Desired.TargetPath,
 		TargetResolution: target.Resolution,
-		Observed:         target.Observed,
+		Leaf:             fileLeafCondition(target, action.Verb, action.Reason),
 	}
 	if action.Verb == FileCreateLink || action.Verb == FileBackupReplace {
 		wantPrecondition.SourcePath = target.Desired.SourcePath

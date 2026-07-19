@@ -24,7 +24,7 @@ func TestPlanOrphanPrune_P1P2P3(t *testing.T) {
 		{
 			name:        "P1 scaffold removes only state",
 			stateKind:   StateScaffold,
-			observed:    Observation{Kind: ObjectRegular, Content: []byte("user data")},
+			observed:    Observation{Kind: ObjectRegular},
 			wantMode:    PruneStateOnly,
 			wantReason:  PruneReasonScaffold,
 			wantWarning: false,
@@ -89,8 +89,7 @@ func TestPlanOrphanPrune_P1P2P3(t *testing.T) {
 			}
 			if action.Precondition.TargetPath != orphan.TargetPath ||
 				!action.Precondition.TargetResolution.Equal(resolution) ||
-				action.Precondition.Observed.Kind != orphan.Observed.Kind ||
-				action.Precondition.Observed.LinkDest != orphan.Observed.LinkDest {
+				!action.Precondition.Leaf.Matches(orphan.Observed) {
 				t.Fatalf("planOrphanPrune() precondition = %#v, want plan-time orphan facts", action.Precondition)
 			}
 			if action.OnSuccess.Kind != StateDelete || action.OnSuccess.Key != orphan.State.Key {

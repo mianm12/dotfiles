@@ -31,13 +31,9 @@ type PrunePlan struct {
 	groups  []PruneConfirmationGroup
 }
 
-// Actions 返回不共享 observation bytes 的动作副本。
+// Actions 返回独立的动作 slice。
 func (plan PrunePlan) Actions() []PruneAction {
-	actions := append([]PruneAction(nil), plan.actions...)
-	for index := range actions {
-		actions[index] = actions[index].Clone()
-	}
-	return actions
+	return append([]PruneAction(nil), plan.actions...)
 }
 
 // ConfirmationGroups 返回不共享 target slices 的确认组副本。

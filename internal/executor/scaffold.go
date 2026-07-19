@@ -205,7 +205,8 @@ func validateScaffoldAction(action planner.FileAction) error {
 		action.Precondition.RequireRegularSource ||
 		action.Precondition.SourcePath != "" ||
 		action.OnFailure.Kind != planner.StatePreserve ||
-		action.Desired.Mode&^fs.ModePerm != 0 {
+		action.Desired.Mode&^fs.ModePerm != 0 ||
+		!action.Precondition.Leaf.Valid() {
 		return fmt.Errorf(
 			"%w: inconsistent scaffold identity, mode, source requirement, or failure effect",
 			ErrUnsupportedFileAction,
@@ -214,18 +215,11 @@ func validateScaffoldAction(action planner.FileAction) error {
 
 	switch action.Verb {
 	case planner.FileSkip:
-		if action.OnSuccess.Kind != planner.StatePreserve {
-			return fmt.Errorf("%w: scaffold skip must preserve state", ErrUnsupportedFileAction)
+		if action.OnSuccess.Kind != planner.StatePreserve || action.Precondition.Leaf.Kind != planner.LeafAny {
+			return fmt.Errorf("%w: scaffold skip must preserve state without a leaf requirement", ErrUnsupportedFileAction)
 		}
 		switch action.Reason {
-		case planner.FileReasonScaffoldPresent:
-			if action.Precondition.Observed.Kind == planner.ObjectMissing {
-				return fmt.Errorf("%w: present scaffold skip was planned missing", ErrUnsupportedFileAction)
-			}
-		case planner.FileReasonScaffoldDeleted:
-			if action.Precondition.Observed.Kind != planner.ObjectMissing {
-				return fmt.Errorf("%w: deleted scaffold skip was planned present", ErrUnsupportedFileAction)
-			}
+		case planner.FileReasonScaffoldPresent, planner.FileReasonScaffoldDeleted:
 		default:
 			return fmt.Errorf("%w: reason %q is not a scaffold skip", ErrUnsupportedFileAction, action.Reason)
 		}
@@ -235,13 +229,17 @@ func validateScaffoldAction(action planner.FileAction) error {
 		}
 		switch action.Reason {
 		case planner.FileReasonScaffoldPresent:
-			if action.Precondition.Observed.Kind == planner.ObjectMissing {
+			if action.Precondition.Leaf.Kind != planner.LeafPresent {
 				return fmt.Errorf("%w: scaffold-present adopt was planned missing", ErrUnsupportedFileAction)
 			}
 		case planner.FileReasonStateMetadata:
-			// metadata 更新既可能补录仍存在的 target，也可能保留用户删除决定。
+			if action.Precondition.Leaf.Kind != planner.LeafAny {
+				return fmt.Errorf("%w: scaffold metadata adopt has an unexpected leaf condition", ErrUnsupportedFileAction)
+			}
 		case planner.FileReasonReleaseOwnershipToScaffold:
-			// scaffold 永不拥有 target；旧 symlink 证据不成立时只更新 state。
+			if action.Precondition.Leaf.Kind != planner.LeafNotOwnedSymlink {
+				return fmt.Errorf("%w: ownership release lacks negative symlink evidence", ErrUnsupportedFileAction)
+			}
 		default:
 			return fmt.Errorf("%w: reason %q is not a scaffold adopt", ErrUnsupportedFileAction, action.Reason)
 		}
@@ -256,11 +254,11 @@ func validateScaffoldAction(action planner.FileAction) error {
 		}
 		switch action.Reason {
 		case planner.FileReasonTargetMissing, planner.FileReasonScaffoldRebuild:
-			if action.Precondition.Observed.Kind != planner.ObjectMissing {
+			if action.Precondition.Leaf.Kind != planner.LeafMissing {
 				return fmt.Errorf("%w: scaffold create target was not planned missing", ErrUnsupportedFileAction)
 			}
 		case planner.FileReasonOwnedLinkToScaffold:
-			if action.Precondition.Observed.Kind != planner.ObjectSymlink {
+			if action.Precondition.Leaf.Kind != planner.LeafExactSymlink {
 				return fmt.Errorf("%w: owned link migration was not planned from a symlink", ErrUnsupportedFileAction)
 			}
 		}

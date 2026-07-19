@@ -33,6 +33,14 @@ func Decide(target ObservedTarget, options DecisionOptions) (FileAction, error) 
 	if err := validateDecisionInput(target); err != nil {
 		return FileAction{}, err
 	}
+	if options.Force && target.Desired.Kind == DesiredLink &&
+		target.Observed.Kind == ObjectRegular && target.Observed.Hash == "" {
+		return FileAction{}, fmt.Errorf(
+			"%w: force regular target %q lacks digest evidence",
+			ErrUnsupportedDecisionInput,
+			target.Desired.Target,
+		)
+	}
 
 	switch target.Desired.Kind {
 	case DesiredLink:
@@ -160,7 +168,7 @@ func plannedAction(
 	precondition := Precondition{
 		TargetPath:       target.Desired.TargetPath,
 		TargetResolution: target.Resolution,
-		Observed:         target.Observed.Clone(),
+		Leaf:             fileLeafCondition(target, verb, reason),
 	}
 	if verb == FileCreateLink || verb == FileBackupReplace {
 		precondition.SourcePath = target.Desired.SourcePath
@@ -179,6 +187,46 @@ func plannedAction(
 		action.OnSuccess = upsertDesiredState(target)
 	}
 	return action
+}
+
+func fileLeafCondition(target ObservedTarget, verb FileVerb, reason FileReason) LeafCondition {
+	switch verb {
+	case FileSkip, FileConflict:
+		return LeafCondition{Kind: LeafAny}
+	case FileAdopt:
+		switch {
+		case target.Desired.Kind == DesiredLink:
+			return LeafCondition{Kind: LeafExactSymlink, LinkDest: target.Desired.SourcePath}
+		case reason == FileReasonScaffoldPresent && !target.HasState:
+			return LeafCondition{Kind: LeafPresent}
+		case reason == FileReasonReleaseOwnershipToScaffold:
+			return LeafCondition{Kind: LeafNotOwnedSymlink, LinkDest: target.State.LinkDest}
+		default:
+			// scaffold metadata 更新在 present/missing 两侧产生同一非所有权 state effect。
+			return LeafCondition{Kind: LeafAny}
+		}
+	case FileCreateLink:
+		if reason == FileReasonTargetMissing {
+			return LeafCondition{Kind: LeafMissing}
+		}
+		return LeafCondition{Kind: LeafExactSymlink, LinkDest: target.State.LinkDest}
+	case FileScaffold:
+		if reason == FileReasonOwnedLinkToScaffold {
+			return LeafCondition{Kind: LeafExactSymlink, LinkDest: target.State.LinkDest}
+		}
+		return LeafCondition{Kind: LeafMissing}
+	case FileBackupReplace:
+		if target.Observed.Kind == ObjectRegular {
+			return LeafCondition{
+				Kind:        LeafExactRegular,
+				Hash:        target.Observed.Hash,
+				Permissions: target.Observed.Mode.Perm(),
+			}
+		}
+		return LeafCondition{Kind: LeafExactSymlink, LinkDest: target.Observed.LinkDest}
+	default:
+		return LeafCondition{}
+	}
 }
 
 func upsertDesiredState(target ObservedTarget) StateEffect {

@@ -29,7 +29,7 @@ func TestObserveTarget_ClassifiesLeafWithoutFollowingSymlink(t *testing.T) {
 	if observed.Kind != ObjectSymlink || observed.LinkDest != rawDestination {
 		t.Fatalf("ObserveTarget() = %#v, want raw symlink %q", observed, rawDestination)
 	}
-	if observed.Content != nil || observed.Hash != "" {
+	if observed.Hash != "" {
 		t.Fatalf("symlink observation contains followed content evidence: %#v", observed)
 	}
 	if after := snapshotObservationTree(t, root); !reflect.DeepEqual(after, before) {
@@ -37,7 +37,7 @@ func TestObserveTarget_ClassifiesLeafWithoutFollowingSymlink(t *testing.T) {
 	}
 }
 
-func TestObserveTarget_RegularFileCarriesBytesHashAndMode(t *testing.T) {
+func TestObserveTarget_RegularFileCarriesMetadataWithoutReadingDigest(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	content := []byte("regular bytes\n")
@@ -49,20 +49,23 @@ func TestObserveTarget_RegularFileCarriesBytesHashAndMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ObserveTarget() error = %v", err)
 	}
-	if observed.Kind != ObjectRegular || string(observed.Content) != string(content) {
-		t.Fatalf("ObserveTarget() = %#v, want regular bytes %q", observed, content)
+	if observed.Kind != ObjectRegular {
+		t.Fatalf("ObserveTarget() = %#v, want regular metadata", observed)
 	}
-	if observed.Hash != "sha256:25dd5c6f41d6e6054f9a55a81a53f0cf54e9536fa4394321accbca0e0b387ece" {
-		t.Fatalf("ObserveTarget() hash = %q, want stable sha256", observed.Hash)
+	if observed.Hash != "" {
+		t.Fatalf("ObserveTarget() hash = %q, want no unrequested digest", observed.Hash)
 	}
 	if observed.Mode.Perm() != 0o640 {
 		t.Fatalf("ObserveTarget() mode = %v, want 0640", observed.Mode)
 	}
 
-	observed.Content[0] = 'X'
-	disk, err := os.ReadFile(target)
-	if err != nil || string(disk) != string(content) {
-		t.Fatalf("mutating observation changed target: bytes=%q error=%v", disk, err)
+	digested, err := ObserveTargetWithDigest(target)
+	if err != nil {
+		t.Fatalf("ObserveTargetWithDigest() error = %v", err)
+	}
+	if digested.Kind != ObjectRegular || digested.Mode != observed.Mode ||
+		digested.Hash != "sha256:25dd5c6f41d6e6054f9a55a81a53f0cf54e9536fa4394321accbca0e0b387ece" {
+		t.Fatalf("ObserveTargetWithDigest() = %#v, want stable sha256 and same metadata", digested)
 	}
 }
 
