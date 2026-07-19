@@ -52,12 +52,15 @@ observation、history 与 action 骨架；`ObserveProfileTargets` 已完成 desi
 - [x] 2026-07-19：确认分配 worktree、Git 顶层、branch 与 clean 基线，读取仓库约定、规范、
   target-observation handoff 和当前 planner model。
 - [x] 2026-07-19：以 `e5e4730` 提交本 active ExecPlan 起点。
-- [x] 2026-07-19：测试先行实现 ownership、完整 L/S 表、force、metadata adopt 与自包含
-  成功/失败 state effect；窄测通过，等待重复/race 与语义 commit。
+- [x] 2026-07-19：测试先行暴露缺失的 ownership、完整 L/S 表、force、metadata adopt 与
+  成功/失败 state effect，随后完成最小纯函数实现并通过窄测。
 - [x] 2026-07-19：以 `118f98e` 提交 ownership、完整 L/S 表、force、metadata adopt 与自包含
-  state effect；测试先行实现 M1 kind migration，managed/rendered 与未知 observation 保持
-  fail closed，等待重复/race 与语义 commit。
-- [ ] 运行窄测、重复、race、完整 diff check 与 `make check`，更新 handoff 并保持计划 active。
+  state effect。
+- [x] 2026-07-19：测试先行实现 M1 kind migration；以 `e6fe61b` 提交 symlink→scaffold 与
+  scaffold→link，managed/rendered 与未知 observation 保持 fail closed。
+- [x] 2026-07-19：planner 20 次重复与 race、Darwin/Linux amd64 测试二进制交叉编译、
+  `git diff 712ab85...HEAD --check` 和完整 `make check` 全部通过；worker handoff 保持计划 active，
+  等待 coordinator 安排独立复核。
 
 ## Milestones
 
@@ -122,12 +125,13 @@ Commit 边界：
 
 | 性质 | 证据 | 状态 |
 |---|---|---|
-| raw symlink ownership 与 scaffold 非所有权 | `Owned` 表驱动测试 | 待实施 |
-| L1–L6、S1a–S3 与短路顺序 | decision matrix tests | 待实施 |
-| metadata adopt、force 与 state effect | action payload tests | 待实施 |
-| symlink↔scaffold M1 migration | migration table tests | 待实施 |
-| managed/rendered fail closed | invalid-kind tests | 待实施 |
-| 当前平台完整门禁 | `make check` | 待运行 |
+| raw symlink ownership 与 scaffold 非所有权 | `Owned` 表驱动测试 | 本机通过 |
+| L1–L6、S1a–S3 与短路顺序 | decision matrix tests | 本机通过 |
+| metadata adopt、force 与 state effect | action payload tests | 本机通过 |
+| symlink↔scaffold M1 migration | migration table tests | 本机通过 |
+| managed/rendered fail closed | invalid-kind tests | 本机通过 |
+| 当前平台完整门禁 | `make check` | 本机通过 |
+| Darwin/Linux 构建 | amd64 planner test binaries | 交叉编译通过，Linux 未实机运行 |
 | 远端 macOS/Linux CI | 精确 branch HEAD | 待验收（本 worker 不 push） |
 
 ## Safety, Authorization, and Recovery
@@ -145,7 +149,17 @@ decision 消费 `ObservedTarget`，返回自包含 `Action` 与 error。`Owned` 
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: strict state 的 `AppliedAt` 必然非空，但它按规范只用于诊断，不能参与 metadata
+  是否过期的决策。
+  Evidence: `HistoricalState` 同时保存 ownership/metadata 与 `AppliedAt`；直接比较整个 struct 会让
+  每条合法记录永久落入 adopt。
+  Impact: metadata 比较只列举 key/module/kind/source 及 link 的 `link_dest`；upsert 的新时间由
+  未来 executor 在动作成功后填入。
+
+- Observation: target observation 会把单个历史 alias 与 current desired 对齐；若 metadata adopt
+  只 upsert 新展示 key，旧 key 会残留并在下次 strict load 形成重复 target identity。
+  Evidence: `ObservedTarget.State.Key` 可以与 `Desired.Target` 不同，二者仍是同一 identity。
+  Impact: `StateEffect.PreviousKey` 明确要求 upsert 同一提交摘除旧 alias；失败分支仍 preserve。
 
 ## Decision Log
 
@@ -158,6 +172,30 @@ decision 消费 `ObservedTarget`，返回自包含 `Action` 与 error。`Owned` 
   同 identity 旧 key，形成下一次加载的重复 state。
   Date: 2026-07-19
 
+- Decision: 使用封闭 `ActionReason` 分类，而不是让后续 CLI/status 解析人类 reason 字符串。
+  Rationale: L4/L5、普通文件/目录/特殊对象和 scaffold 删除状态需要稳定区分；实际展示文案属于
+  presentation 层。
+  Date: 2026-07-19
+
+- Decision: S2 中显式 force 优先于 metadata adopt；迁入 scaffold 时 force 不改变释放所有权规则。
+  Rationale: force 明确授权仅在 target 仍缺失时重建 scaffold，成功动作同时写入当前 metadata；
+  迁入 scaffold 的安全原则则要求非-owned 对象永不因 force 被替换。
+  Date: 2026-07-19
+
 ## Outcomes and Handoff
 
-尚未完成；计划保持 active。
+worker 实现与本地验证完成，计划按 Checkpoint 流程保持 active，等待独立 review。branch base 为
+`712ab85`；语义 commits 为计划起点 `e5e4730`、完整 M1 ownership/L/S 决策与 action model
+`118f98e`、M1 kind migration `e6fe61b`，以及本次验证记录。
+
+实现新增纯函数 `Owned` 与 `Decide`。完整 L1–L6、S1a–S3 及 force 分支均产生带稳定 reason、
+target/source Precondition、desired payload 和成功/失败 state effect 的 action；metadata adopt
+可以替换旧 alias key。symlink→scaffold 只有旧链仍 owned 时计划转换成独立蓝本，否则只写
+scaffold state 释放所有权；scaffold→link 按无记录 L 表决策且冲突/失败保留旧记录。不支持的
+managed/rendered/未知 object kind 返回 `ErrUnsupportedDecisionInput` 和零值 action。
+
+本机 Darwin/arm64 上 planner 20 次重复与 race、全仓
+`make check BINARY=/private/tmp/dot-cp3-decision-engine-check/dot`、完整 branch diff check 均通过；
+Darwin/Linux amd64 planner 测试二进制交叉编译通过，Linux 未实机运行。未新增依赖，未修改
+manifest/runtime/state store、CLI 或 executor。精确 branch HEAD 的远端 macOS/Linux CI 未运行，
+因此结论为“本地验收通过、远端待验收”。
