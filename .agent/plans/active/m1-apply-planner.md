@@ -64,10 +64,14 @@ path validation 与 HOME，`ScopedProfile` 只渲染 module scope；`ObservedPro
   `HEAD == main == 385dea8`。
 - [x] 2026-07-19：读取仓库规则、指定 CP3 规范、coordinator 上下文、四个前置 completed plans、
   runtime/manifest/planner/state 实现与相关测试；未发现规范或共享 contract blocker。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先行组合完整结构 desired、scope render、observation 与 scope-only file decisions。
-- [ ] 测试先行接入 strict runtime load、prune/hooks、整体 validation 与不可变 presentation input。
-- [ ] 运行窄测、重复/race、双平台编译、branch diff check 与 `make check`，保持计划 active 等待 review。
+- [x] 2026-07-19：以 `ccf487a docs(planner): 建立 apply planner 执行计划` 提交 active
+  ExecPlan 起点。
+- [x] 2026-07-19：测试先行组合完整结构 desired、scope render、observation 与 scope-only file
+  decisions，以 `c71fd7d feat(planner): 组合完整 desired 与 scope 决策` 提交。
+- [x] 2026-07-19：测试先行接入 strict runtime load、prune/hooks、整体 validation 与不可变
+  presentation input，以 `3565be4 feat(planner): 建立纯只读 apply 计划入口` 提交。
+- [x] 2026-07-19：窄测、相关五包 20 次/race、darwin/linux amd64 编译、branch diff check 与
+  `make check` 全部通过；计划保持 active，等待 coordinator 安排独立 review。
 
 ## Milestones
 
@@ -141,14 +145,15 @@ Commit 边界：
 
 | 必须成立的性质 | 证据 | 状态 |
 |---|---|---|
-| 完整 collision/path validation 先于 scope | apply integration tests | 待实施 |
-| 只渲染/决策请求 scope | partial/template tests | 待实施 |
-| alias、kind migration 与 complete desired prune 分工 | state/target integration tests | 待实施 |
-| conflict 不阻塞 hook，prune 正确 deferred | combined plan tests | 待实施 |
-| invalid manifest/state、managed/rendered 零计划 | fail-closed tests | 待实施 |
-| deterministic、自包含、getter 深拷贝 | repeat/clone/validation tests | 待实施 |
-| 全部路径零锁零写入 | fixture tree snapshots | 待实施 |
-| 当前平台完整门禁 | `make check` | 待运行 |
+| 完整 collision/path validation 先于 scope | partial 请求下的完整 target collision 集成测试 | 通过 |
+| 只渲染/决策请求 scope | 未请求坏模板 + full fail-fast、unknown scope tests | 通过 |
+| alias、kind migration 与 complete desired prune 分工 | alias symlink→scaffold、partial/full whole-module tests | 通过 |
+| conflict 不阻塞 hook，prune 正确 deferred | default/force/no-prune combined tests | 通过 |
+| invalid manifest/state、managed/rendered 零计划 | fail-closed table tests | 通过 |
+| deterministic、自包含、getter 深拷贝 | repeated plan、getter mutation、combined validation tests | 通过 |
+| 全部路径零锁零写入 | 每个 success/error fixture tree snapshot；missing state root/lock 断言 | 通过 |
+| 当前平台完整门禁 | Darwin/arm64 `make check BINARY=/private/tmp/dot-cp3-apply-planner-check/dot` | 通过 |
+| 双平台编译证据 | darwin/amd64、linux/amd64 planner test binary | 通过（未执行二进制） |
 | 远端 macOS/Linux CI | 精确 branch HEAD | 待验收（本 worker 不 push） |
 
 ## Safety, Authorization, and Recovery
@@ -175,6 +180,19 @@ no-prune，并返回 opaque `ApplyPlan`。结果 getters 给出独立 context/sl
   Impact: scope render 后只把对应 entries 的 Content 回填完整结构 desired，再完成一次完整
   observation；file decisions 单独按 scope module 过滤，不创建第二套 alias/prune 逻辑。
 
+- Observation: `ScopedProfile.Modules()` 在 full scope 仍返回全部 effective modules，而
+  `PruneOptions` 明确要求 `Full` 与 `Modules` 互斥。
+  Evidence: 首次完整入口测试在 `PlanPrune` 返回
+  `full prune cannot include module scope`；partial 路径正常。
+  Impact: 组合层 full 时只设置 `Full=true`，仅 partial 传递 Modules；presentation context 仍保存
+  full modules，不改变 manifest 或 prune contract。
+
+- Observation: strict `state.Decode` 已在 runtime load 阶段直接拒绝任何 rendered entry，managed
+  desired 则在完整 desired observation 转换前拒绝，即使它位于未请求 module。
+  Evidence: public `PlanApply` fail-closed table 对 partial alpha 分别注入 rendered state 与 beta
+  managed source，均返回零 plan 且 fixture tree 不变。
+  Impact: apply planner 不增加第二套 M1 kind 过滤或 fallback，保持两个既有边界的错误来源。
+
 ## Decision Log
 
 - Decision: apply planner 通过一个 production `PlanApply` 入口调用 `runtime.LoadReadOnly`，不暴露
@@ -189,6 +207,30 @@ no-prune，并返回 opaque `ApplyPlan`。结果 getters 给出独立 context/sl
   纯只读且规范只要求 action/prune/hooks scope 缩小，没有授权把非 scope target 变成动作。
   Date: 2026-07-19
 
+- Decision: combined validation 只检查前置组件结果的封闭枚举、排序、scope、Precondition 快照、
+  success/failure effect 与 hook runtime payload 一致性。
+  Rationale: 整体计划必须在 presentation/executor 消费前 fail closed，但 ownership、P1–P3、
+  fingerprint 与路径 identity 的计算继续只由 `Decide`、`PlanPrune`、`PlanHooks` 和 observation
+  提供，组合层不重新决策。
+  Date: 2026-07-19
+
 ## Outcomes and Handoff
 
-尚未完成；计划保持 active。
+实现和 worker 本地门禁已完成，计划保持 active，等待 coordinator 安排未参与实现的完整 branch
+review。相对 base `385dea8` 的 commits 为计划 `ccf487a`、完整 desired/scope file 组合
+`c71fd7d` 与唯一入口/整体 validation `3565be4`。
+
+本地验证（2026-07-19，均退出 0）：
+
+    go test -count=20 ./internal/planner ./internal/runtime ./internal/manifest ./internal/paths ./internal/state
+    go test -race ./internal/planner ./internal/runtime ./internal/manifest ./internal/paths ./internal/state
+    GOOS=darwin GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-apply-darwin.test ./internal/planner
+    GOOS=linux GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-apply-linux.test ./internal/planner
+    git diff 385dea8...HEAD --check
+    make check BINARY=/private/tmp/dot-cp3-apply-planner-check/dot
+
+结果新增唯一 `PlanApply`，它在真实 strict runtime load 后按规范顺序返回完整 observation、scope
+file actions、prune 与 hooks；结果稳定、getter 深拷贝，所有 error 返回零 plan。未新增依赖，未修改
+shared ownership/manifest/runtime/state contract，也没有 CLI/executor/mutation。双平台只完成编译，
+精确 HEAD 远端 macOS/Linux CI 未运行；本地验收通过、远端待验收。实际 file/prune/hook execute、
+state 持久化、输出和退出码属于后续 Milestone，未在本分支验证。
