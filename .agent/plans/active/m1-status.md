@@ -65,11 +65,16 @@ desired、scoped render、observation、file decisions、prune、hooks 与 combi
   `feat/status` clean，`HEAD == base == afd13c8`。
 - [x] 2026-07-19：读取仓库规则、计划生命周期、coordinator、completed apply/plan-cli plans、
   README、指定规范与 CLI/planner APIs；确认 status taxonomy 可由 ApplyPlan 无歧义投影。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先行固定 status summary、DRIFT/PENDING、Clean 与 conflict→2。
-- [ ] 测试先行接入 orphan/unassigned、完整分类矩阵、稳定顺序与无局部 scope/flags 契约。
-- [ ] 覆盖 invalid、missing state、held lock、完整环境隔离和整树零 mutation。
-- [ ] 运行窄测、重复/race、双平台编译、branch diff check 与 `make check`，保持 active 等待 review。
+- [x] 2026-07-19：提交 active ExecPlan 起点（`da154de`）。
+- [x] 2026-07-19：测试先行固定 status summary、DRIFT/PENDING、Clean、unassigned-only 和
+  conflict→2，接入唯一 `PlanApply` 的 status projection（`cf8e114`）。
+- [x] 2026-07-19：补齐 P1/P2/P3/deferred、L/S/kind migration、alias、hook、完整 profile、
+  invalid 与 no-local-flags 分类矩阵（`aa1edb4`）。
+- [x] 2026-07-19：覆盖 missing state、held lock、output error、完整环境隔离和 success/error 整树
+  零 mutation（`aa1edb4`）。
+- [x] 2026-07-19：更新 README 当前实现事实（`e6ccb4f`）。
+- [x] 2026-07-19：运行窄测、20 次重复、race、双平台交叉编译、branch diff check 与
+  `make check`；worktree clean，计划保持 active 等待独立 review。
 
 ## Milestones
 
@@ -152,7 +157,24 @@ DOT_CONFIG 与 DOT_REPO；不读取或修改真实 modules、machine config、st
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: file conflict 存在时，planner 按收敛门控把 P1/P2/P3 全部标记 deferred，但 orphan
+  的基础 P 行分类仍完整保留。
+  Evidence: 混合 fixture 的 owned orphan 同时携带 `PruneReasonOwned` 与
+  `DeferredReason=file-conflict`。
+  Impact: status 始终放入 ORPHAN / PENDING PRUNE，并在描述后追加 deferred 原因；不会因 conflict
+  漏掉 orphan，也不会把它降成普通 PENDING。
+
+- Observation: status 规范没有 module scope 或 force/prune 等 command-local flags；`--profile`
+  选择的是另一个完整 effective profile，不是 partial planner scope。
+  Evidence: `docs/04-cli-spec.md` §4.4 没有位置参数/局部 flag，§2 仍统一提供 global profile；
+  Cobra no-args/flag tests 与 alternate profile fixture 均通过。
+  Impact: status 始终调用 default full-scope `PlanApply`，因此所有 current-profile orphan 都能展示。
+
+- Observation: current run_once fingerprint 只能由同一个 hook planner 稳定获得，测试不应复制其
+  versioned hash 编码。
+  Evidence: hook-skip fixture 先在隔离环境调用 `PlanApply` 取得 fingerprint，再写入合成 state；
+  随后 status 不产生 pending hook。
+  Impact: 测试验证公开行为而不建立第二套 fingerprint 算法。
 
 ## Decision Log
 
@@ -173,6 +195,52 @@ DOT_CONFIG 与 DOT_REPO；不读取或修改真实 modules、machine config、st
   若报告 drift 会错误恢复工具所有权语义。S3、metadata adopt 与迁移动作仍属于 PENDING。
   Date: 2026-07-19
 
+- Decision: status 先构造并验证完整 projection，再输出 summary 或 section；section 顺序固定为
+  DRIFT → PENDING → ORPHAN / PENDING PRUNE → UNASSIGNED MODULES。
+  Rationale: internal mapping 错误必须按运行错误 1 fail closed，不能泄漏半段可信巡检；固定 section
+  和 planner 既有节内顺序满足公开确定性。
+  Date: 2026-07-19
+
+- Decision: status 不复用 diff action-line formatter，只共享 `PlanApply` 事实输入。
+  Rationale: diff 是动作预览，status 是健康 taxonomy；共享字符串会把 CONFLICT/3、verb/reason
+  协议和 skip 可见性错误耦合到 status。
+  Date: 2026-07-19
+
 ## Outcomes and Handoff
 
-尚未完成。计划保持 active，等待实现、验证和独立 review。
+实现已完成，计划保持 active，等待 coordinator 安排未参与实现的独立 reviewer：
+
+- `dot status` 只调用唯一 `planner.PlanApply`，再消费 opaque context/observation/file/prune/hook
+  getters；没有第二次 runtime/state/target 读取或 ownership/P 行/fingerprint 计算。
+- summary、四个稳定 sections、Clean 与 error-only 输出均受 exact/contains 测试保护；同一 link
+  drift 在 status 为 DRIFT/2，既有 diff 仍为 CONFLICT/3。
+- file reason、P1/P2/P3/deferred、hook pending/skip、alias、kind migration、scaffold 用户所有权、
+  alternate full profile 和 unassigned-only 均有真实 filesystem/runtime fixture。
+- invalid manifest/config/state、missing state root、occupied mutation lock 与 stdout failure 分别验证
+  1/2/0 边界；success/error 前后完整树一致，production path 不获取 lock、不写 target/state/
+  backup/temp，也不执行 hook。
+- 无新依赖；没有修改 planner/runtime/state/manifest contract、持久化格式、diff/dry-run output、
+  executor、watch、unified diff、workflow 或 M2/M3。
+
+提交序列：
+
+    da154de docs(plan): 建立 status 执行计划
+    cf8e114 feat(cli): 接入 status 健康巡检
+    aa1edb4 test(cli): 固定 status 分类与零写入边界
+    e6ccb4f docs(readme): 更新 status 实现状态
+
+本地验证（2026-07-19，均退出 0）：
+
+    go test ./internal/cli ./internal/planner ./internal/runtime
+    go test -count=20 ./internal/cli ./internal/planner ./internal/runtime
+    go test -race ./internal/cli ./internal/planner ./internal/runtime
+    GOOS=darwin GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-status-darwin.test ./internal/cli
+    GOOS=linux GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-status-linux.test ./internal/cli
+    git diff afd13c84b8af90d3f6da5da597271bfa1de0c6ec...HEAD --check
+    make check BINARY=/private/tmp/dot-cp3-status-final-check/dot
+
+双平台只完成编译，未执行交叉编译产物；精确 HEAD 的远端 macOS/Linux CI 未运行，本地验收通过、
+远端待验收。reviewer 应以 `afd13c84b8af90d3f6da5da597271bfa1de0c6ec...feat/status` 为
+有效 diff，重点复核 conflict/DRIFT/PENDING 分界、scaffold clean 例外、所有 orphan 无遗漏、
+unassigned-only Clean、错误前零可信输出及全部只读路径零锁零写入。review 前不迁移本计划到
+completed，也不创建 closure commit。
