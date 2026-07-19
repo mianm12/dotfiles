@@ -1,12 +1,18 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/mianm12/dotfiles/internal/buildinfo"
+	"github.com/mianm12/dotfiles/internal/lock"
+	"github.com/mianm12/dotfiles/internal/planner"
+	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 )
 
 func TestStatus_PrintsStableHealthSectionsAndReturnsActionable(t *testing.T) {
@@ -108,4 +114,327 @@ func TestStatus_HasNoModuleScopeOrPlanFlags(t *testing.T) {
 			t.Errorf("status unexpectedly registers local flag %q", flag)
 		}
 	}
+}
+
+func TestStatus_ScaffoldLifecycleDistinguishesCleanSkipsFromPending(t *testing.T) {
+	t.Run("user-owned scaffold missing and modified are clean", func(t *testing.T) {
+		fixture := newNoOpPlanCLIFixture(t)
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "deleted.template"), "blueprint\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "modified.template"), "blueprint\n")
+		writeCLIFile(t, filepath.Join(fixture.home, "clean", "modified"), "user changed bytes\n")
+		stableSource := filepath.Join(fixture.repository, "modules", "clean", "stable")
+		writePlanState(t, fixture.home, planStateDocument{
+			Version: 1,
+			Entries: map[string]planStateEntry{
+				"~/clean/deleted": {
+					Module: "clean", Kind: "scaffold", Source: "modules/clean/deleted.template", AppliedAt: "2026-07-19T00:00:00Z",
+				},
+				"~/clean/modified": {
+					Module: "clean", Kind: "scaffold", Source: "modules/clean/modified.template", AppliedAt: "2026-07-19T00:00:00Z",
+				},
+				"~/clean/stable": {
+					Module: "clean", Kind: "symlink", Source: "modules/clean/stable", LinkDest: stableSource, AppliedAt: "2026-07-19T00:00:00Z",
+				},
+			},
+			RunOnce: map[string]planRunOnce{},
+		})
+
+		stdout, stderr, code := fixture.run(t, "status")
+		want := "Profile: clean (1 modules, 3 files managed)\n\nClean.\n"
+		if code != exitOK || stdout != want || stderr != "" {
+			t.Fatalf("scaffold skips status = stdout %q, stderr %q, exit %d; want %q, empty stderr, 0", stdout, stderr, code, want)
+		}
+	})
+
+	t.Run("new scaffold is pending", func(t *testing.T) {
+		fixture := newNoOpPlanCLIFixture(t)
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "fresh.template"), "blueprint\n")
+
+		stdout, stderr, code := fixture.run(t, "status")
+		want := "Profile: clean (1 modules, 2 files managed)\n" +
+			"\nPENDING (1)\n" +
+			"  ~/clean/fresh                   scaffold not yet created\n"
+		if code != exitActionable || stdout != want || stderr != "" {
+			t.Fatalf("fresh scaffold status = stdout %q, stderr %q, exit %d; want %q, empty stderr, 2", stdout, stderr, code, want)
+		}
+	})
+}
+
+func TestStatus_KindMigrationAndAliasArePendingWithoutFalseOrphan(t *testing.T) {
+	t.Run("kind migrations", func(t *testing.T) {
+		fixture := newNoOpPlanCLIFixture(t)
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "from-scaffold"), "desired link\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "to-scaffold.template"), "blueprint\n")
+		writeCLIFile(t, filepath.Join(fixture.home, "clean", "from-scaffold"), "user file\n")
+		stableSource := filepath.Join(fixture.repository, "modules", "clean", "stable")
+		if err := os.Symlink(stableSource, filepath.Join(fixture.home, "clean", "to-scaffold")); err != nil {
+			t.Fatalf("os.Symlink(to-scaffold) error = %v", err)
+		}
+		writePlanState(t, fixture.home, planStateDocument{
+			Version: 1,
+			Entries: map[string]planStateEntry{
+				"~/clean/from-scaffold": {
+					Module: "clean", Kind: "scaffold", Source: "modules/clean/from-scaffold", AppliedAt: "2026-07-19T00:00:00Z",
+				},
+				"~/clean/stable": {
+					Module: "clean", Kind: "symlink", Source: "modules/clean/stable", LinkDest: stableSource, AppliedAt: "2026-07-19T00:00:00Z",
+				},
+				"~/clean/to-scaffold": {
+					Module: "clean", Kind: "symlink", Source: "modules/clean/old", LinkDest: stableSource, AppliedAt: "2026-07-19T00:00:00Z",
+				},
+			},
+			RunOnce: map[string]planRunOnce{},
+		})
+
+		stdout, stderr, code := fixture.run(t, "status")
+		for _, want := range []string{
+			"PENDING (2)",
+			"~/clean/from-scaffold           regular file blocks desired link",
+			"~/clean/to-scaffold             owned symlink pending scaffold migration",
+		} {
+			if !strings.Contains(stdout, want) {
+				t.Errorf("kind migration status %q missing %q", stdout, want)
+			}
+		}
+		if code != exitActionable || stderr != "" || strings.Contains(stdout, "ORPHAN") || strings.Contains(stdout, "DRIFT") {
+			t.Fatalf("kind migration status = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
+
+	t.Run("historical path alias", func(t *testing.T) {
+		fixture := newAliasStatusFixture(t)
+		stdout, stderr, code := fixture.run(t, "status")
+		want := "Profile: alias (1 modules, 1 files managed)\n" +
+			"\nPENDING (1)\n" +
+			"  ~/alias/item                    state metadata needs refresh\n"
+		if code != exitActionable || stdout != want || stderr != "" || strings.Contains(stdout, "ORPHAN") {
+			t.Fatalf("alias status = stdout %q, stderr %q, exit %d; want pending without orphan", stdout, stderr, code)
+		}
+	})
+}
+
+func TestStatus_ReportsEveryOrphanClass(t *testing.T) {
+	fixture := newNoOpPlanCLIFixture(t)
+	stableSource := filepath.Join(fixture.repository, "modules", "clean", "stable")
+	writeCLIFile(t, filepath.Join(fixture.home, "clean", "scaffold-old"), "user data\n")
+	if err := os.Symlink("owned", filepath.Join(fixture.home, "clean", "owned-old")); err != nil {
+		t.Fatalf("os.Symlink(owned-old) error = %v", err)
+	}
+	if err := os.Symlink("changed", filepath.Join(fixture.home, "clean", "unowned-old")); err != nil {
+		t.Fatalf("os.Symlink(unowned-old) error = %v", err)
+	}
+	writePlanState(t, fixture.home, planStateDocument{
+		Version: 1,
+		Entries: map[string]planStateEntry{
+			"~/clean/owned-old": {
+				Module: "clean", Kind: "symlink", Source: "modules/clean/old", LinkDest: "owned", AppliedAt: "2026-07-19T00:00:00Z",
+			},
+			"~/clean/scaffold-old": {
+				Module: "clean", Kind: "scaffold", Source: "modules/clean/old.template", AppliedAt: "2026-07-19T00:00:00Z",
+			},
+			"~/clean/stable": {
+				Module: "clean", Kind: "symlink", Source: "modules/clean/stable", LinkDest: stableSource, AppliedAt: "2026-07-19T00:00:00Z",
+			},
+			"~/clean/unowned-old": {
+				Module: "clean", Kind: "symlink", Source: "modules/clean/old", LinkDest: "owned", AppliedAt: "2026-07-19T00:00:00Z",
+			},
+		},
+		RunOnce: map[string]planRunOnce{},
+	})
+
+	stdout, stderr, code := fixture.run(t, "status")
+	want := "Profile: clean (1 modules, 1 files managed)\n" +
+		"\nORPHAN / PENDING PRUNE (3)\n" +
+		"  ~/clean/owned-old               owned orphan from previous profile\n" +
+		"  ~/clean/scaffold-old            scaffold orphan pending state cleanup\n" +
+		"  ~/clean/unowned-old             unowned orphan pending state cleanup\n"
+	if code != exitActionable || stdout != want || stderr != "" {
+		t.Fatalf("orphan status = stdout %q, stderr %q, exit %d; want %q, empty stderr, 2", stdout, stderr, code, want)
+	}
+}
+
+func TestStatus_HookSkipAndProfileOverrideUsePlannerScope(t *testing.T) {
+	t.Run("current fingerprints are omitted", func(t *testing.T) {
+		fixture := newPlanCLIFixture(t)
+		fixture.redirectEnvironment(t)
+		plan, err := planner.PlanApply(planner.ApplyOptions{
+			Runtime: dotruntime.Overrides{
+				Home:       dotruntime.Override{Value: fixture.home, Set: true},
+				Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+			},
+			CLIVersion: "v0.0.0",
+		})
+		if err != nil {
+			t.Fatalf("planner.PlanApply() error = %v", err)
+		}
+		runOnce := make(map[string]planRunOnce)
+		for _, action := range plan.Hooks().Actions() {
+			runOnce[action.StateKey] = planRunOnce{Hash: action.Fingerprint, ExecutedAt: "2026-07-19T00:00:00Z"}
+		}
+		stableSource := filepath.Join(fixture.repository, "modules", "alpha", "stable")
+		writePlanState(t, fixture.home, planStateDocument{
+			Version: 1,
+			Entries: map[string]planStateEntry{
+				"~/alpha/orphan": {
+					Module: "alpha", Kind: "symlink", Source: "modules/alpha/obsolete", LinkDest: "owned", AppliedAt: "2026-07-19T00:00:00Z",
+				},
+				"~/alpha/stable": {
+					Module: "alpha", Kind: "symlink", Source: "modules/alpha/stable", LinkDest: stableSource, AppliedAt: "2026-07-19T00:00:00Z",
+				},
+			},
+			RunOnce: runOnce,
+		})
+
+		stdout, stderr, code := fixture.run(t, "status")
+		if code != exitActionable || stderr != "" || strings.Contains(stdout, "run_once pending execution") || strings.Contains(stdout, "hooks/setup.sh") {
+			t.Fatalf("hook-skip status = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
+
+	t.Run("global profile selects a complete profile", func(t *testing.T) {
+		fixture := newPlanCLIFixture(t)
+		writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+all = ["beta", "alpha"]
+alpha = ["alpha"]
+`)
+		stdout, stderr, code := fixture.run(t, "status", "--profile", "alpha")
+		if code != exitActionable || stderr != "" || !strings.HasPrefix(stdout, "Profile: alpha (1 modules, 3 files managed)\n") {
+			t.Fatalf("profile status = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+		if strings.Contains(stdout, "~/beta/") || strings.Contains(stdout, "beta/hooks") {
+			t.Errorf("profile status leaked another profile's actions: %q", stdout)
+		}
+	})
+}
+
+func TestStatus_InvalidConfigAndStateAreErrorOnly(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, planCLIFixture)
+	}{
+		{
+			name: "config",
+			mutate: func(t *testing.T, fixture planCLIFixture) {
+				writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), "invalid = [")
+			},
+		},
+		{
+			name: "state",
+			mutate: func(t *testing.T, fixture planCLIFixture) {
+				writeCLIFile(t, filepath.Join(fixture.home, ".local", "state", "dot", "state.json"), "{")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newNoOpPlanCLIFixture(t)
+			test.mutate(t, fixture)
+			before := snapshotCLITree(t, fixture.root)
+			stdout, stderr, code := fixture.run(t, "status")
+			if code != exitError || stdout != "" || !strings.Contains(stderr, "error:") || strings.Contains(stderr, "Clean.") {
+				t.Fatalf("invalid %s status = stdout %q, stderr %q, exit %d", test.name, stdout, stderr, code)
+			}
+			if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("invalid %s status changed tree\nbefore=%v\nafter=%v", test.name, before, after)
+			}
+		})
+	}
+}
+
+func TestStatus_MissingStateAndHeldLockRemainReadOnly(t *testing.T) {
+	t.Run("missing state root", func(t *testing.T) {
+		fixture := newNoOpPlanCLIFixture(t)
+		stateRoot := filepath.Join(fixture.home, ".local", "state", "dot")
+		if err := os.Remove(filepath.Join(stateRoot, "state.json")); err != nil {
+			t.Fatalf("os.Remove(state) error = %v", err)
+		}
+		if err := os.Remove(stateRoot); err != nil {
+			t.Fatalf("os.Remove(state root) error = %v", err)
+		}
+		before := snapshotCLITree(t, fixture.root)
+
+		stdout, stderr, code := fixture.run(t, "status")
+		if code != exitActionable || stderr != "" || !strings.Contains(stdout, "state metadata needs refresh") {
+			t.Fatalf("missing-state status = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+		if _, err := os.Lstat(stateRoot); !os.IsNotExist(err) {
+			t.Fatalf("status created missing state root: %v", err)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("missing-state status changed tree\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+
+	t.Run("held mutation lock", func(t *testing.T) {
+		fixture := newNoOpPlanCLIFixture(t)
+		stateRoot := filepath.Join(fixture.home, ".local", "state", "dot")
+		owner, err := lock.Acquire(stateRoot, filepath.Join(stateRoot, "lock"))
+		if err != nil {
+			t.Fatalf("lock.Acquire() error = %v", err)
+		}
+		t.Cleanup(func() {
+			if err := owner.Release(); err != nil {
+				t.Errorf("lock Ownership.Release() error = %v", err)
+			}
+		})
+		before := snapshotCLITree(t, fixture.root)
+
+		stdout, stderr, code := fixture.run(t, "status")
+		if code != exitOK || stderr != "" || !strings.HasSuffix(stdout, "Clean.\n") {
+			t.Fatalf("held-lock status = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("held-lock status changed tree\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+}
+
+func TestStatus_OutputErrorOverridesClean(t *testing.T) {
+	fixture := newNoOpPlanCLIFixture(t)
+	fixture.redirectEnvironment(t)
+	var stderr bytes.Buffer
+	code := run([]string{"status", "--home", fixture.home, "--repo", fixture.repository}, environment{
+		stdout:      failingWriter{err: os.ErrClosed},
+		stderr:      &stderr,
+		lookupEnv:   os.LookupEnv,
+		userHomeDir: os.UserHomeDir,
+		build:       buildinfo.Info{Version: "v0.0.0"},
+		goos:        runtime.GOOS,
+	})
+	if code != exitError || !strings.Contains(stderr.String(), "write stdout") {
+		t.Fatalf("status output failure = stderr %q, exit %d; want output error priority 1", stderr.String(), code)
+	}
+}
+
+func newAliasStatusFixture(t *testing.T) planCLIFixture {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repository := filepath.Join(root, "repo")
+	writeCLIFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"alias\"\n")
+	writeCLIFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+alias = ["alias"]
+`)
+	writeCLIFile(t, filepath.Join(repository, "modules", "alias", "dot.toml"), "target = \"~/alias\"\n")
+	writeCLIFile(t, filepath.Join(repository, "modules", "alias", "item"), "item\n")
+	makeDirectory(t, filepath.Join(home, "real"))
+	if err := os.Symlink("real", filepath.Join(home, "alias")); err != nil {
+		t.Fatalf("os.Symlink(alias) error = %v", err)
+	}
+	source := filepath.Join(repository, "modules", "alias", "item")
+	if err := os.Symlink(source, filepath.Join(home, "real", "item")); err != nil {
+		t.Fatalf("os.Symlink(item) error = %v", err)
+	}
+	writePlanState(t, home, planStateDocument{
+		Version: 1,
+		Entries: map[string]planStateEntry{
+			"~/real/item": {
+				Module: "alias", Kind: "symlink", Source: "modules/alias/item", LinkDest: source, AppliedAt: "2026-07-19T00:00:00Z",
+			},
+		},
+		RunOnce: map[string]planRunOnce{},
+	})
+	return planCLIFixture{root: root, home: home, repository: repository}
 }
