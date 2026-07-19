@@ -2,8 +2,10 @@ package apply
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -409,6 +411,7 @@ func newRunIntegrationFixture(t *testing.T) runIntegrationFixture {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repository := filepath.Join(root, "repo")
+	isolateRunMutationEnvironment(t, root, home, repository)
 	writeRunFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
 	writeRunFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
 [profiles]
@@ -430,6 +433,114 @@ mode = "0600"
 		linkTarget:     filepath.Join(home, "zshrc"),
 		scaffoldTarget: filepath.Join(home, "config"),
 	}
+}
+
+type runPathMetadata struct {
+	exists  bool
+	mode    fs.FileMode
+	size    int64
+	modTime time.Time
+	info    fs.FileInfo
+}
+
+func isolateRunMutationEnvironment(t *testing.T, root, home, repository string) {
+	t.Helper()
+	realHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("os.UserHomeDir() error = %v", err)
+	}
+	if realHome == "" || !filepath.IsAbs(realHome) || pathsContain(root, realHome) {
+		t.Fatalf("real HOME %q is not a distinct absolute path outside fixture root %q", realHome, root)
+	}
+	realPaths := []string{
+		realHome,
+		filepath.Join(realHome, ".config", "dot", "config.toml"),
+		filepath.Join(realHome, ".local", "state", "dot"),
+		filepath.Join(realHome, ".local", "state", "dot", "state.json"),
+		filepath.Join(realHome, ".local", "state", "dot", "lock"),
+		filepath.Join(realHome, ".dotfiles"),
+		filepath.Join(realHome, "config"),
+		filepath.Join(realHome, "zshrc"),
+	}
+	before := make(map[string]runPathMetadata, len(realPaths))
+	for _, path := range realPaths {
+		before[path] = snapshotRunPathMetadata(t, path)
+	}
+	t.Cleanup(func() {
+		for _, path := range realPaths {
+			assertRunPathMetadataUnchanged(t, path, before[path], snapshotRunPathMetadata(t, path))
+		}
+	})
+
+	environment := map[string]string{
+		"HOME":            home,
+		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+		"XDG_STATE_HOME":  filepath.Join(home, ".local", "state"),
+		"XDG_DATA_HOME":   filepath.Join(home, ".local", "share"),
+		"XDG_CACHE_HOME":  filepath.Join(home, ".cache"),
+		"XDG_RUNTIME_DIR": filepath.Join(root, "xdg-runtime"),
+		"DOT_CONFIG":      filepath.Join(home, ".config", "dot", "config.toml"),
+		"DOT_REPO":        repository,
+	}
+	for key, value := range environment {
+		t.Setenv(key, value)
+		if !pathsContain(root, value) {
+			t.Fatalf("isolated %s=%q is outside fixture root %q", key, value, root)
+		}
+	}
+	if os.Getenv("HOME") != home ||
+		os.Getenv("DOT_CONFIG") != filepath.Join(home, ".config", "dot", "config.toml") ||
+		os.Getenv("DOT_REPO") != repository {
+		t.Fatal("isolated environment contradicts runtime HOME/repository/config paths")
+	}
+}
+
+func snapshotRunPathMetadata(t *testing.T, path string) runPathMetadata {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return runPathMetadata{}
+	}
+	if err != nil {
+		t.Fatalf("os.Lstat(%q) error = %v", path, err)
+	}
+	return runPathMetadata{
+		exists:  true,
+		mode:    info.Mode(),
+		size:    info.Size(),
+		modTime: info.ModTime(),
+		info:    info,
+	}
+}
+
+func assertRunPathMetadataUnchanged(t *testing.T, path string, before, after runPathMetadata) {
+	t.Helper()
+	if before.exists != after.exists {
+		t.Errorf("real HOME path %q existence changed: before=%t after=%t", path, before.exists, after.exists)
+		return
+	}
+	if !before.exists {
+		return
+	}
+	if !os.SameFile(before.info, after.info) || before.mode != after.mode ||
+		before.size != after.size || !before.modTime.Equal(after.modTime) {
+		t.Errorf(
+			"real HOME path %q metadata changed: before=(%v,%d,%v) after=(%v,%d,%v)",
+			path,
+			before.mode,
+			before.size,
+			before.modTime,
+			after.mode,
+			after.size,
+			after.modTime,
+		)
+	}
+}
+
+func pathsContain(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !filepath.IsAbs(relative) &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func (fixture runIntegrationFixture) options() Options {
