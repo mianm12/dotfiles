@@ -41,7 +41,11 @@ type RuntimeContext struct {
 // ValidatedProfile 是完整 effective profile 的结构性 desired 已通过全部路径边界后的只读结果。
 // scope 选择只能消费 Entries 返回的副本，不能作为全局校验输入。
 type ValidatedProfile struct {
-	entries []DesiredEntry
+	name     string
+	goos     string
+	dataKeys []string
+	modules  []ResolvedModule
+	entries  []DesiredEntry
 }
 
 // Entries 返回完整 profile 的结构性 desired 副本；scaffold 尚未渲染。
@@ -118,7 +122,13 @@ func (p ResolvedProfile) ValidatePathBoundaries(
 	if _, err := paths.ValidatePathBoundaries(controlPaths, targets); err != nil {
 		return ValidatedProfile{}, fmt.Errorf("resolved profile %q path boundaries: %w", p.name, err)
 	}
-	return ValidatedProfile{entries: entries}, nil
+	return ValidatedProfile{
+		name:     p.name,
+		goos:     p.goos,
+		dataKeys: append([]string(nil), p.dataKeys...),
+		modules:  cloneResolvedModules(p.modules),
+		entries:  entries,
+	}, nil
 }
 
 func (p ResolvedProfile) targetStructure(home string) ([]DesiredEntry, []paths.LabeledTarget, error) {
