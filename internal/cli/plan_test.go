@@ -384,6 +384,68 @@ func TestReadOnlyPlan_OutputErrorOverridesConflict(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPlan_StderrFailureDoesNotRollBackComputedStdout(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture func(*testing.T) planCLIFixture
+		args    []string
+	}{
+		{name: "diff clean", fixture: newNoOpPlanCLIFixture, args: []string{"diff"}},
+		{name: "diff actionable", fixture: newPlanCLIFixture, args: []string{"diff", "alpha"}},
+		{name: "dry-run clean", fixture: newNoOpPlanCLIFixture, args: []string{"apply", "--dry-run"}},
+		{name: "dry-run actionable", fixture: newPlanCLIFixture, args: []string{"apply", "alpha", "--dry-run"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := test.fixture(t)
+			fixture.redirectEnvironment(t)
+			args := append(append([]string(nil), test.args...),
+				"--home", fixture.home, "--repo", fixture.repository,
+			)
+			before := snapshotCLITree(t, fixture.root)
+
+			var wantStdout bytes.Buffer
+			var normalStderr bytes.Buffer
+			normalCode := run(args, environment{
+				stdout:      &wantStdout,
+				stderr:      &normalStderr,
+				lookupEnv:   os.LookupEnv,
+				userHomeDir: os.UserHomeDir,
+				build:       buildinfo.Info{Version: "dev"},
+				goos:        runtime.GOOS,
+			})
+			if normalCode == exitError || normalStderr.String() != "notice: development build skipped the requires version comparison\n" {
+				t.Fatalf(
+					"normal development plan = stderr %q, exit %d; want compatibility notice and non-error exit",
+					normalStderr.String(),
+					normalCode,
+				)
+			}
+
+			var stdout bytes.Buffer
+			code := run(args, environment{
+				stdout:      &stdout,
+				stderr:      failingWriter{err: os.ErrClosed},
+				lookupEnv:   os.LookupEnv,
+				userHomeDir: os.UserHomeDir,
+				build:       buildinfo.Info{Version: "dev"},
+				goos:        runtime.GOOS,
+			})
+			if code != exitError || stdout.String() != wantStdout.String() {
+				t.Fatalf(
+					"failed development notice = stdout %q, exit %d; want computed stdout %q and exit 1",
+					stdout.String(),
+					code,
+					wantStdout.String(),
+				)
+			}
+			if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("read-only plan output failure changed isolated tree\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
 func TestDiff_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T) {
 	t.Run("scaffold deleted", func(t *testing.T) {
 		fixture := newNoOpPlanCLIFixture(t)
