@@ -75,6 +75,11 @@ desired、scoped render、observation、file decisions、prune、hooks 与 combi
 - [x] 2026-07-19：更新 README 当前实现事实（`e6ccb4f`）。
 - [x] 2026-07-19：运行窄测、20 次重复、race、双平台交叉编译、branch diff check 与
   `make check`；worktree clean，计划保持 active 等待独立 review。
+- [x] 2026-07-19：review round 1 提出有效 P2：development notice 的 stderr 写失败时，旧实现已先
+  输出 clean/actionable 可信 verdict。回归先在旧实现稳定失败，以 `446cadb` 让 notice 成为 status
+  stdout 的前置提交；正常字节契约不变。
+- [x] 2026-07-19：round 1 fix 后相关三包普通/20 次/race、Darwin/Linux amd64 交叉编译、完整
+  branch diff check 与 `make check` 再次通过；等待 round 2 完整 branch review。
 
 ## Milestones
 
@@ -176,6 +181,13 @@ DOT_CONFIG 与 DOT_REPO；不读取或修改真实 modules、machine config、st
   随后 status 不产生 pending hook。
   Impact: 测试验证公开行为而不建立第二套 fingerprint 算法。
 
+- Observation: `command.PrintErrf` 会把 stderr 写失败留给最终 output tracker，但不会阻止当前
+  presentation 继续写 stdout。
+  Evidence: round 1 dev-build 回归中，notice writer 返回 `os.ErrClosed` 后命令最终退出 1，但旧
+  `printStatusProjection` 已输出 `Clean.` 或完整 actionable sections。
+  Impact: status 需要在任何可信 stdout 前通过会返回 error 的真实 stderr 写入提交 notices；不能
+  依赖最终 exit override 补救已经发布的 verdict。
+
 ## Decision Log
 
 - Decision: UNASSIGNED 只读 `ApplyContext.UnassignedModules`，绝不从 current-profile scope 或 file
@@ -206,6 +218,12 @@ DOT_CONFIG 与 DOT_REPO；不读取或修改真实 modules、machine config、st
   协议和 skip 可见性错误耦合到 status。
   Date: 2026-07-19
 
+- Decision: compatibility notice 是 status summary/sections/Clean 的输出前置条件；通过真实 stderr
+  writer 写入并检查结果，失败立即返回。
+  Rationale: 运行错误 1 不能与可信健康 verdict 并存；这保持正常 stdout/stderr 字节不变，也不靠
+  writer 预探测、吞错或改变 taxonomy。相同路径的 clean/actionable projection 都受回归保护。
+  Date: 2026-07-19
+
 ## Outcomes and Handoff
 
 实现已完成，计划保持 active，等待 coordinator 安排未参与实现的独立 reviewer：
@@ -228,6 +246,8 @@ DOT_CONFIG 与 DOT_REPO；不读取或修改真实 modules、machine config、st
     cf8e114 feat(cli): 接入 status 健康巡检
     aa1edb4 test(cli): 固定 status 分类与零写入边界
     e6ccb4f docs(readme): 更新 status 实现状态
+    244cc3e docs(plan): 记录 status 交接证据
+    446cadb fix(cli): 在 status verdict 前提交 notice
 
 本地验证（2026-07-19，均退出 0）：
 
@@ -237,10 +257,10 @@ DOT_CONFIG 与 DOT_REPO；不读取或修改真实 modules、machine config、st
     GOOS=darwin GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-status-darwin.test ./internal/cli
     GOOS=linux GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-status-linux.test ./internal/cli
     git diff afd13c84b8af90d3f6da5da597271bfa1de0c6ec...HEAD --check
-    make check BINARY=/private/tmp/dot-cp3-status-final-check/dot
+    make check BINARY=/private/tmp/dot-cp3-status-review-fix-check/dot
 
 双平台只完成编译，未执行交叉编译产物；精确 HEAD 的远端 macOS/Linux CI 未运行，本地验收通过、
 远端待验收。reviewer 应以 `afd13c84b8af90d3f6da5da597271bfa1de0c6ec...feat/status` 为
 有效 diff，重点复核 conflict/DRIFT/PENDING 分界、scaffold clean 例外、所有 orphan 无遗漏、
-unassigned-only Clean、错误前零可信输出及全部只读路径零锁零写入。review 前不迁移本计划到
-completed，也不创建 closure commit。
+unassigned-only Clean、notice/prerequisite 失败前零可信输出及全部只读路径零锁零写入。round 1
+P2 已修复并完成全部门禁；round 2 前不迁移本计划到 completed，也不创建 closure commit。
