@@ -171,10 +171,11 @@ func TestMutationSession_LoadAndCloseFailuresKeepRetryableSession(t *testing.T) 
 	operations.readRequirement = func(string) (manifest.Requirement, error) {
 		return manifest.Requirement{}, loadErr
 	}
-	session := &MutationSession{
-		lease:      newSessionLease(&lock.Ownership{}, releaser),
-		operations: operations,
-	}
+	session := newMutationSession(
+		newSessionLease(&lock.Ownership{}, releaser),
+		RunContext{},
+		operations,
+	)
 
 	if _, err := session.Load("v1.0.0"); !errors.Is(err, loadErr) {
 		t.Fatalf("MutationSession.Load() error = %v, want load failure", err)

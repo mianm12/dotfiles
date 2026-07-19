@@ -138,6 +138,141 @@ func TestLoadedMutation_CommitsOnceAfterSuccessfulLoad(t *testing.T) {
 	}
 }
 
+func TestMutationSession_CopiesShareLoadAndCommitState(t *testing.T) {
+	fixture := newLoadingFixture(t, true)
+	writeState(t, fixture, validEmptyState)
+	session, err := BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginMutation() error = %v", err)
+	}
+	t.Cleanup(func() { closeMutationSession(t, session) })
+	copiedSession := *session
+
+	mutation, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("MutationSession.Load() error = %v", err)
+	}
+	if second, err := copiedSession.Load("v1.0.0"); second != nil || !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("copied MutationSession.Load() = (%#v, %v), want ErrSessionOrder", second, err)
+	}
+
+	copiedMutation := *mutation
+	first := mustDecodeState(t, stateWithSymlinkEntry("~/first", "modules/app/file"))
+	if err := copiedMutation.CommitState(first); err != nil {
+		t.Fatalf("copied LoadedMutation.CommitState() error = %v", err)
+	}
+	committed, err := os.ReadFile(fixture.paths.StateFile())
+	if err != nil {
+		t.Fatalf("os.ReadFile(committed state) error = %v", err)
+	}
+
+	second := mustDecodeState(t, stateWithSymlinkEntry("~/second", "modules/app/file"))
+	if err := mutation.CommitState(second); !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("original LoadedMutation.CommitState() after copied commit error = %v, want ErrSessionOrder", err)
+	}
+	after, err := os.ReadFile(fixture.paths.StateFile())
+	if err != nil {
+		t.Fatalf("os.ReadFile(state after rejected commit) error = %v", err)
+	}
+	if !reflect.DeepEqual(after, committed) {
+		t.Fatal("rejected commit through capability alias changed first committed state")
+	}
+}
+
+func TestMutationSession_CopiesLoadConcurrentlyOnce(t *testing.T) {
+	fixture := newLoadingFixture(t, true)
+	writeState(t, fixture, validEmptyState)
+	session, err := BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginMutation() error = %v", err)
+	}
+	t.Cleanup(func() { closeMutationSession(t, session) })
+	copied := *session
+
+	type result struct {
+		mutation *LoadedMutation
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, handle := range []*MutationSession{session, &copied} {
+		go func(candidate *MutationSession) {
+			<-start
+			mutation, err := candidate.Load("v1.0.0")
+			results <- result{mutation: mutation, err: err}
+		}(handle)
+	}
+	close(start)
+
+	loaded := 0
+	orderErrors := 0
+	for range 2 {
+		got := <-results
+		switch {
+		case got.err == nil && got.mutation != nil:
+			loaded++
+		case got.mutation == nil && errors.Is(got.err, ErrSessionOrder):
+			orderErrors++
+		default:
+			t.Fatalf("concurrent copied Load() = (%#v, %v), want capability or ErrSessionOrder", got.mutation, got.err)
+		}
+	}
+	if loaded != 1 || orderErrors != 1 {
+		t.Fatalf("concurrent copied Load() results = %d capabilities, %d order errors; want 1 and 1", loaded, orderErrors)
+	}
+}
+
+func TestLoadedMutation_CopiesCommitConcurrentlyOnce(t *testing.T) {
+	fixture := newLoadingFixture(t, true)
+	writeState(t, fixture, validEmptyState)
+	operations := defaultLoadingOperations()
+	store := operations.storeState
+	storeCalls := 0
+	operations.storeState = func(root, path string, snapshot state.Snapshot) error {
+		storeCalls++
+		return store(root, path, snapshot)
+	}
+	session, err := beginMutation(fixture.overrides, operations)
+	if err != nil {
+		t.Fatalf("beginMutation() error = %v", err)
+	}
+	t.Cleanup(func() { closeMutationSession(t, session) })
+	mutation, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("MutationSession.Load() error = %v", err)
+	}
+	left := *mutation
+	right := *mutation
+	candidate := mustDecodeState(t, stateWithSymlinkEntry("~/new", "modules/app/file"))
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, capability := range []*LoadedMutation{&left, &right} {
+		go func(copy *LoadedMutation) {
+			<-start
+			results <- copy.CommitState(candidate)
+		}(capability)
+	}
+	close(start)
+
+	committed := 0
+	orderErrors := 0
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			committed++
+		case errors.Is(err, ErrSessionOrder):
+			orderErrors++
+		default:
+			t.Fatalf("concurrent copied CommitState() error = %v, want nil or ErrSessionOrder", err)
+		}
+	}
+	if committed != 1 || orderErrors != 1 || storeCalls != 1 {
+		t.Fatalf("concurrent copied commits = %d success, %d order errors, %d stores; want 1, 1, 1", committed, orderErrors, storeCalls)
+	}
+}
+
 func TestMutationSession_LoadFailureCanBeRetriedBeforeCapability(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeState(t, fixture, validEmptyState)
@@ -233,11 +368,29 @@ func TestLoadedMutation_StoreFailureCanBeRetried(t *testing.T) {
 	if err := mutation.CommitState(candidate); !errors.Is(err, storeErr) {
 		t.Fatalf("CommitState() error = %v, want store failure", err)
 	}
-	if err := mutation.CommitState(candidate); err != nil {
-		t.Fatalf("CommitState() retry error = %v", err)
+	copied := *mutation
+	if err := copied.CommitState(candidate); err != nil {
+		t.Fatalf("copied CommitState() retry error = %v", err)
 	}
 	if storeCalls != 2 {
 		t.Fatalf("storeState calls = %d, want 2", storeCalls)
+	}
+}
+
+func TestInitSession_CopiesShareLoadPhase(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	session, err := BeginInit(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginInit() error = %v", err)
+	}
+	t.Cleanup(func() { closeInitSession(t, session) })
+	copied := *session
+
+	if _, err := session.Load("v1.0.0"); err != nil {
+		t.Fatalf("InitSession.Load() error = %v", err)
+	}
+	if _, err := copied.Load("v1.0.0"); !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("copied InitSession.Load() error = %v, want ErrSessionOrder", err)
 	}
 }
 
@@ -375,8 +528,8 @@ func TestNestedMutationGateCloseFailureKeepsChildActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginMutation() error = %v", err)
 	}
-	failing = &retryableLeaseReleaser{inner: child.lease.releaser, err: releaseErr}
-	child.lease.releaser = failing
+	failing = &retryableLeaseReleaser{inner: child.core.lease.releaser, err: releaseErr}
+	child.core.lease.releaser = failing
 	if err := child.Close(); !errors.Is(err, releaseErr) {
 		t.Fatalf("child Close() error = %v, want release failure", err)
 	}
