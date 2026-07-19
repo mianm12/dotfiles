@@ -31,6 +31,24 @@ func Store(root, path string, snapshot Snapshot) error {
 	return store(root, path, snapshot, defaultStoreOperations())
 }
 
+// StoreWithPublisher 执行与 Store 相同的 encode、root/destination 校验、temporary
+// create/write/sync/close 和失败清理，只把最终原子 publish 操作显式交给调用方。
+// internal orchestration 测试用它在不改变生产 Store 路径或使用全局 fault hook 的情况下，
+// 证明错误确实发生在最终发布阶段。
+func StoreWithPublisher(
+	root string,
+	path string,
+	snapshot Snapshot,
+	publish func(prepared, destination string) error,
+) error {
+	if publish == nil {
+		return fmt.Errorf("state publisher is required")
+	}
+	operations := defaultStoreOperations()
+	operations.rename = publish
+	return store(root, path, snapshot, operations)
+}
+
 func store(root, path string, snapshot Snapshot, operations storeOperations) error {
 	cleanRoot, cleanPath, err := cleanStorePair(root, path)
 	if err != nil {
