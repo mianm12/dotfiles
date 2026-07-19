@@ -94,7 +94,12 @@ planner 或 diff/status/dry-run CLI。
   独立复核 GO、无 P0–P3。closure 后 main 以 `afd13c8` fast-forward-only 集成，合入后
   CLI/planner/runtime 三包 20 次与 `make check BINARY=/private/tmp/dot-cp3-main-after-plan-cli`
   通过，clean worktree 已移除。
-- [ ] 按 DAG 完成七个 Milestone 的实现、复核、closure、freshness 和 main 集成。
+- [x] 2026-07-19：`feat/status` 完成同一 `PlanApply` 的 DRIFT/PENDING/ORPHAN/UNASSIGNED
+  投影、Clean/0、actionable/2、error/1 与 held-lock/整树零写入；首轮 review 的 notice 写失败后
+  已输出可信 verdict P2 以 `446cadb` 修复，round 2 完整复审 GO。closure 后 main 以 `f30645e`
+  fast-forward-only 集成，合入后 CLI/planner/runtime 三包 20 次与
+  `make check BINARY=/private/tmp/dot-cp3-main-after-status` 通过，clean worktree 已移除。
+- [x] 按 DAG 完成七个 Milestone 的实现、复核、closure、freshness 和 main 集成。
 - [ ] 从 checkpoint base 完成三路独立 Acceptance，处理有效 finding，收口 coordinator 并
   fast-forward-only 合入 main。
 
@@ -262,5 +267,6 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
 
 ## Outcomes and Handoff
 
-尚未完成。Plan Gate 与前六个 Milestone 已完成独立 review、closure、main 集成及合入后门禁；
-下一节点为从 `main@afd13c8` 创建 `feat/status`。
+尚未完成。Plan Gate 与七个 Milestone 已完成独立 review、closure、main 集成及合入后门禁；
+当前进入 checkpoint-base...main 的三路独立 Acceptance。若无有效 finding，不创建 acceptance-fix
+branch；若有，则只在 `fix/m1-planner-acceptance` 按共享根因修复并复审。
