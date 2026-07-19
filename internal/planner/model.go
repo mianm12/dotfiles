@@ -145,10 +145,46 @@ const (
 	ActionConflict ActionVerb = "conflict"
 )
 
+// ActionReason 是供 presentation/status 稳定分类的决策原因，不把人类文案当内部协议。
+type ActionReason string
+
+const (
+	// ReasonTargetMissing 表示 target 缺失，需要创建 desired 产物。
+	ReasonTargetMissing ActionReason = "target-missing"
+	// ReasonExpectedLink 表示 target 已是精确期望 symlink。
+	ReasonExpectedLink ActionReason = "expected-link"
+	// ReasonStateMetadata 表示 target 证据已满足，只需刷新非所有权 metadata。
+	ReasonStateMetadata ActionReason = "state-metadata"
+	// ReasonOwnedLinkStale 表示 target 仍是 owned 旧链，但期望 source 已变化。
+	ReasonOwnedLinkStale ActionReason = "owned-link-stale"
+	// ReasonLinkDrift 表示有 symlink 记录，但 target 已被改指。
+	ReasonLinkDrift ActionReason = "link-drift"
+	// ReasonUnownedLink 表示未被当前记录拥有的 symlink 阻挡 link desired。
+	ReasonUnownedLink ActionReason = "unowned-link"
+	// ReasonRegularConflict 表示普通文件阻挡 link desired。
+	ReasonRegularConflict ActionReason = "regular-conflict"
+	// ReasonDirectoryConflict 表示目录阻挡 link desired，不能 force 替换。
+	ReasonDirectoryConflict ActionReason = "directory-conflict"
+	// ReasonSpecialConflict 表示特殊对象阻挡 link desired，不能 force 替换。
+	ReasonSpecialConflict ActionReason = "special-conflict"
+	// ReasonScaffoldPresent 表示 target 已满足 scaffold 的一次性生命周期。
+	ReasonScaffoldPresent ActionReason = "scaffold-present"
+	// ReasonScaffoldDeleted 表示已有 scaffold 记录且 target 缺失，应保留用户删除决定。
+	ReasonScaffoldDeleted ActionReason = "scaffold-deleted"
+	// ReasonScaffoldRebuild 表示显式 force 要求重建仍缺失的 scaffold。
+	ReasonScaffoldRebuild ActionReason = "scaffold-rebuild"
+	// ReasonOwnedLinkToScaffold 表示把仍 owned 的 symlink 转成独立 scaffold 文件。
+	ReasonOwnedLinkToScaffold ActionReason = "owned-link-to-scaffold"
+	// ReasonReleaseOwnershipToScaffold 表示只改记 scaffold，立即释放旧所有权。
+	ReasonReleaseOwnershipToScaffold ActionReason = "release-ownership-to-scaffold"
+)
+
 // Precondition 固定一个动作提交前必须仍成立的 target 快照。
 type Precondition struct {
-	TargetPath string
-	Observed   Observation
+	TargetPath           string
+	Observed             Observation
+	SourcePath           string
+	RequireRegularSource bool
 }
 
 // StateEffectKind 描述动作成功后的 state 处置；preserve 也用于 skip/conflict/deferred/失败。
@@ -163,22 +199,26 @@ const (
 	StateDelete StateEffectKind = "delete"
 )
 
-// StateEffect 保存动作成功后的 state 处置。Entry 只对 upsert 有效，Key 对 upsert/delete 有效。
+// StateEffect 保存一个结果分支的 state 处置。Entry 只对 upsert 有效，Key 对 upsert/delete
+// 有效；PreviousKey 在 alias 展示 key 变化时要求同一提交摘除旧 key，避免留下重复 identity。
+// upsert Entry 的 AppliedAt 由未来 executor 在动作成功时填入，不参与计划决策。
 type StateEffect struct {
-	Kind  StateEffectKind
-	Key   string
-	Entry HistoricalState
+	Kind        StateEffectKind
+	Key         string
+	PreviousKey string
+	Entry       HistoricalState
 }
 
 // Action 是 planner 与未来 executor 之间的自包含值；当前 package 只形成和展示它。
 type Action struct {
 	Verb         ActionVerb
 	Target       string
-	Reason       string
+	Reason       ActionReason
 	Desired      Desired
 	HasDesired   bool
 	Precondition Precondition
-	StateEffect  StateEffect
+	OnSuccess    StateEffect
+	OnFailure    StateEffect
 }
 
 // Clone 返回不共享 desired/observed bytes 的动作副本。

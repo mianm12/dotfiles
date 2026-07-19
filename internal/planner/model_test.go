@@ -13,7 +13,8 @@ func TestActionClone_DoesNotSharePlanBytes(t *testing.T) {
 		Precondition: Precondition{
 			Observed: Observation{Kind: ObjectRegular, Content: []byte("observed")},
 		},
-		StateEffect: StateEffect{Kind: StateUpsert},
+		OnSuccess: StateEffect{Kind: StateUpsert},
+		OnFailure: StateEffect{Kind: StatePreserve},
 	}
 	cloned := action.Clone()
 	cloned.Desired.Content[0] = 'D'
