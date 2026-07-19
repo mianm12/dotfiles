@@ -72,6 +72,10 @@ requirement 的封闭形态；CLI presentation 能在后续映射错误前保持
   复用纯 `Decide` 校验 canonical tuple 和完整 state effect，新增三项先失败 mutation 回归；
   reviewer 第二轮重审完整分支 GO，无 P0–P3 finding。
 - [x] 2026-07-19：完成 Outcomes/Handoff，将本计划迁入 `completed/`，进入纯计划收口 commit。
+- [ ] 2026-07-19：合并前独立复核发现 prune canonical validation P1 与一个 FileAction 测试
+  命名 P3；按用户授权将计划 reopen，在原分支以新 commits 完成 test→fix→review，不先合入 main。
+- [ ] 补齐 canonical prune actions/groups 校验与 mutation 回归，修正测试命名。
+- [ ] 重新完成重复测试、完整门禁、独立复审和 plan closure。
 
 ## Milestones
 
@@ -225,6 +229,10 @@ package、循环或 IO helper。
   Date: 2026-07-19
 
 ## Outcomes and Handoff
+
+本计划因合并前复核发现有效 P1/P3 于 2026-07-19 reopen。下述内容是首次 closure 时的历史
+handoff；在 canonical prune plan 修复、完整复审与第二次 closure 完成前，本分支不再是
+merge-ready，main 继续保持在既有基线。
 
 本任务已在 `refactor/m1-planner-contract` 完成本地交付，main 保持 clean 且仍位于基线
 `6322af40e3b256f96e228b3a126a181ce2989f5b`；本计划未自行扩大授权合入 main。实现提交为：
