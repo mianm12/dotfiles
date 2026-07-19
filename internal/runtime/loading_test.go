@@ -26,17 +26,21 @@ type loadingFixture struct {
 	paths     paths.ControlPlanePaths
 }
 
-func TestLoadMutation_OrdersTrustedStagesAndReleasesFailure(t *testing.T) {
+func TestMutationSession_OrdersTrustedStages(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeState(t, fixture, validEmptyState)
 
 	operations := defaultLoadingOperations()
 	events := wrapLoadingEvents(&operations)
-	result, lease, err := loadMutation(fixture.overrides, "v1.0.0", operations)
+	session, err := beginMutation(fixture.overrides, operations)
 	if err != nil {
-		t.Fatalf("loadMutation() error = %v", err)
+		t.Fatalf("beginMutation() error = %v", err)
 	}
-	t.Cleanup(func() { releaseLease(t, lease) })
+	t.Cleanup(func() { closeMutationSession(t, session) })
+	result, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("MutationSession.Load() error = %v", err)
+	}
 	if result.State().Status() != state.StatusLoaded {
 		t.Fatalf("State().Status() = %v, want StatusLoaded", result.State().Status())
 	}
@@ -49,21 +53,21 @@ func TestLoadMutation_OrdersTrustedStagesAndReleasesFailure(t *testing.T) {
 	}
 }
 
-func TestLoadMutation_PreflightFailureDoesNotCreateLock(t *testing.T) {
+func TestBeginMutation_PreflightFailureDoesNotCreateLock(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
 
-	_, lease, err := LoadMutation(fixture.overrides, "v1.0.0")
+	session, err := BeginMutation(fixture.overrides)
 	if err == nil {
-		t.Fatal("LoadMutation() error = nil")
+		t.Fatal("BeginMutation() error = nil")
 	}
-	if lease != nil {
-		t.Fatal("LoadMutation() returned a lease after preflight failure")
+	if session != nil {
+		t.Fatal("BeginMutation() returned a session after preflight failure")
 	}
 	assertMissing(t, fixture.paths.StateRoot())
 }
 
-func TestLoadMutation_BusyStopsBeforeRepositoryAndState(t *testing.T) {
+func TestBeginMutation_BusyStopsBeforeRepositoryAndState(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	owner, err := lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
 	if err != nil {
@@ -73,30 +77,31 @@ func TestLoadMutation_BusyStopsBeforeRepositoryAndState(t *testing.T) {
 
 	operations := defaultLoadingOperations()
 	events := wrapLoadingEvents(&operations)
-	_, lease, err := loadMutation(fixture.overrides, "v1.0.0", operations)
+	session, err := beginMutation(fixture.overrides, operations)
 	if !errors.Is(err, lock.ErrBusy) {
-		t.Fatalf("loadMutation() error = %v, want ErrBusy", err)
+		t.Fatalf("beginMutation() error = %v, want ErrBusy", err)
 	}
-	if lease != nil {
-		t.Fatal("busy mutation returned a lease")
+	if session != nil {
+		t.Fatal("busy mutation returned a session")
 	}
 	if want := []string{"preflight", "acquire"}; !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}
 }
 
-func TestLoadMutation_RepositoryFailuresShortCircuitAndRelease(t *testing.T) {
+func TestMutationSession_RepositoryFailuresShortCircuit(t *testing.T) {
 	t.Run("requires", func(t *testing.T) {
 		fixture := newLoadingFixture(t, true)
 		writeManifest(t, fixture.repo, ">=9.0.0", "")
-
-		_, lease, err := LoadMutation(fixture.overrides, "v1.0.0")
+		session, err := BeginMutation(fixture.overrides)
+		if err != nil {
+			t.Fatalf("BeginMutation() error = %v", err)
+		}
+		_, err = session.Load("v1.0.0")
 		if !errors.Is(err, ErrRequiresUnsatisfied) {
-			t.Fatalf("LoadMutation() error = %v, want ErrRequiresUnsatisfied", err)
+			t.Fatalf("MutationSession.Load() error = %v, want ErrRequiresUnsatisfied", err)
 		}
-		if lease != nil {
-			t.Fatal("requires failure returned a lease")
-		}
+		closeMutationSession(t, session)
 		assertLockAvailable(t, fixture)
 	})
 
@@ -104,14 +109,15 @@ func TestLoadMutation_RepositoryFailuresShortCircuitAndRelease(t *testing.T) {
 		fixture := newLoadingFixture(t, true)
 		writeManifest(t, fixture.repo, ">=1.0.0", "unknown = true\n")
 		writeState(t, fixture, "{")
-
-		_, lease, err := LoadMutation(fixture.overrides, "v1.0.0")
+		session, err := BeginMutation(fixture.overrides)
+		if err != nil {
+			t.Fatalf("BeginMutation() error = %v", err)
+		}
+		_, err = session.Load("v1.0.0")
 		if err == nil || errors.Is(err, state.ErrCorrupt) {
-			t.Fatalf("LoadMutation() error = %v, want strict manifest error before state", err)
+			t.Fatalf("MutationSession.Load() error = %v, want strict manifest error before state", err)
 		}
-		if lease != nil {
-			t.Fatal("manifest failure returned a lease")
-		}
+		closeMutationSession(t, session)
 		assertLockAvailable(t, fixture)
 	})
 
@@ -126,30 +132,102 @@ func TestLoadMutation_RepositoryFailuresShortCircuitAndRelease(t *testing.T) {
 			}
 			return requirement, err
 		}
-
-		_, lease, err := loadMutation(fixture.overrides, "v1.0.0", operations)
+		session, err := beginMutation(fixture.overrides, operations)
+		if err != nil {
+			t.Fatalf("beginMutation() error = %v", err)
+		}
+		_, err = session.Load("v1.0.0")
 		if !errors.Is(err, ErrRequiresUnsatisfied) {
-			t.Fatalf("loadMutation() error = %v, want strict ErrRequiresUnsatisfied", err)
+			t.Fatalf("MutationSession.Load() error = %v, want strict ErrRequiresUnsatisfied", err)
 		}
-		if lease != nil {
-			t.Fatal("strict requirement failure returned a lease")
-		}
+		closeMutationSession(t, session)
 		assertLockAvailable(t, fixture)
 	})
 }
 
-func TestLoadMutation_StateFailureReleasesAndPreservesCause(t *testing.T) {
+func TestMutationSession_LoadFailureKeepsCallerOwnedLock(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeState(t, fixture, "{")
 
-	_, lease, err := LoadMutation(fixture.overrides, "v1.0.0")
+	session, err := BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginMutation() error = %v", err)
+	}
+	_, err = session.Load("v1.0.0")
 	if !errors.Is(err, state.ErrCorrupt) {
-		t.Fatalf("LoadMutation() error = %v, want ErrCorrupt", err)
+		t.Fatalf("MutationSession.Load() error = %v, want ErrCorrupt", err)
 	}
-	if lease != nil {
-		t.Fatal("state failure returned a lease")
-	}
+	assertLockBusy(t, fixture)
+	closeMutationSession(t, session)
 	assertLockAvailable(t, fixture)
+}
+
+func TestMutationSession_LoadAndCloseFailuresKeepRetryableSession(t *testing.T) {
+	loadErr := errors.New("load failed")
+	releaseErr := errors.New("release failed")
+	releaser := &stubSessionReleaser{err: releaseErr}
+	operations := defaultLoadingOperations()
+	operations.readRequirement = func(string) (manifest.Requirement, error) {
+		return manifest.Requirement{}, loadErr
+	}
+	session := &MutationSession{
+		lease:      newSessionLease(&lock.Ownership{}, releaser),
+		operations: operations,
+	}
+
+	if _, err := session.Load("v1.0.0"); !errors.Is(err, loadErr) {
+		t.Fatalf("MutationSession.Load() error = %v, want load failure", err)
+	}
+	if err := session.Close(); !errors.Is(err, releaseErr) {
+		t.Fatalf("MutationSession.Close() error = %v, want release failure", err)
+	}
+	releaser.err = nil
+	if err := session.Close(); err != nil {
+		t.Fatalf("MutationSession.Close() retry error = %v", err)
+	}
+	if releaser.calls != 2 {
+		t.Fatalf("Release() calls = %d, want 2", releaser.calls)
+	}
+	if err := session.Close(); !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("MutationSession.Close() after success error = %v, want ErrSessionClosed", err)
+	}
+}
+
+func TestMutationSession_CommitStateUsesTrustedPathAndRequiresActiveSession(t *testing.T) {
+	fixture := newLoadingFixture(t, true)
+	snapshot, err := state.Decode([]byte(validEmptyState))
+	if err != nil {
+		t.Fatalf("state.Decode() error = %v", err)
+	}
+	session, err := BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginMutation() error = %v", err)
+	}
+	if err := session.CommitState(snapshot); err != nil {
+		t.Fatalf("MutationSession.CommitState() error = %v", err)
+	}
+	loaded, err := state.Load(fixture.paths.StateFile())
+	if _, ok := loaded.Snapshot(); err != nil || !ok {
+		t.Fatalf("state.Load(committed) = (%#v, %v), want loaded Snapshot", loaded, err)
+	}
+	closeMutationSession(t, session)
+	before, err := os.ReadFile(fixture.paths.StateFile())
+	if err != nil {
+		t.Fatalf("os.ReadFile(state) error = %v", err)
+	}
+	if err := session.CommitState(snapshot); !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("CommitState() after Close error = %v, want ErrSessionClosed", err)
+	}
+	if _, err := session.Load("v1.0.0"); !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("Load() after Close error = %v, want ErrSessionClosed", err)
+	}
+	after, err := os.ReadFile(fixture.paths.StateFile())
+	if err != nil {
+		t.Fatalf("os.ReadFile(state) after error = %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatal("CommitState() after Close changed state")
+	}
 }
 
 func TestLoadReadOnly_StateStatusesAreClassifiedWithoutLock(t *testing.T) {
@@ -252,66 +330,6 @@ func TestLoadReadOnly_StatePathClassification(t *testing.T) {
 			t.Fatalf("filesystem alias misclassified as corrupt: %v", err)
 		}
 	})
-}
-
-func TestLoadNestedMutation_ReusesOwnershipWithoutEarlyRelease(t *testing.T) {
-	fixture := newLoadingFixture(t, true)
-	owner, err := lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
-	if err != nil {
-		t.Fatalf("lock.Acquire() error = %v", err)
-	}
-	ownerReleased := false
-	t.Cleanup(func() {
-		if !ownerReleased {
-			releaseOwnership(t, owner)
-		}
-	})
-
-	_, nestedLease, err := LoadNestedMutation(fixture.overrides, "v1.0.0", owner)
-	if err != nil {
-		t.Fatalf("LoadNestedMutation() error = %v", err)
-	}
-	if err := nestedLease.Release(); err != nil {
-		t.Fatalf("nested Lease.Release() error = %v", err)
-	}
-
-	contender, err := lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
-	if !errors.Is(err, lock.ErrBusy) {
-		if err == nil {
-			releaseOwnership(t, contender)
-		}
-		t.Fatalf("contender after nested release error = %v, want ErrBusy", err)
-	}
-	releaseOwnership(t, owner)
-	ownerReleased = true
-	contender, err = lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
-	if err != nil {
-		t.Fatalf("contender after outer release error = %v", err)
-	}
-	releaseOwnership(t, contender)
-}
-
-func TestLoadNestedMutation_PreflightFailureDoesNotReuseOwnership(t *testing.T) {
-	fixture := newLoadingFixture(t, true)
-	owner, err := lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
-	if err != nil {
-		t.Fatalf("lock.Acquire() error = %v", err)
-	}
-	t.Cleanup(func() { releaseOwnership(t, owner) })
-	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
-
-	operations := defaultLoadingOperations()
-	events := wrapLoadingEvents(&operations)
-	_, lease, err := loadNestedMutation(fixture.overrides, "v1.0.0", owner, operations)
-	if err == nil {
-		t.Fatal("loadNestedMutation() error = nil")
-	}
-	if lease != nil {
-		t.Fatal("preflight failure returned a nested lease")
-	}
-	if want := []string{"preflight"}; !reflect.DeepEqual(*events, want) {
-		t.Fatalf("events = %v, want %v", *events, want)
-	}
 }
 
 func wrapLoadingEvents(operations *loadingOperations) *[]string {
@@ -475,6 +493,17 @@ func stateWithSymlinkEntry(target, source string) string {
 	)
 }
 
+func assertLockBusy(t *testing.T, fixture loadingFixture) {
+	t.Helper()
+	contender, err := lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
+	if !errors.Is(err, lock.ErrBusy) {
+		if err == nil {
+			releaseOwnership(t, contender)
+		}
+		t.Fatalf("lock contender error = %v, want ErrBusy", err)
+	}
+}
+
 func assertLockAvailable(t *testing.T, fixture loadingFixture) {
 	t.Helper()
 	owner, err := lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
@@ -484,13 +513,13 @@ func assertLockAvailable(t *testing.T, fixture loadingFixture) {
 	releaseOwnership(t, owner)
 }
 
-func releaseLease(t *testing.T, lease *Lease) {
+func closeMutationSession(t *testing.T, session *MutationSession) {
 	t.Helper()
-	if lease == nil || lease.Ownership() == nil {
+	if session == nil {
 		return
 	}
-	if err := lease.Release(); err != nil {
-		t.Fatalf("Lease.Release() error = %v", err)
+	if err := session.Close(); err != nil && !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("MutationSession.Close() error = %v", err)
 	}
 }
 
@@ -507,6 +536,16 @@ func assertMissing(t *testing.T, path string) {
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("os.Lstat(%q) error = %v, want not exist", path, err)
 	}
+}
+
+type stubSessionReleaser struct {
+	err   error
+	calls int
+}
+
+func (releaser *stubSessionReleaser) Release() error {
+	releaser.calls++
+	return releaser.err
 }
 
 func TestLoadingFixtureUsesSyntheticConfigEnvironment(t *testing.T) {

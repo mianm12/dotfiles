@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/mianm12/dotfiles/internal/lock"
 	"github.com/mianm12/dotfiles/internal/manifest"
@@ -66,175 +65,31 @@ func (inputs InitInputs) Compatibility() Compatibility { return inputs.compatibi
 // Manifest 返回严格加载的仓库 manifest。
 func (inputs InitInputs) Manifest() manifest.Repository { return inputs.repository }
 
-// Lease 表示当前 runtime 层持有的一份 mutation 锁引用。
-// 调用方必须在完整 mutation 周期结束时 Release。
-type Lease struct {
-	mu       sync.Mutex
-	owner    *lock.Ownership
-	releaser leaseReleaser
-	released bool
-}
-
-type leaseReleaser interface {
-	Release() error
-}
-
-// Ownership 返回仍处于活动状态的外层 ownership，供嵌套 mutation 显式复用。
-func (lease *Lease) Ownership() *lock.Ownership {
-	if lease == nil {
-		return nil
-	}
-	lease.mu.Lock()
-	defer lease.mu.Unlock()
-	if lease.released {
-		return nil
-	}
-	return lease.owner
-}
-
-// Release 只释放当前 runtime 层取得或复用的锁引用。
-func (lease *Lease) Release() error {
-	if lease == nil {
-		return lock.ErrOwnership
-	}
-	lease.mu.Lock()
-	defer lease.mu.Unlock()
-	if lease.released || lease.owner == nil || lease.releaser == nil {
-		return lock.ErrOwnership
-	}
-	if err := lease.releaser.Release(); err != nil {
-		return err
-	}
-	lease.released = true
-	return nil
-}
-
-// LoadMutation 在可信 preflight 后获取锁，并加载完整 manifest 与 state。
-func LoadMutation(options Overrides, cliVersion string) (LoadedInputs, *Lease, error) {
-	return loadMutation(options, cliVersion, defaultLoadingOperations())
-}
-
-// LoadNestedMutation 在可信 preflight 后复用显式 ownership，再加载完整 manifest 与 state。
-func LoadNestedMutation(
-	options Overrides,
-	cliVersion string,
-	owner *lock.Ownership,
-) (LoadedInputs, *Lease, error) {
-	return loadNestedMutation(options, cliVersion, owner, defaultLoadingOperations())
-}
-
 // LoadReadOnly 加载与完整 mutation 相同的只读输入，但从不获取或创建 lock。
-func LoadReadOnly(options Overrides, cliVersion string) (LoadedInputs, error) {
-	operations := defaultLoadingOperations()
-	context, err := operations.preflight(options)
+func LoadReadOnly(overrides Overrides, cliVersion string) (LoadedInputs, error) {
+	return systemResolver().LoadReadOnly(overrides, cliVersion)
+}
+
+// LoadReadOnly 使用 resolver 的明确系统来源加载完整只读输入。
+func (resolver Resolver) LoadReadOnly(overrides Overrides, cliVersion string) (LoadedInputs, error) {
+	operations := loadingOperationsWithResolver(resolver)
+	context, err := operations.preflight(overrides)
 	if err != nil {
 		return LoadedInputs{}, err
 	}
 	return loadFull(context, cliVersion, operations)
 }
 
-// LoadInitMutation 允许 config missing，在控制面校验后持锁加载 strict manifest，但不读 state。
-func LoadInitMutation(options Overrides, cliVersion string) (InitInputs, *Lease, error) {
-	return loadInitMutation(options, cliVersion, defaultLoadingOperations())
-}
-
-// LoadRecoveryMutation 为 dot git 与 update pull 等恢复 mutation 建立 repo/control 上下文并持锁。
-// 它有意不读取 requires、manifest 或 state；后续进入 apply 时应调用 LoadNestedMutation。
-func LoadRecoveryMutation(options Overrides) (ControlContext, *Lease, error) {
-	return loadRecoveryMutation(options, defaultLoadingOperations())
-}
-
 // LoadControlRecovery 为 self-update 等 control-only 恢复流程建立只读控制面上下文。
 // config missing 合法；已有 config 仍严格校验。本入口不获取锁，也不读取 manifest/state。
-func LoadControlRecovery(options Overrides) (ControlContext, error) {
-	return defaultLoadingOperations().preflightRepository(options)
+func LoadControlRecovery(overrides Overrides) (ControlContext, error) {
+	return systemResolver().LoadControlRecovery(overrides)
 }
 
-func loadMutation(
-	options Overrides,
-	cliVersion string,
-	operations loadingOperations,
-) (LoadedInputs, *Lease, error) {
-	context, err := operations.preflight(options)
-	if err != nil {
-		return LoadedInputs{}, nil, err
-	}
-	controlPaths := context.Control().Paths()
-	owner, err := operations.acquire(controlPaths.StateRoot(), controlPaths.StateLock())
-	if err != nil {
-		return LoadedInputs{}, nil, err
-	}
-	lease := newLease(owner, owner)
-	result, err := loadFull(context, cliVersion, operations)
-	if err != nil {
-		return LoadedInputs{}, nil, releaseAfterFailure(err, lease)
-	}
-	return result, lease, nil
-}
-
-func loadNestedMutation(
-	options Overrides,
-	cliVersion string,
-	owner *lock.Ownership,
-	operations loadingOperations,
-) (LoadedInputs, *Lease, error) {
-	context, err := operations.preflight(options)
-	if err != nil {
-		return LoadedInputs{}, nil, err
-	}
-	controlPaths := context.Control().Paths()
-	guard, err := operations.reuse(owner, controlPaths.StateRoot(), controlPaths.StateLock())
-	if err != nil {
-		return LoadedInputs{}, nil, err
-	}
-	lease := newLease(owner, guard)
-	result, err := loadFull(context, cliVersion, operations)
-	if err != nil {
-		return LoadedInputs{}, nil, releaseAfterFailure(err, lease)
-	}
-	return result, lease, nil
-}
-
-func loadInitMutation(
-	options Overrides,
-	cliVersion string,
-	operations loadingOperations,
-) (InitInputs, *Lease, error) {
-	context, err := operations.preflightInit(options)
-	if err != nil {
-		return InitInputs{}, nil, err
-	}
-	controlPaths := context.Control().Paths()
-	owner, err := operations.acquire(controlPaths.StateRoot(), controlPaths.StateLock())
-	if err != nil {
-		return InitInputs{}, nil, err
-	}
-	lease := newLease(owner, owner)
-	compatibility, repository, err := loadRepository(context.Control().RepositoryPath(), cliVersion, operations)
-	if err != nil {
-		return InitInputs{}, nil, releaseAfterFailure(err, lease)
-	}
-	return InitInputs{
-		context:       context,
-		compatibility: compatibility,
-		repository:    repository,
-	}, lease, nil
-}
-
-func loadRecoveryMutation(
-	options Overrides,
-	operations loadingOperations,
-) (ControlContext, *Lease, error) {
-	context, err := operations.preflightRepository(options)
-	if err != nil {
-		return ControlContext{}, nil, err
-	}
-	controlPaths := context.Paths()
-	owner, err := operations.acquire(controlPaths.StateRoot(), controlPaths.StateLock())
-	if err != nil {
-		return ControlContext{}, nil, err
-	}
-	return context, newLease(owner, owner), nil
+// LoadControlRecovery 使用 resolver 的明确系统来源建立只读控制面上下文。
+func (resolver Resolver) LoadControlRecovery(overrides Overrides) (ControlContext, error) {
+	operations := loadingOperationsWithResolver(resolver)
+	return operations.preflightRepository(overrides)
 }
 
 func loadFull(context RunContext, cliVersion string, operations loadingOperations) (LoadedInputs, error) {
@@ -334,17 +189,6 @@ func stateTargets(home string, snapshot state.Snapshot) []paths.LabeledTarget {
 	return targets
 }
 
-func newLease(owner *lock.Ownership, releaser leaseReleaser) *Lease {
-	return &Lease{owner: owner, releaser: releaser}
-}
-
-func releaseAfterFailure(cause error, lease *Lease) error {
-	if err := lease.Release(); err != nil {
-		return errors.Join(cause, fmt.Errorf("release runtime lock after failure: %w", err))
-	}
-	return cause
-}
-
 type loadingOperations struct {
 	preflight                 func(Overrides) (RunContext, error)
 	preflightInit             func(Overrides) (InitContext, error)
@@ -355,6 +199,7 @@ type loadingOperations struct {
 	satisfies                 func(string, manifest.Requirement) (bool, bool, error)
 	loadManifest              func(string) (manifest.Repository, error)
 	loadState                 func(string) (state.Loaded, error)
+	storeState                func(string, string, state.Snapshot) error
 	validateLexicalBoundaries func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 	validateStateIdentities   func(state.Snapshot, string) error
 	validatePathBoundaries    func(paths.ControlPlanePaths, []paths.LabeledTarget) error
@@ -371,6 +216,7 @@ func defaultLoadingOperations() loadingOperations {
 		satisfies:                 manifest.Satisfies,
 		loadManifest:              manifest.Load,
 		loadState:                 state.Load,
+		storeState:                state.Store,
 		validateLexicalBoundaries: paths.ValidateLexicalTargetControlBoundaries,
 		validateStateIdentities:   state.ValidateTargetIdentities,
 		validatePathBoundaries: func(control paths.ControlPlanePaths, targets []paths.LabeledTarget) error {
@@ -378,4 +224,12 @@ func defaultLoadingOperations() loadingOperations {
 			return err
 		},
 	}
+}
+
+func loadingOperationsWithResolver(resolver Resolver) loadingOperations {
+	operations := defaultLoadingOperations()
+	operations.preflight = resolver.Preflight
+	operations.preflightInit = resolver.PreflightInit
+	operations.preflightRepository = resolver.PreflightRepository
+	return operations
 }

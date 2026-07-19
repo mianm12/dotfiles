@@ -11,19 +11,23 @@ import (
 	"github.com/mianm12/dotfiles/internal/state"
 )
 
-func TestLoadInitMutation_ConfigMissingLoadsManifestAfterLockAndSkipsState(t *testing.T) {
+func TestInitSession_ConfigMissingLoadsManifestAfterLockAndSkipsState(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
 	writeState(t, fixture, "{")
 
 	operations := defaultLoadingOperations()
 	events := wrapInitEvents(&operations)
-	result, lease, err := loadInitMutation(fixture.overrides, "v1.0.0", operations)
+	session, err := beginInit(fixture.overrides, operations)
 	if err != nil {
-		t.Fatalf("loadInitMutation() error = %v", err)
+		t.Fatalf("beginInit() error = %v", err)
 	}
-	t.Cleanup(func() { releaseLease(t, lease) })
+	t.Cleanup(func() { closeInitSession(t, session) })
+	result, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("InitSession.Load() error = %v", err)
+	}
 	if !result.Context().ConfigMissing() {
-		t.Fatal("ConfigMissing = false, want true")
+		t.Fatal("ConfigMissing() = false, want true")
 	}
 	if got := result.Compatibility().Requirement().String(); got != ">=1.0.0" {
 		t.Fatalf("Requirement = %q", got)
@@ -34,64 +38,64 @@ func TestLoadInitMutation_ConfigMissingLoadsManifestAfterLockAndSkipsState(t *te
 	}
 }
 
-func TestLoadInitMutation_ExistingInvalidConfigFailsBeforeLock(t *testing.T) {
+func TestBeginInit_ExistingInvalidConfigFailsBeforeLock(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
 
-	_, lease, err := LoadInitMutation(fixture.overrides, "v1.0.0")
+	session, err := BeginInit(fixture.overrides)
 	if err == nil {
-		t.Fatal("LoadInitMutation() error = nil")
+		t.Fatal("BeginInit() error = nil")
 	}
-	if lease != nil {
-		t.Fatal("invalid config returned a lease")
+	if session != nil {
+		t.Fatal("invalid config returned an init session")
 	}
 	assertMissing(t, fixture.paths.StateRoot())
 }
 
-func TestLoadInitMutation_ManifestFailureReleasesLockAndSkipsState(t *testing.T) {
+func TestInitSession_ManifestFailureKeepsLockAndSkipsState(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
 	writeManifest(t, fixture.repo, ">=1.0.0", "unknown = true\n")
 	writeState(t, fixture, "{")
 
-	_, lease, err := LoadInitMutation(fixture.overrides, "v1.0.0")
+	session, err := BeginInit(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginInit() error = %v", err)
+	}
+	_, err = session.Load("v1.0.0")
 	if err == nil || errors.Is(err, state.ErrCorrupt) {
-		t.Fatalf("LoadInitMutation() error = %v, want manifest error before state", err)
+		t.Fatalf("InitSession.Load() error = %v, want manifest error before state", err)
 	}
-	if lease != nil {
-		t.Fatal("manifest failure returned a lease")
-	}
+	assertLockBusy(t, fixture)
+	closeInitSession(t, session)
 	assertLockAvailable(t, fixture)
 }
 
-func TestLoadRecoveryMutation_SkipsManifestAndStateButHoldsLock(t *testing.T) {
+func TestRecoverySession_SkipsManifestAndStateButHoldsLock(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeManifest(t, fixture.repo, "invalid", "unknown = true\n")
 	writeState(t, fixture, "{")
 
 	operations := defaultLoadingOperations()
 	events := wrapRecoveryEvents(&operations)
-	context, lease, err := loadRecoveryMutation(fixture.overrides, operations)
+	session, err := beginRecovery(fixture.overrides, operations)
 	if err != nil {
-		t.Fatalf("loadRecoveryMutation() error = %v", err)
+		t.Fatalf("beginRecovery() error = %v", err)
 	}
-	t.Cleanup(func() { releaseLease(t, lease) })
+	t.Cleanup(func() { closeRecoverySession(t, session) })
+	context, err := session.Context()
+	if err != nil {
+		t.Fatalf("RecoverySession.Context() error = %v", err)
+	}
 	if context.RepositoryPath() != fixture.repo {
 		t.Fatalf("RepositoryPath() = %q, want %q", context.RepositoryPath(), fixture.repo)
 	}
 	if want := []string{"repository-preflight", "acquire"}; !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}
-
-	contender, err := lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
-	if !errors.Is(err, lock.ErrBusy) {
-		if err == nil {
-			releaseOwnership(t, contender)
-		}
-		t.Fatalf("contender error = %v, want ErrBusy", err)
-	}
+	assertLockBusy(t, fixture)
 }
 
-func TestLoadRecoveryMutation_StateFailClosedVariantsDoNotBlockRecovery(t *testing.T) {
+func TestBeginRecovery_StateFailClosedVariantsDoNotBlockRecovery(t *testing.T) {
 	tests := []struct {
 		name  string
 		state string
@@ -108,38 +112,42 @@ func TestLoadRecoveryMutation_StateFailClosedVariantsDoNotBlockRecovery(t *testi
 			fixture := newLoadingFixture(t, false)
 			writeState(t, fixture, test.state)
 
-			_, lease, err := LoadRecoveryMutation(fixture.overrides)
+			session, err := BeginRecovery(fixture.overrides)
 			if err != nil {
-				t.Fatalf("LoadRecoveryMutation() error = %v", err)
+				t.Fatalf("BeginRecovery() error = %v", err)
 			}
-			releaseLease(t, lease)
+			closeRecoverySession(t, session)
 		})
 	}
 }
 
-func TestLoadRecoveryMutation_AllowsMissingConfig(t *testing.T) {
+func TestBeginRecovery_AllowsMissingConfig(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
 
-	context, lease, err := LoadRecoveryMutation(fixture.overrides)
+	session, err := BeginRecovery(fixture.overrides)
 	if err != nil {
-		t.Fatalf("LoadRecoveryMutation() error = %v", err)
+		t.Fatalf("BeginRecovery() error = %v", err)
 	}
-	t.Cleanup(func() { releaseLease(t, lease) })
+	t.Cleanup(func() { closeRecoverySession(t, session) })
+	context, err := session.Context()
+	if err != nil {
+		t.Fatalf("RecoverySession.Context() error = %v", err)
+	}
 	if context.RepositoryPath() != fixture.repo {
 		t.Fatalf("RepositoryPath() = %q, want %q", context.RepositoryPath(), fixture.repo)
 	}
 }
 
-func TestLoadRecoveryMutation_ExistingInvalidConfigFailsBeforeLock(t *testing.T) {
+func TestBeginRecovery_ExistingInvalidConfigFailsBeforeLock(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
 
-	_, lease, err := LoadRecoveryMutation(fixture.overrides)
+	session, err := BeginRecovery(fixture.overrides)
 	if err == nil {
-		t.Fatal("LoadRecoveryMutation() error = nil")
+		t.Fatal("BeginRecovery() error = nil")
 	}
-	if lease != nil {
-		t.Fatal("invalid config returned a recovery lease")
+	if session != nil {
+		t.Fatal("invalid config returned a recovery session")
 	}
 	assertMissing(t, fixture.paths.StateRoot())
 }
@@ -186,40 +194,104 @@ func TestLoadControlRecovery_ExistingInvalidConfigFailsWithoutLock(t *testing.T)
 	assertMissing(t, fixture.paths.StateRoot())
 }
 
-func TestRecoveryThenNestedMutation_CorruptStateReleasesOnlyNestedLease(t *testing.T) {
+func TestRecoverySession_NestedMutationFailureKeepsExplicitOwnership(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeState(t, fixture, "{")
 
-	_, outerLease, err := LoadRecoveryMutation(fixture.overrides)
+	outer, err := BeginRecovery(fixture.overrides)
 	if err != nil {
-		t.Fatalf("LoadRecoveryMutation() error = %v", err)
+		t.Fatalf("BeginRecovery() error = %v", err)
 	}
-	outerReleased := false
-	t.Cleanup(func() {
-		if !outerReleased {
-			releaseLease(t, outerLease)
+	nested, err := outer.BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("RecoverySession.BeginMutation() error = %v", err)
+	}
+	_, err = nested.Load("v1.0.0")
+	if !errors.Is(err, state.ErrCorrupt) {
+		t.Fatalf("MutationSession.Load() error = %v, want ErrCorrupt", err)
+	}
+	assertLockBusy(t, fixture)
+	closeMutationSession(t, nested)
+	assertLockBusy(t, fixture)
+	closeRecoverySession(t, outer)
+	assertLockAvailable(t, fixture)
+}
+
+func TestRecoverySession_ClosingOuterKeepsNestedOwnership(t *testing.T) {
+	fixture := newLoadingFixture(t, true)
+	outer, err := BeginRecovery(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginRecovery() error = %v", err)
+	}
+	nested, err := outer.BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("RecoverySession.BeginMutation() error = %v", err)
+	}
+
+	closeRecoverySession(t, outer)
+	assertLockBusy(t, fixture)
+	if _, err := nested.Load("v1.0.0"); err != nil {
+		t.Fatalf("MutationSession.Load() after outer Close error = %v", err)
+	}
+	closeMutationSession(t, nested)
+	assertLockAvailable(t, fixture)
+}
+
+func TestRecoverySession_NestedPreflightFailureDoesNotReuseOwnership(t *testing.T) {
+	fixture := newLoadingFixture(t, true)
+	operations := defaultLoadingOperations()
+	events := wrapLoadingEvents(&operations)
+	outer, err := beginRecovery(fixture.overrides, operations)
+	if err != nil {
+		t.Fatalf("beginRecovery() error = %v", err)
+	}
+	t.Cleanup(func() { closeRecoverySession(t, outer) })
+	*events = nil
+	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
+
+	nested, err := outer.BeginMutation(fixture.overrides)
+	if err == nil {
+		t.Fatal("RecoverySession.BeginMutation() error = nil")
+	}
+	if nested != nil {
+		t.Fatal("preflight failure returned a nested session")
+	}
+	if want := []string{"preflight"}; !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+	assertLockBusy(t, fixture)
+}
+
+func TestClosedRoleSessionsRejectFurtherUse(t *testing.T) {
+	t.Run("init", func(t *testing.T) {
+		fixture := newLoadingFixture(t, false)
+		session, err := BeginInit(fixture.overrides)
+		if err != nil {
+			t.Fatalf("BeginInit() error = %v", err)
+		}
+		closeInitSession(t, session)
+		if _, err := session.Context(); !errors.Is(err, ErrSessionClosed) {
+			t.Fatalf("InitSession.Context() error = %v, want ErrSessionClosed", err)
+		}
+		if _, err := session.Load("v1.0.0"); !errors.Is(err, ErrSessionClosed) {
+			t.Fatalf("InitSession.Load() error = %v, want ErrSessionClosed", err)
 		}
 	})
 
-	_, nestedLease, err := LoadNestedMutation(fixture.overrides, "v1.0.0", outerLease.Ownership())
-	if !errors.Is(err, state.ErrCorrupt) {
-		t.Fatalf("LoadNestedMutation() error = %v, want ErrCorrupt", err)
-	}
-	if nestedLease != nil {
-		t.Fatal("failed nested mutation returned a lease")
-	}
-	contender, err := lock.Acquire(fixture.paths.StateRoot(), fixture.paths.StateLock())
-	if !errors.Is(err, lock.ErrBusy) {
-		if err == nil {
-			releaseOwnership(t, contender)
+	t.Run("recovery", func(t *testing.T) {
+		fixture := newLoadingFixture(t, false)
+		session, err := BeginRecovery(fixture.overrides)
+		if err != nil {
+			t.Fatalf("BeginRecovery() error = %v", err)
 		}
-		t.Fatalf("contender after nested failure error = %v, want ErrBusy", err)
-	}
-	if err := outerLease.Release(); err != nil {
-		t.Fatalf("outer Lease.Release() error = %v", err)
-	}
-	outerReleased = true
-	assertLockAvailable(t, fixture)
+		closeRecoverySession(t, session)
+		if _, err := session.Context(); !errors.Is(err, ErrSessionClosed) {
+			t.Fatalf("RecoverySession.Context() error = %v, want ErrSessionClosed", err)
+		}
+		if _, err := session.BeginMutation(fixture.overrides); !errors.Is(err, ErrSessionClosed) {
+			t.Fatalf("RecoverySession.BeginMutation() error = %v, want ErrSessionClosed", err)
+		}
+	})
 }
 
 func wrapInitEvents(operations *loadingOperations) *[]string {
@@ -268,5 +340,25 @@ func wrapRepositoryEvents(operations *loadingOperations, events *[]string) {
 	operations.loadManifest = func(repo string) (manifest.Repository, error) {
 		*events = append(*events, "manifest")
 		return loadManifest(repo)
+	}
+}
+
+func closeInitSession(t *testing.T, session *InitSession) {
+	t.Helper()
+	if session == nil {
+		return
+	}
+	if err := session.Close(); err != nil && !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("InitSession.Close() error = %v", err)
+	}
+}
+
+func closeRecoverySession(t *testing.T, session *RecoverySession) {
+	t.Helper()
+	if session == nil {
+		return
+	}
+	if err := session.Close(); err != nil && !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("RecoverySession.Close() error = %v", err)
 	}
 }
