@@ -55,8 +55,9 @@ exact-input 公开接缝，也没有将三者连接的内部 orchestration packa
 
 - [x] 2026-07-20：确认分配 worktree、Git 顶层和 branch 均正确，HEAD 为 `061b783` 且 clean；
   读取规范、completed plans 与 runtime/planner/state/executor 当前实现。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先固定 state transition，再实现 missing/loaded、PreviousKey、AppliedAt 与保留语义。
+- [x] 2026-07-20：以 `140c931` 提交本 active ExecPlan 起点。
+- [x] 2026-07-20：测试先固定 state transition；随后实现 missing/loaded、未涉及 entry/run_once
+  保留、PreviousKey 同提交迁移、AppliedAt、无变化判定与歧义 update fail closed。
 - [ ] 测试先固定 exact-input planning 和 CP4 预检，再实现 planner 接缝与范围门禁。
 - [ ] 测试先固定锁内顺序执行、部分成功、Store 失败恢复和幂等，再连接内部 runner。
 - [ ] 完成窄测、重复/race、CLI 拒绝回归、diff check 与 `make check`，保持计划 active 等待复核。
