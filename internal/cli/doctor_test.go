@@ -248,6 +248,7 @@ mac = []
 type cliTreeEntry struct {
 	mode fs.FileMode
 	data string
+	link string
 }
 
 func snapshotCLITree(t *testing.T, root string) map[string]cliTreeEntry {
@@ -262,18 +263,24 @@ func snapshotCLITree(t *testing.T, root string) map[string]cliTreeEntry {
 			return err
 		}
 		data := ""
+		link := ""
 		if info.Mode().IsRegular() {
 			content, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
 			data = string(content)
+		} else if info.Mode()&os.ModeSymlink != 0 {
+			link, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
 		}
 		relative, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
-		snapshot[relative] = cliTreeEntry{mode: info.Mode(), data: data}
+		snapshot[relative] = cliTreeEntry{mode: info.Mode(), data: data, link: link}
 		return nil
 	})
 	if err != nil {

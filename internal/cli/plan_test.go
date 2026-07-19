@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/buildinfo"
+	"github.com/mianm12/dotfiles/internal/lock"
 )
 
 func TestDiff_PrintsStablePlanAndExitPriority(t *testing.T) {
@@ -250,6 +251,130 @@ func TestPlanCommands_RegisterSpecifiedFlags(t *testing.T) {
 	if shorthand := apply.Flags().Lookup(yesFlagName).Shorthand; shorthand != "y" {
 		t.Errorf("--yes shorthand = %q, want y", shorthand)
 	}
+}
+
+func TestReadOnlyPlan_SucceedsWhileMutationLockIsHeld(t *testing.T) {
+	fixture := newPlanCLIFixture(t)
+	stateRoot := filepath.Join(fixture.home, ".local", "state", "dot")
+	lockPath := filepath.Join(stateRoot, "lock")
+	owner, err := lock.Acquire(stateRoot, lockPath)
+	if err != nil {
+		t.Fatalf("lock.Acquire() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := owner.Release(); err != nil {
+			t.Errorf("lock Ownership.Release() error = %v", err)
+		}
+	})
+	before := snapshotCLITree(t, fixture.root)
+
+	for _, args := range [][]string{
+		{"diff", "alpha"},
+		{"apply", "alpha", "--dry-run"},
+	} {
+		stdout, stderr, code := fixture.run(t, args...)
+		if code != exitConflict || stderr != "" || !strings.Contains(stdout, "CONFLICT") {
+			t.Fatalf("occupied-lock %v = stdout %q, stderr %q, exit %d; want normal conflict plan", args, stdout, stderr, code)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("occupied-lock %v changed isolated tree\nbefore=%v\nafter=%v", args, before, after)
+		}
+	}
+}
+
+func TestReadOnlyPlan_MissingStateRootRemainsMissing(t *testing.T) {
+	fixture := newPlanCLIFixture(t)
+	stateRoot := filepath.Join(fixture.home, ".local", "state", "dot")
+	if err := os.Remove(filepath.Join(stateRoot, "state.json")); err != nil {
+		t.Fatalf("os.Remove(state) error = %v", err)
+	}
+	if err := os.Remove(stateRoot); err != nil {
+		t.Fatalf("os.Remove(state root) error = %v", err)
+	}
+	before := snapshotCLITree(t, fixture.root)
+
+	for _, args := range [][]string{
+		{"diff", "alpha", "--force"},
+		{"apply", "alpha", "--dry-run", "--force"},
+	} {
+		stdout, stderr, code := fixture.run(t, args...)
+		if code != exitActionable || stderr != "" || !strings.Contains(stdout, "link  ~/alpha/create") {
+			t.Fatalf("missing-state %v = stdout %q, stderr %q, exit %d; want actionable plan", args, stdout, stderr, code)
+		}
+		if _, err := os.Lstat(stateRoot); !os.IsNotExist(err) {
+			t.Fatalf("missing-state %v created state root: %v", args, err)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("missing-state %v changed isolated tree\nbefore=%v\nafter=%v", args, before, after)
+		}
+	}
+}
+
+func TestReadOnlyPlan_OutputErrorOverridesConflict(t *testing.T) {
+	fixture := newPlanCLIFixture(t)
+	var stderr bytes.Buffer
+	code := run([]string{
+		"diff", "alpha", "--home", fixture.home, "--repo", fixture.repository,
+	}, environment{
+		stdout:      failingWriter{err: os.ErrClosed},
+		stderr:      &stderr,
+		lookupEnv:   os.LookupEnv,
+		userHomeDir: os.UserHomeDir,
+		build:       buildinfo.Info{Version: "v0.0.0"},
+		goos:        runtime.GOOS,
+	})
+	if code != exitError || !strings.Contains(stderr.String(), "write stdout") {
+		t.Fatalf("output failure = stderr %q, exit %d; want output error priority 1", stderr.String(), code)
+	}
+}
+
+func TestDiff_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T) {
+	t.Run("scaffold deleted", func(t *testing.T) {
+		fixture := newNoOpPlanCLIFixture(t)
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "deleted.template"), "template\n")
+		stableSource := filepath.Join(fixture.repository, "modules", "clean", "stable")
+		writePlanState(t, fixture.home, planStateDocument{
+			Version: 1,
+			Entries: map[string]planStateEntry{
+				"~/clean/stable": {
+					Module:    "clean",
+					Kind:      "symlink",
+					Source:    "modules/clean/stable",
+					LinkDest:  stableSource,
+					AppliedAt: "2026-07-19T00:00:00Z",
+				},
+				"~/clean/deleted": {
+					Module:    "clean",
+					Kind:      "scaffold",
+					Source:    "modules/clean/deleted.template",
+					AppliedAt: "2026-07-19T00:00:00Z",
+				},
+			},
+			RunOnce: map[string]planRunOnce{},
+		})
+
+		stdout, stderr, code := fixture.run(t, "diff")
+		wantStdout := "repo=" + fixture.repository + " profile=clean os=" + runtime.GOOS + "\n"
+		if code != exitActionable || stdout != wantStdout || !strings.Contains(stderr, "warning: ~/clean/deleted: scaffold target was deleted") {
+			t.Fatalf("scaffold-deleted diff = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
+
+	t.Run("unowned orphan", func(t *testing.T) {
+		fixture := newPlanCLIFixture(t)
+		orphan := filepath.Join(fixture.home, "alpha", "orphan")
+		if err := os.Remove(orphan); err != nil {
+			t.Fatalf("os.Remove(orphan) error = %v", err)
+		}
+		if err := os.Symlink("changed", orphan); err != nil {
+			t.Fatalf("os.Symlink(changed orphan) error = %v", err)
+		}
+		stdout, stderr, code := fixture.run(t, "diff", "alpha", "--force")
+		if code != exitActionable || !strings.Contains(stdout, "prune  ~/alpha/orphan  (unowned-orphan)") ||
+			!strings.Contains(stderr, "warning: ~/alpha/orphan: orphan target is no longer owned") {
+			t.Fatalf("unowned-orphan diff = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
 }
 
 func withoutOption(values []string, omitted string) []string {
