@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/paths"
@@ -161,6 +162,107 @@ func TestExecuteLink_PreconditionFailuresPreserveTarget(t *testing.T) {
 	})
 }
 
+func TestExecuteLink_RelinkCommitsCompleteNewLink(t *testing.T) {
+	fixture := newLinkFixture(t)
+	target, oldSource, action := fixture.planRelink(t)
+
+	result, err := ExecuteFile(fixture.control, action)
+	if err != nil {
+		t.Fatalf("ExecuteFile() error = %v", err)
+	}
+	if !result.TargetMutated || result.StateEffect != action.OnSuccess {
+		t.Fatalf("ExecuteFile() result = %#v, want committed success %#v", result, action.OnSuccess)
+	}
+	assertLinkText(t, target, fixture.source)
+	if got, readErr := os.ReadFile(oldSource); readErr != nil || string(got) != "old source" {
+		t.Fatalf("old source after relink = (%q, %v), want unchanged", got, readErr)
+	}
+	assertNoExecutorTemps(t, filepath.Dir(target))
+}
+
+func TestExecuteLink_RelinkFailuresPreserveCommitBoundary(t *testing.T) {
+	t.Run("temporary symlink preparation fails", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target, oldSource, action := fixture.planRelink(t)
+		operations := defaultFileOperations()
+		injected := errors.New("prepare failed")
+		operations.symlink = func(string, string) error { return injected }
+
+		result, err := executeFile(fixture.control, action, operations)
+		if !errors.Is(err, injected) {
+			t.Fatalf("executeFile() error = %v, want injected prepare failure", err)
+		}
+		if result.TargetMutated || result.StateEffect != action.OnFailure {
+			t.Fatalf("executeFile() result = %#v, want uncommitted failure", result)
+		}
+		assertLinkText(t, target, oldSource)
+		assertNoExecutorTemps(t, filepath.Dir(target))
+	})
+
+	t.Run("target changes after preparation", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target, _, action := fixture.planRelink(t)
+		operations := defaultFileOperations()
+		realSymlink := operations.symlink
+		intruder := filepath.Join(fixture.root, "intruder")
+		operations.symlink = func(oldname, newname string) error {
+			if err := realSymlink(oldname, newname); err != nil {
+				return err
+			}
+			if err := os.Remove(target); err != nil {
+				return err
+			}
+			return os.Symlink(intruder, target)
+		}
+
+		result, err := executeFile(fixture.control, action, operations)
+		assertPreconditionFailure(t, result, action, err)
+		assertLinkText(t, target, intruder)
+		assertNoExecutorTemps(t, filepath.Dir(target))
+	})
+
+	t.Run("rename fails", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target, oldSource, action := fixture.planRelink(t)
+		operations := defaultFileOperations()
+		injected := errors.New("rename failed")
+		operations.rename = func(string, string) error { return injected }
+
+		result, err := executeFile(fixture.control, action, operations)
+		if !errors.Is(err, injected) {
+			t.Fatalf("executeFile() error = %v, want injected rename failure", err)
+		}
+		if result.TargetMutated || result.StateEffect != action.OnFailure {
+			t.Fatalf("executeFile() result = %#v, want uncommitted failure", result)
+		}
+		assertLinkText(t, target, oldSource)
+		assertNoExecutorTemps(t, filepath.Dir(target))
+	})
+
+	t.Run("post-commit cleanup failure keeps success effect", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target, _, action := fixture.planRelink(t)
+		operations := defaultFileOperations()
+		realRemove := operations.remove
+		injected := errors.New("cleanup failed")
+		operations.remove = func(path string) error {
+			if filepath.Base(path) == temporaryLinkName {
+				return realRemove(path)
+			}
+			return injected
+		}
+
+		result, err := executeFile(fixture.control, action, operations)
+		if !errors.Is(err, injected) {
+			t.Fatalf("executeFile() error = %v, want cleanup failure", err)
+		}
+		if !result.TargetMutated || result.StateEffect != action.OnSuccess {
+			t.Fatalf("executeFile() result = %#v, want committed success", result)
+		}
+		assertLinkText(t, target, fixture.source)
+	})
+}
+
 type linkFixture struct {
 	root    string
 	home    string
@@ -230,6 +332,30 @@ func (fixture linkFixture) planLink(
 	return action
 }
 
+func (fixture linkFixture) planRelink(t *testing.T) (string, string, planner.FileAction) {
+	t.Helper()
+	oldSource := filepath.Join(fixture.repo, "modules", "zsh", "old-zshrc")
+	if err := os.WriteFile(oldSource, []byte("old source"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(old source) error = %v", err)
+	}
+	target := filepath.Join(fixture.home, ".zshrc")
+	if err := os.Symlink(oldSource, target); err != nil {
+		t.Fatalf("os.Symlink(old source) error = %v", err)
+	}
+	historical := planner.HistoricalState{
+		Key:      "~/.zshrc",
+		Module:   "zsh",
+		Kind:     planner.StateSymlink,
+		Source:   "modules/zsh/old-zshrc",
+		LinkDest: oldSource,
+	}
+	action := fixture.planLink(t, target, fixture.source, historical, true)
+	if action.Verb != planner.FileCreateLink || action.Reason != planner.FileReasonOwnedLinkStale {
+		t.Fatalf("planned action = %q/%q, want L3 create-link", action.Verb, action.Reason)
+	}
+	return target, oldSource, action
+}
+
 func mustRelative(t *testing.T, base, target string) string {
 	t.Helper()
 	relative, err := filepath.Rel(base, target)
@@ -272,5 +398,18 @@ func assertMissing(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("os.Lstat(%q) error = %v, want missing", path, err)
+	}
+}
+
+func assertNoExecutorTemps(t *testing.T, directory string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%q) error = %v", directory, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), temporaryDirectoryPrefix) {
+			t.Fatalf("executor temporary entry remains: %q", entry.Name())
+		}
 	}
 }
