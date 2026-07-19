@@ -27,7 +27,7 @@ test(apply): 覆盖未收敛时延迟清理
 1. 从 `docs/` 确认本次需要满足的性质和里程碑边界。
 2. 先写或补充能够暴露问题的测试，再做最小必要实现。
 3. 在当前开发平台运行 `make check`，完成格式、依赖、静态检查、竞态测试、构建和真实仓库
-   manifest 门禁；CI 在 macOS 与 Linux 分别运行同一入口，并使用 `latest` golangci-lint。
+   manifest 门禁；CI 在 macOS 与 Linux 分别运行同一入口，并固定使用 golangci-lint v2.12.2。
 4. 检查完整 diff 和提交边界，再合入 `main`。
 
 若实现改变用户可观察行为、持久化格式、所有权/清理语义、安全不变量或已接受风险，应先
