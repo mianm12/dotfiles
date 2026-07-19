@@ -24,12 +24,15 @@ type Options struct {
 	NoPrune    bool
 }
 
-// Result 保存内部 runner 的可验证摘要，不定义 CLI 输出或退出码。
+// Result 保存内部 runner 的可验证摘要，不定义 CLI 输出或退出码。FileAttempts 统计 executor
+// 调用，TargetCommits 统计 executor 报告已越过的 target 提交点，AdoptionEffects 统计已接受的
+// adopt OnSuccess effect；这些事实即使最终 state Store 失败也保留。StateCommitted 只表示候选
+// state 已成功原子发布。
 type Result struct {
 	Plan            planner.ApplyPlan
-	Executed        int
-	Adoptions       int
-	TargetMutations int
+	FileAttempts    int
+	AdoptionEffects int
+	TargetCommits   int
 	StateCommitted  bool
 }
 
@@ -105,10 +108,10 @@ func runWithOperations(options Options, operations runOperations) (result Result
 		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
 			continue
 		}
-		result.Executed++
+		result.FileAttempts++
 		fileResult, executeErr := operations.execute(mutation.control(), action)
 		if fileResult.TargetMutated {
-			result.TargetMutations++
+			result.TargetCommits++
 		}
 
 		success := fileResult.StateEffect == action.OnSuccess
@@ -121,7 +124,7 @@ func runWithOperations(options Options, operations runOperations) (result Result
 			} else {
 				updates = append(updates, update)
 				if action.Verb == planner.FileAdopt {
-					result.Adoptions++
+					result.AdoptionEffects++
 				}
 			}
 		case failure:

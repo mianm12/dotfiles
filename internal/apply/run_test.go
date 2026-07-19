@@ -36,7 +36,7 @@ func TestRun_PersistsPostCommitCleanupResultBeforeReturningError(t *testing.T) {
 	if !errors.Is(err, cleanupErr) {
 		t.Fatalf("runWithOperations() error = %v, want cleanup error", err)
 	}
-	if secondStarted || result.Executed != 1 || result.TargetMutations != 1 || !result.StateCommitted {
+	if secondStarted || result.FileAttempts != 1 || result.TargetCommits != 1 || !result.StateCommitted {
 		t.Fatalf("run result = %#v, secondStarted=%t", result, secondStarted)
 	}
 	if fixture.loaded.commitCalls != 1 {
@@ -74,7 +74,7 @@ func TestRun_PartialSuccessCommitsOnceAndJoinsExecutionCommitCloseErrors(t *test
 			t.Fatalf("runWithOperations() error = %v, want joined %v", err, want)
 		}
 	}
-	if result.Executed != 2 || result.TargetMutations != 1 || result.StateCommitted {
+	if result.FileAttempts != 2 || result.TargetCommits != 1 || result.StateCommitted {
 		t.Fatalf("run result = %#v", result)
 	}
 	if fixture.loaded.commitCalls != 1 {
@@ -113,7 +113,7 @@ func TestRun_RejectsUnsupportedScopeBeforeExecutor(t *testing.T) {
 	if !errors.Is(err, ErrUnsupportedPlan) {
 		t.Fatalf("runWithOperations() error = %v, want ErrUnsupportedPlan", err)
 	}
-	if executed || result.Executed != 0 || fixture.loaded.commitCalls != 0 {
+	if executed || result.FileAttempts != 0 || fixture.loaded.commitCalls != 0 {
 		t.Fatalf("precheck executed=%t result=%#v commitCalls=%d", executed, result, fixture.loaded.commitCalls)
 	}
 	if !fixture.session.closed {
@@ -174,7 +174,7 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 		!strings.Contains(err.Error(), "commit runtime state") {
 		t.Fatalf("first run error = %v, want identifiable Store publish failure", err)
 	}
-	if first.Executed != 2 || first.TargetMutations != 2 || first.StateCommitted ||
+	if first.FileAttempts != 2 || first.TargetCommits != 2 || first.StateCommitted ||
 		storeCalls != 1 || publishCalls != 1 {
 		t.Fatalf(
 			"first run = %#v, storeCalls=%d publishCalls=%d; want two targets and one failed Store publish",
@@ -201,7 +201,7 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recovery Run() error = %v", err)
 	}
-	if second.Executed != 2 || second.Adoptions != 2 || second.TargetMutations != 0 || !second.StateCommitted {
+	if second.FileAttempts != 2 || second.AdoptionEffects != 2 || second.TargetCommits != 0 || !second.StateCommitted {
 		t.Fatalf("recovery result = %#v, want two state-only adopts", second)
 	}
 	stateBefore, err := os.ReadFile(fixture.stateFile)
@@ -221,7 +221,7 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("converged Run() error = %v", err)
 	}
-	if third.Executed != 0 || third.Adoptions != 0 || third.TargetMutations != 0 || third.StateCommitted {
+	if third.FileAttempts != 0 || third.AdoptionEffects != 0 || third.TargetCommits != 0 || third.StateCommitted {
 		t.Fatalf("converged result = %#v, want zero mutation/adopt/Store", third)
 	}
 	stateAfter, err := os.ReadFile(fixture.stateFile)
@@ -275,7 +275,7 @@ func TestRun_RealPreconditionFailureCommitsPriorSuccessAndPreservesOldEntry(t *t
 	if !errors.Is(err, executor.ErrPrecondition) {
 		t.Fatalf("runWithOperations() error = %v, want executor.ErrPrecondition", err)
 	}
-	if result.Executed != 2 || result.TargetMutations != 1 || !result.StateCommitted {
+	if result.FileAttempts != 2 || result.TargetCommits != 1 || !result.StateCommitted {
 		t.Fatalf("partial result = %#v", result)
 	}
 	content, readErr := os.ReadFile(fixture.linkTarget)
