@@ -57,7 +57,9 @@ link action，尚不能消费 planner 已形成的 scaffold skip/adopt/create/ki
 - [x] 2026-07-20：以 `1b3583b` 提交本 active ExecPlan 起点。
 - [x] 2026-07-20：测试先固定 S1a–S3、state-only adopt、完整发布与 no-clobber；随后完成
   scaffold kind dispatch、三次 Precond 复核、同目录完整临时文件和排他 hard-link 发布。
-- [ ] 测试先固定 symlink↔scaffold migration 与 hard-link 隔离，再完成 kind migration。
+- [x] 2026-07-20：测试先固定 owned/nonowned symlink→scaffold、scaffold→link no-record 与
+  hard-link sibling 隔离；随后完成完整临时 regular file 加 rename 的 owned migration，其他
+  release 分支保持 state-only。
 - [ ] 完成窄测、重复/race、diff check 与 `make check`，更新 handoff 并保持计划 active 等待复核。
 
 ## Milestones

@@ -43,8 +43,8 @@ type FileResult struct {
 	TargetMutated bool
 }
 
-// ExecuteFile 执行当前 M1 link 切片支持的动作。调用方负责只传入可信 ApplyPlan 中的动作，
-// 本函数仍会拒绝不安全的动作形态，并在每个 target 提交点前重新复核 Precondition。
+// ExecuteFile 执行当前 M1 link/scaffold 切片支持的动作。调用方负责只传入可信 ApplyPlan 中的
+// 动作，本函数仍会拒绝不安全的动作形态，并在每个 target 提交点前重新复核 Precondition。
 func ExecuteFile(control paths.ControlPlanePaths, action planner.FileAction) (FileResult, error) {
 	return executeFile(control, action, defaultFileOperations())
 }

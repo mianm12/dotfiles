@@ -35,6 +35,8 @@ func executeScaffoldFile(
 		switch action.Reason {
 		case planner.FileReasonTargetMissing:
 			return createMissingScaffold(control, action, operations)
+		case planner.FileReasonOwnedLinkToScaffold:
+			return migrateOwnedLinkToScaffold(control, action, operations)
 		case planner.FileReasonScaffoldRebuild:
 			return failure, fmt.Errorf(
 				"%w: force scaffold rebuild is outside the current execution slice",
@@ -54,6 +56,43 @@ func executeScaffoldFile(
 			action.Verb,
 		)
 	}
+}
+
+func migrateOwnedLinkToScaffold(
+	control paths.ControlPlanePaths,
+	action planner.FileAction,
+	operations fileOperations,
+) (FileResult, error) {
+	failure := FileResult{StateEffect: action.OnFailure}
+	if err := validatePrecondition(control, action); err != nil {
+		return failure, err
+	}
+	temporaryFile, err := prepareScaffoldFile(
+		operations,
+		filepath.Dir(action.Precondition.TargetPath),
+		action.Desired,
+	)
+	if err != nil {
+		return failure, err
+	}
+	cleanup := func() error {
+		if err := operations.remove(temporaryFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove temporary migration file: %w", err)
+		}
+		return nil
+	}
+	failPrepared := func(primary error) (FileResult, error) {
+		return failure, errors.Join(primary, cleanup())
+	}
+
+	// 只有最终快照仍是 planner 证明 owned 的原 symlink 时，才允许 rename 替换。
+	if err := validatePrecondition(control, action); err != nil {
+		return failPrepared(err)
+	}
+	if err := operations.rename(temporaryFile, action.Precondition.TargetPath); err != nil {
+		return failPrepared(fmt.Errorf("commit owned link-to-scaffold migration: %w", err))
+	}
+	return FileResult{StateEffect: action.OnSuccess, TargetMutated: true}, nil
 }
 
 func createMissingScaffold(
@@ -197,6 +236,8 @@ func validateScaffoldAction(action planner.FileAction) error {
 			}
 		case planner.FileReasonStateMetadata:
 			// metadata 更新既可能补录仍存在的 target，也可能保留用户删除决定。
+		case planner.FileReasonReleaseOwnershipToScaffold:
+			// scaffold 永不拥有 target；旧 symlink 证据不成立时只更新 state。
 		default:
 			return fmt.Errorf("%w: reason %q is not a scaffold adopt", ErrUnsupportedFileAction, action.Reason)
 		}
@@ -205,11 +246,19 @@ func validateScaffoldAction(action planner.FileAction) error {
 			return err
 		}
 		if action.Reason != planner.FileReasonTargetMissing &&
-			action.Reason != planner.FileReasonScaffoldRebuild {
+			action.Reason != planner.FileReasonScaffoldRebuild &&
+			action.Reason != planner.FileReasonOwnedLinkToScaffold {
 			return fmt.Errorf("%w: reason %q is not a scaffold create", ErrUnsupportedFileAction, action.Reason)
 		}
-		if action.Precondition.Observed.Kind != planner.ObjectMissing {
-			return fmt.Errorf("%w: scaffold create target was not planned missing", ErrUnsupportedFileAction)
+		switch action.Reason {
+		case planner.FileReasonTargetMissing, planner.FileReasonScaffoldRebuild:
+			if action.Precondition.Observed.Kind != planner.ObjectMissing {
+				return fmt.Errorf("%w: scaffold create target was not planned missing", ErrUnsupportedFileAction)
+			}
+		case planner.FileReasonOwnedLinkToScaffold:
+			if action.Precondition.Observed.Kind != planner.ObjectSymlink {
+				return fmt.Errorf("%w: owned link migration was not planned from a symlink", ErrUnsupportedFileAction)
+			}
 		}
 	default:
 		return fmt.Errorf("%w: verb %q is not a scaffold action", ErrUnsupportedFileAction, action.Verb)
