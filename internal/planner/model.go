@@ -7,7 +7,9 @@ import "io/fs"
 type DesiredKind string
 
 const (
-	DesiredLink     DesiredKind = "link"
+	// DesiredLink 要求 target 是指向 source 的精确 symlink。
+	DesiredLink DesiredKind = "link"
+	// DesiredScaffold 要求 target 仅在首次缺失时接收渲染蓝本。
 	DesiredScaffold DesiredKind = "scaffold"
 )
 
@@ -33,11 +35,16 @@ func (desired Desired) Clone() Desired {
 type ObjectKind string
 
 const (
-	ObjectMissing   ObjectKind = "missing"
-	ObjectSymlink   ObjectKind = "symlink"
-	ObjectRegular   ObjectKind = "regular"
+	// ObjectMissing 表示 target leaf 安全缺失。
+	ObjectMissing ObjectKind = "missing"
+	// ObjectSymlink 表示 target leaf 是 symlink。
+	ObjectSymlink ObjectKind = "symlink"
+	// ObjectRegular 表示 target leaf 是普通文件。
+	ObjectRegular ObjectKind = "regular"
+	// ObjectDirectory 表示 target leaf 是目录。
 	ObjectDirectory ObjectKind = "directory"
-	ObjectSpecial   ObjectKind = "special"
+	// ObjectSpecial 表示 target leaf 是 fifo、socket 或设备等特殊对象。
+	ObjectSpecial ObjectKind = "special"
 )
 
 // Observation 是 target leaf 的显式只读快照。LinkDest 只对 symlink 有效；Content 与 Hash
@@ -60,7 +67,9 @@ func (observed Observation) Clone() Observation {
 type StateKind string
 
 const (
-	StateSymlink  StateKind = "symlink"
+	// StateSymlink 表示历史条目携带 symlink 所有权存证。
+	StateSymlink StateKind = "symlink"
+	// StateScaffold 表示历史条目只记录一次性 scaffold 生命周期。
 	StateScaffold StateKind = "scaffold"
 )
 
@@ -118,14 +127,22 @@ func (profile ObservedProfile) Orphans() []OrphanTarget {
 type ActionVerb string
 
 const (
-	ActionSkip          ActionVerb = "skip"
-	ActionCreateLink    ActionVerb = "create-link"
-	ActionScaffold      ActionVerb = "scaffold"
-	ActionAdopt         ActionVerb = "adopt"
+	// ActionSkip 不触碰 target 或 state。
+	ActionSkip ActionVerb = "skip"
+	// ActionCreateLink 创建或重建精确 symlink。
+	ActionCreateLink ActionVerb = "create-link"
+	// ActionScaffold 写入一次性渲染蓝本。
+	ActionScaffold ActionVerb = "scaffold"
+	// ActionAdopt 只更新 state，不触碰 target。
+	ActionAdopt ActionVerb = "adopt"
+	// ActionBackupReplace 先建立可用备份再替换普通对象。
 	ActionBackupReplace ActionVerb = "backup-replace"
-	ActionPrune         ActionVerb = "prune"
-	ActionRunHook       ActionVerb = "run-hook"
-	ActionConflict      ActionVerb = "conflict"
+	// ActionPrune 清理历史孤儿 target 或 state 条目。
+	ActionPrune ActionVerb = "prune"
+	// ActionRunHook 表示待执行的 run_once hook。
+	ActionRunHook ActionVerb = "run-hook"
+	// ActionConflict 保留 unresolved 用户决策。
+	ActionConflict ActionVerb = "conflict"
 )
 
 // Precondition 固定一个动作提交前必须仍成立的 target 快照。
@@ -138,9 +155,12 @@ type Precondition struct {
 type StateEffectKind string
 
 const (
+	// StatePreserve 保留原 state 不变。
 	StatePreserve StateEffectKind = "preserve"
-	StateUpsert   StateEffectKind = "upsert"
-	StateDelete   StateEffectKind = "delete"
+	// StateUpsert 在动作成功后写入或刷新 state 条目。
+	StateUpsert StateEffectKind = "upsert"
+	// StateDelete 在活动 prune 成功后删除 state 条目。
+	StateDelete StateEffectKind = "delete"
 )
 
 // StateEffect 保存动作成功后的 state 处置。Entry 只对 upsert 有效，Key 对 upsert/delete 有效。
