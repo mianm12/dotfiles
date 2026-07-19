@@ -74,6 +74,46 @@ type HistoricalState struct {
 	AppliedAt string
 }
 
+// ObservedTarget 把一个完整 desired 与其 current leaf 快照、可选历史 state 对齐。
+type ObservedTarget struct {
+	Desired  Desired
+	Observed Observation
+	State    HistoricalState
+	HasState bool
+}
+
+// OrphanTarget 保存不匹配任何 current desired 的历史 entry 及其 current leaf 快照。
+type OrphanTarget struct {
+	TargetPath string
+	State      HistoricalState
+	Observed   Observation
+}
+
+// ObservedProfile 是完整 desired 与 strict state 的只读 identity join 结果。
+type ObservedProfile struct {
+	targets []ObservedTarget
+	orphans []OrphanTarget
+}
+
+// Targets 返回不共享 desired/observed bytes 的副本。
+func (profile ObservedProfile) Targets() []ObservedTarget {
+	cloned := append([]ObservedTarget(nil), profile.targets...)
+	for index := range cloned {
+		cloned[index].Desired = cloned[index].Desired.Clone()
+		cloned[index].Observed = cloned[index].Observed.Clone()
+	}
+	return cloned
+}
+
+// Orphans 返回不共享 observed bytes 的副本。
+func (profile ObservedProfile) Orphans() []OrphanTarget {
+	cloned := append([]OrphanTarget(nil), profile.orphans...)
+	for index := range cloned {
+		cloned[index].Observed = cloned[index].Observed.Clone()
+	}
+	return cloned
+}
+
 // ActionVerb 是纯计划中的稳定动作词汇；它不提供执行能力。
 type ActionVerb string
 
