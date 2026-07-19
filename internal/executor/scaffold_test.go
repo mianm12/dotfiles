@@ -329,12 +329,10 @@ func TestExecuteScaffold_MigrationFailuresPreserveOwnedLink(t *testing.T) {
 				return nil, err
 			}
 			if err := os.Remove(target); err != nil {
-				file.Close()
-				return nil, err
+				return nil, errors.Join(err, file.Close())
 			}
 			if err := os.Symlink(intruder, target); err != nil {
-				file.Close()
-				return nil, err
+				return nil, errors.Join(err, file.Close())
 			}
 			return file, nil
 		}
