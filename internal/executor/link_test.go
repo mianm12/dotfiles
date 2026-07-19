@@ -88,6 +88,27 @@ func TestExecuteLink_PreconditionFailuresPreserveTarget(t *testing.T) {
 		}
 	})
 
+	t.Run("target appears at L1 commit", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target := filepath.Join(fixture.home, "commit-race")
+		action := fixture.planLink(t, target, fixture.source, planner.HistoricalState{}, false)
+		operations := defaultFileOperations()
+		realSymlink := operations.symlink
+		operations.symlink = func(oldname, newname string) error {
+			if err := os.WriteFile(newname, []byte("raced user data"), 0o600); err != nil {
+				return err
+			}
+			return realSymlink(oldname, newname)
+		}
+
+		result, err := executeFile(fixture.control, action, operations)
+		assertPreconditionFailure(t, result, action, err)
+		content, readErr := os.ReadFile(target)
+		if readErr != nil || string(content) != "raced user data" {
+			t.Fatalf("target after commit race = (%q, %v), want raced user data", content, readErr)
+		}
+	})
+
 	t.Run("source is no longer regular", func(t *testing.T) {
 		fixture := newLinkFixture(t)
 		target := filepath.Join(fixture.home, "missing-source-target")
@@ -97,6 +118,24 @@ func TestExecuteLink_PreconditionFailuresPreserveTarget(t *testing.T) {
 		}
 		if err := os.Symlink(filepath.Join(fixture.repo, "elsewhere"), fixture.source); err != nil {
 			t.Fatalf("os.Symlink() source error = %v", err)
+		}
+
+		result, err := ExecuteFile(fixture.control, action)
+		assertPreconditionFailure(t, result, action, err)
+		assertMissing(t, target)
+	})
+
+	t.Run("source module became symlink", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target := filepath.Join(fixture.home, "escaped-source-target")
+		action := fixture.planLink(t, target, fixture.source, planner.HistoricalState{}, false)
+		moduleRoot := filepath.Dir(fixture.source)
+		movedModule := filepath.Join(fixture.root, "moved-zsh")
+		if err := os.Rename(moduleRoot, movedModule); err != nil {
+			t.Fatalf("os.Rename(module root) error = %v", err)
+		}
+		if err := os.Symlink(movedModule, moduleRoot); err != nil {
+			t.Fatalf("os.Symlink(module root) error = %v", err)
 		}
 
 		result, err := ExecuteFile(fixture.control, action)

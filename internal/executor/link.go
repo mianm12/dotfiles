@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/planner"
@@ -243,12 +244,43 @@ func validatePrecondition(control paths.ControlPlanePaths, action planner.FileAc
 		return fmt.Errorf("%w: target observation changed", ErrPrecondition)
 	}
 	if action.Precondition.RequireRegularSource {
-		info, err := os.Lstat(action.Precondition.SourcePath)
-		if err != nil {
-			return fmt.Errorf("%w: inspect link source: %w", ErrPrecondition, err)
+		if err := validateRegularModuleSource(control.Repository(), action); err != nil {
+			return err
 		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("%w: link source is not a regular file", ErrPrecondition)
+	}
+	return nil
+}
+
+func validateRegularModuleSource(repository string, action planner.FileAction) error {
+	moduleRoot := filepath.Join(repository, "modules", action.Desired.Module)
+	relative, err := filepath.Rel(moduleRoot, action.Precondition.SourcePath)
+	if err != nil {
+		return fmt.Errorf("%w: locate link source in module: %w", ErrPrecondition, err)
+	}
+	if relative == "." || filepath.IsAbs(relative) || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
+		filepath.ToSlash(relative) != action.Desired.Source {
+		return fmt.Errorf("%w: link source is outside its planned module path", ErrPrecondition)
+	}
+
+	components := []string{"modules", action.Desired.Module}
+	components = append(components, strings.Split(filepath.Clean(relative), string(filepath.Separator))...)
+	current := filepath.Clean(repository)
+	for index, component := range components {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return fmt.Errorf("%w: inspect link source component %q: %w", ErrPrecondition, current, err)
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%w: link source component %q is a symlink", ErrPrecondition, current)
+		}
+		last := index == len(components)-1
+		switch {
+		case last && !info.Mode().IsRegular():
+			return fmt.Errorf("%w: link source %q is not a regular file", ErrPrecondition, current)
+		case !last && !info.IsDir():
+			return fmt.Errorf("%w: link source ancestor %q is not a directory", ErrPrecondition, current)
 		}
 	}
 	return nil
