@@ -61,7 +61,9 @@ exact-input 公开接缝，也没有将三者连接的内部 orchestration packa
 - [x] 2026-07-20：测试先证明磁盘 state 在 strict load 后变化不会影响 exact-input plan，并固定
   backup-replace/ScaffoldRebuild/active prune/HookRun 整体拒绝；随后实现 `PlanLoadedApply` 与
   `internal/apply` 范围门禁。
-- [ ] 测试先固定锁内顺序执行、部分成功、Store 失败恢复和幂等，再连接内部 runner。
+- [x] 2026-07-20：测试先固定锁内顺序执行、scope gate 零 executor、部分成功、post-commit
+  cleanup、Store/Close 错误合并和真实 Store 失败恢复；随后连接 `internal/apply.Run`，验证
+  L2/S1b adopt 与第三次零 target mutation/adopt/Store。
 - [ ] 完成窄测、重复/race、CLI 拒绝回归、diff check 与 `make check`，保持计划 active 等待复核。
 
 ## Milestones
@@ -138,6 +140,13 @@ executor、state，避免 runtime↔planner import cycle。operation seam 只覆
   Evidence: `planner.PlanApply` 当前调用 `runtime.LoadReadOnly`。
   Impact: orchestration 放入独立 `internal/apply`；runtime 仍只负责严格加载、锁和 state commit，
   planner/runtime 依赖方向不反转。
+
+- Observation: state Store 失败可以在完整隔离集成测试中通过 rename 已持锁 state root、在旧路径
+  放置普通文件稳定触发，不需要修改生产 state Store 或依赖权限位行为。
+  Evidence: 两个 file action 均越过 target 提交点后，`CommitState` 因 state root 不是目录失败；
+  还原 root 后重跑形成 link/scaffold 两个 state-only adopt，第三次无 executor 与 Store。
+  Impact: 恢复测试覆盖真实 MutationSession、lock、planner、executor、state.Store 全链，而不是
+  mock 成功路径；所有操作只发生在 `t.TempDir()`。
 
 ## Decision Log
 
