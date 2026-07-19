@@ -186,6 +186,69 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	}
 }
 
+func TestRun_RealPreconditionFailureCommitsPriorSuccessAndPreservesOldEntry(t *testing.T) {
+	fixture := newRunIntegrationFixture(t)
+	oldAppliedAt := "2026-07-18T00:00:00Z"
+	linkSource := filepath.Join(fixture.repository, "modules", "app", "zshrc")
+	writeRunFile(t, fixture.stateFile, `{
+  "version": 1,
+  "entries": {
+    "~/zshrc": {
+      "module": "app",
+      "kind": "symlink",
+      "source": "modules/app/zshrc",
+      "link_dest": "`+linkSource+`",
+      "applied_at": "`+oldAppliedAt+`"
+    }
+  },
+  "run_once": {
+    "app/hooks/old": {
+      "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "executed_at": "2026-07-18T00:00:00Z"
+    }
+  }
+}`)
+	operations := defaultRunOperations()
+	realExecute := operations.execute
+	operations.execute = func(control paths.ControlPlanePaths, action planner.FileAction) (executor.FileResult, error) {
+		if action.Target == "~/zshrc" {
+			if err := os.WriteFile(fixture.linkTarget, []byte("concurrent user data"), 0o600); err != nil {
+				t.Fatalf("os.WriteFile(concurrent target) error = %v", err)
+			}
+		}
+		return realExecute(control, action)
+	}
+
+	result, err := runWithOperations(fixture.options(), operations)
+	if !errors.Is(err, executor.ErrPrecondition) {
+		t.Fatalf("runWithOperations() error = %v, want executor.ErrPrecondition", err)
+	}
+	if result.Executed != 2 || result.TargetMutations != 1 || !result.StateCommitted {
+		t.Fatalf("partial result = %#v", result)
+	}
+	content, readErr := os.ReadFile(fixture.linkTarget)
+	if readErr != nil || string(content) != "concurrent user data" {
+		t.Fatalf("failed target = (%q, %v), want preserved concurrent data", content, readErr)
+	}
+	loaded, loadErr := state.Load(fixture.stateFile)
+	if loadErr != nil {
+		t.Fatalf("state.Load() error = %v", loadErr)
+	}
+	snapshot, ok := loaded.Snapshot()
+	if !ok {
+		t.Fatal("committed partial state has no Snapshot")
+	}
+	if entry, exists := snapshot.Entry("~/config"); !exists || entry.Kind() != state.KindScaffold {
+		t.Fatalf("successful scaffold entry = (%#v, %t)", entry, exists)
+	}
+	if entry, exists := snapshot.Entry("~/zshrc"); !exists || entry.AppliedAt() != oldAppliedAt {
+		t.Fatalf("failed link old entry = (%#v, %t), want preserved", entry, exists)
+	}
+	if _, exists := snapshot.RunOnce("app/hooks/old"); !exists {
+		t.Fatal("partial state commit discarded unrelated run_once")
+	}
+}
+
 func TestRun_HoldsMutationLockThroughExecutionAndClose(t *testing.T) {
 	fixture := newRunIntegrationFixture(t)
 	operations := defaultRunOperations()
@@ -297,10 +360,13 @@ type fakeLoadedMutation struct {
 func (mutation *fakeLoadedMutation) inputs() dotruntime.LoadedInputs {
 	return dotruntime.LoadedInputs{}
 }
+
 func (mutation *fakeLoadedMutation) baseline() state.Loaded { return mutation.baselineState }
+
 func (mutation *fakeLoadedMutation) control() paths.ControlPlanePaths {
 	return mutation.controlPaths
 }
+
 func (mutation *fakeLoadedMutation) commit(snapshot state.Snapshot) error {
 	mutation.commitCalls++
 	mutation.committed = snapshot
