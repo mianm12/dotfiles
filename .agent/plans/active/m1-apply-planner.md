@@ -72,6 +72,11 @@ path validation 与 HOME，`ScopedProfile` 只渲染 module scope；`ObservedPro
   presentation input，以 `3565be4 feat(planner): 建立纯只读 apply 计划入口` 提交。
 - [x] 2026-07-19：窄测、相关五包 20 次/race、darwin/linux amd64 编译、branch diff check 与
   `make check` 全部通过；计划保持 active，等待 coordinator 安排独立 review。
+- [x] 2026-07-19：review round 1 提出有效 blocking P1：active P2 orphan prune 可删除完整
+  desired 的祖先 symlink。full/partial filesystem regressions 先在旧实现失败；以 fix commit
+  `864c828` 增加完整 desired × active delete topology 校验。
+- [x] 2026-07-19：P1 fix 后相关五包 20 次/race、darwin/linux amd64 编译、完整 branch diff
+  check 与 `make check` 再次通过；等待 round 2 完整 branch review。
 
 ## Milestones
 
@@ -152,7 +157,8 @@ Commit 边界：
 | invalid manifest/state、managed/rendered 零计划 | fail-closed table tests | 通过 |
 | deterministic、自包含、getter 深拷贝 | repeated plan、getter mutation、combined validation tests | 通过 |
 | 全部路径零锁零写入 | 每个 success/error fixture tree snapshot；missing state root/lock 断言 | 通过 |
-| 当前平台完整门禁 | Darwin/arm64 `make check BINARY=/private/tmp/dot-cp3-apply-planner-check/dot` | 通过 |
+| active prune 不删除 desired leaf/祖先 | full/partial ancestor、equal identity 与非 active 对照 tests | 通过（round 1 fix） |
+| 当前平台完整门禁 | Darwin/arm64 `make check BINARY=/private/tmp/dot-cp3-apply-planner-review-check/dot` | 通过 |
 | 双平台编译证据 | darwin/amd64、linux/amd64 planner test binary | 通过（未执行二进制） |
 | 远端 macOS/Linux CI | 精确 branch HEAD | 待验收（本 worker 不 push） |
 
@@ -193,6 +199,13 @@ no-prune，并返回 opaque `ApplyPlan`。结果 getters 给出独立 context/sl
   managed source，均返回零 plan 且 fixture tree 不变。
   Impact: apply planner 不增加第二套 M1 kind 过滤或 fallback，保持两个既有边界的错误来源。
 
+- Observation: desired 与 state 分别通过 target-set 校验、alias join 也正确时，active P2 orphan
+  仍可能是某个完整 desired 路径实际经过的祖先 symlink。
+  Evidence: review round 1 fixture 中 owned `~/dir -> owned` 是 orphan，而 desired
+  `~/dir/child` 经它到达；旧 combined validation 同时返回 create-link 与 active target prune。
+  Impact: create/adopt→prune 顺序会先满足 child 再删除其祖先，因此必须在 combined validation
+  对完整 desired resolutions 与实际 `DeletesTarget()` prune resolutions 做 cross-check。
+
 ## Decision Log
 
 - Decision: apply planner 通过一个 production `PlanApply` 入口调用 `runtime.LoadReadOnly`，不暴露
@@ -214,23 +227,32 @@ no-prune，并返回 opaque `ApplyPlan`。结果 getters 给出独立 context/sl
   提供，组合层不重新决策。
   Date: 2026-07-19
 
+- Decision: prune topology cross-check 只拒绝 active P2 与 desired 相同 identity，或 active P2 是
+  desired 的祖先；使用既有 `TargetResolution.Equal/IsAncestorOf`。
+  Rationale: P1/P3 只删 state，deferred/no-prune 本轮不删 target，不能误拦；相反方向中 prune
+  删除 desired 后代不删除 desired leaf，link 场景还会被路径阻断或 file conflict 门控，当前没有
+  规范破坏证据，因此不扩成对称祖先禁令，也不使用字符串前缀。
+  Date: 2026-07-19
+
 ## Outcomes and Handoff
 
 实现和 worker 本地门禁已完成，计划保持 active，等待 coordinator 安排未参与实现的完整 branch
-review。相对 base `385dea8` 的 commits 为计划 `ccf487a`、完整 desired/scope file 组合
-`c71fd7d` 与唯一入口/整体 validation `3565be4`。
+review round 2。相对 base `385dea8` 的 commits 为计划 `ccf487a`、完整 desired/scope file 组合
+`c71fd7d`、唯一入口/整体 validation `3565be4`、首轮交接计划 `239b67b`，以及 review P1 fix
+`864c828`。
 
 本地验证（2026-07-19，均退出 0）：
 
     go test -count=20 ./internal/planner ./internal/runtime ./internal/manifest ./internal/paths ./internal/state
     go test -race ./internal/planner ./internal/runtime ./internal/manifest ./internal/paths ./internal/state
-    GOOS=darwin GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-apply-darwin.test ./internal/planner
-    GOOS=linux GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-apply-linux.test ./internal/planner
+    GOOS=darwin GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-apply-review-darwin.test ./internal/planner
+    GOOS=linux GOARCH=amd64 go test -c -o /private/tmp/dot-cp3-apply-review-linux.test ./internal/planner
     git diff 385dea8...HEAD --check
-    make check BINARY=/private/tmp/dot-cp3-apply-planner-check/dot
+    make check BINARY=/private/tmp/dot-cp3-apply-planner-review-check/dot
 
 结果新增唯一 `PlanApply`，它在真实 strict runtime load 后按规范顺序返回完整 observation、scope
 file actions、prune 与 hooks；结果稳定、getter 深拷贝，所有 error 返回零 plan。未新增依赖，未修改
 shared ownership/manifest/runtime/state contract，也没有 CLI/executor/mutation。双平台只完成编译，
 精确 HEAD 远端 macOS/Linux CI 未运行；本地验收通过、远端待验收。实际 file/prune/hook execute、
-state 持久化、输出和退出码属于后续 Milestone，未在本分支验证。
+state 持久化、输出和退出码属于后续 Milestone，未在本分支验证。review round 1 的 blocking P1
+已修复并重跑全部门禁；仍需 round 2 对完整 branch 复审，当前不满足 lifecycle closure 条件。
