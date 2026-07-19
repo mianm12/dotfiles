@@ -158,12 +158,12 @@ func TestApply_RejectsMutationAndAdoptBeforeRuntime(t *testing.T) {
 		{
 			name: "naked apply",
 			args: []string{"apply"},
-			want: "real apply is not available in M1; use dot apply --dry-run",
+			want: "real apply is not available in this build; use dot apply --dry-run",
 		},
 		{
 			name: "module mutation flags",
 			args: []string{"apply", "alpha", "--force", "--no-prune"},
-			want: "real apply is not available in M1; use dot apply --dry-run",
+			want: "real apply is not available in this build; use dot apply --dry-run",
 		},
 		{
 			name: "dry-run adopt",

@@ -50,7 +50,7 @@ func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 				return errors.New("--adopt requires M2 and is not supported in this build")
 			}
 			if !dryRun {
-				return errors.New("real apply is not available in M1; use dot apply --dry-run")
+				return errors.New("real apply is not available in this build; use dot apply --dry-run")
 			}
 			return runReadOnlyPlan(command, readOnlyPlanOptions{
 				modules:       append([]string(nil), modules...),
