@@ -310,6 +310,61 @@ func TestReadOnlyPlan_MissingStateRootRemainsMissing(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPlan_ErrorAndRefusalDoNotCreateMissingStateRoot(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   []string
+		mutate func(*testing.T, planCLIFixture)
+	}{
+		{
+			name: "planner error",
+			args: []string{"diff", "alpha"},
+			mutate: func(t *testing.T, fixture planCLIFixture) {
+				writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "invalid = [")
+			},
+		},
+		{
+			name: "mutation refusal",
+			args: []string{"apply", "alpha"},
+			mutate: func(t *testing.T, fixture planCLIFixture) {
+				writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), "invalid = [")
+			},
+		},
+		{
+			name: "adopt refusal",
+			args: []string{"apply", "alpha", "--dry-run", "--adopt"},
+			mutate: func(t *testing.T, fixture planCLIFixture) {
+				writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), "invalid = [")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPlanCLIFixture(t)
+			stateRoot := filepath.Join(fixture.home, ".local", "state", "dot")
+			if err := os.Remove(filepath.Join(stateRoot, "state.json")); err != nil {
+				t.Fatalf("os.Remove(state) error = %v", err)
+			}
+			if err := os.Remove(stateRoot); err != nil {
+				t.Fatalf("os.Remove(state root) error = %v", err)
+			}
+			test.mutate(t, fixture)
+			before := snapshotCLITree(t, fixture.root)
+
+			stdout, _, code := fixture.run(t, test.args...)
+			if code != exitError || stdout != "" {
+				t.Fatalf("%s = stdout %q, exit %d; want error without success output", test.name, stdout, code)
+			}
+			if _, err := os.Lstat(stateRoot); !os.IsNotExist(err) {
+				t.Fatalf("%s created state root: %v", test.name, err)
+			}
+			if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("%s changed isolated tree\nbefore=%v\nafter=%v", test.name, before, after)
+			}
+		})
+	}
+}
+
 func TestReadOnlyPlan_OutputErrorOverridesConflict(t *testing.T) {
 	fixture := newPlanCLIFixture(t)
 	fixture.redirectEnvironment(t)
