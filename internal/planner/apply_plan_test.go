@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/manifest"
 	"github.com/mianm12/dotfiles/internal/paths"
+	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 	"github.com/mianm12/dotfiles/internal/state"
 )
 
@@ -85,6 +87,289 @@ func TestPlanScopedFiles_RejectsInvalidScopeWithoutPartialResult(t *testing.T) {
 	}
 }
 
+func TestPlanApply_ComposesDeterministicFullAndPartialPlansWithoutWrites(t *testing.T) {
+	fixture := newApplyIntegrationFixture(t)
+	fixture.redirectEnvironment(t)
+	before := snapshotObservationTree(t, fixture.root)
+
+	options := fixture.options()
+	options.Modules = []string{"alpha"}
+	partial, err := PlanApply(options)
+	if err != nil {
+		t.Fatalf("PlanApply(partial alpha) error = %v", err)
+	}
+	if !partial.Valid() {
+		t.Fatal("PlanApply(partial alpha) returned invalid plan")
+	}
+	context := partial.Context()
+	if context.Profile != "all" || context.Full || !reflect.DeepEqual(context.Modules, []string{"alpha"}) {
+		t.Fatalf("partial context = %#v", context)
+	}
+	if got, want := context.UnassignedModules, []string{"unused"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unassigned modules = %v, want %v", got, want)
+	}
+	fileActions := partial.FileActions()
+	if got, want := applyFileActionKeys(fileActions), []string{
+		"alpha/conflict.txt",
+		"alpha/stable.txt",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("partial file action order = %v, want %v", got, want)
+	}
+	if fileActions[0].Verb != ActionConflict {
+		t.Fatalf("conflicting file action = %#v", fileActions[0])
+	}
+	pruneActions := partial.Prune().Actions()
+	if len(pruneActions) != 1 || pruneActions[0].Target != "~/alpha/obsolete" || !pruneActions[0].Deferred {
+		t.Fatalf("partial prune actions = %#v, want deferred alpha orphan", pruneActions)
+	}
+	if groups := partial.Prune().ConfirmationGroups(); groups != nil {
+		t.Fatalf("partial confirmation groups = %#v, want no whole-module group", groups)
+	}
+	hooks := partial.Hooks().Actions()
+	if len(hooks) != 1 || hooks[0].Module != "alpha" || hooks[0].Verb != HookRun {
+		t.Fatalf("partial hooks = %#v, want alpha run-hook despite conflict", hooks)
+	}
+
+	forceOptions := options
+	forceOptions.Force = true
+	forced, err := PlanApply(forceOptions)
+	if err != nil {
+		t.Fatalf("PlanApply(partial force) error = %v", err)
+	}
+	if forced.FileActions()[0].Verb != ActionBackupReplace || forced.Prune().Actions()[0].Deferred {
+		t.Fatalf("forced file/prune plan = file %#v prune %#v", forced.FileActions(), forced.Prune().Actions())
+	}
+	noPruneOptions := options
+	noPruneOptions.NoPrune = true
+	withoutPrune, err := PlanApply(noPruneOptions)
+	if err != nil {
+		t.Fatalf("PlanApply(no-prune) error = %v", err)
+	}
+	if withoutPrune.Context().PruneEnabled || withoutPrune.Prune().Actions() != nil || len(withoutPrune.Hooks().Actions()) != 1 {
+		t.Fatalf("no-prune plan = context %#v prune %#v hooks %#v", withoutPrune.Context(), withoutPrune.Prune().Actions(), withoutPrune.Hooks().Actions())
+	}
+
+	repeated, err := PlanApply(options)
+	if err != nil {
+		t.Fatalf("PlanApply(partial repeated) error = %v", err)
+	}
+	if !reflect.DeepEqual(partial.Context(), repeated.Context()) ||
+		!reflect.DeepEqual(partial.Observed().Targets(), repeated.Observed().Targets()) ||
+		!reflect.DeepEqual(partial.Observed().Orphans(), repeated.Observed().Orphans()) ||
+		!reflect.DeepEqual(partial.FileActions(), repeated.FileActions()) ||
+		!reflect.DeepEqual(partial.Prune().Actions(), repeated.Prune().Actions()) ||
+		!reflect.DeepEqual(partial.Hooks().Actions(), repeated.Hooks().Actions()) {
+		t.Fatal("repeated PlanApply(partial) changed deterministic plan")
+	}
+
+	fullOptions := fixture.options()
+	full, err := PlanApply(fullOptions)
+	if err != nil {
+		t.Fatalf("PlanApply(full) error = %v", err)
+	}
+	if !full.Context().Full || !reflect.DeepEqual(full.Context().Modules, []string{"alpha", "beta"}) {
+		t.Fatalf("full context = %#v", full.Context())
+	}
+	if got, want := applyFileActionKeys(full.FileActions()), []string{
+		"alpha/conflict.txt",
+		"alpha/stable.txt",
+		"beta/other.txt",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("full file action order = %v, want %v", got, want)
+	}
+	if got, want := applyHookActionKeys(full.Hooks().Actions()), []string{
+		"alpha/hooks/setup.sh",
+		"beta/hooks/setup.sh",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("full hook order = %v, want %v", got, want)
+	}
+	groups := full.Prune().ConfirmationGroups()
+	if len(groups) != 1 || groups[0].Module != "legacy" || len(groups[0].Targets) != 1 {
+		t.Fatalf("full confirmation groups = %#v, want legacy whole-module group", groups)
+	}
+
+	// ApplyPlan 的组合 getters 不能让 presentation 调用方反向修改 plan。
+	mutableContext := partial.Context()
+	mutableContext.Modules[0] = "changed"
+	mutableObserved := partial.Observed().Targets()
+	mutableObserved[0].Observed.Content[0] = 'X'
+	mutableFiles := partial.FileActions()
+	mutableFiles[0].Precondition.Observed.Content[0] = 'Y'
+	mutableHooks := full.Hooks().Actions()
+	mutableHooks[1].Invocation.Arguments[0] = "changed"
+	if partial.Context().Modules[0] != "alpha" ||
+		string(partial.Observed().Targets()[0].Observed.Content) != "user data\n" ||
+		string(partial.FileActions()[0].Precondition.Observed.Content) != "user data\n" ||
+		full.Hooks().Actions()[1].Invocation.Arguments[0] == "changed" {
+		t.Fatal("mutating ApplyPlan getter result changed stored plan")
+	}
+	if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("PlanApply() changed fixture tree\nbefore=%v\nafter=%v", before, after)
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.home, ".local", "state", "dot", "lock")); !os.IsNotExist(err) {
+		t.Fatalf("PlanApply() lock Lstat error = %v, want missing", err)
+	}
+}
+
+func TestPlanApply_PartialScopeSkipsUnrequestedTemplateRenderButNotFullCollision(t *testing.T) {
+	t.Run("unrequested template failure", func(t *testing.T) {
+		fixture := newApplyIntegrationFixture(t)
+		fixture.redirectEnvironment(t)
+		writeApplyFile(t, filepath.Join(fixture.repository, "modules", "beta", "broken.template"), `{{`)
+		before := snapshotObservationTree(t, fixture.root)
+
+		partialOptions := fixture.options()
+		partialOptions.Modules = []string{"alpha"}
+		if plan, err := PlanApply(partialOptions); err != nil || !plan.Valid() {
+			t.Fatalf("PlanApply(partial alpha) = (%#v, %v), want valid plan", plan, err)
+		}
+		full, err := PlanApply(fixture.options())
+		if err == nil || !strings.Contains(err.Error(), "broken.template") {
+			t.Fatalf("PlanApply(full) error = %v, want beta template failure", err)
+		}
+		if !reflect.DeepEqual(full, ApplyPlan{}) {
+			t.Fatalf("failed full plan = %#v, want zero", full)
+		}
+		if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("template failure planning changed fixture\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+
+	t.Run("complete profile collision", func(t *testing.T) {
+		fixture := newApplyIntegrationFixture(t)
+		fixture.redirectEnvironment(t)
+		writeApplyFile(t, filepath.Join(fixture.repository, "modules", "beta", "dot.toml"), `target = "~/alpha"
+[hooks]
+run_once = ["hooks/setup.sh"]
+`)
+		writeApplyFile(t, filepath.Join(fixture.repository, "modules", "beta", "stable.txt"), "beta\n")
+		options := fixture.options()
+		options.Modules = []string{"alpha"}
+		plan, err := PlanApply(options)
+		if err == nil || !strings.Contains(err.Error(), "target") {
+			t.Fatalf("PlanApply(partial collision) error = %v, want complete target collision", err)
+		}
+		if !reflect.DeepEqual(plan, ApplyPlan{}) {
+			t.Fatalf("failed collision plan = %#v, want zero", plan)
+		}
+	})
+}
+
+func TestPlanApply_FailsClosedWithZeroPlan(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, applyIntegrationFixture)
+		want   string
+	}{
+		{
+			name: "invalid manifest",
+			mutate: func(t *testing.T, fixture applyIntegrationFixture) {
+				writeApplyFile(t, filepath.Join(fixture.repository, "dot.toml"), `requires = ">=0.0.0"
+unknown = true
+[profiles]
+all = ["alpha"]
+`)
+			},
+			want: "manifest",
+		},
+		{
+			name: "invalid state",
+			mutate: func(t *testing.T, fixture applyIntegrationFixture) {
+				writeApplyFile(t, fixture.statePath, `{`)
+			},
+			want: "state",
+		},
+		{
+			name: "rendered state",
+			mutate: func(t *testing.T, fixture applyIntegrationFixture) {
+				writeApplyFile(t, fixture.statePath, `{"version":1,"entries":{"~/alpha/rendered":{"module":"alpha","kind":"rendered","source":"modules/alpha/rendered.tmpl","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","applied_at":"2026-07-19T00:00:00Z"}},"run_once":{}}`)
+			},
+			want: "rendered",
+		},
+		{
+			name: "managed desired outside scope",
+			mutate: func(t *testing.T, fixture applyIntegrationFixture) {
+				writeApplyFile(t, filepath.Join(fixture.repository, "modules", "beta", "managed.tmpl"), "managed\n")
+			},
+			want: "managed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newApplyIntegrationFixture(t)
+			fixture.redirectEnvironment(t)
+			test.mutate(t, fixture)
+			before := snapshotObservationTree(t, fixture.root)
+			options := fixture.options()
+			options.Modules = []string{"alpha"}
+			plan, err := PlanApply(options)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), test.want) {
+				t.Fatalf("PlanApply() error = %v, want substring %q", err, test.want)
+			}
+			if !reflect.DeepEqual(plan, ApplyPlan{}) {
+				t.Fatalf("failed PlanApply() plan = %#v, want zero", plan)
+			}
+			if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("failed PlanApply() changed fixture\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func TestPlanApply_MissingStateDoesNotCreateStateOrLock(t *testing.T) {
+	fixture := newApplyIntegrationFixture(t)
+	fixture.redirectEnvironment(t)
+	if err := os.Remove(fixture.statePath); err != nil {
+		t.Fatalf("Remove(state) error = %v", err)
+	}
+	stateRoot := filepath.Dir(fixture.statePath)
+	if err := os.Remove(stateRoot); err != nil {
+		t.Fatalf("Remove(state root) error = %v", err)
+	}
+	before := snapshotObservationTree(t, fixture.root)
+	plan, err := PlanApply(fixture.options())
+	if err != nil || !plan.Valid() {
+		t.Fatalf("PlanApply(missing state) = (%#v, %v), want valid", plan, err)
+	}
+	if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("PlanApply(missing state) changed fixture\nbefore=%v\nafter=%v", before, after)
+	}
+	if _, err := os.Lstat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("state root Lstat error = %v, want missing", err)
+	}
+}
+
+func TestPlanApply_RejectsUnknownScopeWithZeroPlan(t *testing.T) {
+	fixture := newApplyIntegrationFixture(t)
+	fixture.redirectEnvironment(t)
+	before := snapshotObservationTree(t, fixture.root)
+	options := fixture.options()
+	options.Modules = []string{"missing"}
+	plan, err := PlanApply(options)
+	if err == nil || !strings.Contains(err.Error(), "not in the effective profile") {
+		t.Fatalf("PlanApply(unknown scope) error = %v", err)
+	}
+	if !reflect.DeepEqual(plan, ApplyPlan{}) {
+		t.Fatalf("failed unknown-scope plan = %#v, want zero", plan)
+	}
+	if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("unknown-scope planning changed fixture\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestValidateApplyPlan_RejectsInconsistentAction(t *testing.T) {
+	fixture := newApplyIntegrationFixture(t)
+	fixture.redirectEnvironment(t)
+	plan, err := PlanApply(fixture.options())
+	if err != nil {
+		t.Fatalf("PlanApply() error = %v", err)
+	}
+	plan.fileActions[0].OnFailure = StateEffect{Kind: StateUpsert}
+	if err := validateApplyPlan(plan); err == nil {
+		t.Fatal("validateApplyPlan(inconsistent failure effect) error = nil")
+	}
+}
+
 type fileCompositionFixture struct {
 	root        string
 	home        string
@@ -92,6 +377,120 @@ type fileCompositionFixture struct {
 	validated   manifest.ValidatedProfile
 	context     manifest.RuntimeContext
 	loadedState state.Loaded
+}
+
+type applyIntegrationFixture struct {
+	root       string
+	home       string
+	repository string
+	configPath string
+	statePath  string
+}
+
+func newApplyIntegrationFixture(t *testing.T) applyIntegrationFixture {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repository := filepath.Join(root, "repo")
+	configPath := filepath.Join(home, ".config", "dot", "config.toml")
+	statePath := filepath.Join(home, ".local", "state", "dot", "state.json")
+	writeApplyFile(t, configPath, "profile = \"all\"\n")
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+all = ["beta", "alpha"]
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "dot.toml"), `target = "~/alpha"
+[hooks]
+run_once = ["hooks/setup.sh"]
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "conflict.txt"), "wanted conflict\n")
+	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "stable.txt"), "stable\n")
+	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "hooks", "setup.sh"), "#!/bin/sh\nexit 99\n")
+	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "hooks", "old.txt"), "old\n")
+	if err := os.Chmod(filepath.Join(repository, "modules", "alpha", "hooks", "setup.sh"), 0o755); err != nil {
+		t.Fatalf("Chmod(alpha hook) error = %v", err)
+	}
+
+	writeApplyFile(t, filepath.Join(repository, "modules", "beta", "dot.toml"), `target = "~/beta"
+[hooks]
+run_once = ["hooks/setup.sh"]
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "beta", "other.txt"), "other\n")
+	writeApplyFile(t, filepath.Join(repository, "modules", "beta", "hooks", "setup.sh"), "#!/bin/sh\nexit 98\n")
+
+	// 未被任何 profile 引用，只供后续 status/presentation input 使用。
+	writeApplyFile(t, filepath.Join(repository, "modules", "unused", "note.txt"), "unused\n")
+	if err := os.MkdirAll(filepath.Join(home, "alpha"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(home/alpha) error = %v", err)
+	}
+	writeApplyFile(t, filepath.Join(home, "alpha", "conflict.txt"), "user data\n")
+	alphaOldSource := filepath.Join(repository, "modules", "alpha", "hooks", "old.txt")
+	if err := os.Symlink(alphaOldSource, filepath.Join(home, "alpha", "obsolete")); err != nil {
+		t.Fatalf("Symlink(alpha orphan) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "legacy"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(home/legacy) error = %v", err)
+	}
+	legacyDest := filepath.Join(repository, "modules", "unused", "note.txt")
+	if err := os.Symlink(legacyDest, filepath.Join(home, "legacy", "old")); err != nil {
+		t.Fatalf("Symlink(legacy orphan) error = %v", err)
+	}
+	writeApplyState(t, statePath, map[string]applyStateEntry{
+		"~/alpha/obsolete": {
+			Module:   "alpha",
+			Kind:     "symlink",
+			Source:   "modules/alpha/hooks/old.txt",
+			LinkDest: alphaOldSource,
+		},
+		"~/legacy/old": {
+			Module:   "legacy",
+			Kind:     "symlink",
+			Source:   "modules/legacy/old.txt",
+			LinkDest: legacyDest,
+		},
+	}, map[string]applyRunOnce{
+		"alpha/hooks/setup.sh": {Hash: "sha256:" + strings.Repeat("0", 64)},
+		"beta/hooks/setup.sh":  {Hash: "sha256:" + strings.Repeat("1", 64)},
+	})
+	return applyIntegrationFixture{
+		root:       root,
+		home:       home,
+		repository: repository,
+		configPath: configPath,
+		statePath:  statePath,
+	}
+}
+
+func (fixture applyIntegrationFixture) redirectEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("DOT_CONFIG", fixture.configPath)
+	t.Setenv("DOT_REPO", fixture.repository)
+}
+
+func (fixture applyIntegrationFixture) options() ApplyOptions {
+	return ApplyOptions{
+		Runtime: dotruntime.Overrides{
+			Home:       dotruntime.Override{Value: fixture.home, Set: true},
+			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+		},
+		CLIVersion: "dev",
+	}
+}
+
+func applyFileActionKeys(actions []Action) []string {
+	keys := make([]string, len(actions))
+	for index, action := range actions {
+		keys[index] = action.Desired.Module + "/" + action.Desired.Source
+	}
+	return keys
+}
+
+func applyHookActionKeys(actions []HookAction) []string {
+	keys := make([]string, len(actions))
+	for index, action := range actions {
+		keys[index] = action.StateKey
+	}
+	return keys
 }
 
 func newFileCompositionFixture(t *testing.T) fileCompositionFixture {
