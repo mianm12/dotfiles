@@ -168,10 +168,16 @@ func validateLoadedState(context RunContext, snapshot state.Snapshot, operations
 	if err := operations.validateLexicalBoundaries(control.Paths(), targets); err != nil {
 		return fmt.Errorf("%w: validate state target lexical boundaries: %w", state.ErrCorrupt, err)
 	}
-	if err := operations.validateStateIdentities(snapshot, control.Home()); err != nil {
-		return err
-	}
 	if err := operations.validatePathBoundaries(control.Paths(), targets); err != nil {
+		var conflict *paths.TargetConflictError
+		if errors.As(err, &conflict) && conflict.Relation() == paths.TargetRelationEqual {
+			return fmt.Errorf(
+				"%w: %w: validate equal state target identities: %w",
+				state.ErrCorrupt,
+				state.ErrTargetIdentityConflict,
+				err,
+			)
+		}
 		return fmt.Errorf("%w: validate state target runtime boundaries: %w", state.ErrPathValidation, err)
 	}
 	return nil
@@ -201,7 +207,6 @@ type loadingOperations struct {
 	loadState                 func(string) (state.Loaded, error)
 	storeState                func(string, string, state.Snapshot) error
 	validateLexicalBoundaries func(paths.ControlPlanePaths, []paths.LabeledTarget) error
-	validateStateIdentities   func(state.Snapshot, string) error
 	validatePathBoundaries    func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 }
 
@@ -218,7 +223,6 @@ func defaultLoadingOperations() loadingOperations {
 		loadState:                 state.Load,
 		storeState:                state.Store,
 		validateLexicalBoundaries: paths.ValidateLexicalTargetControlBoundaries,
-		validateStateIdentities:   state.ValidateTargetIdentities,
 		validatePathBoundaries: func(control paths.ControlPlanePaths, targets []paths.LabeledTarget) error {
 			_, err := paths.ValidatePathBoundaries(control, targets)
 			return err

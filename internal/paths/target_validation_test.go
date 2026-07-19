@@ -56,7 +56,7 @@ func TestValidateTargetSet_RejectsEqualIdentity(t *testing.T) {
 			{Label: "module alpha source first", Path: path},
 			{Label: "module beta source second", Path: filepath.Join(filepath.Dir(path), ".", filepath.Base(path))},
 		},
-		"equal",
+		TargetRelationEqual,
 	)
 }
 
@@ -71,7 +71,7 @@ func TestValidateTargetSet_RejectsAncestorsInEitherOrder(t *testing.T) {
 	tests := []struct {
 		name         string
 		inputs       []LabeledTarget
-		wantRelation string
+		wantRelation TargetRelation
 	}{
 		{
 			name: "parent first",
@@ -79,7 +79,7 @@ func TestValidateTargetSet_RejectsAncestorsInEitherOrder(t *testing.T) {
 				{Label: "parent target", Path: parent},
 				{Label: "child target", Path: child},
 			},
-			wantRelation: "left-ancestor",
+			wantRelation: TargetRelationLeftAncestor,
 		},
 		{
 			name: "child first",
@@ -87,7 +87,7 @@ func TestValidateTargetSet_RejectsAncestorsInEitherOrder(t *testing.T) {
 				{Label: "child target", Path: child},
 				{Label: "parent target", Path: parent},
 			},
-			wantRelation: "right-ancestor",
+			wantRelation: TargetRelationRightAncestor,
 		},
 	}
 	for _, test := range tests {
@@ -116,7 +116,7 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 		assertTargetSetOverlap(t, []LabeledTarget{
 			{Label: "alias leaf", Path: alias},
 			{Label: "alias child", Path: filepath.Join(alias, "child")},
-		}, "left-ancestor")
+		}, TargetRelationLeftAncestor)
 	})
 
 	t.Run("chained intermediate symlink", func(t *testing.T) {
@@ -141,7 +141,7 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 		assertTargetSetOverlap(t, []LabeledTarget{
 			{Label: "bridge leaf", Path: bridge},
 			{Label: "alias child", Path: filepath.Join(alias, "child")},
-		}, "left-ancestor")
+		}, TargetRelationLeftAncestor)
 	})
 
 	t.Run("component traversed before dot dot", func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 		assertTargetSetOverlap(t, []LabeledTarget{
 			{Label: "detour leaf", Path: detour},
 			{Label: "alias child", Path: filepath.Join(alias, "child")},
-		}, "left-ancestor")
+		}, TargetRelationLeftAncestor)
 	})
 }
 
@@ -344,7 +344,7 @@ func TestValidateTargetSet_FailsClosed(t *testing.T) {
 	})
 }
 
-func assertTargetSetOverlap(t *testing.T, inputs []LabeledTarget, wantRelation string) {
+func assertTargetSetOverlap(t *testing.T, inputs []LabeledTarget, wantRelation TargetRelation) {
 	t.Helper()
 
 	validated, err := ValidateTargetSet(inputs)
@@ -354,6 +354,22 @@ func assertTargetSetOverlap(t *testing.T, inputs []LabeledTarget, wantRelation s
 	if validated.targets != nil {
 		t.Fatalf("ValidateTargetSet() targets = %#v, want zero result", validated.targets)
 	}
+	var conflict *TargetConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("ValidateTargetSet() error = %T %v, want *TargetConflictError", err, err)
+	}
+	if conflict.Left() != inputs[0] || conflict.Right() != inputs[1] {
+		t.Errorf(
+			"TargetConflictError inputs = (%#v, %#v), want (%#v, %#v)",
+			conflict.Left(),
+			conflict.Right(),
+			inputs[0],
+			inputs[1],
+		)
+	}
+	if conflict.Relation() != wantRelation {
+		t.Errorf("TargetConflictError.Relation() = %v, want %v", conflict.Relation(), wantRelation)
+	}
 	for _, input := range inputs {
 		for _, want := range []string{input.Label, input.Path} {
 			if !strings.Contains(err.Error(), want) {
@@ -361,7 +377,7 @@ func assertTargetSetOverlap(t *testing.T, inputs []LabeledTarget, wantRelation s
 			}
 		}
 	}
-	if !strings.Contains(err.Error(), wantRelation) {
+	if !strings.Contains(err.Error(), wantRelation.String()) {
 		t.Errorf("ValidateTargetSet() error = %q, want relation %q", err, wantRelation)
 	}
 }

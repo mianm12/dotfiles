@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/lock"
@@ -46,7 +47,7 @@ func TestMutationSession_OrdersTrustedStages(t *testing.T) {
 	}
 	want := []string{
 		"preflight", "acquire", "requires", "satisfies", "manifest", "satisfies",
-		"state", "lexical-boundaries", "state-identities", "path-boundaries",
+		"state", "lexical-boundaries", "path-boundaries",
 	}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
@@ -304,7 +305,7 @@ func TestLoadReadOnly_StatePathClassification(t *testing.T) {
 			"modules/app/state.json",
 		))
 
-		_, err := LoadReadOnly(fixture.overrides, "v1.0.0")
+		_, err := loadReadOnlyWithoutMutation(t, fixture)
 		if !errors.Is(err, state.ErrCorrupt) || !errors.Is(err, paths.ErrTargetControlOverlap) {
 			t.Fatalf("LoadReadOnly() error = %v, want corrupt target/control overlap", err)
 		}
@@ -322,7 +323,7 @@ func TestLoadReadOnly_StatePathClassification(t *testing.T) {
 		}
 		writeState(t, fixture, stateWithSymlinkEntry("~/managed/file", "modules/app/file"))
 
-		_, err := LoadReadOnly(fixture.overrides, "v1.0.0")
+		_, err := loadReadOnlyWithoutMutation(t, fixture)
 		if !errors.Is(err, state.ErrPathValidation) || !errors.Is(err, paths.ErrTargetControlOverlap) {
 			t.Fatalf("LoadReadOnly() error = %v, want runtime target/control overlap", err)
 		}
@@ -330,6 +331,85 @@ func TestLoadReadOnly_StatePathClassification(t *testing.T) {
 			t.Fatalf("filesystem alias misclassified as corrupt: %v", err)
 		}
 	})
+
+	t.Run("filesystem state alias is corrupt", func(t *testing.T) {
+		fixture := newLoadingFixture(t, true)
+		realDirectory := filepath.Join(fixture.home, "real")
+		writeFile(t, filepath.Join(realDirectory, "file"), []byte("fixture"), 0o600)
+		if err := os.Symlink(realDirectory, filepath.Join(fixture.home, "alias")); err != nil {
+			t.Fatalf("os.Symlink() error = %v", err)
+		}
+		writeState(t, fixture, stateWithSymlinkEntries("~/real/file", "~/alias/file"))
+
+		_, err := loadReadOnlyWithoutMutation(t, fixture)
+		if !errors.Is(err, state.ErrCorrupt) ||
+			!errors.Is(err, state.ErrTargetIdentityConflict) ||
+			!errors.Is(err, paths.ErrTargetOverlap) {
+			t.Fatalf("LoadReadOnly() error = %v, want corrupt equal target identity", err)
+		}
+		if errors.Is(err, state.ErrPathValidation) {
+			t.Fatalf("equal state identities misclassified as runtime path error: %v", err)
+		}
+		var conflict *paths.TargetConflictError
+		if !errors.As(err, &conflict) || conflict.Relation() != paths.TargetRelationEqual {
+			t.Fatalf("LoadReadOnly() conflict = %#v, want equal TargetConflictError", conflict)
+		}
+	})
+
+	t.Run("state ancestor relation is runtime unsafe", func(t *testing.T) {
+		fixture := newLoadingFixture(t, true)
+		writeFile(t, filepath.Join(fixture.home, "parent", "child"), []byte("fixture"), 0o600)
+		writeState(t, fixture, stateWithSymlinkEntries("~/parent", "~/parent/child"))
+
+		_, err := loadReadOnlyWithoutMutation(t, fixture)
+		if !errors.Is(err, state.ErrPathValidation) || !errors.Is(err, paths.ErrTargetOverlap) {
+			t.Fatalf("LoadReadOnly() error = %v, want runtime ancestor conflict", err)
+		}
+		if errors.Is(err, state.ErrCorrupt) || errors.Is(err, state.ErrTargetIdentityConflict) {
+			t.Fatalf("ancestor state targets misclassified as corrupt identity conflict: %v", err)
+		}
+	})
+
+	t.Run("blocked target is runtime unsafe", func(t *testing.T) {
+		fixture := newLoadingFixture(t, true)
+		writeFile(t, filepath.Join(fixture.home, "blocked"), []byte("user data"), 0o600)
+		writeState(t, fixture, stateWithSymlinkEntry("~/blocked/child", "modules/app/file"))
+
+		_, err := loadReadOnlyWithoutMutation(t, fixture)
+		if !errors.Is(err, state.ErrPathValidation) || !errors.Is(err, paths.ErrPathBlocked) {
+			t.Fatalf("LoadReadOnly() error = %v, want runtime blocked-path error", err)
+		}
+		if errors.Is(err, state.ErrCorrupt) {
+			t.Fatalf("blocked target misclassified as corrupt: %v", err)
+		}
+	})
+
+	t.Run("different hard-link entries remain valid", func(t *testing.T) {
+		fixture := newLoadingFixture(t, true)
+		first := filepath.Join(fixture.home, "first")
+		second := filepath.Join(fixture.home, "second")
+		writeFile(t, first, []byte("same inode"), 0o600)
+		if err := os.Link(first, second); err != nil {
+			t.Fatalf("os.Link() error = %v", err)
+		}
+		writeState(t, fixture, stateWithSymlinkEntries("~/first", "~/second"))
+
+		if _, err := loadReadOnlyWithoutMutation(t, fixture); err != nil {
+			t.Fatalf("LoadReadOnly() error = %v, want distinct target entries", err)
+		}
+	})
+}
+
+func loadReadOnlyWithoutMutation(t *testing.T, fixture loadingFixture) (LoadedInputs, error) {
+	t.Helper()
+	before := snapshotFixtureTree(t, fixture.root)
+	result, err := LoadReadOnly(fixture.overrides, "v1.0.0")
+	after := snapshotFixtureTree(t, fixture.root)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("LoadReadOnly() changed fixture tree\nbefore: %#v\nafter:  %#v", before, after)
+	}
+	assertMissing(t, fixture.paths.StateLock())
+	return result, err
 }
 
 func wrapLoadingEvents(operations *loadingOperations) *[]string {
@@ -373,11 +453,6 @@ func wrapLoadingEvents(operations *loadingOperations) *[]string {
 	operations.validateLexicalBoundaries = func(control paths.ControlPlanePaths, targets []paths.LabeledTarget) error {
 		events = append(events, "lexical-boundaries")
 		return lexical(control, targets)
-	}
-	identities := operations.validateStateIdentities
-	operations.validateStateIdentities = func(snapshot state.Snapshot, home string) error {
-		events = append(events, "state-identities")
-		return identities(snapshot, home)
 	}
 	boundaries := operations.validatePathBoundaries
 	operations.validatePathBoundaries = func(control paths.ControlPlanePaths, targets []paths.LabeledTarget) error {
@@ -491,6 +566,21 @@ func stateWithSymlinkEntry(target, source string) string {
 		target,
 		source,
 	)
+}
+
+func stateWithSymlinkEntries(targets ...string) string {
+	entries := make([]string, len(targets))
+	for index, target := range targets {
+		module := fmt.Sprintf("module%d", index)
+		entries[index] = fmt.Sprintf(
+			`%q:{"module":%q,"kind":"symlink","source":%q,"link_dest":%q,"applied_at":"2026-07-19T00:00:00Z"}`,
+			target,
+			module,
+			"modules/"+module+"/file",
+			"/repo/modules/"+module+"/file",
+		)
+	}
+	return `{"version":1,"entries":{` + strings.Join(entries, ",") + `},"run_once":{}}`
 }
 
 func assertLockBusy(t *testing.T, fixture loadingFixture) {

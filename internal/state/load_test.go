@@ -2,15 +2,12 @@ package state
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/mianm12/dotfiles/internal/paths"
 )
 
 func TestLoad_DistinguishesMissingLoadedAndInvalidStates(t *testing.T) {
@@ -65,106 +62,6 @@ func TestLoad_RejectsPathAndReadErrorsWithoutClassifyingStateCorrupt(t *testing.
 	}
 	if loaded, err := Load(dangling); err == nil || loaded.Status() != StatusInvalid || errors.Is(err, ErrCorrupt) {
 		t.Fatalf("Load(dangling) = (%v, %v), want StatusInvalid non-corrupt read error", loaded.Status(), err)
-	}
-}
-
-func TestValidateTargetIdentities_RejectsAliasedStateKeys(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	realDirectory := filepath.Join(home, "real")
-	if err := os.MkdirAll(realDirectory, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(realDirectory, "file"), []byte("existing leaf"), 0o600); err != nil {
-		t.Fatalf("os.WriteFile() error = %v", err)
-	}
-	if err := os.Symlink(realDirectory, filepath.Join(home, "alias")); err != nil {
-		t.Fatalf("os.Symlink() error = %v", err)
-	}
-	document := testDocument()
-	document["entries"] = map[string]any{
-		"~/real/file":  entryForModule("real"),
-		"~/alias/file": entryForModule("alias"),
-	}
-	snapshot, err := Decode(marshalDocument(t, document))
-	if err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-
-	err = ValidateTargetIdentities(snapshot, home)
-	if !errors.Is(err, ErrCorrupt) || !errors.Is(err, ErrTargetIdentityConflict) || errors.Is(err, ErrPathValidation) {
-		t.Fatalf("ValidateTargetIdentities() error = %v, want corrupt identity conflict", err)
-	}
-}
-
-func TestValidateTargetIdentities_KeepsRuntimePathErrorsSeparateFromCorrupt(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	if err := os.Mkdir(home, 0o700); err != nil {
-		t.Fatalf("os.Mkdir() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, "blocked"), []byte("user data"), 0o600); err != nil {
-		t.Fatalf("os.WriteFile() error = %v", err)
-	}
-	document := testDocument()
-	document["entries"] = map[string]any{"~/blocked/child": entryForModule("app")}
-	snapshot, err := Decode(marshalDocument(t, document))
-	if err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-
-	err = ValidateTargetIdentities(snapshot, home)
-	if !errors.Is(err, ErrPathValidation) || !errors.Is(err, paths.ErrPathBlocked) || errors.Is(err, ErrCorrupt) {
-		t.Fatalf("ValidateTargetIdentities() error = %v, want path validation + ErrPathBlocked, not corrupt", err)
-	}
-
-	err = validateTargetIdentities(snapshot, home, func(string) (paths.TargetIdentity, error) {
-		return paths.TargetIdentity{}, fmt.Errorf("capability probe: %w", paths.ErrIdentityUnavailable)
-	})
-	if !errors.Is(err, ErrPathValidation) || !errors.Is(err, paths.ErrIdentityUnavailable) || errors.Is(err, ErrCorrupt) {
-		t.Fatalf("validateTargetIdentities(capability) error = %v, want path validation + ErrIdentityUnavailable", err)
-	}
-}
-
-func TestValidateTargetIdentities_IsReadOnlyAndKeepsDifferentHardLinkLeavesDistinct(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	if err := os.Mkdir(home, 0o700); err != nil {
-		t.Fatalf("os.Mkdir() error = %v", err)
-	}
-	first := filepath.Join(home, "first")
-	second := filepath.Join(home, "second")
-	if err := os.WriteFile(first, []byte("same inode"), 0o600); err != nil {
-		t.Fatalf("os.WriteFile() error = %v", err)
-	}
-	if err := os.Link(first, second); err != nil {
-		t.Fatalf("os.Link() error = %v", err)
-	}
-	document := testDocument()
-	document["entries"] = map[string]any{
-		"~/first":  entryForModule("first"),
-		"~/second": entryForModule("second"),
-	}
-	snapshot, err := Decode(marshalDocument(t, document))
-	if err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-	before := snapshotFiles(t, root)
-	if err := ValidateTargetIdentities(snapshot, home); err != nil {
-		t.Fatalf("ValidateTargetIdentities() error = %v, want nil", err)
-	}
-	if after := snapshotFiles(t, root); !reflect.DeepEqual(after, before) {
-		t.Fatalf("ValidateTargetIdentities() changed tree: before=%v after=%v", before, after)
-	}
-}
-
-func entryForModule(module string) map[string]any {
-	return map[string]any{
-		"module":     module,
-		"kind":       "symlink",
-		"source":     "modules/" + module + "/file",
-		"link_dest":  "/repo/modules/" + module + "/file",
-		"applied_at": "2026-07-14T10:00:00Z",
 	}
 }
 
