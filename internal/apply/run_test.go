@@ -96,7 +96,13 @@ func TestRun_RejectsUnsupportedScopeBeforeExecutor(t *testing.T) {
 	executed := false
 	operations := fixture.operations(executionPlan{files: []planner.FileAction{
 		seamLinkAction("~/.allowed"),
-		{Verb: planner.FileBackupReplace, Target: "~/.unsupported"},
+		{
+			Verb:   planner.FileAdopt,
+			Target: "~/.malformed",
+			Desired: planner.Desired{
+				Kind: planner.DesiredLink,
+			},
+		},
 	}})
 	operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
 		executed = true
@@ -421,10 +427,25 @@ func (mutation *fakeLoadedMutation) commit(snapshot state.Snapshot) error {
 
 func seamLinkAction(target string) planner.FileAction {
 	source := "/repo/modules/app/" + filepath.Base(target)
+	targetPath := "/home/" + filepath.Base(target)
 	return planner.FileAction{
 		Verb:   planner.FileCreateLink,
 		Target: target,
 		Reason: planner.FileReasonTargetMissing,
+		Desired: planner.Desired{
+			Module:     "app",
+			Source:     filepath.Base(target),
+			SourcePath: source,
+			Target:     target,
+			TargetPath: targetPath,
+			Kind:       planner.DesiredLink,
+		},
+		Precondition: planner.Precondition{
+			TargetPath:           targetPath,
+			Leaf:                 planner.LeafCondition{Kind: planner.LeafMissing},
+			SourcePath:           source,
+			RequireRegularSource: true,
+		},
 		OnSuccess: planner.StateEffect{
 			Kind: planner.StateUpsert,
 			Key:  target,
@@ -438,6 +459,19 @@ func seamLinkAction(target string) planner.FileAction {
 		},
 		OnFailure: planner.StateEffect{Kind: planner.StatePreserve},
 	}
+}
+
+func seamLinkAdoptAction(target string) planner.FileAction {
+	action := seamLinkAction(target)
+	action.Verb = planner.FileAdopt
+	action.Reason = planner.FileReasonStateMetadata
+	action.Precondition.Leaf = planner.LeafCondition{
+		Kind:     planner.LeafExactSymlink,
+		LinkDest: action.Desired.SourcePath,
+	}
+	action.Precondition.SourcePath = ""
+	action.Precondition.RequireRegularSource = false
+	return action
 }
 
 type runIntegrationFixture struct {

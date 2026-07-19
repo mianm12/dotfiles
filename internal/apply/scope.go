@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/mianm12/dotfiles/internal/executor"
 	"github.com/mianm12/dotfiles/internal/planner"
 )
 
@@ -17,26 +18,11 @@ func validateExecutionScope(
 	hooks []planner.HookAction,
 ) error {
 	for index, action := range files {
-		switch action.Verb {
-		case planner.FileSkip, planner.FileConflict, planner.FileAdopt:
-			// 当前 runner 不执行 skip/conflict；adopt 由 file executor 复核并产生 state effect。
-		case planner.FileCreateLink:
-			if action.Reason != planner.FileReasonTargetMissing &&
-				action.Reason != planner.FileReasonOwnedLinkStale {
-				return unsupportedFileAction(index, action)
-			}
-		case planner.FileScaffold:
-			if action.Reason == planner.FileReasonScaffoldRebuild {
-				return unsupportedFileAction(index, action)
-			}
-			if action.Reason != planner.FileReasonTargetMissing &&
-				action.Reason != planner.FileReasonOwnedLinkToScaffold {
-				return unsupportedFileAction(index, action)
-			}
-		case planner.FileBackupReplace:
-			return unsupportedFileAction(index, action)
-		default:
-			return unsupportedFileAction(index, action)
+		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
+			continue
+		}
+		if err := executor.ValidateFileAction(action); err != nil {
+			return unsupportedFileAction(index, action, err)
 		}
 	}
 	for index, action := range prune {
@@ -72,13 +58,14 @@ func validateExecutionScope(
 	return nil
 }
 
-func unsupportedFileAction(index int, action planner.FileAction) error {
+func unsupportedFileAction(index int, action planner.FileAction, cause error) error {
 	return fmt.Errorf(
-		"%w: file action %d for %q uses %q/%q",
+		"%w: file action %d for %q uses %q/%q: %w",
 		ErrUnsupportedPlan,
 		index,
 		action.Target,
 		action.Verb,
 		action.Reason,
+		cause,
 	)
 }

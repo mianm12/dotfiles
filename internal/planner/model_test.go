@@ -22,6 +22,26 @@ func TestFileActionClone_DoesNotShareDesiredBytes(t *testing.T) {
 	}
 }
 
+func TestFileVerbExecutionClass(t *testing.T) {
+	tests := []struct {
+		verb FileVerb
+		want FileExecutionClass
+	}{
+		{verb: FileSkip, want: FilePlanOnly},
+		{verb: FileConflict, want: FilePlanOnly},
+		{verb: FileAdopt, want: FileStateOnly},
+		{verb: FileCreateLink, want: FileTargetMutation},
+		{verb: FileScaffold, want: FileTargetMutation},
+		{verb: FileBackupReplace, want: FileTargetMutation},
+		{verb: FileVerb("future"), want: ""},
+	}
+	for _, test := range tests {
+		if got := test.verb.ExecutionClass(); got != test.want {
+			t.Errorf("FileVerb(%q).ExecutionClass() = %q, want %q", test.verb, got, test.want)
+		}
+	}
+}
+
 func TestLeafConditionMatchesOnlyRequiredEvidence(t *testing.T) {
 	regular := Observation{Kind: ObjectRegular, Mode: 0o640, Hash: "sha256:regular"}
 	tests := []struct {

@@ -21,12 +21,9 @@ func executeScaffoldFile(
 	operations fileOperations,
 ) (FileResult, error) {
 	failure := FileResult{StateEffect: action.OnFailure}
-	if err := validateScaffoldAction(action); err != nil {
-		return failure, err
-	}
 
 	switch action.Verb {
-	case planner.FileSkip, planner.FileAdopt:
+	case planner.FileAdopt:
 		if err := validatePrecondition(control, action); err != nil {
 			return failure, err
 		}
@@ -37,11 +34,6 @@ func executeScaffoldFile(
 			return createMissingScaffold(control, action, operations)
 		case planner.FileReasonOwnedLinkToScaffold:
 			return migrateOwnedLinkToScaffold(control, action, operations)
-		case planner.FileReasonScaffoldRebuild:
-			return failure, fmt.Errorf(
-				"%w: force scaffold rebuild is outside the current execution slice",
-				ErrUnsupportedFileAction,
-			)
 		default:
 			return failure, fmt.Errorf(
 				"%w: scaffold reason %q is not implemented",
@@ -214,15 +206,6 @@ func validateScaffoldAction(action planner.FileAction) error {
 	}
 
 	switch action.Verb {
-	case planner.FileSkip:
-		if action.OnSuccess.Kind != planner.StatePreserve || action.Precondition.Leaf.Kind != planner.LeafAny {
-			return fmt.Errorf("%w: scaffold skip must preserve state without a leaf requirement", ErrUnsupportedFileAction)
-		}
-		switch action.Reason {
-		case planner.FileReasonScaffoldPresent, planner.FileReasonScaffoldDeleted:
-		default:
-			return fmt.Errorf("%w: reason %q is not a scaffold skip", ErrUnsupportedFileAction, action.Reason)
-		}
 	case planner.FileAdopt:
 		if err := validateScaffoldUpsert(action); err != nil {
 			return err
@@ -248,12 +231,17 @@ func validateScaffoldAction(action planner.FileAction) error {
 			return err
 		}
 		if action.Reason != planner.FileReasonTargetMissing &&
-			action.Reason != planner.FileReasonScaffoldRebuild &&
 			action.Reason != planner.FileReasonOwnedLinkToScaffold {
+			if action.Reason == planner.FileReasonScaffoldRebuild {
+				return fmt.Errorf(
+					"%w: force scaffold rebuild is outside the current execution slice",
+					ErrUnsupportedFileAction,
+				)
+			}
 			return fmt.Errorf("%w: reason %q is not a scaffold create", ErrUnsupportedFileAction, action.Reason)
 		}
 		switch action.Reason {
-		case planner.FileReasonTargetMissing, planner.FileReasonScaffoldRebuild:
+		case planner.FileReasonTargetMissing:
 			if action.Precondition.Leaf.Kind != planner.LeafMissing {
 				return fmt.Errorf("%w: scaffold create target was not planned missing", ErrUnsupportedFileAction)
 			}

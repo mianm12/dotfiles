@@ -38,13 +38,6 @@ func TestExecuteScaffold_CreatePublishesCompleteFile(t *testing.T) {
 	if secondAction.Verb != planner.FileSkip || secondAction.Reason != planner.FileReasonScaffoldPresent {
 		t.Fatalf("second action = %q/%q, want S1a skip", secondAction.Verb, secondAction.Reason)
 	}
-	secondResult, err := ExecuteFile(fixture.control, secondAction)
-	if err != nil {
-		t.Fatalf("second ExecuteFile() error = %v", err)
-	}
-	if secondResult.TargetMutated || secondResult.StateEffect != secondAction.OnSuccess {
-		t.Fatalf("second ExecuteFile() result = %#v, want zero mutation", secondResult)
-	}
 	after, err := os.Stat(target)
 	if err != nil {
 		t.Fatalf("os.Stat() after second run error = %v", err)
@@ -254,7 +247,7 @@ func TestExecuteScaffold_ReleaseOwnershipRejectsRestoredOwnedLink(t *testing.T) 
 	assertLinkText(t, target, oldSource)
 }
 
-func TestExecuteScaffold_SkipPreservesPresentAndDeletedTargets(t *testing.T) {
+func TestValidateFileAction_RejectsPlanOnlyActions(t *testing.T) {
 	t.Run("S1a present", func(t *testing.T) {
 		fixture := newScaffoldFixture(t)
 		target := filepath.Join(fixture.home, "present")
@@ -266,12 +259,8 @@ func TestExecuteScaffold_SkipPreservesPresentAndDeletedTargets(t *testing.T) {
 			t.Fatalf("planned action = %q/%q, want S1a skip", action.Verb, action.Reason)
 		}
 
-		result, err := ExecuteFile(fixture.control, action)
-		if err != nil {
-			t.Fatalf("ExecuteFile() error = %v", err)
-		}
-		if result.TargetMutated || result.StateEffect != action.OnSuccess {
-			t.Fatalf("ExecuteFile() result = %#v, want preserve", result)
+		if err := ValidateFileAction(action); !errors.Is(err, ErrUnsupportedFileAction) {
+			t.Fatalf("ValidateFileAction(skip) error = %v, want ErrUnsupportedFileAction", err)
 		}
 		content, readErr := os.ReadFile(target)
 		if readErr != nil || string(content) != "edited by user" {
@@ -287,14 +276,32 @@ func TestExecuteScaffold_SkipPreservesPresentAndDeletedTargets(t *testing.T) {
 			t.Fatalf("planned action = %q/%q, want S2 skip", action.Verb, action.Reason)
 		}
 
-		result, err := ExecuteFile(fixture.control, action)
-		if err != nil {
-			t.Fatalf("ExecuteFile() error = %v", err)
-		}
-		if result.TargetMutated || result.StateEffect != action.OnSuccess {
-			t.Fatalf("ExecuteFile() result = %#v, want preserve", result)
+		if err := ValidateFileAction(action); !errors.Is(err, ErrUnsupportedFileAction) {
+			t.Fatalf("ValidateFileAction(skip) error = %v, want ErrUnsupportedFileAction", err)
 		}
 		assertMissing(t, target)
+	})
+
+	t.Run("L2 expected link", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target := filepath.Join(fixture.home, "expected")
+		if err := os.Symlink(fixture.source, target); err != nil {
+			t.Fatalf("os.Symlink(expected target) error = %v", err)
+		}
+		historical := planner.HistoricalState{
+			Key:      "~/expected",
+			Module:   "zsh",
+			Kind:     planner.StateSymlink,
+			Source:   "modules/zsh/zshrc",
+			LinkDest: fixture.source,
+		}
+		action := fixture.planLink(t, target, fixture.source, historical, true)
+		if action.Verb != planner.FileSkip || action.Reason != planner.FileReasonExpectedLink {
+			t.Fatalf("planned action = %q/%q, want L2 skip", action.Verb, action.Reason)
+		}
+		if err := ValidateFileAction(action); !errors.Is(err, ErrUnsupportedFileAction) {
+			t.Fatalf("ValidateFileAction(skip) error = %v, want ErrUnsupportedFileAction", err)
+		}
 	})
 }
 

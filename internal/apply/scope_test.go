@@ -51,9 +51,8 @@ func TestValidateExecutionScope_AllowsCurrentNonExecutableFacts(t *testing.T) {
 	files := []planner.FileAction{
 		{Verb: planner.FileSkip},
 		{Verb: planner.FileConflict},
-		{Verb: planner.FileCreateLink, Reason: planner.FileReasonTargetMissing},
-		{Verb: planner.FileAdopt},
-		{Verb: planner.FileScaffold, Reason: planner.FileReasonOwnedLinkToScaffold},
+		seamLinkAction("~/.create"),
+		seamLinkAdoptAction("~/.adopt"),
 	}
 	prune := []planner.PruneAction{{Deferred: true}}
 	hooks := []planner.HookAction{{Verb: planner.HookSkip}}

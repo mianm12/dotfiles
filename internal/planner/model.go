@@ -136,6 +136,32 @@ const (
 	FileConflict FileVerb = "conflict"
 )
 
+// FileExecutionClass 描述 file action 在编排层的执行职责。
+type FileExecutionClass string
+
+const (
+	// FilePlanOnly 表示 action 只供计划和展示使用，不进入 executor。
+	FilePlanOnly FileExecutionClass = "plan-only"
+	// FileStateOnly 表示 action 复核 target 前提后只形成 state effect。
+	FileStateOnly FileExecutionClass = "state-only"
+	// FileTargetMutation 表示 action 可能越过 target mutation 提交点。
+	FileTargetMutation FileExecutionClass = "target-mutation"
+)
+
+// ExecutionClass 返回 verb 的封闭执行职责；未知 verb 返回空值并由消费方拒绝。
+func (verb FileVerb) ExecutionClass() FileExecutionClass {
+	switch verb {
+	case FileSkip, FileConflict:
+		return FilePlanOnly
+	case FileAdopt:
+		return FileStateOnly
+	case FileCreateLink, FileScaffold, FileBackupReplace:
+		return FileTargetMutation
+	default:
+		return ""
+	}
+}
+
 // FileReason 是供 presentation/status 稳定分类的 file decision 原因，不把人类文案当内部协议。
 type FileReason string
 

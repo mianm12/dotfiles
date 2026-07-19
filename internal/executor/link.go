@@ -54,6 +54,9 @@ func executeFile(
 	operations fileOperations,
 ) (FileResult, error) {
 	failure := FileResult{StateEffect: action.OnFailure}
+	if err := ValidateFileAction(action); err != nil {
+		return failure, err
+	}
 	switch action.Desired.Kind {
 	case planner.DesiredLink:
 		return executeLinkFile(control, action, operations)
@@ -68,15 +71,34 @@ func executeFile(
 	}
 }
 
+// ValidateFileAction 在不读取文件系统的情况下检查 action 是否属于当前 executor 的封闭能力，
+// 并验证其字段一致性、leaf Precondition 与 state effect 形态。runner 用它在任何 mutation 前完成
+// 全计划 preflight；ExecuteFile 复用同一检查。
+func ValidateFileAction(action planner.FileAction) error {
+	executionClass := action.Verb.ExecutionClass()
+	if executionClass == "" || executionClass == planner.FilePlanOnly {
+		return fmt.Errorf("%w: verb %q is not executable", ErrUnsupportedFileAction, action.Verb)
+	}
+	switch action.Desired.Kind {
+	case planner.DesiredLink:
+		return validateLinkAction(action)
+	case planner.DesiredScaffold:
+		return validateScaffoldAction(action)
+	default:
+		return fmt.Errorf(
+			"%w: desired kind %q is not implemented",
+			ErrUnsupportedFileAction,
+			action.Desired.Kind,
+		)
+	}
+}
+
 func executeLinkFile(
 	control paths.ControlPlanePaths,
 	action planner.FileAction,
 	operations fileOperations,
 ) (FileResult, error) {
 	failure := FileResult{StateEffect: action.OnFailure}
-	if err := validateLinkAction(action); err != nil {
-		return failure, err
-	}
 
 	switch action.Verb {
 	case planner.FileAdopt:

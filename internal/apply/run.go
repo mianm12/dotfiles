@@ -102,7 +102,7 @@ func runWithOperations(options Options, operations runOperations) (result Result
 
 	updates := make([]state.EntryUpdate, 0, len(planned.files))
 	for index, action := range planned.files {
-		if action.Verb == planner.FileSkip || action.Verb == planner.FileConflict {
+		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
 			continue
 		}
 		result.Executed++
