@@ -58,7 +58,8 @@ requirement 的封闭形态；CLI presentation 能在后续映射错误前保持
 - [x] 2026-07-19：确认 main/worktree clean、branch 不存在、基线与 origin 状态；建立
   `refactor/m1-planner-contract` 独立 worktree。
 - [x] 2026-07-19：提交本 active ExecPlan，固定范围、里程碑、验证与停止边界。
-- [ ] 澄清跨 stream 输出失败契约并补 plan stderr failure 回归。
+- [x] 2026-07-19：以 `cdb9868` 澄清跨 stream 非事务边界，以 `dee1db7` 固定 diff/dry-run
+  clean/actionable development notice 写失败语义；CLI 窄测通过且隔离树不变。
 - [ ] 收窄完整 file action 类型族并更新所有生产调用方与测试。
 - [ ] 补齐 source Precondition 与封闭 reason 结构校验。
 - [ ] 完成窄测、重复测试、race、完整 diff check、`make check` 和独立只读复核。
@@ -140,7 +141,7 @@ Commit 边界：
 
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
-| 正常 CLI 输出/退出码不变，写失败仍为 1 | CLI 窄测与新增 stderr failure 回归 | 待验证 |
+| 正常 CLI 输出/退出码不变，写失败仍为 1 | CLI 窄测与新增 stderr failure 回归 | 通过 |
 | 三个 action family 边界明确且无兼容残余 | `rg`、planner/CLI 编译与测试 | 待验证 |
 | source Precondition/closed reason fail closed | combined validation mutation tests | 待验证 |
 | planner/diff/status 保持只读与完整数据流 | 既有隔离 fixture、重复测试、race | 待验证 |
