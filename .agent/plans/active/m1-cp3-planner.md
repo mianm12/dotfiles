@@ -89,6 +89,11 @@ planner 或 diff/status/dry-run CLI。
   `864c828` 修复，round 2 完整复审 GO。closure 后 main 以 `83039c1` fast-forward-only 集成，
   合入后相关五包 20 次与 `make check BINARY=/private/tmp/dot-cp3-main-after-apply` 通过，clean
   worktree 已移除。
+- [x] 2026-07-19：`feat/plan-cli` 接入共享 `PlanApply` 的 `dot diff` 与
+  `dot apply --dry-run` 投影、1 > 3 > 2 > 0、warning/skip、前置拒绝与 held-lock/整树零写入；
+  独立复核 GO、无 P0–P3。closure 后 main 以 `afd13c8` fast-forward-only 集成，合入后
+  CLI/planner/runtime 三包 20 次与 `make check BINARY=/private/tmp/dot-cp3-main-after-plan-cli`
+  通过，clean worktree 已移除。
 - [ ] 按 DAG 完成七个 Milestone 的实现、复核、closure、freshness 和 main 集成。
 - [ ] 从 checkpoint base 完成三路独立 Acceptance，处理有效 finding，收口 coordinator 并
   fast-forward-only 合入 main。
@@ -257,5 +262,5 @@ CP3 不新增依赖：标准库 `os.Lstat`、`os.Readlink`、`crypto/sha256` 与
 
 ## Outcomes and Handoff
 
-尚未完成。Plan Gate、target observation、decision、prune、hook 与 apply planner 已完成独立
-review、closure、main 集成及合入后门禁；下一节点为从 `main@83039c1` 创建 `feat/plan-cli`。
+尚未完成。Plan Gate 与前六个 Milestone 已完成独立 review、closure、main 集成及合入后门禁；
+下一节点为从 `main@afd13c8` 创建 `feat/status`。
