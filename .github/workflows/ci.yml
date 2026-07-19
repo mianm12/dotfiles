@@ -42,7 +42,7 @@ jobs:
       - name: Set up golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12.2
           # action 只负责安装；实际命令统一由 Makefile 定义。
           install-only: true
 
