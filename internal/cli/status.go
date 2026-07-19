@@ -90,7 +90,7 @@ func projectStatus(plan planner.ApplyPlan) (statusProjection, error) {
 			return statusProjection{}, err
 		}
 		finding := statusFinding{target: action.Target, description: description}
-		if action.Reason == planner.ReasonLinkDrift {
+		if action.Verb == planner.ActionConflict {
 			projection.drift = append(projection.drift, finding)
 		} else {
 			projection.pending = append(projection.pending, finding)

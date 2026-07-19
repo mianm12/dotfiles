@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/buildinfo"
@@ -28,10 +29,10 @@ func TestStatus_PrintsStableHealthSectionsAndReturnsActionable(t *testing.T) {
 
 	stdout, stderr, code := fixture.run(t, "status")
 	want := "Profile: all (2 modules, 4 files managed)\n" +
-		"\nDRIFT (1)\n" +
-		"  ~/alpha/stable                  symlink re-pointed elsewhere\n" +
-		"\nPENDING (5)\n" +
+		"\nDRIFT (2)\n" +
 		"  ~/alpha/conflict                regular file blocks desired link\n" +
+		"  ~/alpha/stable                  symlink re-pointed elsewhere\n" +
+		"\nPENDING (4)\n" +
 		"  ~/alpha/create                  desired symlink missing\n" +
 		"  ~/beta/create                   desired symlink missing\n" +
 		"  alpha/hooks/setup.sh            run_once pending execution\n" +
@@ -48,6 +49,49 @@ func TestStatus_PrintsStableHealthSectionsAndReturnsActionable(t *testing.T) {
 	diffOut, diffErr, diffCode := fixture.run(t, "diff", "alpha")
 	if diffCode != exitConflict || diffErr != "" || !strings.Contains(diffOut, "CONFLICT  ~/alpha/stable  (link-drift)") {
 		t.Fatalf("diff after status = stdout %q, stderr %q, exit %d; want existing conflict/3 contract", diffOut, diffErr, diffCode)
+	}
+}
+
+func TestStatus_AllFileConflictsAreDriftRegardlessOfHistory(t *testing.T) {
+	tests := []struct {
+		name        string
+		object      string
+		description string
+	}{
+		{name: "unowned symlink", object: "symlink", description: "unowned symlink blocks desired link"},
+		{name: "regular file", object: "regular", description: "regular file blocks desired link"},
+		{name: "directory", object: "directory", description: "directory blocks desired link"},
+		{name: "special file", object: "special", description: "special file blocks desired link"},
+	}
+	for _, test := range tests {
+		for _, historical := range []bool{false, true} {
+			name := test.name + "/without history"
+			description := test.description
+			if historical {
+				name = test.name + "/with history"
+				if test.object == "symlink" {
+					description = "symlink re-pointed elsewhere"
+				}
+			}
+			t.Run(name, func(t *testing.T) {
+				fixture := newConflictStatusFixture(t, test.object, historical)
+				before := snapshotCLITree(t, fixture.root)
+
+				stdout, stderr, code := fixture.run(t, "status")
+				want := "Profile: clean (1 modules, 2 files managed)\n" +
+					"\nDRIFT (1)\n" +
+					"  ~/clean/blocker                 " + description + "\n"
+				if code != exitActionable || stdout != want || stderr != "" {
+					t.Fatalf("conflict status = stdout %q, stderr %q, exit %d; want %q, empty stderr, 2", stdout, stderr, code, want)
+				}
+				if strings.Contains(stdout, "PENDING") {
+					t.Errorf("conflict status misclassified blocker as pending: %q", stdout)
+				}
+				if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+					t.Fatalf("conflict status changed isolated tree\nbefore=%v\nafter=%v", before, after)
+				}
+			})
+		}
 	}
 }
 
@@ -160,7 +204,7 @@ func TestStatus_ScaffoldLifecycleDistinguishesCleanSkipsFromPending(t *testing.T
 	})
 }
 
-func TestStatus_KindMigrationAndAliasArePendingWithoutFalseOrphan(t *testing.T) {
+func TestStatus_KindMigrationAndAliasUseTheirOwnTaxonomy(t *testing.T) {
 	t.Run("kind migrations", func(t *testing.T) {
 		fixture := newNoOpPlanCLIFixture(t)
 		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "from-scaffold"), "desired link\n")
@@ -187,17 +231,13 @@ func TestStatus_KindMigrationAndAliasArePendingWithoutFalseOrphan(t *testing.T) 
 		})
 
 		stdout, stderr, code := fixture.run(t, "status")
-		for _, want := range []string{
-			"PENDING (2)",
-			"~/clean/from-scaffold           regular file blocks desired link",
-			"~/clean/to-scaffold             owned symlink pending scaffold migration",
-		} {
-			if !strings.Contains(stdout, want) {
-				t.Errorf("kind migration status %q missing %q", stdout, want)
-			}
-		}
-		if code != exitActionable || stderr != "" || strings.Contains(stdout, "ORPHAN") || strings.Contains(stdout, "DRIFT") {
-			t.Fatalf("kind migration status = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		want := "Profile: clean (1 modules, 3 files managed)\n" +
+			"\nDRIFT (1)\n" +
+			"  ~/clean/from-scaffold           regular file blocks desired link\n" +
+			"\nPENDING (1)\n" +
+			"  ~/clean/to-scaffold             owned symlink pending scaffold migration\n"
+		if code != exitActionable || stdout != want || stderr != "" || strings.Contains(stdout, "ORPHAN") {
+			t.Fatalf("kind migration status = stdout %q, stderr %q, exit %d; want %q, empty stderr, 2", stdout, stderr, code, want)
 		}
 	})
 
@@ -488,4 +528,45 @@ alias = ["alias"]
 		RunOnce: map[string]planRunOnce{},
 	})
 	return planCLIFixture{root: root, home: home, repository: repository}
+}
+
+func newConflictStatusFixture(t *testing.T, object string, historical bool) planCLIFixture {
+	t.Helper()
+	fixture := newNoOpPlanCLIFixture(t)
+	writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "blocker"), "desired\n")
+	target := filepath.Join(fixture.home, "clean", "blocker")
+	switch object {
+	case "symlink":
+		if err := os.Symlink("elsewhere", target); err != nil {
+			t.Fatalf("os.Symlink(blocker) error = %v", err)
+		}
+	case "regular":
+		writeCLIFile(t, target, "user data\n")
+	case "directory":
+		makeDirectory(t, target)
+	case "special":
+		if err := syscall.Mkfifo(target, 0o600); err != nil {
+			t.Fatalf("syscall.Mkfifo(blocker) error = %v", err)
+		}
+	default:
+		t.Fatalf("unknown conflict object %q", object)
+	}
+
+	stableSource := filepath.Join(fixture.repository, "modules", "clean", "stable")
+	entries := map[string]planStateEntry{
+		"~/clean/stable": {
+			Module: "clean", Kind: "symlink", Source: "modules/clean/stable", LinkDest: stableSource, AppliedAt: "2026-07-19T00:00:00Z",
+		},
+	}
+	if historical {
+		entries["~/clean/blocker"] = planStateEntry{
+			Module: "clean", Kind: "symlink", Source: "modules/clean/old", LinkDest: "historical", AppliedAt: "2026-07-19T00:00:00Z",
+		}
+	}
+	writePlanState(t, fixture.home, planStateDocument{
+		Version: 1,
+		Entries: entries,
+		RunOnce: map[string]planRunOnce{},
+	})
+	return fixture
 }
