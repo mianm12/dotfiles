@@ -37,22 +37,13 @@ func Decide(target ObservedTarget, options DecisionOptions) (Action, error) {
 	switch target.Desired.Kind {
 	case DesiredLink:
 		if target.HasState && target.State.Kind == StateScaffold {
-			return Action{}, fmt.Errorf(
-				"%w: migration from %q to %q is not implemented",
-				ErrUnsupportedDecisionInput,
-				target.State.Kind,
-				target.Desired.Kind,
-			)
+			// 迁出 scaffold 不继承任何所有权，但旧记录必须保留到新动作成功。
+			return decideLink(target, options, false), nil
 		}
 		return decideLink(target, options, target.HasState), nil
 	case DesiredScaffold:
 		if target.HasState && target.State.Kind == StateSymlink {
-			return Action{}, fmt.Errorf(
-				"%w: migration from %q to %q is not implemented",
-				ErrUnsupportedDecisionInput,
-				target.State.Kind,
-				target.Desired.Kind,
-			)
+			return decideSymlinkToScaffold(target), nil
 		}
 		return decideScaffold(target, options), nil
 	default:
@@ -62,6 +53,15 @@ func Decide(target ObservedTarget, options DecisionOptions) (Action, error) {
 			target.Desired.Kind,
 		)
 	}
+}
+
+func decideSymlinkToScaffold(target ObservedTarget) Action {
+	if Owned(target.State, target.Observed) {
+		// owned 旧链可以安全转换为携带已渲染 Content 的独立普通文件；该动作不需要备份。
+		return plannedAction(target, ActionScaffold, ReasonOwnedLinkToScaffold, StateUpsert)
+	}
+	// 旧证据不成立或 target 缺失时只释放所有权，不触碰 target；force 不改变迁入 scaffold 规则。
+	return plannedAction(target, ActionAdopt, ReasonReleaseOwnershipToScaffold, StateUpsert)
 }
 
 func validateDecisionInput(target ObservedTarget) error {

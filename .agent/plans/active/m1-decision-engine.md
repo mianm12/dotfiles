@@ -54,7 +54,9 @@ observation、history 与 action 骨架；`ObserveProfileTargets` 已完成 desi
 - [x] 2026-07-19：以 `e5e4730` 提交本 active ExecPlan 起点。
 - [x] 2026-07-19：测试先行实现 ownership、完整 L/S 表、force、metadata adopt 与自包含
   成功/失败 state effect；窄测通过，等待重复/race 与语义 commit。
-- [ ] 测试先行实现 M1 kind migration 和 managed/rendered fail-closed。
+- [x] 2026-07-19：以 `118f98e` 提交 ownership、完整 L/S 表、force、metadata adopt 与自包含
+  state effect；测试先行实现 M1 kind migration，managed/rendered 与未知 observation 保持
+  fail closed，等待重复/race 与语义 commit。
 - [ ] 运行窄测、重复、race、完整 diff check 与 `make check`，更新 handoff 并保持计划 active。
 
 ## Milestones

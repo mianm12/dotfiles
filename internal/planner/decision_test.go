@@ -331,6 +331,127 @@ func TestDecide_RejectsUnsupportedInputs(t *testing.T) {
 	}
 }
 
+func TestDecide_M1KindMigration(t *testing.T) {
+	t.Parallel()
+
+	ownedSymlink := HistoricalState{
+		Key:       "~/.zshrc.local",
+		Module:    "zsh",
+		Kind:      StateSymlink,
+		Source:    "modules/zsh/old-local",
+		LinkDest:  "/repo/modules/zsh/old-local",
+		AppliedAt: "2026-07-18T00:00:00Z",
+	}
+	oldScaffold := HistoricalState{
+		Key:       "~/.zshrc",
+		Module:    "zsh",
+		Kind:      StateScaffold,
+		Source:    "modules/zsh/old-zshrc.template",
+		AppliedAt: "2026-07-18T00:00:00Z",
+	}
+	tests := []struct {
+		name   string
+		target ObservedTarget
+		force  bool
+		want   decisionWant
+	}{
+		{
+			name: "owned symlink migrates to independent scaffold",
+			target: scaffoldTarget(
+				Observation{Kind: ObjectSymlink, LinkDest: "/repo/modules/zsh/old-local"},
+				ownedSymlink,
+				true,
+			),
+			want: wantAction(ActionScaffold, ReasonOwnedLinkToScaffold, StateUpsert),
+		},
+		{
+			name: "drifted symlink releases ownership without touching target",
+			target: scaffoldTarget(
+				Observation{Kind: ObjectSymlink, LinkDest: "/user/repointed"},
+				ownedSymlink,
+				true,
+			),
+			want: wantAction(ActionAdopt, ReasonReleaseOwnershipToScaffold, StateUpsert),
+		},
+		{
+			name: "missing former symlink records deletion as scaffold lifecycle",
+			target: scaffoldTarget(
+				Observation{Kind: ObjectMissing},
+				ownedSymlink,
+				true,
+			),
+			want: wantAction(ActionAdopt, ReasonReleaseOwnershipToScaffold, StateUpsert),
+		},
+		{
+			name: "force cannot replace non-owned object while migrating into scaffold",
+			target: scaffoldTarget(
+				Observation{Kind: ObjectRegular, Mode: 0o600, Hash: "sha256:user"},
+				ownedSymlink,
+				true,
+			),
+			force: true,
+			want:  wantAction(ActionAdopt, ReasonReleaseOwnershipToScaffold, StateUpsert),
+		},
+		{
+			name: "scaffold to link missing target follows L1 without-record semantics",
+			target: linkTarget(
+				Observation{Kind: ObjectMissing},
+				oldScaffold,
+				true,
+			),
+			want: wantAction(ActionCreateLink, ReasonTargetMissing, StateUpsert),
+		},
+		{
+			name: "scaffold to exact link follows L2 automatic adoption",
+			target: linkTarget(
+				Observation{Kind: ObjectSymlink, LinkDest: "/repo/modules/zsh/zshrc"},
+				oldScaffold,
+				true,
+			),
+			want: wantAction(ActionAdopt, ReasonStateMetadata, StateUpsert),
+		},
+		{
+			name: "scaffold to other link follows L5 conflict and preserves old record",
+			target: linkTarget(
+				Observation{Kind: ObjectSymlink, LinkDest: "/user/link"},
+				oldScaffold,
+				true,
+			),
+			want: wantAction(ActionConflict, ReasonUnownedLink, StatePreserve),
+		},
+		{
+			name: "scaffold to regular link target needs explicit force",
+			target: linkTarget(
+				Observation{Kind: ObjectRegular, Mode: 0o644, Hash: "sha256:user"},
+				oldScaffold,
+				true,
+			),
+			want: wantAction(ActionConflict, ReasonRegularConflict, StatePreserve),
+		},
+		{
+			name: "scaffold to regular link target force plans backup replace",
+			target: linkTarget(
+				Observation{Kind: ObjectRegular, Mode: 0o644, Hash: "sha256:user"},
+				oldScaffold,
+				true,
+			),
+			force: true,
+			want:  wantAction(ActionBackupReplace, ReasonRegularConflict, StateUpsert),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			action, err := Decide(test.target, DecisionOptions{Force: test.force})
+			if err != nil {
+				t.Fatalf("Decide() error = %v", err)
+			}
+			assertDecision(t, test.target, action, test.want)
+		})
+	}
+}
+
 type decisionWant struct {
 	verb        ActionVerb
 	reason      ActionReason
