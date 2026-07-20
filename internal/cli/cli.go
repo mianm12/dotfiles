@@ -41,6 +41,7 @@ type environment struct {
 	lookupEnv    func(string) (string, bool)
 	userHomeDir  func() (string, error)
 	openTerminal func() (io.ReadCloser, error)
+	applyRun     applyRun
 	build        buildinfo.Info
 	goos         string
 }

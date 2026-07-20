@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,7 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	applyrunner "github.com/mianm12/dotfiles/internal/apply"
 	"github.com/mianm12/dotfiles/internal/buildinfo"
+	"github.com/mianm12/dotfiles/internal/planner"
+	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 )
 
 func TestApply_MutatesAndConvergesWithoutRepeatWrites(t *testing.T) {
@@ -335,6 +339,114 @@ func TestApply_OutputFailureHasErrorPriorityAfterCommittedMutation(t *testing.T)
 	}
 }
 
+func TestApply_RuntimeFileOutcomeProjectsExactConflict(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+	plan := planMutationFixture(t, fixture)
+	files := plan.FileActions()
+	if len(files) != 1 || files[0].Verb != planner.FileCreateLink {
+		t.Fatalf("fixture file actions = %#v", files)
+	}
+
+	t.Run("precondition mismatch", func(t *testing.T) {
+		result := applyrunner.Result{
+			Plan:                plan,
+			ActionOutcomesReady: true,
+			FileOutcomes: []applyrunner.FileOutcome{{
+				Index: 0, Target: files[0].Target, Status: applyrunner.ActionConflict,
+			}},
+			UnresolvedConflicts: 1,
+		}
+		stdout, stderr, code := runInjectedApply(t, fixture, result, nil)
+		if code != exitConflict || stderr != "" || !strings.Contains(stdout, "CONFLICT  ~/alpha/file  (target-missing)") {
+			t.Fatalf("runtime file conflict = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+		if strings.Contains(stdout, "link  ~/alpha/file") {
+			t.Fatalf("runtime file conflict retained planned link verb: %q", stdout)
+		}
+	})
+
+	t.Run("IO error priority", func(t *testing.T) {
+		runtimeErr := errors.New("injected file IO failure")
+		result := applyrunner.Result{
+			Plan:                plan,
+			ActionOutcomesReady: true,
+			FileOutcomes: []applyrunner.FileOutcome{{
+				Index: 0, Target: files[0].Target, Status: applyrunner.ActionFailed,
+			}},
+		}
+		stdout, stderr, code := runInjectedApply(t, fixture, result, runtimeErr)
+		if code != exitError || !strings.Contains(stderr, runtimeErr.Error()) || !strings.Contains(stdout, "link  ~/alpha/file") {
+			t.Fatalf("runtime file IO = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
+
+	t.Run("invalid outcome fails closed", func(t *testing.T) {
+		result := applyrunner.Result{
+			Plan:                plan,
+			ActionOutcomesReady: true,
+			FileOutcomes: []applyrunner.FileOutcome{{
+				Index: 0, Target: "~/wrong", Status: applyrunner.ActionConflict,
+			}},
+			UnresolvedConflicts: 1,
+		}
+		stdout, stderr, code := runInjectedApply(t, fixture, result, nil)
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "invalid file outcome") {
+			t.Fatalf("invalid runner outcome = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
+}
+
+func TestApply_PruneOutcomesPreserveSuccessAndDeferMismatchSuffix(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+	source := filepath.Join(fixture.repository, "modules", "alpha", "file")
+	target := filepath.Join(fixture.home, "alpha", "file")
+	makeDirectory(t, filepath.Dir(target))
+	if err := os.Symlink(source, target); err != nil {
+		t.Fatalf("create converged desired link: %v", err)
+	}
+	entries := map[string]planStateEntry{
+		"~/alpha/file": {Module: "alpha", Kind: "symlink", Source: "modules/alpha/file", LinkDest: source, AppliedAt: "2026-07-20T00:00:00Z"},
+	}
+	for _, key := range []string{"~/a", "~/b", "~/c"} {
+		entries[key] = planStateEntry{Module: "old", Kind: "scaffold", Source: "modules/old/file.template", AppliedAt: "2026-07-20T00:00:00Z"}
+	}
+	writePlanState(t, fixture.home, planStateDocument{Version: 1, Entries: entries, RunOnce: map[string]planRunOnce{}})
+	plan := planMutationFixture(t, fixture)
+	prune := plan.Prune().Actions()
+	if len(prune) != 3 {
+		t.Fatalf("fixture prune actions = %#v", prune)
+	}
+	result := applyrunner.Result{
+		Plan:                plan,
+		ActionOutcomesReady: true,
+		PruneOutcomes: []applyrunner.PruneOutcome{
+			{Index: 0, Target: prune[0].Target, Status: applyrunner.ActionSucceeded},
+			{Index: 1, Target: prune[1].Target, Status: applyrunner.ActionConflict},
+			{Index: 2, Target: prune[2].Target, Status: applyrunner.ActionDeferred},
+		},
+		PruneAttempts:       2,
+		PruneEffects:        1,
+		PruneDeferred:       true,
+		UnresolvedConflicts: 1,
+	}
+	stdout, stderr, code := runInjectedApply(t, fixture, result, nil)
+	if code != exitConflict || !strings.Contains(stderr, "prune was deferred") {
+		t.Fatalf("runtime prune conflict = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	for _, want := range []string{
+		"prune  ~/a  (scaffold-orphan)",
+		"prune (deferred)  ~/b  (scaffold-orphan)",
+		"prune (deferred)  ~/c  (scaffold-orphan)",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("runtime prune stdout = %q, want %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "prune (deferred)  ~/a") {
+		t.Fatalf("successful prune was mislabeled deferred: %q", stdout)
+	}
+}
+
 type mutationCLIFixture struct {
 	root       string
 	home       string
@@ -387,13 +499,7 @@ func (fixture mutationCLIFixture) run(
 	commandArgs ...string,
 ) (string, string, int) {
 	t.Helper()
-	t.Setenv("HOME", fixture.realHome)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(fixture.home, ".config"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(fixture.home, ".local", "state"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(fixture.home, ".local", "share"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(fixture.home, ".cache"))
-	t.Setenv("DOT_CONFIG", filepath.Join(fixture.home, ".config", "dot", "config.toml"))
-	t.Setenv("DOT_REPO", fixture.repository)
+	fixture.setEnvironment(t)
 	args := append([]string(nil), commandArgs...)
 	args = append(args, "--home", fixture.home, "--repo", fixture.repository)
 	var stdout bytes.Buffer
@@ -406,6 +512,57 @@ func (fixture mutationCLIFixture) run(
 		build:        buildinfo.Info{Version: "v0.0.0", Commit: "test", BuildTime: "test"},
 		goos:         runtime.GOOS,
 		openTerminal: openTerminal,
+	})
+	return stdout.String(), stderr.String(), code
+}
+
+func (fixture mutationCLIFixture) setEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", fixture.realHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(fixture.home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(fixture.home, ".local", "state"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(fixture.home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(fixture.home, ".cache"))
+	t.Setenv("DOT_CONFIG", filepath.Join(fixture.home, ".config", "dot", "config.toml"))
+	t.Setenv("DOT_REPO", fixture.repository)
+}
+
+func planMutationFixture(t *testing.T, fixture mutationCLIFixture) planner.ApplyPlan {
+	t.Helper()
+	fixture.setEnvironment(t)
+	plan, err := planner.PlanApply(planner.ApplyOptions{
+		Runtime: dotruntime.Overrides{
+			Home:       dotruntime.Override{Value: fixture.home, Set: true},
+			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+		},
+		CLIVersion: "v0.0.0",
+	})
+	if err != nil {
+		t.Fatalf("planner.PlanApply() error = %v", err)
+	}
+	return plan
+}
+
+func runInjectedApply(
+	t *testing.T,
+	fixture mutationCLIFixture,
+	result applyrunner.Result,
+	runErr error,
+) (string, string, int) {
+	t.Helper()
+	fixture.setEnvironment(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"apply", "--home", fixture.home, "--repo", fixture.repository}, environment{
+		stdout:      &stdout,
+		stderr:      &stderr,
+		lookupEnv:   os.LookupEnv,
+		userHomeDir: os.UserHomeDir,
+		build:       buildinfo.Info{Version: "v0.0.0"},
+		goos:        runtime.GOOS,
+		applyRun: func(applyrunner.Options) (applyrunner.Result, error) {
+			return result, runErr
+		},
 	})
 	return stdout.String(), stderr.String(), code
 }
