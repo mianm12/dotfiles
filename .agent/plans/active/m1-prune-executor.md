@@ -48,7 +48,8 @@ run_once 动作时会在一切 mutation 前硬拒绝。
 - [x] 2026-07-20：`go test ./internal/state ./internal/executor ./internal/apply`、branch diff check
   与隔离 cache `make check` 通过；保持计划 active 等待独立复核。
 - [x] 2026-07-20：首轮独立 review 确认 P1 finding：广义 `ErrPrecondition` 会把观测/cleanup IO
-  错误误降级 conflict；新增 executor 单一精确分类与 file/prune 回归，窄测通过，等待完整复审。
+  错误误降级 conflict；`4782f91` 新增 executor 单一精确分类与 file/prune 回归，窄测、完整
+  branch diff check 和隔离 cache `make check` 通过，等待完整复审。
 
 ## Milestones
 
