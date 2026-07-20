@@ -51,6 +51,12 @@ transition。当前 executor 对 `FileBackupReplace` 和 S2 scaffold rebuild 仍
   （`f66371e`）。
 - [x] 2026-07-20：backup/executor/apply 窄测试、branch diff check 与隔离 cache `make check`
   通过；保持计划 active 等待独立复核。
+- [x] 2026-07-20：第一轮独立 review 确认两个 P2：backup preparation 的 evidence/IO 错误未
+  精确分类，S2 publish `EEXIST` 只属于广义 Precondition。`6e6c3f7`、`b1e1df2` 和
+  `004b09c` 修复 pure/mixed error tree；`08ce774` 固定 post-commit cleanup 与 state Store
+  失败仍报告并保留精确 backup path。
+- [x] 2026-07-20：review fixes 后窄测试、完整 branch diff check 与隔离 cache `make check`
+  重新通过；等待完整复审。
 
 ## Milestones
 
@@ -117,6 +123,11 @@ macOS/Linux 留待 Checkpoint Acceptance。
   `FileBackupReplace` 分派新入口。
 - 2026-07-20：backup 后 source 的 `Lstat` 失败仍是 runtime IO，不是纯 evidence mismatch；target
   内容/hash 变化则是精确 mismatch。故障注入测试固定两类错误不会混淆，且都保留 backup path。
+- 2026-07-20：backup store 原先把摘要、mode、inode 和 raw link text 的明确变化与 IO 使用同一
+  普通 error；runner 因而无法把准备期间的确定失配安全降级 conflict。store 现在提供 sentinel
+  与整棵 error tree 分类；混入 destination cleanup IO 时明确不是 pure mismatch。
+- 2026-07-20：`hardLink` 的 `EEXIST` 是提交点明确出现新 leaf 的证据，但 cleanup 失败会通过
+  `errors.Join` 混入运行错误；executor 的递归 pure classifier 能精确区分这两种结果。
 
 ## Decision Log
 
@@ -124,10 +135,13 @@ macOS/Linux 留待 Checkpoint Acceptance。
   backup root/batch。理由是 runner 拥有一次 apply 生命周期，executor 只消费 canonical action。
 - 2026-07-20：精确 backup relative path 由稳定 target key 构成并保持在 batch 内；最终绝对路径
   从 backup store 返回并原样报告，不增加持久化 state 字段。
+- 2026-07-20：只把 `backup.IsPureEvidenceMismatch` 映射为 `ErrPreconditionMismatch`；open、copy、
+  chmod、sync、cleanup 以及任何 mixed tree 保留 runtime error。理由是只有纯 evidence 失配才能
+  安全成为 unresolved conflict，其他失败仍需显式暴露。
 
 ## Outcomes and Handoff
 
-实现与本地门禁已完成，计划保持 active 等待未参与实现的 reviewer。当前 branch 交付：
+实现、首轮 review fixes 与本地门禁已完成，计划保持 active 等待完整复审。当前 branch 交付：
 
 - regular/symlink canonical backup-replace，保存 bytes/mode 或 raw link text 后再次完整 Precondition
   并原子 rename；backup 失败零替换，成功路径不会因后续错误丢失。
@@ -135,6 +149,8 @@ macOS/Linux 留待 Checkpoint Acceptance。
 - runner 每次 force apply 复用唯一 batch，通过 `Result.BackupPaths` 报告恢复事实；file 未收敛仍按
   既有契约延迟 prune，成功 state effect 仍能部分提交。
 
+首轮 reviewer 的两个 P2 已修复；regular/symlink preparation evidence、mixed cleanup、S2 pure
+`EEXIST`/`EEXIST+cleanup`、真实 force post-commit cleanup 与 state Store 失败均有回归测试。
 验证证据：`go test ./internal/backup ./internal/executor ./internal/apply`、
 `git diff 0499de9...HEAD --check` 与隔离 cache `make check` 均通过。仅在 Darwin/arm64 原生验证；
 远端 macOS/Linux 待 Checkpoint Acceptance。
