@@ -169,6 +169,80 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 	})
 }
 
+func TestValidateTargetSet_RejectsSelfTraversal(t *testing.T) {
+	_, selfTraversing := selfTraversingTargetPaths(t)
+	input := LabeledTarget{
+		Label: "module bad self-traversing target",
+		Path:  selfTraversing,
+	}
+	resolution := mustResolveTarget(t, input.Path)
+	if !resolution.Traverses(resolution) {
+		t.Fatal("fixture target does not traverse its own leaf identity")
+	}
+
+	validated, err := ValidateTargetSet([]LabeledTarget{input})
+	if !errors.Is(err, ErrTargetOverlap) {
+		t.Fatalf("ValidateTargetSet() error = %v, want ErrTargetOverlap", err)
+	}
+	if validated.targets != nil {
+		t.Fatalf("ValidateTargetSet() targets = %#v, want zero result", validated.targets)
+	}
+	var traversal *TargetSelfTraversalError
+	if !errors.As(err, &traversal) {
+		t.Fatalf("ValidateTargetSet() error = %T %v, want structured self-traversal error", err, err)
+	}
+	if traversal.Target() != input {
+		t.Errorf("self-traversal target = %#v, want %#v", traversal.Target(), input)
+	}
+	for _, want := range []string{input.Label, input.Path, "traverses its own leaf"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("ValidateTargetSet() error = %q, want %q", err, want)
+		}
+	}
+}
+
+func TestValidateTargetSet_PairConflictPrecedesSelfTraversal(t *testing.T) {
+	direct, selfTraversing := selfTraversingTargetPaths(t)
+	inputs := []LabeledTarget{
+		{Label: "direct target", Path: direct},
+		{Label: "self-traversing alias", Path: selfTraversing},
+	}
+
+	validated, err := ValidateTargetSet(inputs)
+	if !errors.Is(err, ErrTargetOverlap) {
+		t.Fatalf("ValidateTargetSet() error = %v, want ErrTargetOverlap", err)
+	}
+	if validated.targets != nil {
+		t.Fatalf("ValidateTargetSet() targets = %#v, want zero result", validated.targets)
+	}
+	var conflict *TargetConflictError
+	if !errors.As(err, &conflict) || conflict.Relation() != TargetRelationEqual {
+		t.Fatalf("ValidateTargetSet() conflict = %#v, want equal TargetConflictError", conflict)
+	}
+	var traversal *TargetSelfTraversalError
+	if errors.As(err, &traversal) {
+		t.Fatalf("equal pair conflict was masked by self traversal: %#v", traversal)
+	}
+}
+
+func selfTraversingTargetPaths(t *testing.T) (direct, selfTraversing string) {
+	t.Helper()
+	root := t.TempDir()
+	realDirectory := filepath.Join(root, "real")
+	if err := os.Mkdir(realDirectory, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", realDirectory, err)
+	}
+	bridge := filepath.Join(root, "bridge")
+	if err := os.Symlink("real", bridge); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", "real", bridge, err)
+	}
+	detour := filepath.Join(root, "detour")
+	if err := os.Symlink(filepath.FromSlash("bridge/.."), detour); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", "bridge/..", detour, err)
+	}
+	return bridge, filepath.Join(detour, "bridge")
+}
+
 func TestValidateTargetSet_PreservesMutualSymlinkAncestorRelation(t *testing.T) {
 	root := t.TempDir()
 	left := filepath.Join(root, "left")

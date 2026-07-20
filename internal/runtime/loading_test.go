@@ -320,6 +320,36 @@ func TestLoadReadOnly_StatePathClassification(t *testing.T) {
 		}
 	})
 
+	t.Run("equal state identity precedes self traversal", func(t *testing.T) {
+		fixture := newLoadingFixture(t, true)
+		realDirectory := filepath.Join(fixture.home, "real")
+		writeFile(t, filepath.Join(realDirectory, "fixture"), []byte("fixture"), 0o600)
+		if err := os.Symlink("real", filepath.Join(fixture.home, "bridge")); err != nil {
+			t.Fatalf("os.Symlink(bridge) error = %v", err)
+		}
+		if err := os.Symlink(
+			filepath.FromSlash("bridge/.."),
+			filepath.Join(fixture.home, "detour"),
+		); err != nil {
+			t.Fatalf("os.Symlink(detour) error = %v", err)
+		}
+		writeState(t, fixture, stateWithSymlinkEntries("~/bridge", "~/detour/bridge"))
+
+		_, err := loadReadOnlyWithoutMutation(t, fixture)
+		if !errors.Is(err, state.ErrCorrupt) ||
+			!errors.Is(err, state.ErrTargetIdentityConflict) ||
+			!errors.Is(err, paths.ErrTargetOverlap) {
+			t.Fatalf("LoadReadOnly() error = %v, want corrupt equal target identity", err)
+		}
+		if errors.Is(err, state.ErrPathValidation) {
+			t.Fatalf("equal state identities misclassified as self-traversal path error: %v", err)
+		}
+		var conflict *paths.TargetConflictError
+		if !errors.As(err, &conflict) || conflict.Relation() != paths.TargetRelationEqual {
+			t.Fatalf("LoadReadOnly() conflict = %#v, want equal TargetConflictError", conflict)
+		}
+	})
+
 	t.Run("state ancestor relation is runtime unsafe", func(t *testing.T) {
 		fixture := newLoadingFixture(t, true)
 		writeFile(t, filepath.Join(fixture.home, "parent", "child"), []byte("fixture"), 0o600)

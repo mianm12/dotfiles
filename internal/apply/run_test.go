@@ -347,6 +347,52 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsSelfTraversingEffectiveTargetBeforeExecutor(t *testing.T) {
+	tests := []struct {
+		name        string
+		includeGood bool
+		modules     []string
+	}{
+		{
+			name:        "partial scope cannot hide invalid module",
+			includeGood: true,
+			modules:     []string{"good"},
+		},
+		{
+			name: "S1b state-only cannot bypass global topology",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRunSelfTraversalFixture(t, test.includeGood)
+			options := fixture.options()
+			options.Modules = test.modules
+
+			for attempt := 1; attempt <= 2; attempt++ {
+				result, err := Run(options)
+				if !errors.Is(err, paths.ErrTargetOverlap) ||
+					!strings.Contains(err.Error(), "module \"bad\"") ||
+					!strings.Contains(err.Error(), "traverses its own leaf") {
+					t.Fatalf("Run() attempt %d error = %v, want full-profile self-traversal rejection", attempt, err)
+				}
+				if result.FileAttempts != 0 || result.TargetCommits != 0 ||
+					result.AdoptionEffects != 0 || result.StateCommitted {
+					t.Fatalf("Run() attempt %d result = %#v, want zero mutation", attempt, result)
+				}
+				if destination, readErr := os.Readlink(fixture.bridge); readErr != nil || destination != "real" {
+					t.Fatalf("Run() attempt %d bridge = (%q, %v), want unchanged", attempt, destination, readErr)
+				}
+				if _, statErr := os.Lstat(fixture.goodTarget); !errors.Is(statErr, fs.ErrNotExist) {
+					t.Fatalf("Run() attempt %d good target Lstat error = %v, want missing", attempt, statErr)
+				}
+				if _, statErr := os.Lstat(fixture.stateFile); !errors.Is(statErr, fs.ErrNotExist) {
+					t.Fatalf("Run() attempt %d state Lstat error = %v, want missing", attempt, statErr)
+				}
+			}
+		})
+	}
+}
+
 func TestRun_RejectsUnsafeCandidateStateTopologyBeforeExecutor(t *testing.T) {
 	fixture := newRunCandidateTopologyFixture(t)
 	target := filepath.Join(fixture.home, "parent")
@@ -463,7 +509,7 @@ func TestRun_RejectsMatchedAliasCandidateStateTopologyBeforeExecutor(t *testing.
 	}
 }
 
-func TestRun_RejectsAliasMigrationThatWouldBlockPersistedStateBeforeExecutor(t *testing.T) {
+func TestRun_RejectsSelfTraversingPersistedStateBeforePlanning(t *testing.T) {
 	fixture := newRunCandidateTopologyFixture(t)
 	if err := os.MkdirAll(filepath.Join(fixture.home, "real"), 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(real) error = %v", err)
@@ -514,12 +560,12 @@ func TestRun_RejectsAliasMigrationThatWouldBlockPersistedStateBeforeExecutor(t *
 	}
 
 	result, runErr := runWithOperations(fixture.options(), operations)
-	if !errors.Is(runErr, paths.ErrTargetOverlap) ||
-		errors.Is(runErr, state.ErrPathValidation) ||
+	if !errors.Is(runErr, state.ErrPathValidation) ||
+		!errors.Is(runErr, paths.ErrTargetOverlap) ||
 		errors.Is(runErr, storeErr) ||
-		!strings.Contains(runErr.Error(), "target mutation") ||
-		!strings.Contains(runErr.Error(), "~/detour/bridge") {
-		t.Fatalf("runWithOperations() error = %v, want persisted-state traversal rejection", runErr)
+		!strings.Contains(runErr.Error(), "state target") ||
+		!strings.Contains(runErr.Error(), "traverses its own leaf") {
+		t.Fatalf("runWithOperations() error = %v, want strict state self-traversal rejection", runErr)
 	}
 	if result.FileAttempts != 0 || result.TargetCommits != 0 ||
 		result.AdoptionEffects != 0 || result.StateCommitted || storeCalls != 0 {
@@ -543,8 +589,8 @@ func TestRun_RejectsAliasMigrationThatWouldBlockPersistedStateBeforeExecutor(t *
 	)
 
 	repeated, repeatedErr := Run(fixture.options())
-	if !errors.Is(repeatedErr, paths.ErrTargetOverlap) || errors.Is(repeatedErr, state.ErrPathValidation) {
-		t.Fatalf("repeated Run() error = %v, want same planner target overlap", repeatedErr)
+	if !errors.Is(repeatedErr, state.ErrPathValidation) || !errors.Is(repeatedErr, paths.ErrTargetOverlap) {
+		t.Fatalf("repeated Run() error = %v, want same strict state target overlap", repeatedErr)
 	}
 	if repeated.FileAttempts != 0 || repeated.TargetCommits != 0 || repeated.StateCommitted {
 		t.Fatalf("repeated Run() result = %#v, want zero mutation", repeated)
@@ -801,6 +847,68 @@ type runCandidateTopologyFixture struct {
 	home       string
 	repository string
 	stateFile  string
+}
+
+type runSelfTraversalFixture struct {
+	home       string
+	repository string
+	stateFile  string
+	bridge     string
+	goodTarget string
+}
+
+func newRunSelfTraversalFixture(t *testing.T, includeGood bool) runSelfTraversalFixture {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repository := filepath.Join(root, "repo")
+	isolateRunMutationEnvironment(t, root, home, repository)
+	if err := os.MkdirAll(filepath.Join(home, "real"), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(real) error = %v", err)
+	}
+	bridge := filepath.Join(home, "bridge")
+	if err := os.Symlink("real", bridge); err != nil {
+		t.Fatalf("os.Symlink(bridge) error = %v", err)
+	}
+	if err := os.Symlink(filepath.FromSlash("bridge/.."), filepath.Join(home, "detour")); err != nil {
+		t.Fatalf("os.Symlink(detour) error = %v", err)
+	}
+
+	writeRunFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
+	profileModules := "all = [\"bad\"]"
+	if includeGood {
+		profileModules = "all = [\"bad\", \"good\"]"
+	}
+	writeRunFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+`+profileModules+"\n")
+	writeRunFile(t, filepath.Join(repository, "modules", "bad", "dot.toml"), `target = "~/detour"
+[files."bridge.template"]
+kind = "scaffold"
+`)
+	writeRunFile(t, filepath.Join(repository, "modules", "bad", "bridge.template"), "scaffold content\n")
+	if includeGood {
+		writeRunFile(t, filepath.Join(repository, "modules", "good", "dot.toml"), "target = \"~\"\n")
+		writeRunFile(t, filepath.Join(repository, "modules", "good", "good"), "link source\n")
+	}
+	return runSelfTraversalFixture{
+		home:       home,
+		repository: repository,
+		stateFile:  filepath.Join(home, ".local", "state", "dot", "state.json"),
+		bridge:     bridge,
+		goodTarget: filepath.Join(home, "good"),
+	}
+}
+
+func (fixture runSelfTraversalFixture) options() Options {
+	return Options{
+		Runtime: dotruntime.Overrides{
+			Home:       dotruntime.Override{Value: fixture.home, Set: true},
+			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+		},
+		CLIVersion: "dev",
+		NoPrune:    true,
+	}
 }
 
 func newRunCandidateTopologyFixture(t *testing.T) runCandidateTopologyFixture {
