@@ -30,12 +30,40 @@ type Options struct {
 // 确认 IO 失败。调用方不得在 callback 中执行 target/state mutation。
 type ConfirmPrune func([]planner.PruneConfirmationGroup) (accepted bool, err error)
 
+// ActionOutcomeStatus 描述 runner 对一个可执行计划动作的实际处置，不让调用方从聚合计数猜测。
+type ActionOutcomeStatus string
+
+const (
+	ActionSucceeded ActionOutcomeStatus = "succeeded"
+	ActionConflict  ActionOutcomeStatus = "conflict"
+	ActionDeferred  ActionOutcomeStatus = "deferred"
+	ActionFailed    ActionOutcomeStatus = "failed"
+)
+
+// FileOutcome 以原 file plan 的 index 和 target 标识一次可执行 file 动作的结果。
+// 未尝试的可执行后缀保持 deferred；plan-only skip/conflict 不重复记录。
+type FileOutcome struct {
+	Index  int
+	Target string
+	Status ActionOutcomeStatus
+}
+
+// PruneOutcome 以原 prune plan 的 index 和 target 标识每个 prune 动作的结果。
+type PruneOutcome struct {
+	Index  int
+	Target string
+	Status ActionOutcomeStatus
+}
+
 // Result 保存内部 runner 的可验证摘要，不定义 CLI 输出或退出码。FileAttempts 统计 executor
 // 调用，TargetCommits 统计 executor 报告已越过的 target 提交点，AdoptionEffects 统计已接受的
 // adopt OnSuccess effect；这些事实即使最终 state Store 失败也保留。StateCommitted 只表示候选
 // state 已成功原子发布。
 type Result struct {
 	Plan                planner.ApplyPlan
+	ActionOutcomesReady bool
+	FileOutcomes        []FileOutcome
+	PruneOutcomes       []PruneOutcome
 	FileAttempts        int
 	AdoptionEffects     int
 	TargetCommits       int
@@ -122,6 +150,23 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	if err := validateExecutionScope(planned.files, planned.prune, planned.hooks); err != nil {
 		return result, err
 	}
+	result.ActionOutcomesReady = true
+	fileOutcomePositions := make(map[int]int)
+	for index, action := range planned.files {
+		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
+			continue
+		}
+		fileOutcomePositions[index] = len(result.FileOutcomes)
+		result.FileOutcomes = append(result.FileOutcomes, FileOutcome{
+			Index: index, Target: action.Target, Status: ActionDeferred,
+		})
+	}
+	result.PruneOutcomes = make([]PruneOutcome, len(planned.prune))
+	for index, action := range planned.prune {
+		result.PruneOutcomes[index] = PruneOutcome{
+			Index: index, Target: action.Target, Status: ActionDeferred,
+		}
+	}
 
 	updates := make([]state.EntryUpdate, 0, len(planned.files))
 	deletes := make([]string, 0, len(planned.prune))
@@ -134,6 +179,7 @@ func runWithOperations(options Options, operations runOperations) (result Result
 		if action.Verb == planner.FileBackupReplace && backupBatch == nil {
 			backupBatch, err = operations.backup(mutation.control().BackupRoot())
 			if err != nil {
+				result.FileOutcomes[fileOutcomePositions[index]].Status = ActionFailed
 				resultErr = fmt.Errorf("begin force backup batch: %w", err)
 				filesConverged = false
 				break
@@ -184,12 +230,15 @@ func runWithOperations(options Options, operations runOperations) (result Result
 		if executeErr != nil {
 			if protocolErr == nil && executor.IsPurePreconditionMismatch(executeErr) {
 				result.UnresolvedConflicts++
+				result.FileOutcomes[fileOutcomePositions[index]].Status = ActionConflict
 			} else {
+				result.FileOutcomes[fileOutcomePositions[index]].Status = ActionFailed
 				resultErr = fmt.Errorf("execute file action %d for %q: %w", index, action.Target, executeErr)
 			}
 			filesConverged = false
 			break
 		}
+		result.FileOutcomes[fileOutcomePositions[index]].Status = ActionSucceeded
 	}
 
 	activePrune := false
@@ -248,12 +297,15 @@ func runWithOperations(options Options, operations runOperations) (result Result
 				if pruneErr != nil {
 					if protocolErr == nil && executor.IsPurePreconditionMismatch(pruneErr) {
 						result.UnresolvedConflicts++
+						result.PruneOutcomes[index].Status = ActionConflict
 					} else {
+						result.PruneOutcomes[index].Status = ActionFailed
 						resultErr = errors.Join(resultErr, fmt.Errorf("execute prune action %d for %q: %w", index, action.Target, pruneErr))
 					}
 					result.PruneDeferred = true
 					break
 				}
+				result.PruneOutcomes[index].Status = ActionSucceeded
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -369,6 +370,13 @@ func TestRun_PrunePreconditionBecomesConflictAndCommitsPriorPrune(t *testing.T) 
 		!result.PruneDeferred || !result.StateCommitted || fixture.loaded.commitCalls != 1 {
 		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 	}
+	wantOutcomes := []PruneOutcome{
+		{Index: 0, Target: first.Target, Status: ActionSucceeded},
+		{Index: 1, Target: second.Target, Status: ActionConflict},
+	}
+	if !reflect.DeepEqual(result.PruneOutcomes, wantOutcomes) {
+		t.Fatalf("prune outcomes = %#v, want %#v", result.PruneOutcomes, wantOutcomes)
+	}
 	if _, exists := fixture.loaded.committed.Entry(first.Target); exists {
 		t.Fatal("successful first prune was not persisted")
 	}
@@ -424,7 +432,60 @@ func TestRun_PreconditionClassificationRequiresPureMismatch(t *testing.T) {
 			if result.UnresolvedConflicts != test.wantConflict || result.StateCommitted || fixture.loaded.commitCalls != 0 {
 				t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 			}
+			if test.prune {
+				wantStatus := ActionFailed
+				if test.wantConflict == 1 {
+					wantStatus = ActionConflict
+				}
+				if got := result.PruneOutcomes; len(got) != 1 || got[0].Status != wantStatus || got[0].Index != 0 || got[0].Target != "~/.orphan" {
+					t.Fatalf("prune outcomes = %#v, want %q for index 0", got, wantStatus)
+				}
+			} else {
+				wantStatus := ActionFailed
+				if test.wantConflict == 1 {
+					wantStatus = ActionConflict
+				}
+				if got := result.FileOutcomes; len(got) != 1 || got[0].Status != wantStatus || got[0].Index != 0 || got[0].Target != "~/.file" {
+					t.Fatalf("file outcomes = %#v, want %q for index 0", got, wantStatus)
+				}
+			}
 		})
+	}
+}
+
+func TestRun_PruneOutcomesMarkUnattemptedSuffixDeferred(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	fixture.loadBaseline(t, `{
+  "version":1,
+  "entries":{
+    "~/.first":{"module":"old","kind":"scaffold","source":"modules/old/first.template","applied_at":"2026-07-19T00:00:00Z"},
+    "~/.second":{"module":"old","kind":"symlink","source":"modules/old/second","link_dest":"/old/second","applied_at":"2026-07-19T00:00:00Z"},
+    "~/.third":{"module":"old","kind":"symlink","source":"modules/old/third","link_dest":"/old/third","applied_at":"2026-07-19T00:00:00Z"}
+  },
+  "run_once":{}
+}`)
+	first := seamPruneAction(t, fixture.loaded.controlPaths, "~/.first", planner.PruneReasonScaffold)
+	second := seamPruneAction(t, fixture.loaded.controlPaths, "~/.second", planner.PruneReasonOwned)
+	third := seamPruneAction(t, fixture.loaded.controlPaths, "~/.third", planner.PruneReasonUnowned)
+	operations := fixture.operations(executionPlan{prune: []planner.PruneAction{first, second, third}})
+	operations.pruneExecute = func(_ paths.ControlPlanePaths, action planner.PruneAction) (executor.PruneResult, error) {
+		if action.Target == first.Target {
+			return executor.PruneResult{StateEffect: action.OnSuccess}, nil
+		}
+		return executor.PruneResult{StateEffect: action.OnFailure}, executor.ErrPreconditionMismatch
+	}
+
+	result, err := runWithOperations(Options{}, operations)
+	if err != nil {
+		t.Fatalf("runWithOperations() error = %v", err)
+	}
+	want := []PruneOutcome{
+		{Index: 0, Target: first.Target, Status: ActionSucceeded},
+		{Index: 1, Target: second.Target, Status: ActionConflict},
+		{Index: 2, Target: third.Target, Status: ActionDeferred},
+	}
+	if !result.ActionOutcomesReady || !reflect.DeepEqual(result.PruneOutcomes, want) {
+		t.Fatalf("prune outcomes ready=%t got=%#v want=%#v", result.ActionOutcomesReady, result.PruneOutcomes, want)
 	}
 }
 
