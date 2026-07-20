@@ -509,7 +509,7 @@ func TestRun_RejectsMatchedAliasCandidateStateTopologyBeforeExecutor(t *testing.
 	}
 }
 
-func TestRun_RejectsAliasMigrationThatWouldBlockPersistedStateBeforeExecutor(t *testing.T) {
+func TestRun_RejectsSelfTraversingPersistedStateBeforePlanning(t *testing.T) {
 	fixture := newRunCandidateTopologyFixture(t)
 	if err := os.MkdirAll(filepath.Join(fixture.home, "real"), 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(real) error = %v", err)
@@ -560,12 +560,12 @@ func TestRun_RejectsAliasMigrationThatWouldBlockPersistedStateBeforeExecutor(t *
 	}
 
 	result, runErr := runWithOperations(fixture.options(), operations)
-	if !errors.Is(runErr, paths.ErrTargetOverlap) ||
-		errors.Is(runErr, state.ErrPathValidation) ||
+	if !errors.Is(runErr, state.ErrPathValidation) ||
+		!errors.Is(runErr, paths.ErrTargetOverlap) ||
 		errors.Is(runErr, storeErr) ||
-		!strings.Contains(runErr.Error(), "target mutation") ||
-		!strings.Contains(runErr.Error(), "~/detour/bridge") {
-		t.Fatalf("runWithOperations() error = %v, want persisted-state traversal rejection", runErr)
+		!strings.Contains(runErr.Error(), "state target") ||
+		!strings.Contains(runErr.Error(), "traverses its own leaf") {
+		t.Fatalf("runWithOperations() error = %v, want strict state self-traversal rejection", runErr)
 	}
 	if result.FileAttempts != 0 || result.TargetCommits != 0 ||
 		result.AdoptionEffects != 0 || result.StateCommitted || storeCalls != 0 {
@@ -589,8 +589,8 @@ func TestRun_RejectsAliasMigrationThatWouldBlockPersistedStateBeforeExecutor(t *
 	)
 
 	repeated, repeatedErr := Run(fixture.options())
-	if !errors.Is(repeatedErr, paths.ErrTargetOverlap) || errors.Is(repeatedErr, state.ErrPathValidation) {
-		t.Fatalf("repeated Run() error = %v, want same planner target overlap", repeatedErr)
+	if !errors.Is(repeatedErr, state.ErrPathValidation) || !errors.Is(repeatedErr, paths.ErrTargetOverlap) {
+		t.Fatalf("repeated Run() error = %v, want same strict state target overlap", repeatedErr)
 	}
 	if repeated.FileAttempts != 0 || repeated.TargetCommits != 0 || repeated.StateCommitted {
 		t.Fatalf("repeated Run() result = %#v, want zero mutation", repeated)

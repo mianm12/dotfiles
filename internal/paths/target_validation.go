@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-// ErrTargetOverlap 表示两个 labeled target 的文件系统身份相等或互为祖先。
+// ErrTargetOverlap 表示一个 labeled target 穿过自身 leaf，或两个 target 的文件系统身份相等/
+// 互为祖先。
 var ErrTargetOverlap = errors.New("target paths overlap")
 
 // TargetRelation 描述冲突中 left/right target 的文件系统 identity 关系；
@@ -82,6 +83,28 @@ func (conflict *TargetConflictError) Right() LabeledTarget { return conflict.rig
 // Relation 返回双方在同一次 identity snapshot 中的关系。
 func (conflict *TargetConflictError) Relation() TargetRelation { return conflict.relation }
 
+// TargetSelfTraversalError 保存展示路径在到达 leaf 前穿过自身 leaf identity 的 target provenance。
+// 访问器返回不可变值副本；errors.Is(error, ErrTargetOverlap) 保持成立。
+type TargetSelfTraversalError struct {
+	target LabeledTarget
+}
+
+// Error 返回包含 target label、展示路径和 unary topology 原因的诊断。
+func (traversal *TargetSelfTraversalError) Error() string {
+	return fmt.Sprintf(
+		"%v: %s path %q traverses its own leaf identity",
+		ErrTargetOverlap,
+		traversal.target.Label,
+		traversal.target.Path,
+	)
+}
+
+// Unwrap 保留 ErrTargetOverlap sentinel。
+func (traversal *TargetSelfTraversalError) Unwrap() error { return ErrTargetOverlap }
+
+// Target 返回发生 self traversal 的 target。
+func (traversal *TargetSelfTraversalError) Target() LabeledTarget { return traversal.target }
+
 // LabeledTarget 是共享 target-set validator 的最小输入。
 // Label 由调用方提供诊断 provenance；Path 必须是非 root 绝对 target 展示路径。
 type LabeledTarget struct {
@@ -100,7 +123,7 @@ type TargetSet struct {
 }
 
 // ValidateTargetSet 在同一个只读 identity snapshot 内解析并校验全部 target。
-// 任一解析或 pair relation 失败都返回零值，调用方不会获得部分可信集合。
+// 任一解析、self traversal 或 pair relation 失败都返回零值，调用方不会获得部分可信集合。
 func ValidateTargetSet(inputs []LabeledTarget) (TargetSet, error) {
 	return validateTargetSet(inputs, newTargetResolver())
 }
@@ -114,6 +137,9 @@ func validateTargetSet(inputs []LabeledTarget, resolver *targetResolver) (Target
 		resolution, err := resolver.resolve(input.Path)
 		if err != nil {
 			return TargetSet{}, fmt.Errorf("resolve target %s path %q: %w", input.Label, input.Path, err)
+		}
+		if resolution.Traverses(resolution) {
+			return TargetSet{}, &TargetSelfTraversalError{target: input}
 		}
 		resolved[index] = resolvedLabeledTarget{input: input, resolution: resolution}
 	}

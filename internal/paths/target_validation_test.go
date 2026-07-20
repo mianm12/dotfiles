@@ -199,7 +199,7 @@ func TestValidateTargetSet_RejectsSelfTraversal(t *testing.T) {
 	if validated.targets != nil {
 		t.Fatalf("ValidateTargetSet() targets = %#v, want zero result", validated.targets)
 	}
-	var traversal interface{ Target() LabeledTarget }
+	var traversal *TargetSelfTraversalError
 	if !errors.As(err, &traversal) {
 		t.Fatalf("ValidateTargetSet() error = %T %v, want structured self-traversal error", err, err)
 	}
