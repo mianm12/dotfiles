@@ -64,9 +64,10 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   `4e92a11` freshness 合入 backup main 后再次完整 review GO，closure `0499de9` FF-only 合入。
 - [x] 2026-07-20：Wave 1 完成。backup `79d3713`、prune `0499de9` 均在 main 上通过窄测与
   隔离 cache 的 `make check`；两个 worker worktree 已确认 clean/合入后无 force 移除。
-- [ ] 2026-07-20：force-replace 第一轮完整 review 发现 backup 准备期证据变化与 S2 EEXIST
-  未精确分类为 pure Precond mismatch 的两个 P2；finding 已验证有效，worker 正以新 commits
-  修复并补真实 cleanup/Store failure 的 backup path 恢复证据，之后完整复审。
+- [x] 2026-07-20：force-replace 第一轮两个 P2 由 `6e6c3f7`、`b1e1df2`、`08ce774`、
+  `004b09c` 修复；round 2 的失真注释 P3 由 `7b0a712` 修复；round 3 完整 review GO。
+- [x] 2026-07-20：force-replace closure `e0d2243` FF-only 合入 main；backup/executor/apply 窄测
+  与隔离 cache `make check` 通过，worker worktree clean/已合入后无 force 移除。
 - [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
