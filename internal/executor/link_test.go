@@ -161,6 +161,78 @@ func TestExecuteLink_BackupReplaceFailurePreservesTargetAndBackupFact(t *testing
 	}
 }
 
+func TestExecuteLink_BackupReplaceRechecksFinalPrecondition(t *testing.T) {
+	t.Run("target leaf changed after backup", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target := filepath.Join(fixture.home, ".zshrc")
+		if err := os.WriteFile(target, []byte("planned user data"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(target) error = %v", err)
+		}
+		action := fixture.planLinkWithForce(t, target, fixture.source, planner.HistoricalState{}, false, true)
+		batch, err := backup.NewBatch(fixture.control.BackupRoot())
+		if err != nil {
+			t.Fatalf("backup.NewBatch() error = %v", err)
+		}
+		operations := defaultFileOperations()
+		realMkdirTemp := operations.mkdirTemp
+		operations.mkdirTemp = func(directory, pattern string) (string, error) {
+			temporary, err := realMkdirTemp(directory, pattern)
+			if err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(target, []byte("changed user data"), 0o600); err != nil {
+				return "", err
+			}
+			return temporary, nil
+		}
+
+		result, err := executeFileWithBackup(fixture.control, action, operations, batch)
+		assertPreconditionFailure(t, result, action, err)
+		if !IsPurePreconditionMismatch(err) || result.BackupPath == "" {
+			t.Fatalf("result/error = (%#v, %v), want retained backup and pure mismatch", result, err)
+		}
+		content, readErr := os.ReadFile(target)
+		if readErr != nil || string(content) != "changed user data" {
+			t.Fatalf("changed target = (%q, %v), want preserved", content, readErr)
+		}
+	})
+
+	t.Run("source observation failed after backup", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target := filepath.Join(fixture.home, ".zshrc")
+		if err := os.WriteFile(target, []byte("user data"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(target) error = %v", err)
+		}
+		action := fixture.planLinkWithForce(t, target, fixture.source, planner.HistoricalState{}, false, true)
+		batch, err := backup.NewBatch(fixture.control.BackupRoot())
+		if err != nil {
+			t.Fatalf("backup.NewBatch() error = %v", err)
+		}
+		operations := defaultFileOperations()
+		realMkdirTemp := operations.mkdirTemp
+		operations.mkdirTemp = func(directory, pattern string) (string, error) {
+			temporary, err := realMkdirTemp(directory, pattern)
+			if err != nil {
+				return "", err
+			}
+			if err := os.Remove(fixture.source); err != nil {
+				return "", err
+			}
+			return temporary, nil
+		}
+
+		result, err := executeFileWithBackup(fixture.control, action, operations, batch)
+		assertPreconditionFailure(t, result, action, err)
+		if IsPurePreconditionMismatch(err) || result.BackupPath == "" {
+			t.Fatalf("result/error = (%#v, %v), want retained backup and runtime IO", result, err)
+		}
+		content, readErr := os.ReadFile(target)
+		if readErr != nil || string(content) != "user data" {
+			t.Fatalf("target after source failure = (%q, %v), want preserved", content, readErr)
+		}
+	})
+}
+
 func TestValidateFileAction_RejectsIncompleteLinkUpsert(t *testing.T) {
 	fixture := newLinkFixture(t)
 	base := fixture.planLink(
