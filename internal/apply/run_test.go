@@ -1049,10 +1049,11 @@ func seamPruneAction(
 		OnSuccess: planner.StateEffect{Kind: planner.StateDelete, Key: key},
 		OnFailure: planner.StateEffect{Kind: planner.StatePreserve},
 	}
-	if reason == planner.PruneReasonUnowned {
+	switch reason {
+	case planner.PruneReasonUnowned:
 		action.Warning = true
 		action.Precondition.Leaf = planner.LeafCondition{Kind: planner.LeafNotOwnedSymlink, LinkDest: "/old"}
-	} else if reason == planner.PruneReasonOwned {
+	case planner.PruneReasonOwned:
 		action.Mode = planner.PruneTargetAndState
 		action.Precondition.Leaf = planner.LeafCondition{Kind: planner.LeafExactSymlink, LinkDest: "/old/second"}
 	}

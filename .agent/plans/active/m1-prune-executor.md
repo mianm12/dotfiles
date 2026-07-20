@@ -114,6 +114,8 @@ Checkpoint integration 后验收。
 
 - Observation: 隔离空 `GOMODCACHE` 会尝试访问当前配置的外部 Go proxy，而 sandbox 无网络；
   继续复用只读的既有 module cache，只隔离 `GOCACHE`，未下载或修改依赖。
+- Observation: 首次 `make check` 在测试 helper 报告 staticcheck QF1003；改为封闭 switch 后
+  apply 窄测与 scoped lint 通过，未改变产品行为。
 
 ## Decision Log
 
