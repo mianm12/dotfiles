@@ -36,12 +36,13 @@ func commandExit(code int) error {
 
 // environment 集中保存 CLI 的外部依赖，便于测试替换 I/O、环境变量、HOME 和构建元数据。
 type environment struct {
-	stdout      io.Writer
-	stderr      io.Writer
-	lookupEnv   func(string) (string, bool)
-	userHomeDir func() (string, error)
-	build       buildinfo.Info
-	goos        string
+	stdout       io.Writer
+	stderr       io.Writer
+	lookupEnv    func(string) (string, bool)
+	userHomeDir  func() (string, error)
+	openTerminal func() (io.ReadCloser, error)
+	build        buildinfo.Info
+	goos         string
 }
 
 // Run 使用不含程序名的 args 执行 dot，将命令输出写入 stdout 和 stderr，
@@ -52,8 +53,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		stderr:      stderr,
 		lookupEnv:   os.LookupEnv,
 		userHomeDir: os.UserHomeDir,
-		build:       buildinfo.Current(),
-		goos:        runtime.GOOS,
+		openTerminal: func() (io.ReadCloser, error) {
+			return os.Open("/dev/tty")
+		},
+		build: buildinfo.Current(),
+		goos:  runtime.GOOS,
 	})
 }
 

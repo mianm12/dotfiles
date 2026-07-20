@@ -45,9 +45,12 @@
 
 - [x] 2026-07-20：确认 worktree/top-level `/private/tmp/dot-m1-cp5-cli`、branch `feat/apply-cli`、
   clean baseline `e0d2243`，阅读适用规范、实现、测试和 completed ExecPlans。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先行接入 mutation apply、确认、输出与退出码。
-- [ ] 补齐隔离真实文件系统、partial/state recovery、幂等与 dry-run 回归；更新 README。
+- [x] 2026-07-20：提交 active ExecPlan 起点（`cba2b5b`）。
+- [x] 2026-07-20：测试先行接入 mutation apply、确认、稳定输出与 1 > 3 > 2 > 0 退出聚合；
+  CLI 窄测通过。
+- [x] 2026-07-20：补齐隔离真实文件系统、partial scope、部分成功 state、P1/P2/P3、force backup、
+  hook/managed/rendered fail-closed、确认拒绝与二次收敛回归。
+- [ ] 更新 README 当前实现事实。
 - [ ] 运行窄测、branch diff check、隔离 cache `make check`，保持计划 active 等待独立复核。
 
 ## Milestones
@@ -117,7 +120,10 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: mutation session 在 strict load/plan 前取得进程锁，因此 managed/rendered/hook
+  fail-closed 路径允许创建隔离 state 目录和持久 lock 文件，但不会产生 target、backup 或 state
+  mutation。Evidence: CLI 集成测试分别断言 target/state/backup 不变，并不把锁基础设施误判为
+  dry-run 式整树零写入。
 
 ## Decision Log
 
@@ -125,6 +131,9 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
   Rationale: planner 是动作、scope、warning 和稳定顺序的唯一真相源；runner 只补充执行事实。
 - Decision: hook gate 保持在 `internal/apply.Run` 的 scoped plan validation，不在 CLI 预跑只读 planner。
   Rationale: mutation 必须基于锁内 exact inputs；partial scope 已由同一锁内 planner 缩小。
+- Decision: whole-module 确认只从 `/dev/tty` 读取；终端不可用、EOF 和非 yes 都返回拒绝，
+  `--yes` 则不打开终端。
+  Rationale: pipeline 输入不能偷读；确认拒绝是规范定义的 deferred work（exit 2），不是运行错误。
 
 ## Outcomes and Handoff
 

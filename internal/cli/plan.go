@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
+	applyrunner "github.com/mianm12/dotfiles/internal/apply"
 	"github.com/mianm12/dotfiles/internal/planner"
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 	"github.com/spf13/cobra"
@@ -49,10 +54,7 @@ func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 			if adopt {
 				return errors.New("--adopt requires M2 and is not supported in this build")
 			}
-			if !dryRun {
-				return errors.New("real apply is not available in this build; use dot apply --dry-run")
-			}
-			return runReadOnlyPlan(command, readOnlyPlanOptions{
+			options := readOnlyPlanOptions{
 				modules:       append([]string(nil), modules...),
 				force:         force,
 				prune:         prune,
@@ -66,7 +68,14 @@ func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 				profile:       global.profile,
 				profileSet:    command.Flags().Changed(profileFlagName),
 				verbose:       global.verbose,
-			}, env)
+			}
+			if err := validatePlanFlags(options); err != nil {
+				return err
+			}
+			if dryRun {
+				return runReadOnlyPlan(command, options, env)
+			}
+			return runMutationApply(command, options, yes, env)
 		},
 	}
 	flags := command.Flags()
@@ -115,10 +124,30 @@ func bindReadOnlyPlanFlags(command *cobra.Command, force, prune, noPrune *bool) 
 }
 
 func runReadOnlyPlan(command *cobra.Command, options readOnlyPlanOptions, env environment) error {
+	if err := validatePlanFlags(options); err != nil {
+		return err
+	}
+	plan, err := planner.PlanApply(plannerOptions(options, env))
+	if err != nil {
+		return err
+	}
+	projection, err := projectApplyPlan(plan, options.verbose)
+	if err != nil {
+		return err
+	}
+	printPlanProjection(command, projection)
+	return commandExit(projection.exitCode)
+}
+
+func validatePlanFlags(options readOnlyPlanOptions) error {
 	if options.pruneSet && options.noPruneSet {
 		return errors.New("--prune and --no-prune must not be used together")
 	}
-	plan, err := planner.PlanApply(planner.ApplyOptions{
+	return nil
+}
+
+func plannerOptions(options readOnlyPlanOptions, env environment) planner.ApplyOptions {
+	return planner.ApplyOptions{
 		Runtime: dotruntime.Overrides{
 			Home: dotruntime.Override{
 				Value: options.home,
@@ -137,16 +166,122 @@ func runReadOnlyPlan(command *cobra.Command, options readOnlyPlanOptions, env en
 		Modules:    options.modules,
 		Force:      options.force,
 		NoPrune:    options.noPrune || !options.prune,
+	}
+}
+
+func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes bool, env environment) error {
+	confirm := confirmationCallback(command, yes, env.openTerminal)
+	result, runErr := applyrunner.Run(applyrunner.Options{
+		Runtime:    plannerOptions(options, env).Runtime,
+		CLIVersion: env.build.Version,
+		Modules:    append([]string(nil), options.modules...),
+		Force:      options.force,
+		NoPrune:    options.noPrune || !options.prune,
+		Confirm:    confirm,
 	})
-	if err != nil {
-		return err
+	if result.Plan.Valid() {
+		projection, projectionErr := projectApplyResult(result, options.verbose)
+		if projectionErr != nil {
+			return errors.Join(runErr, projectionErr)
+		}
+		printPlanProjection(command, projection)
+		for _, backupPath := range result.BackupPaths {
+			command.Println("backup  " + backupPath)
+		}
+		if runErr == nil {
+			return commandExit(projection.exitCode)
+		}
 	}
-	projection, err := projectApplyPlan(plan, options.verbose)
-	if err != nil {
-		return err
+	return runErr
+}
+
+func confirmationCallback(
+	command *cobra.Command,
+	yes bool,
+	openTerminal func() (io.ReadCloser, error),
+) applyrunner.ConfirmPrune {
+	if yes {
+		return func([]planner.PruneConfirmationGroup) (bool, error) { return true, nil }
 	}
-	printPlanProjection(command, projection)
-	return commandExit(projection.exitCode)
+	return func(groups []planner.PruneConfirmationGroup) (bool, error) {
+		writer := command.ErrOrStderr()
+		if _, err := fmt.Fprintln(writer, "Whole-module orphan prune:"); err != nil {
+			return false, err
+		}
+		for _, group := range groups {
+			if _, err := fmt.Fprintf(writer, "  %s:\n", group.Module); err != nil {
+				return false, err
+			}
+			for _, target := range group.Targets {
+				effect := "remove state only"
+				if target.WouldDeleteTarget {
+					effect = "delete target"
+				}
+				if _, err := fmt.Fprintf(writer, "    %s  %s\n", effect, target.Target); err != nil {
+					return false, err
+				}
+			}
+		}
+		if _, err := fmt.Fprint(writer, "Remove orphaned modules? [y/N] "); err != nil {
+			return false, err
+		}
+		if openTerminal == nil {
+			openTerminal = func() (io.ReadCloser, error) { return os.Open("/dev/tty") }
+		}
+		terminal, err := openTerminal()
+		if err != nil {
+			_, writeErr := fmt.Fprintln(writer, "\nwarning: no user terminal available; prune deferred")
+			return false, writeErr
+		}
+		answer, readErr := bufio.NewReader(terminal).ReadString('\n')
+		closeErr := terminal.Close()
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				_, writeErr := fmt.Fprintln(writer, "warning: confirmation input ended; prune deferred")
+				return false, writeErr
+			}
+			return false, errors.Join(readErr, closeErr)
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "y", "yes":
+			return true, nil
+		default:
+			return false, nil
+		}
+	}
+}
+
+func projectApplyResult(result applyrunner.Result, verbose bool) (planProjection, error) {
+	projection, err := projectApplyPlan(result.Plan, verbose)
+	if err != nil {
+		return planProjection{}, err
+	}
+	if result.PruneDeferred && result.PruneAttempts == 0 {
+		for index, line := range projection.actionLines {
+			if strings.HasPrefix(line, "prune  ") {
+				projection.actionLines[index] = "prune (deferred)" + strings.TrimPrefix(line, "prune")
+			}
+		}
+	}
+	if result.PruneDeferred {
+		projection.warnings = append(projection.warnings, "prune was deferred; rerun apply after resolving unfinished work")
+	}
+	conflict := result.UnresolvedConflicts > 0
+	for _, action := range result.Plan.FileActions() {
+		conflict = conflict || action.Verb == planner.FileConflict
+	}
+	switch {
+	case conflict:
+		projection.exitCode = exitConflict
+	case result.PruneDeferred || len(projection.warnings) > 0:
+		projection.exitCode = exitActionable
+	default:
+		projection.exitCode = exitOK
+	}
+	return projection, nil
 }
 
 type planProjection struct {
