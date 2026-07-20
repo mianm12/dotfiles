@@ -52,7 +52,8 @@
   hook/managed/rendered fail-closed、确认拒绝与二次收敛回归。
 - [x] 2026-07-20：提交公开 apply 行为（`01067ac`）与独立恢复边界回归（`580af47`）；更新 README
   当前实现事实。
-- [ ] 运行窄测、branch diff check、隔离 cache `make check`，保持计划 active 等待独立复核。
+- [x] 2026-07-20：窄测、重复、race、Darwin/Linux CLI 交叉编译、branch diff check 与隔离 cache
+  `make check` 全部通过；worktree clean，计划保持 active 等待独立复核。
 
 ## Milestones
 
@@ -112,6 +113,12 @@ Commit 边界：
 成功要求：全部命令退出 0；完整 branch 只含本 active plan、CLI wiring/presentation/tests 与 README；
 worktree clean。测试不读取或写入真实 modules、machine config、state、backup、`.env` 或主力 HOME。
 远端 macOS/Linux CI 未运行，留待 Checkpoint integration 验收。
+
+2026-07-20 本地证据：上述窄测通过；`go test -count=5 ./internal/cli ./internal/apply`、
+`go test -race ./internal/cli ./internal/apply`、Darwin/Linux amd64 CLI 交叉编译、
+`git diff e0d22431...HEAD --check` 均退出 0。隔离 `GOCACHE` 与 `GOLANGCI_LINT_CACHE` 的
+`make check BINARY=/private/tmp/dot-m1-cp5-cli-check/dot` 通过，包含 0 lint issues、全仓 race、
+build 和真实仓库 manifest gate。
 
 ## Safety, Authorization, and Recovery
 
