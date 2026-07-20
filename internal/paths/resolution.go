@@ -32,8 +32,14 @@ func (resolution TargetResolution) IsAncestorOf(other TargetResolution) bool {
 	if resolution.Equal(other) {
 		return false
 	}
-	for _, ancestor := range other.ancestors {
-		if resolution.identity.Equal(ancestor) {
+	return other.Traverses(resolution)
+}
+
+// Traverses 报告解析 resolution 的展示路径时，是否在到达 leaf 前经过 target 的 leaf identity。
+// 与 IsAncestorOf 不同，两个 resolution 的 leaf identity 相同时仍可能返回 true。
+func (resolution TargetResolution) Traverses(target TargetResolution) bool {
+	for _, ancestor := range resolution.ancestors {
+		if target.identity.Equal(ancestor) {
 			return true
 		}
 	}

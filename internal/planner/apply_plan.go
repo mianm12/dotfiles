@@ -490,11 +490,20 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 }
 
 func validateFileStateTopology(profile ObservedProfile, actions []FileAction) error {
-	retained, err := historicalStateResolutions(profile)
+	baseline, err := historicalStateResolutions(profile)
 	if err != nil {
 		return err
 	}
+	retained := make(map[string]paths.TargetResolution, len(baseline))
+	for key, resolution := range baseline {
+		retained[key] = resolution
+	}
 	for _, action := range actions {
+		if action.Verb.ExecutionClass() == FileTargetMutation {
+			if err := validateTargetMutationStateReachability(action, baseline); err != nil {
+				return err
+			}
+		}
 		effect := action.OnSuccess
 		if effect.Kind != StateUpsert {
 			continue
@@ -518,6 +527,31 @@ func validateFileStateTopology(profile ObservedProfile, actions []FileAction) er
 			}
 		}
 		retained[effect.Key] = resolution
+	}
+	return nil
+}
+
+func validateTargetMutationStateReachability(
+	action FileAction,
+	baseline map[string]paths.TargetResolution,
+) error {
+	mutation := action.Precondition.TargetResolution
+	if mutation.Traverses(mutation) {
+		return fmt.Errorf(
+			"%w: target mutation %q uses a path that traverses its own target leaf",
+			paths.ErrTargetOverlap,
+			action.Target,
+		)
+	}
+	for _, key := range sortedStateResolutionKeys(baseline) {
+		if baseline[key].Traverses(mutation) {
+			return fmt.Errorf(
+				"%w: target mutation %q would block persisted state target %q",
+				paths.ErrTargetOverlap,
+				action.Target,
+				key,
+			)
+		}
 	}
 	return nil
 }

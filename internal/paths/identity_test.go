@@ -50,6 +50,9 @@ func TestTargetResolution_Relations(t *testing.T) {
 	if !alphaResolution.IsAncestorOf(childResolution) {
 		t.Error("alpha target is not an ancestor of its child")
 	}
+	if !childResolution.Traverses(alphaResolution) || alphaResolution.Traverses(childResolution) {
+		t.Error("target traversal relation does not preserve direction")
+	}
 	if alphaResolution.IsAncestorOf(alphaAgainResolution) {
 		t.Error("target is a strict ancestor of itself")
 	}

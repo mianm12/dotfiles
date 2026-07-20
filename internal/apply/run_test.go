@@ -373,7 +373,8 @@ func TestRun_RejectsUnsafeCandidateStateTopologyBeforeExecutor(t *testing.T) {
 		result, runErr := Run(fixture.options())
 		if !errors.Is(runErr, paths.ErrTargetOverlap) ||
 			errors.Is(runErr, state.ErrPathValidation) ||
-			!strings.Contains(runErr.Error(), "file state upsert") {
+			!strings.Contains(runErr.Error(), "target mutation") ||
+			!strings.Contains(runErr.Error(), "persisted state target") {
 			t.Fatalf("Run() attempt %d error = %v, want planner target overlap", attempt, runErr)
 		}
 		if result.FileAttempts != 0 || result.TargetCommits != 0 ||
@@ -459,6 +460,94 @@ func TestRun_RejectsMatchedAliasCandidateStateTopologyBeforeExecutor(t *testing.
 			metadataBefore,
 			snapshotRunPathMetadata(t, fixture.stateFile),
 		)
+	}
+}
+
+func TestRun_RejectsAliasMigrationThatWouldBlockPersistedStateBeforeExecutor(t *testing.T) {
+	fixture := newRunCandidateTopologyFixture(t)
+	if err := os.MkdirAll(filepath.Join(fixture.home, "real"), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(real) error = %v", err)
+	}
+	bridge := filepath.Join(fixture.home, "bridge")
+	if err := os.Symlink("real", bridge); err != nil {
+		t.Fatalf("os.Symlink(bridge) error = %v", err)
+	}
+	if err := os.Symlink(filepath.FromSlash("bridge/.."), filepath.Join(fixture.home, "detour")); err != nil {
+		t.Fatalf("os.Symlink(detour) error = %v", err)
+	}
+	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "bridge"), "new link source\n")
+	writeRunFile(t, fixture.stateFile, `{
+  "version": 1,
+  "entries": {
+    "~/detour/bridge": {
+      "module": "app",
+      "kind": "symlink",
+      "source": "modules/app/old-bridge",
+      "link_dest": "real",
+      "applied_at": "2026-07-19T00:00:00Z"
+    }
+  },
+  "run_once": {}
+}`)
+	stateBefore, err := os.ReadFile(fixture.stateFile)
+	if err != nil {
+		t.Fatalf("os.ReadFile(state before Run) error = %v", err)
+	}
+	metadataBefore := snapshotRunPathMetadata(t, fixture.stateFile)
+	storeErr := errors.New("injected state publish failure")
+	storeCalls := 0
+	operations := defaultRunOperations()
+	operations.begin = func(overrides dotruntime.Overrides) (mutationSession, error) {
+		session, beginErr := dotruntime.BeginMutationWithStateStore(
+			overrides,
+			func(root, path string, snapshot state.Snapshot) error {
+				storeCalls++
+				return state.StoreWithPublisher(root, path, snapshot, func(string, string) error {
+					return storeErr
+				})
+			},
+		)
+		if beginErr != nil {
+			return nil, beginErr
+		}
+		return runtimeMutationSession{session: session}, nil
+	}
+
+	result, runErr := runWithOperations(fixture.options(), operations)
+	if !errors.Is(runErr, paths.ErrTargetOverlap) ||
+		errors.Is(runErr, state.ErrPathValidation) ||
+		errors.Is(runErr, storeErr) ||
+		!strings.Contains(runErr.Error(), "target mutation") ||
+		!strings.Contains(runErr.Error(), "~/detour/bridge") {
+		t.Fatalf("runWithOperations() error = %v, want persisted-state traversal rejection", runErr)
+	}
+	if result.FileAttempts != 0 || result.TargetCommits != 0 ||
+		result.AdoptionEffects != 0 || result.StateCommitted || storeCalls != 0 {
+		t.Fatalf("run result = %#v storeCalls=%d, want zero mutation/Store", result, storeCalls)
+	}
+	if destination, readErr := os.Readlink(bridge); readErr != nil || destination != "real" {
+		t.Fatalf("bridge destination = (%q, %v), want original directory link", destination, readErr)
+	}
+	stateAfter, err := os.ReadFile(fixture.stateFile)
+	if err != nil {
+		t.Fatalf("os.ReadFile(state after Run) error = %v", err)
+	}
+	if string(stateAfter) != string(stateBefore) {
+		t.Fatal("rejected Run changed state bytes")
+	}
+	assertRunPathMetadataUnchanged(
+		t,
+		fixture.stateFile,
+		metadataBefore,
+		snapshotRunPathMetadata(t, fixture.stateFile),
+	)
+
+	repeated, repeatedErr := Run(fixture.options())
+	if !errors.Is(repeatedErr, paths.ErrTargetOverlap) || errors.Is(repeatedErr, state.ErrPathValidation) {
+		t.Fatalf("repeated Run() error = %v, want same planner target overlap", repeatedErr)
+	}
+	if repeated.FileAttempts != 0 || repeated.TargetCommits != 0 || repeated.StateCommitted {
+		t.Fatalf("repeated Run() result = %#v, want zero mutation", repeated)
 	}
 }
 

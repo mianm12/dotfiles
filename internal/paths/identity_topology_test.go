@@ -158,6 +158,12 @@ func TestResolveTarget_EqualAliasIsNotItsOwnAncestor(t *testing.T) {
 	if aliasResolution.IsAncestorOf(nestedAliasResolution) || nestedAliasResolution.IsAncestorOf(aliasResolution) {
 		t.Error("equal leaf target is treated as its own strict ancestor")
 	}
+	if !nestedAliasResolution.Traverses(aliasResolution) {
+		t.Error("equal leaf target traversed before itself is absent from traversal trace")
+	}
+	if aliasResolution.Traverses(nestedAliasResolution) {
+		t.Error("direct leaf lookup is treated as traversing its equal alias")
+	}
 }
 
 func TestResolveTarget_KernelRejectsDeepSymlinkChain(t *testing.T) {

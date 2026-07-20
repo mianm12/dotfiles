@@ -501,7 +501,7 @@ func TestPlanApply_RejectsUnknownScopeWithZeroPlan(t *testing.T) {
 	}
 }
 
-func TestPlanApply_RejectsFileUpsertOverlappingRetainedOrphan(t *testing.T) {
+func TestPlanApply_RejectsUnsafeFileStateTopology(t *testing.T) {
 	tests := []struct {
 		name          string
 		noPrune       bool
@@ -541,9 +541,9 @@ func TestPlanApply_RejectsFileUpsertOverlappingRetainedOrphan(t *testing.T) {
 
 			plan, err := PlanApply(options)
 			if !errors.Is(err, paths.ErrTargetOverlap) ||
-				!strings.Contains(err.Error(), "file state upsert") ||
-				!strings.Contains(err.Error(), "retained state target") {
-				t.Fatalf("PlanApply() error = %v, want file-upsert/orphan target overlap", err)
+				!strings.Contains(err.Error(), "target mutation") ||
+				!strings.Contains(err.Error(), "persisted state target") {
+				t.Fatalf("PlanApply() error = %v, want mutation/persisted-state target overlap", err)
 			}
 			if !reflect.DeepEqual(plan, ApplyPlan{}) {
 				t.Fatalf("failed PlanApply() plan = %#v, want zero", plan)
@@ -906,10 +906,16 @@ func TestPlanApply_FileUpsertTopologyDependsOnStateEffectNotPruneMode(t *testing
 			options.NoPrune = test.noPrune
 			plan, err := PlanApply(options)
 			if test.wantRejected {
-				if !errors.Is(err, paths.ErrTargetOverlap) ||
-					!strings.Contains(err.Error(), "file state upsert") ||
-					!strings.Contains(err.Error(), "retained state target") {
-					t.Fatalf("PlanApply(%s) error = %v, want file-upsert/orphan rejection", test.name, err)
+				message := ""
+				if err != nil {
+					message = err.Error()
+				}
+				candidateOverlap := strings.Contains(message, "file state upsert") &&
+					strings.Contains(message, "retained state target")
+				mutationOverlap := strings.Contains(message, "target mutation") &&
+					strings.Contains(message, "persisted state target")
+				if !errors.Is(err, paths.ErrTargetOverlap) || (!candidateOverlap && !mutationOverlap) {
+					t.Fatalf("PlanApply(%s) error = %v, want file-state topology rejection", test.name, err)
 				}
 				if !reflect.DeepEqual(plan, ApplyPlan{}) {
 					t.Fatalf("failed PlanApply(%s) plan = %#v, want zero", test.name, plan)
@@ -1141,6 +1147,113 @@ func TestValidateFileStateTopology_MatchedHistoryPrefixes(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("validateFileStateTopology() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestValidateFileStateTopology_TargetMutationKeepsPersistedBaselineReachable(t *testing.T) {
+	t.Parallel()
+
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(filepath.Join(home, "real"), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(real) error = %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(home, "bridge")); err != nil {
+		t.Fatalf("os.Symlink(bridge) error = %v", err)
+	}
+	if err := os.Symlink(filepath.FromSlash("bridge/.."), filepath.Join(home, "detour")); err != nil {
+		t.Fatalf("os.Symlink(detour) error = %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(home, "safe-alias")); err != nil {
+		t.Fatalf("os.Symlink(safe alias) error = %v", err)
+	}
+	resolve := func(path string) paths.TargetResolution {
+		t.Helper()
+		resolution, err := paths.ResolveTarget(path)
+		if err != nil {
+			t.Fatalf("ResolveTarget(%q) error = %v", path, err)
+		}
+		return resolution
+	}
+	bridge := resolve(filepath.Join(home, "bridge"))
+	detourBridge := resolve(filepath.Join(home, "detour", "bridge"))
+	if !detourBridge.Equal(bridge) || !detourBridge.Traverses(bridge) {
+		t.Fatal("fixture does not preserve equal leaf reached through its own traversal ancestor")
+	}
+	safeHistorical := resolve(filepath.Join(home, "safe-alias", "child"))
+	safeDesired := resolve(filepath.Join(home, "real", "child"))
+	if !safeHistorical.Equal(safeDesired) || safeHistorical.Traverses(safeDesired) {
+		t.Fatal("safe fixture unexpectedly traverses its desired leaf")
+	}
+
+	profile := func(key string, historical, desired paths.TargetResolution) ObservedProfile {
+		return ObservedProfile{targets: []ObservedTarget{{
+			Desired:              Desired{Target: "~/desired"},
+			Resolution:           desired,
+			State:                HistoricalState{Key: key},
+			HistoricalResolution: historical,
+			HasState:             true,
+		}}}
+	}
+	action := func(verb FileVerb, key, previousKey string, resolution paths.TargetResolution) FileAction {
+		return FileAction{
+			Verb:         verb,
+			Target:       key,
+			Precondition: Precondition{TargetResolution: resolution},
+			OnSuccess: StateEffect{
+				Kind:        StateUpsert,
+				Key:         key,
+				PreviousKey: previousKey,
+			},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		profile     ObservedProfile
+		action      FileAction
+		wantMessage string
+	}{
+		{
+			name:    "state-only migration does not change traversal",
+			profile: profile("~/detour/bridge", detourBridge, bridge),
+			action:  action(FileAdopt, "~/bridge", "~/detour/bridge", bridge),
+		},
+		{
+			name:        "target mutation blocks persisted alias key",
+			profile:     profile("~/detour/bridge", detourBridge, bridge),
+			action:      action(FileCreateLink, "~/bridge", "~/detour/bridge", bridge),
+			wantMessage: "persisted state target",
+		},
+		{
+			name:        "target mutation path traverses its own leaf",
+			profile:     ObservedProfile{},
+			action:      action(FileCreateLink, "~/detour/bridge", "", detourBridge),
+			wantMessage: "own target leaf",
+		},
+		{
+			name:    "target mutation preserves ordinary alias key reachability",
+			profile: profile("~/safe-alias/child", safeHistorical, safeDesired),
+			action:  action(FileCreateLink, "~/real/child", "~/safe-alias/child", safeDesired),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateFileStateTopology(test.profile, []FileAction{test.action})
+			if test.wantMessage == "" {
+				if err != nil {
+					t.Fatalf("validateFileStateTopology() error = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, paths.ErrTargetOverlap) || !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf(
+					"validateFileStateTopology() error = %v, want ErrTargetOverlap containing %q",
+					err,
+					test.wantMessage,
+				)
 			}
 		})
 	}
