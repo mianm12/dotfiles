@@ -2,6 +2,7 @@ package planner
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -500,6 +501,81 @@ func TestPlanApply_RejectsUnknownScopeWithZeroPlan(t *testing.T) {
 	}
 }
 
+func TestPlanApply_RejectsFileUpsertOverlappingRetainedOrphan(t *testing.T) {
+	tests := []struct {
+		name          string
+		noPrune       bool
+		partial       bool
+		childConflict bool
+		scaffold      bool
+	}{
+		{
+			name:    "no-prune retains orphan",
+			noPrune: true,
+		},
+		{
+			name:     "scaffold upsert retains orphan",
+			noPrune:  true,
+			scaffold: true,
+		},
+		{
+			name:          "conflict defers orphan prune",
+			childConflict: true,
+		},
+		{
+			name:    "partial scope retains outside orphan",
+			partial: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFileUpsertStateTopologyFixture(t, test.childConflict, test.scaffold)
+			fixture.redirectEnvironment(t)
+			before := snapshotObservationTree(t, fixture.root)
+			options := fixture.options()
+			options.NoPrune = test.noPrune
+			if test.partial {
+				options.Modules = []string{"app"}
+			}
+
+			plan, err := PlanApply(options)
+			if !errors.Is(err, paths.ErrTargetOverlap) ||
+				!strings.Contains(err.Error(), "file state upsert") ||
+				!strings.Contains(err.Error(), "retained orphan") {
+				t.Fatalf("PlanApply() error = %v, want file-upsert/orphan target overlap", err)
+			}
+			if !reflect.DeepEqual(plan, ApplyPlan{}) {
+				t.Fatalf("failed PlanApply() plan = %#v, want zero", plan)
+			}
+			if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("failed PlanApply() changed fixture\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+
+	t.Run("state-only adopt below retained orphan", func(t *testing.T) {
+		fixture := newFileAdoptStateTopologyFixture(t)
+		fixture.redirectEnvironment(t)
+		before := snapshotObservationTree(t, fixture.root)
+		options := fixture.options()
+		options.NoPrune = true
+
+		plan, err := PlanApply(options)
+		if !errors.Is(err, paths.ErrTargetOverlap) ||
+			!strings.Contains(err.Error(), "retained orphan") ||
+			!strings.Contains(err.Error(), "ancestor of file state upsert") {
+			t.Fatalf("PlanApply() error = %v, want orphan-ancestor state-only upsert rejection", err)
+		}
+		if !reflect.DeepEqual(plan, ApplyPlan{}) {
+			t.Fatalf("failed PlanApply() plan = %#v, want zero", plan)
+		}
+		if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("failed PlanApply() changed fixture\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+}
+
 func TestValidateApplyPlan_RejectsInconsistentAction(t *testing.T) {
 	fixture := newApplyIntegrationFixture(t)
 	fixture.redirectEnvironment(t)
@@ -767,7 +843,7 @@ func TestPlanApply_RejectsActivePruneAncestorOfCompleteDesired(t *testing.T) {
 	}
 }
 
-func TestPlanApply_PruneTopologyChecksOnlyActiveTargetDeletes(t *testing.T) {
+func TestPlanApply_FileUpsertTopologyDependsOnStateEffectNotPruneMode(t *testing.T) {
 	tests := []struct {
 		name          string
 		state         applyStateEntry
@@ -775,6 +851,7 @@ func TestPlanApply_PruneTopologyChecksOnlyActiveTargetDeletes(t *testing.T) {
 		noPrune       bool
 		wantMode      PruneMode
 		wantDeferred  bool
+		wantRejected  bool
 	}{
 		{
 			name: "P1 state-only",
@@ -783,7 +860,8 @@ func TestPlanApply_PruneTopologyChecksOnlyActiveTargetDeletes(t *testing.T) {
 				Kind:   "scaffold",
 				Source: "modules/legacy/old.template",
 			},
-			wantMode: PruneStateOnly,
+			wantMode:     PruneStateOnly,
+			wantRejected: true,
 		},
 		{
 			name: "P3 warning state-only",
@@ -793,7 +871,8 @@ func TestPlanApply_PruneTopologyChecksOnlyActiveTargetDeletes(t *testing.T) {
 				Source:   "modules/legacy/old.txt",
 				LinkDest: "changed",
 			},
-			wantMode: PruneStateOnly,
+			wantMode:     PruneStateOnly,
+			wantRejected: true,
 		},
 		{
 			name: "deferred P2",
@@ -815,7 +894,8 @@ func TestPlanApply_PruneTopologyChecksOnlyActiveTargetDeletes(t *testing.T) {
 				Source:   "modules/legacy/old.txt",
 				LinkDest: "owned",
 			},
-			noPrune: true,
+			noPrune:      true,
+			wantRejected: true,
 		},
 	}
 	for _, test := range tests {
@@ -825,6 +905,17 @@ func TestPlanApply_PruneTopologyChecksOnlyActiveTargetDeletes(t *testing.T) {
 			options := fixture.options()
 			options.NoPrune = test.noPrune
 			plan, err := PlanApply(options)
+			if test.wantRejected {
+				if !errors.Is(err, paths.ErrTargetOverlap) ||
+					!strings.Contains(err.Error(), "file state upsert") ||
+					!strings.Contains(err.Error(), "retained orphan") {
+					t.Fatalf("PlanApply(%s) error = %v, want file-upsert/orphan rejection", test.name, err)
+				}
+				if !reflect.DeepEqual(plan, ApplyPlan{}) {
+					t.Fatalf("failed PlanApply(%s) plan = %#v, want zero", test.name, plan)
+				}
+				return
+			}
 			if err != nil || !plan.Valid() {
 				t.Fatalf("PlanApply(%s) = (%#v, %v), want valid", test.name, plan, err)
 			}
@@ -865,6 +956,97 @@ func TestValidateActivePruneTopology_RejectsEqualIdentity(t *testing.T) {
 	}}}
 	if err := validateActivePruneTopology(profile, prune); err == nil || !strings.Contains(err.Error(), "same identity") {
 		t.Fatalf("validateActivePruneTopology(equal identity) error = %v", err)
+	}
+}
+
+func TestValidateFileUpsertStateTopology(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parentPath := filepath.Join(root, "parent")
+	childPath := filepath.Join(parentPath, "child")
+	unrelatedPath := filepath.Join(root, "unrelated")
+	resolve := func(path string) paths.TargetResolution {
+		t.Helper()
+		resolution, err := paths.ResolveTarget(path)
+		if err != nil {
+			t.Fatalf("ResolveTarget(%q) error = %v", path, err)
+		}
+		return resolution
+	}
+	parent := resolve(parentPath)
+	child := resolve(childPath)
+	unrelated := resolve(unrelatedPath)
+
+	tests := []struct {
+		name             string
+		effect           StateEffectKind
+		actionResolution paths.TargetResolution
+		orphanResolution paths.TargetResolution
+		wantRelation     string
+	}{
+		{
+			name:             "equal identity",
+			effect:           StateUpsert,
+			actionResolution: parent,
+			orphanResolution: parent,
+			wantRelation:     "same identity",
+		},
+		{
+			name:             "upsert is ancestor",
+			effect:           StateUpsert,
+			actionResolution: parent,
+			orphanResolution: child,
+			wantRelation:     "ancestor of retained orphan",
+		},
+		{
+			name:             "orphan is ancestor",
+			effect:           StateUpsert,
+			actionResolution: child,
+			orphanResolution: parent,
+			wantRelation:     "is an ancestor of file state upsert",
+		},
+		{
+			name:             "unrelated upsert",
+			effect:           StateUpsert,
+			actionResolution: unrelated,
+			orphanResolution: parent,
+		},
+		{
+			name:             "preserve does not add state",
+			effect:           StatePreserve,
+			actionResolution: parent,
+			orphanResolution: child,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile := ObservedProfile{orphans: []OrphanTarget{{
+				Resolution: test.orphanResolution,
+				State:      HistoricalState{Key: "~/orphan"},
+			}}}
+			actions := []FileAction{{
+				Target:       "~/action",
+				Precondition: Precondition{TargetResolution: test.actionResolution},
+				OnSuccess:    StateEffect{Kind: test.effect},
+			}}
+
+			err := validateFileUpsertStateTopology(profile, actions)
+			if test.wantRelation == "" {
+				if err != nil {
+					t.Fatalf("validateFileUpsertStateTopology() error = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, paths.ErrTargetOverlap) || !strings.Contains(err.Error(), test.wantRelation) {
+				t.Fatalf(
+					"validateFileUpsertStateTopology() error = %v, want ErrTargetOverlap containing %q",
+					err,
+					test.wantRelation,
+				)
+			}
+		})
 	}
 }
 
@@ -916,6 +1098,81 @@ all = ["cleanup", "app"]
 		writeApplyFile(t, filepath.Join(home, "owned", "child"), "user data\n")
 	}
 	writeApplyState(t, statePath, map[string]applyStateEntry{"~/dir": historical}, nil)
+	return applyIntegrationFixture{
+		root:       root,
+		home:       home,
+		repository: repository,
+		configPath: configPath,
+		statePath:  statePath,
+	}
+}
+
+func newFileUpsertStateTopologyFixture(
+	t *testing.T,
+	childConflict bool,
+	scaffold bool,
+) applyIntegrationFixture {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repository := filepath.Join(root, "repo")
+	configPath := filepath.Join(home, ".config", "dot", "config.toml")
+	statePath := filepath.Join(home, ".local", "state", "dot", "state.json")
+	writeApplyFile(t, configPath, "profile = \"all\"\n")
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+all = ["app"]
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~"
+`)
+	parentSource := "parent"
+	if scaffold {
+		parentSource = "parent.template"
+	}
+	writeApplyFile(t, filepath.Join(repository, "modules", "app", parentSource), "source content\n")
+	if childConflict {
+		writeApplyFile(t, filepath.Join(repository, "modules", "app", "blocked"), "wanted\n")
+		writeApplyFile(t, filepath.Join(home, "blocked"), "user data\n")
+	}
+	writeApplyState(t, statePath, map[string]applyStateEntry{
+		"~/parent/child": {
+			Module: "legacy",
+			Kind:   "scaffold",
+			Source: "modules/legacy/child.template",
+		},
+	}, nil)
+	return applyIntegrationFixture{
+		root:       root,
+		home:       home,
+		repository: repository,
+		configPath: configPath,
+		statePath:  statePath,
+	}
+}
+
+func newFileAdoptStateTopologyFixture(t *testing.T) applyIntegrationFixture {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repository := filepath.Join(root, "repo")
+	configPath := filepath.Join(home, ".config", "dot", "config.toml")
+	statePath := filepath.Join(home, ".local", "state", "dot", "state.json")
+	writeApplyFile(t, configPath, "profile = \"all\"\n")
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+all = ["app"]
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~/parent"
+`)
+	writeApplyFile(t, filepath.Join(repository, "modules", "app", "child.template"), "scaffold source\n")
+	writeApplyFile(t, filepath.Join(home, "parent", "child"), "existing user data\n")
+	writeApplyState(t, statePath, map[string]applyStateEntry{
+		"~/parent": {
+			Module: "legacy",
+			Kind:   "scaffold",
+			Source: "modules/legacy/parent.template",
+		},
+	}, nil)
 	return applyIntegrationFixture{
 		root:       root,
 		home:       home,

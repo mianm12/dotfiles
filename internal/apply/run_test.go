@@ -324,6 +324,72 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsUnsafeCandidateStateTopologyBeforeExecutor(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repository := filepath.Join(root, "repo")
+	isolateRunMutationEnvironment(t, root, home, repository)
+	stateFile := filepath.Join(home, ".local", "state", "dot", "state.json")
+	target := filepath.Join(home, "parent")
+	writeRunFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
+	writeRunFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+all = ["app"]
+`)
+	writeRunFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~"
+`)
+	writeRunFile(t, filepath.Join(repository, "modules", "app", "parent"), "link source\n")
+	writeRunFile(t, stateFile, `{
+  "version": 1,
+  "entries": {
+    "~/parent/child": {
+      "module": "legacy",
+      "kind": "scaffold",
+      "source": "modules/legacy/child.template",
+      "applied_at": "2026-07-19T00:00:00Z"
+    }
+  },
+  "run_once": {}
+}`)
+	options := Options{
+		Runtime: dotruntime.Overrides{
+			Home:       dotruntime.Override{Value: home, Set: true},
+			Repository: dotruntime.Override{Value: repository, Set: true},
+		},
+		CLIVersion: "dev",
+		NoPrune:    true,
+	}
+	stateBefore, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatalf("os.ReadFile(state before Run) error = %v", err)
+	}
+	metadataBefore := snapshotRunPathMetadata(t, stateFile)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, runErr := Run(options)
+		if !errors.Is(runErr, paths.ErrTargetOverlap) ||
+			errors.Is(runErr, state.ErrPathValidation) ||
+			!strings.Contains(runErr.Error(), "file state upsert") {
+			t.Fatalf("Run() attempt %d error = %v, want planner target overlap", attempt, runErr)
+		}
+		if result.FileAttempts != 0 || result.TargetCommits != 0 ||
+			result.AdoptionEffects != 0 || result.StateCommitted {
+			t.Fatalf("Run() attempt %d result = %#v, want zero mutation", attempt, result)
+		}
+		if _, statErr := os.Lstat(target); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Fatalf("Run() attempt %d target Lstat error = %v, want missing", attempt, statErr)
+		}
+		stateAfter, readErr := os.ReadFile(stateFile)
+		if readErr != nil {
+			t.Fatalf("os.ReadFile(state after Run %d) error = %v", attempt, readErr)
+		}
+		if string(stateAfter) != string(stateBefore) {
+			t.Fatalf("Run() attempt %d changed state bytes", attempt)
+		}
+		assertRunPathMetadataUnchanged(t, stateFile, metadataBefore, snapshotRunPathMetadata(t, stateFile))
+	}
+}
+
 func TestRun_RealPreconditionFailureCommitsPriorSuccessAndPreservesOldEntry(t *testing.T) {
 	fixture := newRunIntegrationFixture(t)
 	oldAppliedAt := "2026-07-18T00:00:00Z"

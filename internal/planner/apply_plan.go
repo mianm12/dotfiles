@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mianm12/dotfiles/internal/manifest"
+	"github.com/mianm12/dotfiles/internal/paths"
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 	"github.com/mianm12/dotfiles/internal/state"
 )
@@ -388,6 +389,9 @@ func validateApplyPlan(plan ApplyPlan) error {
 	if err := validateActivePruneTopology(plan.observed, plan.prune); err != nil {
 		return err
 	}
+	if err := validateFileUpsertStateTopology(plan.observed, plan.fileActions); err != nil {
+		return err
+	}
 	return validateHookPlan(plan.context, plan.hooks)
 }
 
@@ -480,6 +484,42 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 		}
 		if err := validateCanonicalFileDecision(context.Force, target, action); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateFileUpsertStateTopology(profile ObservedProfile, actions []FileAction) error {
+	orphans := profile.Orphans()
+	for _, action := range actions {
+		if action.OnSuccess.Kind != StateUpsert {
+			continue
+		}
+		actionResolution := action.Precondition.TargetResolution
+		for _, orphan := range orphans {
+			switch {
+			case actionResolution.Equal(orphan.Resolution):
+				return fmt.Errorf(
+					"%w: file state upsert target %q has the same identity as retained orphan %q",
+					paths.ErrTargetOverlap,
+					action.Target,
+					orphan.State.Key,
+				)
+			case actionResolution.IsAncestorOf(orphan.Resolution):
+				return fmt.Errorf(
+					"%w: file state upsert target %q is an ancestor of retained orphan %q",
+					paths.ErrTargetOverlap,
+					action.Target,
+					orphan.State.Key,
+				)
+			case orphan.Resolution.IsAncestorOf(actionResolution):
+				return fmt.Errorf(
+					"%w: retained orphan %q is an ancestor of file state upsert target %q",
+					paths.ErrTargetOverlap,
+					orphan.State.Key,
+					action.Target,
+				)
+			}
 		}
 	}
 	return nil
