@@ -435,7 +435,7 @@ func TestApply_PruneOutcomesPreserveSuccessAndDeferMismatchSuffix(t *testing.T) 
 	}
 	for _, want := range []string{
 		"prune  ~/a  (scaffold-orphan)",
-		"prune (deferred)  ~/b  (scaffold-orphan)",
+		"CONFLICT  ~/b  (scaffold-orphan)",
 		"prune (deferred)  ~/c  (scaffold-orphan)",
 	} {
 		if !strings.Contains(stdout, want) {
@@ -445,6 +445,34 @@ func TestApply_PruneOutcomesPreserveSuccessAndDeferMismatchSuffix(t *testing.T) 
 	if strings.Contains(stdout, "prune (deferred)  ~/a") {
 		t.Fatalf("successful prune was mislabeled deferred: %q", stdout)
 	}
+	if strings.Contains(stdout, "prune (deferred)  ~/b") {
+		t.Fatalf("conflicted prune was mislabeled deferred: %q", stdout)
+	}
+
+	t.Run("failed without runtime error fails closed", func(t *testing.T) {
+		failed := result
+		failed.PruneOutcomes = append([]applyrunner.PruneOutcome(nil), result.PruneOutcomes...)
+		failed.PruneOutcomes[1].Status = applyrunner.ActionFailed
+		failed.UnresolvedConflicts = 0
+		stdout, stderr, code := runInjectedApply(t, fixture, failed, nil)
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "failed action outcome requires a runtime error") {
+			t.Fatalf("inconsistent failed outcome = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
+
+	t.Run("failed with runtime error keeps error priority", func(t *testing.T) {
+		failed := result
+		failed.PruneOutcomes = append([]applyrunner.PruneOutcome(nil), result.PruneOutcomes...)
+		failed.PruneOutcomes[1].Status = applyrunner.ActionFailed
+		failed.UnresolvedConflicts = 0
+		runtimeErr := errors.New("injected prune IO failure")
+		stdout, stderr, code := runInjectedApply(t, fixture, failed, runtimeErr)
+		if code != exitError || !strings.Contains(stderr, runtimeErr.Error()) ||
+			!strings.Contains(stdout, "prune  ~/a") || !strings.Contains(stdout, "prune  ~/b") ||
+			!strings.Contains(stdout, "prune (deferred)  ~/c") {
+			t.Fatalf("failed prune runtime error = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
 }
 
 type mutationCLIFixture struct {

@@ -191,7 +191,7 @@ func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes b
 		if !result.ActionOutcomesReady && runErr != nil {
 			projection, projectionErr = projectApplyPlan(result.Plan, options.verbose)
 		} else {
-			projection, projectionErr = projectApplyResult(result, options.verbose)
+			projection, projectionErr = projectApplyResult(result, options.verbose, runErr != nil)
 		}
 		if projectionErr != nil {
 			return errors.Join(runErr, projectionErr)
@@ -266,8 +266,8 @@ func confirmationCallback(
 	}
 }
 
-func projectApplyResult(result applyrunner.Result, verbose bool) (planProjection, error) {
-	fileOutcomes, pruneOutcomes, err := validateApplyOutcomes(result)
+func projectApplyResult(result applyrunner.Result, verbose, hasRuntimeError bool) (planProjection, error) {
+	fileOutcomes, pruneOutcomes, err := validateApplyOutcomes(result, hasRuntimeError)
 	if err != nil {
 		return planProjection{}, err
 	}
@@ -304,7 +304,7 @@ func projectApplyResult(result applyrunner.Result, verbose bool) (planProjection
 	return projection, nil
 }
 
-func validateApplyOutcomes(result applyrunner.Result) (
+func validateApplyOutcomes(result applyrunner.Result, hasRuntimeError bool) (
 	map[int]applyrunner.ActionOutcomeStatus,
 	map[int]applyrunner.ActionOutcomeStatus,
 	error,
@@ -315,6 +315,7 @@ func validateApplyOutcomes(result applyrunner.Result) (
 	files := result.Plan.FileActions()
 	fileOutcomes := make(map[int]applyrunner.ActionOutcomeStatus, len(result.FileOutcomes))
 	conflicts := 0
+	failed := false
 	for _, outcome := range result.FileOutcomes {
 		if outcome.Index < 0 || outcome.Index >= len(files) || files[outcome.Index].Target != outcome.Target ||
 			files[outcome.Index].Verb.ExecutionClass() == planner.FilePlanOnly || !validActionOutcome(outcome.Status) {
@@ -327,6 +328,7 @@ func validateApplyOutcomes(result applyrunner.Result) (
 		if outcome.Status == applyrunner.ActionConflict {
 			conflicts++
 		}
+		failed = failed || outcome.Status == applyrunner.ActionFailed
 	}
 	for index, action := range files {
 		_, exists := fileOutcomes[index]
@@ -354,6 +356,10 @@ func validateApplyOutcomes(result applyrunner.Result) (
 		if outcome.Status == applyrunner.ActionConflict {
 			conflicts++
 		}
+		failed = failed || outcome.Status == applyrunner.ActionFailed
+	}
+	if failed && !hasRuntimeError {
+		return nil, nil, errors.New("failed action outcome requires a runtime error")
 	}
 	if conflicts != result.UnresolvedConflicts {
 		return nil, nil, fmt.Errorf("runtime conflict count is %d, want %d", conflicts, result.UnresolvedConflicts)
@@ -435,8 +441,15 @@ func projectApplyPlanWithOutcomes(
 	for index, action := range plan.Prune().Actions() {
 		verb := "prune"
 		outcome := pruneOutcomes[index]
-		if action.Deferred || outcome == applyrunner.ActionConflict || outcome == applyrunner.ActionDeferred || outcome == applyrunner.ActionFailed {
+		switch outcome {
+		case applyrunner.ActionConflict:
+			verb = "CONFLICT"
+		case applyrunner.ActionDeferred:
 			verb = "prune (deferred)"
+		default:
+			if action.Deferred {
+				verb = "prune (deferred)"
+			}
 		}
 		projection.actionLines = append(projection.actionLines, planActionLine(verb, action.Target, string(action.Reason)))
 		actionable = true
