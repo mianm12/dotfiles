@@ -475,14 +475,17 @@ func TestApply_PruneOutcomesPreserveSuccessAndDeferMismatchSuffix(t *testing.T) 
 	})
 }
 
-func TestApply_StaticDeferredPruneOutcomeCannotBePromoted(t *testing.T) {
+func TestApply_StaticDeferredPruneOutcomeValidationFailsClosed(t *testing.T) {
 	fixture := newMutationCLIFixture(t)
 	target := filepath.Join(fixture.home, "alpha", "file")
 	writeCLIFile(t, target, "user data\n")
 	writePlanState(t, fixture.home, planStateDocument{
 		Version: 1,
 		Entries: map[string]planStateEntry{
-			"~/old": {
+			"~/old-a": {
+				Module: "old", Kind: "scaffold", Source: "modules/old/a.template", AppliedAt: "2026-07-20T00:00:00Z",
+			},
+			"~/old-b": {
 				Module: "old", Kind: "scaffold", Source: "modules/old/file.template", AppliedAt: "2026-07-20T00:00:00Z",
 			},
 		},
@@ -491,8 +494,38 @@ func TestApply_StaticDeferredPruneOutcomeCannotBePromoted(t *testing.T) {
 	plan := planMutationFixture(t, fixture)
 	files := plan.FileActions()
 	prune := plan.Prune().Actions()
-	if len(files) != 1 || files[0].Verb != planner.FileConflict || len(prune) != 1 || !prune[0].Deferred {
+	if len(files) != 1 || files[0].Verb != planner.FileConflict || len(prune) != 2 ||
+		!prune[0].Deferred || !prune[1].Deferred {
 		t.Fatalf("fixture plan = files %#v, prune %#v", files, prune)
+	}
+	baseResult := applyrunner.Result{
+		Plan:                plan,
+		ActionOutcomesReady: true,
+		PruneOutcomes: []applyrunner.PruneOutcome{
+			{Index: 0, Target: prune[0].Target, Status: applyrunner.ActionDeferred},
+			{Index: 1, Target: prune[1].Target, Status: applyrunner.ActionDeferred},
+		},
+		PruneDeferred: true,
+	}
+	cloneResult := func() applyrunner.Result {
+		result := baseResult
+		result.PruneOutcomes = append([]applyrunner.PruneOutcome(nil), baseResult.PruneOutcomes...)
+		return result
+	}
+	assertFailsClosed := func(
+		t *testing.T,
+		result applyrunner.Result,
+		runErr error,
+		wantError string,
+	) {
+		t.Helper()
+		if _, err := projectApplyResult(result, false, runErr != nil); err == nil || !strings.Contains(err.Error(), wantError) {
+			t.Fatalf("projectApplyResult() error = %v, want %q", err, wantError)
+		}
+		stdout, stderr, code := runInjectedApply(t, fixture, result, runErr)
+		if code != exitError || stdout != "" || !strings.Contains(stderr, wantError) {
+			t.Fatalf("invalid prune outcome = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
 	}
 
 	for _, test := range []struct {
@@ -507,34 +540,54 @@ func TestApply_StaticDeferredPruneOutcomeCannotBePromoted(t *testing.T) {
 		{name: "failed", status: applyrunner.ActionFailed, pruneDeferred: true, runErr: errors.New("injected prune IO failure")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			result := applyrunner.Result{
-				Plan:                plan,
-				ActionOutcomesReady: true,
-				PruneOutcomes: []applyrunner.PruneOutcome{{
-					Index: 0, Target: prune[0].Target, Status: test.status,
-				}},
-				PruneDeferred:       test.pruneDeferred,
-				UnresolvedConflicts: test.unresolvedConflicts,
-			}
-			stdout, stderr, code := runInjectedApply(t, fixture, result, test.runErr)
-			if code != exitError || stdout != "" || !strings.Contains(stderr, "static deferred prune outcome") {
-				t.Fatalf("promoted deferred prune = stdout %q, stderr %q, exit %d", stdout, stderr, code)
-			}
+			result := cloneResult()
+			result.PruneOutcomes[0].Status = test.status
+			result.PruneDeferred = test.pruneDeferred
+			result.UnresolvedConflicts = test.unresolvedConflicts
+			assertFailsClosed(t, result, test.runErr, "static deferred prune outcome")
+		})
+	}
+
+	for _, test := range []struct {
+		name      string
+		mutate    func(*applyrunner.Result)
+		wantError string
+	}{
+		{name: "unknown status", mutate: func(result *applyrunner.Result) {
+			result.PruneOutcomes[0].Status = applyrunner.ActionOutcomeStatus("unknown")
+		}, wantError: "invalid prune outcome"},
+		{name: "duplicate leaves coverage gap", mutate: func(result *applyrunner.Result) {
+			result.PruneOutcomes[1] = result.PruneOutcomes[0]
+		}, wantError: "duplicate prune outcome"},
+		{name: "missing outcome count", mutate: func(result *applyrunner.Result) {
+			result.PruneOutcomes = result.PruneOutcomes[:1]
+		}, wantError: "prune outcome count"},
+		{name: "extra outcome count", mutate: func(result *applyrunner.Result) {
+			result.PruneOutcomes = append(result.PruneOutcomes, result.PruneOutcomes[1])
+		}, wantError: "prune outcome count"},
+		{name: "wrong target", mutate: func(result *applyrunner.Result) {
+			result.PruneOutcomes[0].Target = "~/wrong"
+		}, wantError: "invalid prune outcome"},
+		{name: "negative index", mutate: func(result *applyrunner.Result) {
+			result.PruneOutcomes[0].Index = -1
+		}, wantError: "invalid prune outcome"},
+		{name: "out of range index", mutate: func(result *applyrunner.Result) {
+			result.PruneOutcomes[0].Index = len(prune)
+		}, wantError: "invalid prune outcome"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := cloneResult()
+			test.mutate(&result)
+			assertFailsClosed(t, result, nil, test.wantError)
 		})
 	}
 
 	t.Run("deferred", func(t *testing.T) {
-		result := applyrunner.Result{
-			Plan:                plan,
-			ActionOutcomesReady: true,
-			PruneOutcomes: []applyrunner.PruneOutcome{{
-				Index: 0, Target: prune[0].Target, Status: applyrunner.ActionDeferred,
-			}},
-			PruneDeferred: true,
-		}
+		result := cloneResult()
 		stdout, stderr, code := runInjectedApply(t, fixture, result, nil)
 		if code != exitConflict || !strings.Contains(stdout, "CONFLICT  ~/alpha/file") ||
-			!strings.Contains(stdout, "prune (deferred)  ~/old") || !strings.Contains(stderr, "prune was deferred") {
+			!strings.Contains(stdout, "prune (deferred)  ~/old-a") ||
+			!strings.Contains(stdout, "prune (deferred)  ~/old-b") || !strings.Contains(stderr, "prune was deferred") {
 			t.Fatalf("static deferred prune = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 		}
 	})
