@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/backup"
 	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/planner"
 )
@@ -69,6 +70,95 @@ func TestExecuteLink_AdoptIsStateOnly(t *testing.T) {
 		t.Fatalf("adopt changed target identity/mode: before=%v after=%v", before.Mode(), after.Mode())
 	}
 	assertLinkText(t, target, fixture.source)
+}
+
+func TestExecuteLink_BackupReplaceRegular(t *testing.T) {
+	fixture := newLinkFixture(t)
+	target := filepath.Join(fixture.home, ".zshrc")
+	content := []byte("user data\n")
+	if err := os.WriteFile(target, content, 0o640); err != nil {
+		t.Fatalf("os.WriteFile(target) error = %v", err)
+	}
+	action := fixture.planLinkWithForce(t, target, fixture.source, planner.HistoricalState{}, false, true)
+	if action.Verb != planner.FileBackupReplace || action.Reason != planner.FileReasonRegularConflict {
+		t.Fatalf("planned action = %q/%q, want regular backup-replace", action.Verb, action.Reason)
+	}
+	batch, err := backup.NewBatch(fixture.control.BackupRoot())
+	if err != nil {
+		t.Fatalf("backup.NewBatch() error = %v", err)
+	}
+
+	result, err := ExecuteFileWithBackup(fixture.control, action, batch)
+	if err != nil {
+		t.Fatalf("ExecuteFileWithBackup() error = %v", err)
+	}
+	if !result.TargetMutated || result.StateEffect != action.OnSuccess || result.BackupPath == "" {
+		t.Fatalf("ExecuteFileWithBackup() result = %#v, want committed result with backup", result)
+	}
+	assertLinkText(t, target, fixture.source)
+	got, err := os.ReadFile(result.BackupPath)
+	if err != nil || string(got) != string(content) {
+		t.Fatalf("backup content = (%q, %v), want %q", got, err, content)
+	}
+	info, err := os.Stat(result.BackupPath)
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("backup mode = (%v, %v), want 0640", info, err)
+	}
+}
+
+func TestExecuteLink_BackupReplaceSymlink(t *testing.T) {
+	fixture := newLinkFixture(t)
+	target := filepath.Join(fixture.home, ".zshrc")
+	oldText := "../elsewhere/raw"
+	if err := os.Symlink(oldText, target); err != nil {
+		t.Fatalf("os.Symlink(target) error = %v", err)
+	}
+	action := fixture.planLinkWithForce(t, target, fixture.source, planner.HistoricalState{}, false, true)
+	if action.Verb != planner.FileBackupReplace || action.Reason != planner.FileReasonUnownedLink {
+		t.Fatalf("planned action = %q/%q, want symlink backup-replace", action.Verb, action.Reason)
+	}
+	batch, err := backup.NewBatch(fixture.control.BackupRoot())
+	if err != nil {
+		t.Fatalf("backup.NewBatch() error = %v", err)
+	}
+
+	result, err := ExecuteFileWithBackup(fixture.control, action, batch)
+	if err != nil {
+		t.Fatalf("ExecuteFileWithBackup() error = %v", err)
+	}
+	assertLinkText(t, target, fixture.source)
+	assertLinkText(t, result.BackupPath, oldText)
+}
+
+func TestExecuteLink_BackupReplaceFailurePreservesTargetAndBackupFact(t *testing.T) {
+	fixture := newLinkFixture(t)
+	target := filepath.Join(fixture.home, ".zshrc")
+	if err := os.WriteFile(target, []byte("user data"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(target) error = %v", err)
+	}
+	action := fixture.planLinkWithForce(t, target, fixture.source, planner.HistoricalState{}, false, true)
+	batch, err := backup.NewBatch(fixture.control.BackupRoot())
+	if err != nil {
+		t.Fatalf("backup.NewBatch() error = %v", err)
+	}
+	operations := defaultFileOperations()
+	injected := errors.New("rename failed")
+	operations.rename = func(string, string) error { return injected }
+
+	result, err := executeFileWithBackup(fixture.control, action, operations, batch)
+	if !errors.Is(err, injected) {
+		t.Fatalf("executeFileWithBackup() error = %v, want rename failure", err)
+	}
+	if result.TargetMutated || result.StateEffect != action.OnFailure || result.BackupPath == "" {
+		t.Fatalf("executeFileWithBackup() result = %#v, want failure with retained backup", result)
+	}
+	got, readErr := os.ReadFile(target)
+	if readErr != nil || string(got) != "user data" {
+		t.Fatalf("target after failed replace = (%q, %v), want user data", got, readErr)
+	}
+	if _, statErr := os.Lstat(result.BackupPath); statErr != nil {
+		t.Fatalf("retained backup Lstat() error = %v", statErr)
+	}
 }
 
 func TestValidateFileAction_RejectsIncompleteLinkUpsert(t *testing.T) {
@@ -427,12 +517,27 @@ func (fixture linkFixture) planLink(
 	historical planner.HistoricalState,
 	hasState bool,
 ) planner.FileAction {
+	return fixture.planLinkWithForce(t, target, source, historical, hasState, false)
+}
+
+func (fixture linkFixture) planLinkWithForce(
+	t *testing.T,
+	target string,
+	source string,
+	historical planner.HistoricalState,
+	hasState bool,
+	force bool,
+) planner.FileAction {
 	t.Helper()
 	resolution, err := paths.ResolveTarget(target)
 	if err != nil {
 		t.Fatalf("ResolveTarget(%q) error = %v", target, err)
 	}
-	observed, err := planner.ObserveTarget(target)
+	observe := planner.ObserveTarget
+	if force {
+		observe = planner.ObserveTargetWithDigest
+	}
+	observed, err := observe(target)
 	if err != nil {
 		t.Fatalf("ObserveTarget(%q) error = %v", target, err)
 	}
@@ -449,7 +554,7 @@ func (fixture linkFixture) planLink(
 		Observed:   observed,
 		State:      historical,
 		HasState:   hasState,
-	}, planner.DecisionOptions{})
+	}, planner.DecisionOptions{Force: force})
 	if err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
