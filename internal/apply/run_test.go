@@ -117,6 +117,40 @@ func TestRun_ReportsRetainedBackupAfterReplaceFailure(t *testing.T) {
 	}
 }
 
+func TestRun_ReportsRetainedBackupAfterPostCommitCleanupFailure(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	action := seamBackupReplaceAction("~/.forced")
+	operations := fixture.operations(executionPlan{files: []planner.FileAction{action}})
+	cleanupErr := errors.New("cleanup failed")
+	wantPath := filepath.Join(fixture.loaded.controlPaths.BackupRoot(), "batch", "~", ".forced")
+	if err := os.MkdirAll(filepath.Dir(wantPath), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(backup parent) error = %v", err)
+	}
+	if err := os.WriteFile(wantPath, []byte("retained backup"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(backup) error = %v", err)
+	}
+	operations.executeBackup = func(
+		paths.ControlPlanePaths,
+		planner.FileAction,
+		*backup.Batch,
+	) (executor.FileResult, error) {
+		return executor.FileResult{
+			StateEffect:   action.OnSuccess,
+			TargetMutated: true,
+			BackupPath:    wantPath,
+		}, cleanupErr
+	}
+
+	result, err := runWithOperations(Options{}, operations)
+	if !errors.Is(err, cleanupErr) || result.FileAttempts != 1 || result.TargetCommits != 1 ||
+		len(result.BackupPaths) != 1 || result.BackupPaths[0] != wantPath || !result.StateCommitted {
+		t.Fatalf("run result/error = (%#v, %v)", result, err)
+	}
+	if _, err := os.Lstat(wantPath); err != nil {
+		t.Fatalf("reported backup Lstat() error = %v", err)
+	}
+}
+
 func TestRun_RejectsUnsupportedScopeBeforeExecutor(t *testing.T) {
 	fixture := newRunSeamFixture(t)
 	executed := false
@@ -637,6 +671,42 @@ func TestRun_ForceBacksUpRegularAndConverges(t *testing.T) {
 	}
 	if _, err := os.Lstat(first.BackupPaths[0]); err != nil {
 		t.Fatalf("successful backup was not retained: %v", err)
+	}
+}
+
+func TestRun_ForceStateStoreFailureRetainsAndReportsBackup(t *testing.T) {
+	fixture := newRunIntegrationFixture(t)
+	original := []byte("user zshrc\n")
+	if err := os.WriteFile(fixture.linkTarget, original, 0o640); err != nil {
+		t.Fatalf("os.WriteFile(conflict target) error = %v", err)
+	}
+	storeErr := errors.New("state store failed")
+	operations := defaultRunOperations()
+	operations.begin = func(overrides dotruntime.Overrides) (mutationSession, error) {
+		session, err := dotruntime.BeginMutationWithStateStore(
+			overrides,
+			func(string, string, state.Snapshot) error { return storeErr },
+		)
+		if err != nil {
+			return nil, err
+		}
+		return runtimeMutationSession{session: session}, nil
+	}
+	options := fixture.options()
+	options.Force = true
+
+	result, err := runWithOperations(options, operations)
+	if !errors.Is(err, storeErr) || result.FileAttempts != 2 || result.TargetCommits != 2 ||
+		len(result.BackupPaths) != 1 || result.StateCommitted {
+		t.Fatalf("force Store failure result/error = (%#v, %v)", result, err)
+	}
+	backupContent, readErr := os.ReadFile(result.BackupPaths[0])
+	if readErr != nil || string(backupContent) != string(original) {
+		t.Fatalf("reported backup = (%q, %v), want %q", backupContent, readErr, original)
+	}
+	assertRunTargets(t, fixture)
+	if _, statErr := os.Lstat(fixture.stateFile); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("failed Store state file Lstat error = %v, want missing", statErr)
 	}
 }
 
