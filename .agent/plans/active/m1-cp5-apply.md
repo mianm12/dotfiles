@@ -60,9 +60,10 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
 - [x] 2026-07-20：创建 coordinator branch/worktree 与本 active ExecPlan。
 - [x] 2026-07-20：backup-store 第一轮完整 review 的目录链持久化 P1 由 `ae2a9e1` 修复；round 2
   完整复审 GO，无 P0–P3，正在执行最终门禁与 plan closure。
-- [ ] 2026-07-20：prune-executor 第一轮完整 review 发现宽泛 `ErrPrecondition` 会吞掉 IO/cleanup
-  的 P1；finding 已验证有效，worker 正以精确错误分类和新回归测试修复，之后完整复审。
-- [ ] Wave 1：backup-store 与 prune-executor 独立计划、实现、复核、closure 和 main 集成。
+- [x] 2026-07-20：prune-executor 第一轮 P1 由 `4782f91` 精确错误分类修复；round 2 GO；以
+  `4e92a11` freshness 合入 backup main 后再次完整 review GO，closure `0499de9` FF-only 合入。
+- [x] 2026-07-20：Wave 1 完成。backup `79d3713`、prune `0499de9` 均在 main 上通过窄测与
+  隔离 cache 的 `make check`；两个 worker worktree 已确认 clean/合入后无 force 移除。
 - [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
