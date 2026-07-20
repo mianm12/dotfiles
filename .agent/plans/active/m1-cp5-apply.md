@@ -58,6 +58,8 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   无停止条件，不需新依赖。
 - [x] 2026-07-20：基线 `make check` 在 Darwin/arm64 通过；Go/lint cache 隔离到 `/private/tmp`。
 - [x] 2026-07-20：创建 coordinator branch/worktree 与本 active ExecPlan。
+- [ ] 2026-07-20：backup-store 第一轮完整 review 发现首次创建 backup root 未持久化其父目录项的
+  P1；finding 已验证有效，worker 正以新 fix commit 补齐目录链 sync 与故障证据，之后完整复审。
 - [ ] Wave 1：backup-store 与 prune-executor 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
@@ -168,6 +170,10 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
 - Observation: HookSkip 仍证明作用域内存在 run_once；仅拒绝 HookRun 会静默跳过已执行 hook。
   Evidence: planner hook action model 与 CP5 明确门禁。
   Impact: CP5 真实 apply preflight 拒绝任何 scope HookAction；partial scope 仍只受请求模块影响。
+
+- Observation: 首次创建 backup root 时，只 sync root 不能持久化 root 在 state root 中的目录项。
+  Evidence: backup-store round 1 review 对 `internal/backup/batch.go` 与 `save.go` 的完整数据流审查。
+  Impact: backup store 必须在报告成功前同步本轮新建目录链；否则 force 的“备份成功”前置不成立。
 
 ## Decision Log
 
