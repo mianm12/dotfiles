@@ -4,6 +4,7 @@ package backup
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,15 @@ func NewBatch(root string) (*Batch, error) {
 		}
 		if err := os.Chmod(path, storage.PrivateDirectoryMode); err != nil {
 			return nil, fmt.Errorf("set backup batch permissions %q: %w", path, err)
+		}
+		if err := syncDirectory(cleanRoot); err != nil {
+			if removeErr := os.Remove(path); removeErr != nil {
+				return nil, errors.Join(
+					fmt.Errorf("persist backup batch %q: %w", path, err),
+					fmt.Errorf("remove incomplete backup batch %q: %w", path, removeErr),
+				)
+			}
+			return nil, fmt.Errorf("persist backup batch %q: %w", path, err)
 		}
 		return &Batch{path: path}, nil
 	}
