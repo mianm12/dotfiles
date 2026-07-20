@@ -229,7 +229,11 @@ func backupReplaceLink(
 	}
 	if err != nil {
 		if backup.IsPureEvidenceMismatch(err) {
-			return failure, fmt.Errorf("%w: target changed during backup preparation: %v", ErrPreconditionMismatch, err)
+			return failure, fmt.Errorf(
+				"%w: target changed during backup preparation: %s",
+				ErrPreconditionMismatch,
+				err.Error(),
+			)
 		}
 		return failure, fmt.Errorf("persist target backup: %w", err)
 	}

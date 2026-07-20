@@ -125,9 +125,9 @@ func createMissingScaffold(
 	if err := operations.hardLink(temporaryFile, action.Precondition.TargetPath); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return failPrepared(fmt.Errorf(
-				"%w: target appeared before scaffold publish: %v",
+				"%w: target appeared before scaffold publish: %s",
 				ErrPreconditionMismatch,
-				err,
+				err.Error(),
 			))
 		}
 		return failPrepared(fmt.Errorf("publish scaffold without clobber: %w", err))
