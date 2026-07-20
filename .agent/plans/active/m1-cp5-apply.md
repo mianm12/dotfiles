@@ -78,6 +78,9 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   blocking P2：outcome validator 未拒绝“planner 已 deferred 的 prune 却报告 succeeded”，可导致
   stdout 显示 deferred 而 exit 0。按本 Goal 规则第三轮后停止，不继续补丁、不 closure、不合入 main；
   等待用户裁决后续处理方式。
+- [x] 2026-07-20：用户明确授权把上述 P2 建立为新的串行 fix Milestone，使用独立 ExecPlan
+  和新的 review 轮次；Goal 已恢复 active。fix 从 clean `feat/apply-cli@bf021c9` 创建，通过后
+  FF-only 回并 apply-cli，再完成其完整复核、closure 与 main 集成。
 - [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
@@ -90,6 +93,8 @@ Wave 1 @ checkpoint_base
 └── feat/prune-executor ├──> feat/force-replace ──> feat/apply-cli
                         │
 预定集成：backup-store ─┘ then prune-executor
+
+apply-cli ──> fix/m1-apply-cli-outcome-validation ──> apply-cli closure
 ```
 
 backup-store 只允许新增独立 backup 机制及测试，不修改 planner/state/executor/apply/CLI shared
@@ -226,6 +231,11 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
 - Decision: 锁创建不视为被 run_once 门禁禁止的 file/state mutation。
   Rationale: 规范 pipeline 要求 mutation command 先持锁再 strict load；run_once 只能在 load/plan 后发现。
   门禁仍必须先于任何 target、backup、prune 或 state 提交，且不得执行或静默跳过 hook。
+  Date: 2026-07-20
+
+- Decision: 将 apply-cli 第三轮 P2 作为新的串行 fix Milestone，而不继续在原 review 单元堆补丁。
+  Rationale: 用户在停止后明确授权独立 ExecPlan 与新的 review 轮次；新节点只闭合 planner
+  deferred prune 与 outcome 单调性，不扩大公开行为、state 格式或 CP5 Scope。
   Date: 2026-07-20
 
 ## Outcomes and Handoff
