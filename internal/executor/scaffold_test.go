@@ -62,11 +62,40 @@ func TestExecuteScaffold_CreateDoesNotClobberCommitRace(t *testing.T) {
 
 	result, err := executeFile(fixture.control, action, operations)
 	assertPreconditionFailure(t, result, action, err)
+	if !IsPurePreconditionMismatch(err) {
+		t.Fatalf("executeFile() error = %v, want pure EEXIST mismatch", err)
+	}
 	content, readErr := os.ReadFile(target)
 	if readErr != nil || string(content) != "user data" {
 		t.Fatalf("target after commit race = (%q, %v), want user data", content, readErr)
 	}
 	assertNoScaffoldTemps(t, filepath.Dir(target))
+}
+
+func TestExecuteScaffold_CreateCommitRaceWithCleanupFailureIsRuntimeError(t *testing.T) {
+	fixture := newScaffoldFixture(t)
+	target := filepath.Join(fixture.home, "raced-cleanup")
+	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+	operations := defaultFileOperations()
+	realLink := operations.hardLink
+	operations.hardLink = func(oldname, newname string) error {
+		if err := os.WriteFile(newname, []byte("user data"), 0o600); err != nil {
+			return err
+		}
+		return realLink(oldname, newname)
+	}
+	cleanupErr := errors.New("cleanup failed")
+	operations.remove = func(string) error { return cleanupErr }
+
+	result, err := executeFile(fixture.control, action, operations)
+	assertPreconditionFailure(t, result, action, err)
+	if IsPurePreconditionMismatch(err) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("executeFile() error = %v, want mixed runtime cleanup error", err)
+	}
+	content, readErr := os.ReadFile(target)
+	if readErr != nil || string(content) != "user data" {
+		t.Fatalf("target after commit race = (%q, %v), want user data", content, readErr)
+	}
 }
 
 func TestExecuteScaffold_CreateCleanupFailureKeepsSuccessEffect(t *testing.T) {
