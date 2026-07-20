@@ -50,6 +50,10 @@ run_once 动作时会在一切 mutation 前硬拒绝。
 - [x] 2026-07-20：首轮独立 review 确认 P1 finding：广义 `ErrPrecondition` 会把观测/cleanup IO
   错误误降级 conflict；`4782f91` 新增 executor 单一精确分类与 file/prune 回归，窄测、完整
   branch diff check 和隔离 cache `make check` 通过，等待完整复审。
+- [x] 2026-07-20：freshness gate 将有效 base `main@79d3713` 以非重写 merge `4e92a11`
+  同步到分支；round 2 独立 reviewer 完整复审 GO、无 findings。
+- [x] 2026-07-20：freshness 后 `go test ./internal/state ./internal/executor ./internal/apply`、
+  `git diff 79d3713...HEAD --check` 与隔离 cache `make check` 通过；计划完成并迁移到 completed。
 
 ## Milestones
 
@@ -140,9 +144,10 @@ Checkpoint integration 后验收。
 
 ## Outcomes and Handoff
 
-实现与本地门禁完成，计划保持 active 等待独立 reviewer。分支新增 mixed state transition、
+目标已完成。分支新增 mixed state transition、
 canonical prune executor，以及 files→confirmation→prune→single Store runner；scope 内任何
 run_once action 都在 mutation 前拒绝。提交时纯证据 Precondition mismatch 记录为 unresolved
 conflict；路径解析、观测、权限、cleanup 或任何混合错误仍按运行错误返回。未接入 CLI、backup、
-force 或 hook execution；
-远端 macOS/Linux CI 未运行，留待 Checkpoint integration 验收。
+force 或 hook execution。首轮 review 的 P1 已由 `4782f91` 修复；freshness merge `4e92a11` 后
+round 2 完整复审 GO、无 findings，最终窄测、diff check 与 `make check` 通过。worktree 在收口前
+clean；远端 macOS/Linux CI 未运行，状态为本地验收通过、远端待验收。
