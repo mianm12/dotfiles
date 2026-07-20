@@ -287,35 +287,46 @@ func validateFileUpsert(action planner.FileAction, kind planner.StateKind, linkD
 }
 
 func validatePrecondition(control paths.ControlPlanePaths, action planner.FileAction) error {
-	if !action.Precondition.Leaf.Valid() {
-		return fmt.Errorf("%w: leaf condition is invalid", ErrPrecondition)
-	}
-	target := paths.LabeledTarget{Label: "file action " + action.Target, Path: action.Precondition.TargetPath}
-	if _, err := paths.ValidatePathBoundaries(control, []paths.LabeledTarget{target}); err != nil {
-		return fmt.Errorf("%w: validate target/control boundary: %w", ErrPrecondition, err)
-	}
-	resolution, err := paths.ResolveTarget(action.Precondition.TargetPath)
-	if err != nil {
-		return fmt.Errorf("%w: resolve target: %w", ErrPrecondition, err)
-	}
-	if !resolution.Equal(action.Precondition.TargetResolution) {
-		return fmt.Errorf("%w: target identity changed", ErrPrecondition)
-	}
-	observe := planner.ObserveTarget
-	if action.Precondition.Leaf.RequiresRegularDigest() {
-		observe = planner.ObserveTargetWithDigest
-	}
-	observed, err := observe(action.Precondition.TargetPath)
-	if err != nil {
-		return fmt.Errorf("%w: observe target: %w", ErrPrecondition, err)
-	}
-	if !action.Precondition.Leaf.Matches(observed) {
-		return fmt.Errorf("%w: target leaf condition no longer holds", ErrPrecondition)
+	if err := validateTargetPrecondition(control, "file action "+action.Target, action.Precondition); err != nil {
+		return err
 	}
 	if action.Precondition.RequireRegularSource {
 		if err := validateRegularModuleSource(control.Repository(), action); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateTargetPrecondition(
+	control paths.ControlPlanePaths,
+	label string,
+	precondition planner.Precondition,
+) error {
+	if !precondition.Leaf.Valid() {
+		return fmt.Errorf("%w: leaf condition is invalid", ErrPrecondition)
+	}
+	target := paths.LabeledTarget{Label: label, Path: precondition.TargetPath}
+	if _, err := paths.ValidatePathBoundaries(control, []paths.LabeledTarget{target}); err != nil {
+		return fmt.Errorf("%w: validate target/control boundary: %w", ErrPrecondition, err)
+	}
+	resolution, err := paths.ResolveTarget(precondition.TargetPath)
+	if err != nil {
+		return fmt.Errorf("%w: resolve target: %w", ErrPrecondition, err)
+	}
+	if !resolution.Equal(precondition.TargetResolution) {
+		return fmt.Errorf("%w: target identity changed", ErrPrecondition)
+	}
+	observe := planner.ObserveTarget
+	if precondition.Leaf.RequiresRegularDigest() {
+		observe = planner.ObserveTargetWithDigest
+	}
+	observed, err := observe(precondition.TargetPath)
+	if err != nil {
+		return fmt.Errorf("%w: observe target: %w", ErrPrecondition, err)
+	}
+	if !precondition.Leaf.Matches(observed) {
+		return fmt.Errorf("%w: target leaf condition no longer holds", ErrPrecondition)
 	}
 	return nil
 }

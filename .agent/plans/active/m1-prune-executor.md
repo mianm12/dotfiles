@@ -43,7 +43,7 @@ run_once 动作时会在一切 mutation 前硬拒绝。
 
 - [x] 2026-07-20：确认 worktree、branch、clean baseline，阅读规范、既有实现、测试与 completed ExecPlans。
 - [x] 2026-07-20：Milestone 1 以测试先行扩展 mixed state transition；窄测通过。
-- [ ] Milestone 2：以测试先行实现 canonical prune executor。
+- [x] 2026-07-20：Milestone 2 以测试先行实现 canonical P1/P2/P3 prune executor；executor 窄测通过。
 - [ ] Milestone 3：以测试先行接入 runner 阶段、确认与 run_once 零写入门禁。
 - [ ] 运行窄测、完整 diff check、隔离 cache `make check`，保持计划 active 等待独立复核。
 
@@ -112,7 +112,8 @@ Checkpoint integration 后验收。
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: 隔离空 `GOMODCACHE` 会尝试访问当前配置的外部 Go proxy，而 sandbox 无网络；
+  继续复用只读的既有 module cache，只隔离 `GOCACHE`，未下载或修改依赖。
 
 ## Decision Log
 
