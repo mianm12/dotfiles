@@ -54,6 +54,11 @@
   当前实现事实。
 - [x] 2026-07-20：窄测、重复、race、Darwin/Linux CLI 交叉编译、branch diff check 与隔离 cache
   `make check` 全部通过；worktree clean，计划保持 active 等待独立复核。
+- [x] 2026-07-20：首轮独立 review 确认 P2：聚合 `PruneDeferred`/attempt counts 无法精确展示
+  “前项成功、后项 Precondition 失配”的逐项结果；`7234a47` 增加 runner outcome contract，
+  `b8e91c4` 改为 CLI 校验并逐项投影，窄测通过。
+- [x] 2026-07-20：P2 修复后重新运行窄测、重复、race、Darwin/Linux 交叉编译、branch diff check
+  与隔离 cache `make check`，全部通过；保持 active 等待完整 branch 复审。
 
 ## Milestones
 
@@ -120,6 +125,11 @@ worktree clean。测试不读取或写入真实 modules、machine config、state
 `make check BINARY=/private/tmp/dot-m1-cp5-cli-check/dot` 通过，包含 0 lint issues、全仓 race、
 build 和真实仓库 manifest gate。
 
+P2 修复后再次运行相同门禁：`go test -count=5 ./internal/cli ./internal/apply`、CLI/apply race、
+Darwin/Linux amd64 CLI 交叉编译均通过；首次 `make check` 仅发现 exported outcome constants 缺少
+revive 注释，`af7b673` 修复后隔离 cache `make check` 通过（0 lint issues、全仓 race、build、
+manifest gate）。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 内创建 active plan、修改、stage、commit 与验证。所有 mutation 测试
@@ -132,6 +142,9 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
   fail-closed 路径允许创建隔离 state 目录和持久 lock 文件，但不会产生 target、backup 或 state
   mutation。Evidence: CLI 集成测试分别断言 target/state/backup 不变，并不把锁基础设施误判为
   dry-run 式整树零写入。
+- Observation: `PruneDeferred` 与 `PruneAttempts` 只能描述整轮摘要；当第一个 prune 已成功而第二个
+  发生 Precondition mismatch 时，它们无法证明哪一行已经提交、哪一行必须 deferred。
+  Evidence: reviewer 指出的 success→mismatch 场景原投影会把成功前缀也改写为 deferred。
 
 ## Decision Log
 
@@ -142,6 +155,9 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
 - Decision: whole-module 确认只从 `/dev/tty` 读取；终端不可用、EOF 和非 yes 都返回拒绝，
   `--yes` 则不打开终端。
   Rationale: pipeline 输入不能偷读；确认拒绝是规范定义的 deferred work（exit 2），不是运行错误。
+- Decision: runner 在 scope gate 后为每个可执行 file 与每个 prune 记录原 plan index、target 和
+  succeeded/conflict/deferred/failed；CLI 先验证 coverage 与聚合一致性，再按逐项 outcome 投影。
+  Rationale: 执行层是提交事实的唯一来源；presentation 不应从计数、错误文案或 slice 前缀猜测。
 
 ## Outcomes and Handoff
 
