@@ -62,8 +62,13 @@ func TestBatchSaveRegular_ValidatesPlanDigestAndMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			batch := newTestBatch(t, filepath.Join(fixture, strings.ReplaceAll(tt.name, " ", "-")))
 			path := filepath.Join(batch.Path(), "target")
-			if _, err := batch.SaveRegular(source, "target", tt.hash, tt.mode); err == nil {
+			_, err := batch.SaveRegular(source, "target", tt.hash, tt.mode)
+			if err == nil {
 				t.Fatalf("SaveRegular() error = nil, want plan evidence rejection")
+			}
+			if (tt.name == "digest mismatch" || tt.name == "mode mismatch") &&
+				!IsPureEvidenceMismatch(err) {
+				t.Fatalf("SaveRegular() error = %v, want pure evidence mismatch", err)
 			}
 			if _, err := os.Lstat(path); !os.IsNotExist(err) {
 				t.Fatalf("os.Lstat(%q) error = %v, want no failed backup", path, err)
@@ -98,7 +103,7 @@ func TestBatchSaveSymlink_RejectsChangedLinkText(t *testing.T) {
 	if err := os.Symlink("actual", source); err != nil {
 		t.Fatalf("os.Symlink() error = %v", err)
 	}
-	if _, err := batch.SaveSymlink(source, "link", "planned"); err == nil {
+	if _, err := batch.SaveSymlink(source, "link", "planned"); !IsPureEvidenceMismatch(err) {
 		t.Fatalf("SaveSymlink() error = nil, want link text mismatch")
 	}
 	if _, err := os.Lstat(filepath.Join(batch.Path(), "link")); !os.IsNotExist(err) {

@@ -71,6 +71,11 @@ type fileOperations struct {
 	remove     func(string) error
 }
 
+type backupStore interface {
+	SaveRegular(string, string, string, fs.FileMode) (string, error)
+	SaveSymlink(string, string, string) (string, error)
+}
+
 // FileResult 保存单个动作供 runtime 消费的结果。StateEffect 已按成功或失败分支选择；
 // TargetMutated 只在 target 提交点已经越过时为 true。
 type FileResult struct {
@@ -107,7 +112,7 @@ func executeFileWithBackup(
 	control paths.ControlPlanePaths,
 	action planner.FileAction,
 	operations fileOperations,
-	batch *backup.Batch,
+	batch backupStore,
 ) (FileResult, error) {
 	failure := FileResult{StateEffect: action.OnFailure}
 	if err := ValidateFileAction(action); err != nil {
@@ -153,7 +158,7 @@ func executeLinkFile(
 	control paths.ControlPlanePaths,
 	action planner.FileAction,
 	operations fileOperations,
-	batch *backup.Batch,
+	batch backupStore,
 ) (FileResult, error) {
 	failure := FileResult{StateEffect: action.OnFailure}
 
@@ -191,7 +196,7 @@ func backupReplaceLink(
 	control paths.ControlPlanePaths,
 	action planner.FileAction,
 	operations fileOperations,
-	batch *backup.Batch,
+	batch backupStore,
 ) (FileResult, error) {
 	failure := FileResult{StateEffect: action.OnFailure}
 	if batch == nil {
@@ -223,6 +228,9 @@ func backupReplaceLink(
 		return failure, fmt.Errorf("%w: backup-replace lacks exact backup evidence", ErrUnsupportedFileAction)
 	}
 	if err != nil {
+		if backup.IsPureEvidenceMismatch(err) {
+			return failure, fmt.Errorf("%w: target changed during backup preparation: %v", ErrPreconditionMismatch, err)
+		}
 		return failure, fmt.Errorf("persist target backup: %w", err)
 	}
 	failure.BackupPath = backupPath

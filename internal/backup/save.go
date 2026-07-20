@@ -16,6 +16,33 @@ import (
 
 const sha256Prefix = "sha256:"
 
+// ErrEvidenceMismatch 表示 backup source 已明确不再满足调用方提供的计划证据。
+// open/copy/chmod/sync/cleanup 等 IO 错误不属于此分类。
+var ErrEvidenceMismatch = errors.New("backup source evidence mismatch")
+
+// IsPureEvidenceMismatch 只在整个错误树均由明确 evidence 失配构成时返回 true。
+func IsPureEvidenceMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !IsPureEvidenceMismatch(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return IsPureEvidenceMismatch(wrapped.Unwrap())
+	}
+	return errors.Is(err, ErrEvidenceMismatch)
+}
+
 type directorySyncer interface {
 	Sync() error
 	Close() error
@@ -47,11 +74,12 @@ func (batch *Batch) SaveRegular(
 		return "", err
 	}
 	if !sourceInfo.Mode().IsRegular() {
-		return "", fmt.Errorf("backup source %q is not a regular file", filepath.Clean(source))
+		return "", fmt.Errorf("%w: backup source %q is not a regular file", ErrEvidenceMismatch, filepath.Clean(source))
 	}
 	if sourceInfo.Mode().Perm() != expectedMode {
 		return "", fmt.Errorf(
-			"backup source %q permissions changed: got %04o, want %04o",
+			"%w: backup source %q permissions changed: got %04o, want %04o",
+			ErrEvidenceMismatch,
 			filepath.Clean(source), sourceInfo.Mode().Perm(), expectedMode,
 		)
 	}
@@ -67,7 +95,7 @@ func (batch *Batch) SaveRegular(
 	}
 	if !openedInfo.Mode().IsRegular() || !os.SameFile(sourceInfo, openedInfo) {
 		_ = sourceFile.Close()
-		return "", fmt.Errorf("backup source %q changed before copy", filepath.Clean(source))
+		return "", fmt.Errorf("%w: backup source %q changed before copy", ErrEvidenceMismatch, filepath.Clean(source))
 	}
 
 	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -94,7 +122,8 @@ func (batch *Batch) SaveRegular(
 	if actualHash != expectedHash {
 		_ = destinationFile.Close()
 		return "", cleanupFailedBackup(destination, fmt.Errorf(
-			"backup source %q digest changed: got %s, want %s",
+			"%w: backup source %q digest changed: got %s, want %s",
+			ErrEvidenceMismatch,
 			filepath.Clean(source), actualHash, expectedHash,
 		))
 	}
@@ -126,22 +155,28 @@ func (batch *Batch) SaveSymlink(source string, relative string, expectedLinkText
 		return "", err
 	}
 	if sourceInfo.Mode()&fs.ModeSymlink == 0 {
-		return "", fmt.Errorf("backup source %q is not a symlink", filepath.Clean(source))
+		return "", fmt.Errorf("%w: backup source %q is not a symlink", ErrEvidenceMismatch, filepath.Clean(source))
 	}
 	linkText, err := os.Readlink(filepath.Clean(source))
 	if err != nil {
 		return "", fmt.Errorf("read backup source symlink %q: %w", filepath.Clean(source), err)
 	}
 	if linkText != expectedLinkText {
-		return "", fmt.Errorf("backup source %q link text changed", filepath.Clean(source))
+		return "", fmt.Errorf("%w: backup source %q link text changed", ErrEvidenceMismatch, filepath.Clean(source))
 	}
 	currentInfo, err := os.Lstat(filepath.Clean(source))
-	if err != nil || !os.SameFile(sourceInfo, currentInfo) {
-		return "", fmt.Errorf("backup source %q changed before copy", filepath.Clean(source))
+	if err != nil {
+		return "", fmt.Errorf("inspect backup source %q before copy: %w", filepath.Clean(source), err)
+	}
+	if !os.SameFile(sourceInfo, currentInfo) {
+		return "", fmt.Errorf("%w: backup source %q changed before copy", ErrEvidenceMismatch, filepath.Clean(source))
 	}
 	currentText, err := os.Readlink(filepath.Clean(source))
-	if err != nil || currentText != expectedLinkText {
-		return "", fmt.Errorf("backup source %q link text changed before copy", filepath.Clean(source))
+	if err != nil {
+		return "", fmt.Errorf("read backup source symlink %q before copy: %w", filepath.Clean(source), err)
+	}
+	if currentText != expectedLinkText {
+		return "", fmt.Errorf("%w: backup source %q link text changed before copy", ErrEvidenceMismatch, filepath.Clean(source))
 	}
 	if err := os.Symlink(expectedLinkText, destination); err != nil {
 		return "", fmt.Errorf("create backup symlink %q without overwrite: %w", destination, err)
@@ -214,7 +249,7 @@ func validateSourceAfterCopy(source string, before fs.FileInfo, expectedMode fs.
 		return fmt.Errorf("inspect backup source %q after copy: %w", filepath.Clean(source), err)
 	}
 	if !after.Mode().IsRegular() || !os.SameFile(before, after) || after.Mode().Perm() != expectedMode {
-		return fmt.Errorf("backup source %q changed during copy", filepath.Clean(source))
+		return fmt.Errorf("%w: backup source %q changed during copy", ErrEvidenceMismatch, filepath.Clean(source))
 	}
 	return nil
 }

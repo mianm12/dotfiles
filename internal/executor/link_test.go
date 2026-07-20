@@ -2,6 +2,7 @@ package executor
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -231,6 +232,69 @@ func TestExecuteLink_BackupReplaceRechecksFinalPrecondition(t *testing.T) {
 			t.Fatalf("target after source failure = (%q, %v), want preserved", content, readErr)
 		}
 	})
+}
+
+func TestExecuteLink_BackupPreparationEvidenceClassification(t *testing.T) {
+	for _, kind := range []string{"regular", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			fixture := newLinkFixture(t)
+			target := filepath.Join(fixture.home, ".zshrc")
+			if kind == "regular" {
+				if err := os.WriteFile(target, []byte("user data"), 0o600); err != nil {
+					t.Fatalf("os.WriteFile(target) error = %v", err)
+				}
+			} else if err := os.Symlink("../raw-destination", target); err != nil {
+				t.Fatalf("os.Symlink(target) error = %v", err)
+			}
+			action := fixture.planLinkWithForce(t, target, fixture.source, planner.HistoricalState{}, false, true)
+			store := failingBackupStore{err: fmt.Errorf("%w: injected %s evidence change", backup.ErrEvidenceMismatch, kind)}
+
+			result, err := executeFileWithBackup(fixture.control, action, defaultFileOperations(), store)
+			assertPreconditionFailure(t, result, action, err)
+			if !IsPurePreconditionMismatch(err) {
+				t.Fatalf("executeFileWithBackup() error = %v, want pure mismatch", err)
+			}
+
+			cleanupErr := errors.New("backup cleanup failed")
+			store.err = errors.Join(store.err, cleanupErr)
+			result, err = executeFileWithBackup(fixture.control, action, defaultFileOperations(), store)
+			if IsPurePreconditionMismatch(err) || !errors.Is(err, cleanupErr) || result.TargetMutated {
+				t.Fatalf("mixed backup result/error = (%#v, %v), want runtime cleanup error", result, err)
+			}
+		})
+	}
+}
+
+func TestExecuteLink_BackupReplacePostCommitCleanupKeepsBackupFact(t *testing.T) {
+	fixture := newLinkFixture(t)
+	target := filepath.Join(fixture.home, ".zshrc")
+	if err := os.WriteFile(target, []byte("user data"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(target) error = %v", err)
+	}
+	action := fixture.planLinkWithForce(t, target, fixture.source, planner.HistoricalState{}, false, true)
+	batch, err := backup.NewBatch(fixture.control.BackupRoot())
+	if err != nil {
+		t.Fatalf("backup.NewBatch() error = %v", err)
+	}
+	operations := defaultFileOperations()
+	realRemove := operations.remove
+	injected := errors.New("cleanup failed")
+	operations.remove = func(path string) error {
+		if strings.HasPrefix(filepath.Base(path), temporaryDirectoryPrefix) {
+			return injected
+		}
+		return realRemove(path)
+	}
+
+	result, err := executeFileWithBackup(fixture.control, action, operations, batch)
+	if !errors.Is(err, injected) || !result.TargetMutated || result.StateEffect != action.OnSuccess ||
+		result.BackupPath == "" {
+		t.Fatalf("post-commit cleanup result/error = (%#v, %v)", result, err)
+	}
+	assertLinkText(t, target, fixture.source)
+	if _, err := os.Lstat(result.BackupPath); err != nil {
+		t.Fatalf("retained backup Lstat() error = %v", err)
+	}
 }
 
 func TestValidateFileAction_RejectsIncompleteLinkUpsert(t *testing.T) {
@@ -713,4 +777,16 @@ func assertNoExecutorTemps(t *testing.T, directory string) {
 			t.Fatalf("executor temporary entry remains: %q", entry.Name())
 		}
 	}
+}
+
+type failingBackupStore struct {
+	err error
+}
+
+func (store failingBackupStore) SaveRegular(string, string, string, fs.FileMode) (string, error) {
+	return "", store.err
+}
+
+func (store failingBackupStore) SaveSymlink(string, string, string) (string, error) {
+	return "", store.err
 }
