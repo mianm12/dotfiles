@@ -34,10 +34,14 @@ type ConfirmPrune func([]planner.PruneConfirmationGroup) (accepted bool, err err
 type ActionOutcomeStatus string
 
 const (
+	// ActionSucceeded 表示动作已成功提交其计划效果。
 	ActionSucceeded ActionOutcomeStatus = "succeeded"
-	ActionConflict  ActionOutcomeStatus = "conflict"
-	ActionDeferred  ActionOutcomeStatus = "deferred"
-	ActionFailed    ActionOutcomeStatus = "failed"
+	// ActionConflict 表示最终 Precondition 失配，动作未提交且需要用户消解。
+	ActionConflict ActionOutcomeStatus = "conflict"
+	// ActionDeferred 表示动作因前置收敛或确认门禁未被尝试。
+	ActionDeferred ActionOutcomeStatus = "deferred"
+	// ActionFailed 表示动作遭遇非 conflict 运行或协议错误。
+	ActionFailed ActionOutcomeStatus = "failed"
 )
 
 // FileOutcome 以原 file plan 的 index 和 target 标识一次可执行 file 动作的结果。
