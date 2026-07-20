@@ -61,7 +61,7 @@ func (context ApplyContext) Clone() ApplyContext {
 }
 
 // ApplyPlan 是完整 observation、file/prune/hook action 与 presentation context 的不可变组合。
-// 零值不是可信计划；只有 PlanApply 成功返回的值才 Valid。
+// 零值不是可信计划；PlanApply 和 PlanLoadedApply 仅在完整组合校验通过后返回 Valid plan。
 type ApplyPlan struct {
 	valid       bool
 	context     ApplyContext
@@ -80,7 +80,7 @@ func (plan ApplyPlan) Context() ApplyContext { return plan.context.Clone() }
 // Observed 返回不共享 desired bytes 的完整 profile 快照。
 func (plan ApplyPlan) Observed() ObservedProfile { return cloneObservedProfile(plan.observed) }
 
-// FileActions 返回不共享 desired/Precondition bytes 的 scope file action。
+// FileActions 返回独立的 scope action slice，并复制每个 Desired.Content。
 func (plan ApplyPlan) FileActions() []FileAction {
 	actions := append([]FileAction(nil), plan.fileActions...)
 	for index := range actions {
