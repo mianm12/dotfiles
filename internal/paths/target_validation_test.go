@@ -169,6 +169,50 @@ func TestValidateTargetSet_RejectsSymlinkTraversalAncestors(t *testing.T) {
 	})
 }
 
+func TestValidateTargetSet_RejectsSelfTraversal(t *testing.T) {
+	root := t.TempDir()
+	realDirectory := filepath.Join(root, "real")
+	if err := os.Mkdir(realDirectory, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", realDirectory, err)
+	}
+	bridge := filepath.Join(root, "bridge")
+	if err := os.Symlink("real", bridge); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", "real", bridge, err)
+	}
+	detour := filepath.Join(root, "detour")
+	if err := os.Symlink(filepath.FromSlash("bridge/.."), detour); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", "bridge/..", detour, err)
+	}
+	input := LabeledTarget{
+		Label: "module bad self-traversing target",
+		Path:  filepath.Join(detour, "bridge"),
+	}
+	resolution := mustResolveTarget(t, input.Path)
+	if !resolution.Traverses(resolution) {
+		t.Fatal("fixture target does not traverse its own leaf identity")
+	}
+
+	validated, err := ValidateTargetSet([]LabeledTarget{input})
+	if !errors.Is(err, ErrTargetOverlap) {
+		t.Fatalf("ValidateTargetSet() error = %v, want ErrTargetOverlap", err)
+	}
+	if validated.targets != nil {
+		t.Fatalf("ValidateTargetSet() targets = %#v, want zero result", validated.targets)
+	}
+	var traversal interface{ Target() LabeledTarget }
+	if !errors.As(err, &traversal) {
+		t.Fatalf("ValidateTargetSet() error = %T %v, want structured self-traversal error", err, err)
+	}
+	if traversal.Target() != input {
+		t.Errorf("self-traversal target = %#v, want %#v", traversal.Target(), input)
+	}
+	for _, want := range []string{input.Label, input.Path, "traverses its own leaf"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("ValidateTargetSet() error = %q, want %q", err, want)
+		}
+	}
+}
+
 func TestValidateTargetSet_PreservesMutualSymlinkAncestorRelation(t *testing.T) {
 	root := t.TempDir()
 	left := filepath.Join(root, "left")
