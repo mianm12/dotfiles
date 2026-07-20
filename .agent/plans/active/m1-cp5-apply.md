@@ -74,6 +74,10 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
 - [ ] 2026-07-20：apply-cli round 2 确认逐 action contract 已闭合第一轮 P2，但发现 prune
   `ActionConflict` 仍被展示为 deferred 的 P2；worker 正校正为具体 `CONFLICT` target，之后进行
   本有效基线第三轮完整 review。
+- [ ] 2026-07-20：**停止条件命中**。apply-cli round 3 确认 round 2 P2 已修复，但发现新的
+  blocking P2：outcome validator 未拒绝“planner 已 deferred 的 prune 却报告 succeeded”，可导致
+  stdout 显示 deferred 而 exit 0。按本 Goal 规则第三轮后停止，不继续补丁、不 closure、不合入 main；
+  等待用户裁决后续处理方式。
 - [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
@@ -202,6 +206,12 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
   action 的最终展示状态。
   Evidence: apply-cli round 1 review 对 runner Result 与 `projectApplyResult` 的交叉审查。
   Impact: runner 必须提供逐 action outcome；CLI 只投影事实，不按计数或字符串前缀猜测。
+
+- Observation: 跨组件 outcome validator 还必须保持 planner 的静态安全门禁单调不减；执行结果
+  不能把 planner 已 deferred 的 prune 提升为 succeeded。
+  Evidence: apply-cli round 3 review 构造 deferred plan + succeeded outcome，当前可输出 deferred
+  文案却返回 exit 0。
+  Impact: 这是有效 P2，但第三轮完整 review 后仍存在 blocking finding，已按停止条件暂停。
 
 ## Decision Log
 
