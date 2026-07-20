@@ -27,14 +27,12 @@ func TestValidateExecutionScope_RejectsUnsupportedExecutablePlan(t *testing.T) {
 				Reason: planner.FileReasonScaffoldRebuild,
 			}},
 		},
-		{
-			name:  "active prune",
-			prune: []planner.PruneAction{{Mode: planner.PruneStateOnly}},
-		},
+		{name: "malformed active prune", prune: []planner.PruneAction{{Mode: planner.PruneStateOnly}}},
 		{
 			name:  "hook run",
 			hooks: []planner.HookAction{{Verb: planner.HookRun}},
 		},
+		{name: "hook skip", hooks: []planner.HookAction{{Verb: planner.HookSkip}}},
 	}
 
 	for _, test := range tests {
@@ -55,8 +53,7 @@ func TestValidateExecutionScope_AllowsCurrentNonExecutableFacts(t *testing.T) {
 		seamLinkAdoptAction("~/.adopt"),
 	}
 	prune := []planner.PruneAction{{Deferred: true}}
-	hooks := []planner.HookAction{{Verb: planner.HookSkip}}
-	if err := validateExecutionScope(files, prune, hooks); err != nil {
+	if err := validateExecutionScope(files, prune, nil); err != nil {
 		t.Fatalf("validateExecutionScope() error = %v", err)
 	}
 }

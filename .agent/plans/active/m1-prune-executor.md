@@ -44,7 +44,7 @@ run_once 动作时会在一切 mutation 前硬拒绝。
 - [x] 2026-07-20：确认 worktree、branch、clean baseline，阅读规范、既有实现、测试与 completed ExecPlans。
 - [x] 2026-07-20：Milestone 1 以测试先行扩展 mixed state transition；窄测通过。
 - [x] 2026-07-20：Milestone 2 以测试先行实现 canonical P1/P2/P3 prune executor；executor 窄测通过。
-- [ ] Milestone 3：以测试先行接入 runner 阶段、确认与 run_once 零写入门禁。
+- [x] 2026-07-20：Milestone 3 以测试先行接入 runner 阶段、确认、prune 与 run_once 零写入门禁；apply 包测试通过。
 - [ ] 运行窄测、完整 diff check、隔离 cache `make check`，保持计划 active 等待独立复核。
 
 ## Milestones
@@ -121,6 +121,10 @@ Checkpoint integration 后验收。
   Rationale: ownership、Precondition 与 deferred 已由 planner 统一表达，避免第二真相源。
 - Decision: run_once 硬门禁在任何 file executor/confirmation/prune/state commit 前检查整个 scoped hook slice。
   Rationale: CP5 明确要求 run 与 skip 都不得被静默忽略，partial scope 已由 PlanLoadedApply 缩小。
+- Decision: executor 的 `ErrPrecondition` 不作为运行错误返回，而由 Result 记录为 unresolved conflict；
+  generic IO/protocol 错误仍返回 error。
+  Rationale: `docs/05-apply-engine.md` §6 要求提交时 Precondition 失配降级 conflict，同时保留
+  target/state 并延迟 prune。
 
 ## Outcomes and Handoff
 

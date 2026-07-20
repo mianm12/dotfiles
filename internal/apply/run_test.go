@@ -141,6 +141,182 @@ func TestRun_RejectsMalformedLinkUpsertBeforeExecutor(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsAnyScopedHookBeforeAllMutation(t *testing.T) {
+	for _, verb := range []planner.HookVerb{planner.HookRun, planner.HookSkip} {
+		t.Run(string(verb), func(t *testing.T) {
+			fixture := newRunSeamFixture(t)
+			fileExecuted := false
+			pruneExecuted := false
+			confirmed := false
+			operations := fixture.operations(executionPlan{
+				files: []planner.FileAction{seamLinkAction("~/.file")},
+				hooks: []planner.HookAction{{Verb: verb, StateKey: "app/hooks/setup"}},
+			})
+			operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+				fileExecuted = true
+				return executor.FileResult{}, nil
+			}
+			operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+				pruneExecuted = true
+				return executor.PruneResult{}, nil
+			}
+
+			result, err := runWithOperations(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
+				confirmed = true
+				return true, nil
+			}}, operations)
+			if !errors.Is(err, ErrUnsupportedPlan) {
+				t.Fatalf("runWithOperations() error = %v, want ErrUnsupportedPlan", err)
+			}
+			if fileExecuted || pruneExecuted || confirmed || result.FileAttempts != 0 ||
+				result.PruneAttempts != 0 || fixture.loaded.commitCalls != 0 {
+				t.Fatalf("mutation before hook gate: result=%#v file=%t prune=%t confirm=%t commit=%d", result, fileExecuted, pruneExecuted, confirmed, fixture.loaded.commitCalls)
+			}
+		})
+	}
+}
+
+func TestRun_OrdersFilesConfirmationPruneAndStoresMixedEffectsOnce(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	fixture.loadBaseline(t, `{
+  "version": 1,
+  "entries": {"~/.orphan":{"module":"old","kind":"scaffold","source":"modules/old/file.template","applied_at":"2026-07-19T00:00:00Z"}},
+  "run_once": {"keep/hooks/done":{"hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executed_at":"2026-07-19T00:00:00Z"}}
+}`)
+	file := seamLinkAction("~/.created")
+	prune := seamPruneAction(t, fixture.loaded.controlPaths, "~/.orphan", planner.PruneReasonScaffold)
+	order := make([]string, 0, 3)
+	operations := fixture.operations(executionPlan{
+		files:  []planner.FileAction{file},
+		prune:  []planner.PruneAction{prune},
+		groups: []planner.PruneConfirmationGroup{{Module: "old"}},
+	})
+	operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+		order = append(order, "file")
+		return executor.FileResult{StateEffect: file.OnSuccess, TargetMutated: true}, nil
+	}
+	operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+		order = append(order, "prune")
+		return executor.PruneResult{StateEffect: prune.OnSuccess}, nil
+	}
+
+	result, err := runWithOperations(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
+		order = append(order, "confirm")
+		return true, nil
+	}}, operations)
+	if err != nil {
+		t.Fatalf("runWithOperations() error = %v", err)
+	}
+	if got := strings.Join(order, ","); got != "file,confirm,prune" {
+		t.Fatalf("execution order = %q", got)
+	}
+	if result.FileAttempts != 1 || result.PruneAttempts != 1 || result.PruneEffects != 1 ||
+		!result.ConfirmRequested || !result.ConfirmAccepted || !result.StateCommitted || fixture.loaded.commitCalls != 1 {
+		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
+	}
+	if _, exists := fixture.loaded.committed.Entry("~/.orphan"); exists {
+		t.Fatal("pruned entry remains in committed state")
+	}
+	if _, exists := fixture.loaded.committed.Entry("~/.created"); !exists {
+		t.Fatal("successful file upsert missing from committed state")
+	}
+	if _, exists := fixture.loaded.committed.RunOnce("keep/hooks/done"); !exists {
+		t.Fatal("unrelated run_once was not preserved")
+	}
+}
+
+func TestRun_ConfirmationRefusalDefersAllPruneButStoresFileSuccess(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	fixture.loadBaseline(t, `{"version":1,"entries":{"~/.orphan":{"module":"old","kind":"scaffold","source":"modules/old/file.template","applied_at":"2026-07-19T00:00:00Z"}},"run_once":{}}`)
+	file := seamLinkAction("~/.created")
+	prune := seamPruneAction(t, fixture.loaded.controlPaths, "~/.orphan", planner.PruneReasonScaffold)
+	operations := fixture.operations(executionPlan{
+		files: []planner.FileAction{file}, prune: []planner.PruneAction{prune},
+		groups: []planner.PruneConfirmationGroup{{Module: "old"}},
+	})
+	operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+		return executor.FileResult{StateEffect: file.OnSuccess, TargetMutated: true}, nil
+	}
+	pruneExecuted := false
+	operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+		pruneExecuted = true
+		return executor.PruneResult{}, nil
+	}
+
+	result, err := runWithOperations(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
+		return false, nil
+	}}, operations)
+	if err != nil {
+		t.Fatalf("runWithOperations() error = %v", err)
+	}
+	if pruneExecuted || !result.PruneDeferred || !result.ConfirmRequested || result.ConfirmAccepted ||
+		result.PruneAttempts != 0 || !result.StateCommitted || fixture.loaded.commitCalls != 1 {
+		t.Fatalf("run result = %#v pruneExecuted=%t commitCalls=%d", result, pruneExecuted, fixture.loaded.commitCalls)
+	}
+	if _, exists := fixture.loaded.committed.Entry("~/.orphan"); !exists {
+		t.Fatal("confirmation refusal removed orphan state")
+	}
+}
+
+func TestRun_MissingConfirmationDefersWholeModulePrune(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	prune := seamPruneAction(t, fixture.loaded.controlPaths, "~/.orphan", planner.PruneReasonScaffold)
+	operations := fixture.operations(executionPlan{
+		prune:  []planner.PruneAction{prune},
+		groups: []planner.PruneConfirmationGroup{{Module: "old"}},
+	})
+	pruneExecuted := false
+	operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+		pruneExecuted = true
+		return executor.PruneResult{}, nil
+	}
+
+	result, err := runWithOperations(Options{}, operations)
+	if err != nil {
+		t.Fatalf("runWithOperations() error = %v", err)
+	}
+	if pruneExecuted || !result.PruneDeferred || !result.ConfirmRequested || result.ConfirmAccepted ||
+		result.PruneAttempts != 0 || result.StateCommitted || fixture.loaded.commitCalls != 0 {
+		t.Fatalf("run result = %#v pruneExecuted=%t commitCalls=%d", result, pruneExecuted, fixture.loaded.commitCalls)
+	}
+}
+
+func TestRun_PrunePreconditionBecomesConflictAndCommitsPriorPrune(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	fixture.loadBaseline(t, `{
+  "version":1,
+  "entries":{
+    "~/.first":{"module":"old","kind":"scaffold","source":"modules/old/first.template","applied_at":"2026-07-19T00:00:00Z"},
+    "~/.second":{"module":"old","kind":"symlink","source":"modules/old/second","link_dest":"/old/second","applied_at":"2026-07-19T00:00:00Z"}
+  },
+  "run_once":{}
+}`)
+	first := seamPruneAction(t, fixture.loaded.controlPaths, "~/.first", planner.PruneReasonScaffold)
+	second := seamPruneAction(t, fixture.loaded.controlPaths, "~/.second", planner.PruneReasonOwned)
+	operations := fixture.operations(executionPlan{prune: []planner.PruneAction{first, second}})
+	operations.pruneExecute = func(_ paths.ControlPlanePaths, action planner.PruneAction) (executor.PruneResult, error) {
+		if action.Target == first.Target {
+			return executor.PruneResult{StateEffect: action.OnSuccess}, nil
+		}
+		return executor.PruneResult{StateEffect: action.OnFailure}, executor.ErrPrecondition
+	}
+
+	result, err := runWithOperations(Options{}, operations)
+	if err != nil {
+		t.Fatalf("runWithOperations() error = %v, want downgraded conflict", err)
+	}
+	if result.PruneAttempts != 2 || result.PruneEffects != 1 || result.UnresolvedConflicts != 1 ||
+		!result.PruneDeferred || !result.StateCommitted || fixture.loaded.commitCalls != 1 {
+		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
+	}
+	if _, exists := fixture.loaded.committed.Entry(first.Target); exists {
+		t.Fatal("successful first prune was not persisted")
+	}
+	if _, exists := fixture.loaded.committed.Entry(second.Target); !exists {
+		t.Fatal("failed second prune removed state")
+	}
+}
+
 func TestRun_RejectsExecutionResultsThatContradictActionClass(t *testing.T) {
 	type effectChoice uint8
 	const (
@@ -631,10 +807,11 @@ func TestRun_RealPreconditionFailureCommitsPriorSuccessAndPreservesOldEntry(t *t
 	}
 
 	result, err := runWithOperations(fixture.options(), operations)
-	if !errors.Is(err, executor.ErrPrecondition) {
-		t.Fatalf("runWithOperations() error = %v, want executor.ErrPrecondition", err)
+	if err != nil {
+		t.Fatalf("runWithOperations() error = %v, want downgraded conflict", err)
 	}
-	if result.FileAttempts != 2 || result.TargetCommits != 1 || !result.StateCommitted {
+	if result.FileAttempts != 2 || result.TargetCommits != 1 || result.UnresolvedConflicts != 1 ||
+		!result.StateCommitted {
 		t.Fatalf("partial result = %#v", result)
 	}
 	content, readErr := os.ReadFile(fixture.linkTarget)
@@ -740,8 +917,24 @@ func (fixture runSeamFixture) operations(plan executionPlan) runOperations {
 		execute: func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
 			return executor.FileResult{}, nil
 		},
+		pruneExecute: func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+			return executor.PruneResult{}, nil
+		},
 		now: func() time.Time { return time.Date(2026, 7, 20, 1, 2, 3, 0, time.UTC) },
 	}
+}
+
+func (fixture runSeamFixture) loadBaseline(t *testing.T, raw string) {
+	t.Helper()
+	path := filepath.Join(fixture.loaded.controlPaths.EffectiveHome(), "baseline.json")
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(baseline) error = %v", err)
+	}
+	loaded, err := state.Load(path)
+	if err != nil {
+		t.Fatalf("state.Load(baseline) error = %v", err)
+	}
+	fixture.loaded.baselineState = loaded
 }
 
 type fakeMutationSession struct {
@@ -830,6 +1023,39 @@ func seamLinkAdoptAction(target string) planner.FileAction {
 	}
 	action.Precondition.SourcePath = ""
 	action.Precondition.RequireRegularSource = false
+	return action
+}
+
+func seamPruneAction(
+	t *testing.T,
+	control paths.ControlPlanePaths,
+	key string,
+	reason planner.PruneReason,
+) planner.PruneAction {
+	t.Helper()
+	targetPath := filepath.Join(control.EffectiveHome(), filepath.Base(key))
+	resolution, err := paths.ResolveTarget(targetPath)
+	if err != nil {
+		t.Fatalf("paths.ResolveTarget(prune) error = %v", err)
+	}
+	action := planner.PruneAction{
+		Mode:   planner.PruneStateOnly,
+		Target: key,
+		Module: "old",
+		Reason: reason,
+		Precondition: planner.Precondition{
+			TargetPath: targetPath, TargetResolution: resolution, Leaf: planner.LeafCondition{Kind: planner.LeafAny},
+		},
+		OnSuccess: planner.StateEffect{Kind: planner.StateDelete, Key: key},
+		OnFailure: planner.StateEffect{Kind: planner.StatePreserve},
+	}
+	if reason == planner.PruneReasonUnowned {
+		action.Warning = true
+		action.Precondition.Leaf = planner.LeafCondition{Kind: planner.LeafNotOwnedSymlink, LinkDest: "/old"}
+	} else if reason == planner.PruneReasonOwned {
+		action.Mode = planner.PruneTargetAndState
+		action.Precondition.Leaf = planner.LeafCondition{Kind: planner.LeafExactSymlink, LinkDest: "/old/second"}
+	}
 	return action
 }
 

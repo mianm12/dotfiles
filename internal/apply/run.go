@@ -22,18 +22,30 @@ type Options struct {
 	Modules    []string
 	Force      bool
 	NoPrune    bool
+	Confirm    ConfirmPrune
 }
+
+// ConfirmPrune 请求一次 whole-module prune 汇总确认。accepted=false 表示用户拒绝；error 表示
+// 确认 IO 失败。调用方不得在 callback 中执行 target/state mutation。
+type ConfirmPrune func([]planner.PruneConfirmationGroup) (accepted bool, err error)
 
 // Result 保存内部 runner 的可验证摘要，不定义 CLI 输出或退出码。FileAttempts 统计 executor
 // 调用，TargetCommits 统计 executor 报告已越过的 target 提交点，AdoptionEffects 统计已接受的
 // adopt OnSuccess effect；这些事实即使最终 state Store 失败也保留。StateCommitted 只表示候选
 // state 已成功原子发布。
 type Result struct {
-	Plan            planner.ApplyPlan
-	FileAttempts    int
-	AdoptionEffects int
-	TargetCommits   int
-	StateCommitted  bool
+	Plan                planner.ApplyPlan
+	FileAttempts        int
+	AdoptionEffects     int
+	TargetCommits       int
+	PruneAttempts       int
+	PruneEffects        int
+	PruneCommits        int
+	PruneDeferred       bool
+	UnresolvedConflicts int
+	ConfirmRequested    bool
+	ConfirmAccepted     bool
+	StateCommitted      bool
 }
 
 type mutationSession interface {
@@ -49,27 +61,30 @@ type loadedMutation interface {
 }
 
 type executionPlan struct {
-	value planner.ApplyPlan
-	files []planner.FileAction
-	prune []planner.PruneAction
-	hooks []planner.HookAction
+	value  planner.ApplyPlan
+	files  []planner.FileAction
+	prune  []planner.PruneAction
+	groups []planner.PruneConfirmationGroup
+	hooks  []planner.HookAction
 }
 
 type runOperations struct {
-	begin   func(dotruntime.Overrides) (mutationSession, error)
-	plan    func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (executionPlan, error)
-	execute func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error)
-	now     func() time.Time
+	begin        func(dotruntime.Overrides) (mutationSession, error)
+	plan         func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (executionPlan, error)
+	execute      func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error)
+	pruneExecute func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error)
+	now          func() time.Time
 }
 
-// Run 在一个 mutation lock 周期内完成 strict load、exact-input plan、CP4 scope gate、file
-// execution 和一次 state commit。它不连接 CLI，也不执行 backup/prune/hooks。
+// Run 在一个 mutation lock 周期内完成 strict load、exact-input plan、CP5 scope gate、file、
+// confirmation、prune execution 和一次 state commit。它不连接 CLI，也不执行 backup/hooks。
 func Run(options Options) (Result, error) {
 	return runWithOperations(options, defaultRunOperations())
 }
 
 func runWithOperations(options Options, operations runOperations) (result Result, resultErr error) {
-	if operations.begin == nil || operations.plan == nil || operations.execute == nil || operations.now == nil {
+	if operations.begin == nil || operations.plan == nil || operations.execute == nil ||
+		operations.pruneExecute == nil || operations.now == nil {
 		return Result{}, fmt.Errorf("%w: apply runner operations are incomplete", ErrExecutionProtocol)
 	}
 	session, err := operations.begin(options.Runtime)
@@ -104,6 +119,8 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	}
 
 	updates := make([]state.EntryUpdate, 0, len(planned.files))
+	deletes := make([]string, 0, len(planned.prune))
+	filesConverged := true
 	for index, action := range planned.files {
 		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
 			continue
@@ -142,15 +159,86 @@ func runWithOperations(options Options, operations runOperations) (result Result
 			}
 		}
 		if executeErr != nil {
-			resultErr = fmt.Errorf("execute file action %d for %q: %w", index, action.Target, executeErr)
+			if protocolErr == nil && errors.Is(executeErr, executor.ErrPrecondition) {
+				result.UnresolvedConflicts++
+			} else {
+				resultErr = fmt.Errorf("execute file action %d for %q: %w", index, action.Target, executeErr)
+			}
+			filesConverged = false
 			break
 		}
 	}
 
-	if len(updates) == 0 {
+	activePrune := false
+	for _, action := range planned.prune {
+		if !action.Deferred {
+			activePrune = true
+			break
+		}
+	}
+	if !filesConverged || !activePrune {
+		result.PruneDeferred = len(planned.prune) > 0
+	} else {
+		confirmed := true
+		if len(planned.groups) > 0 {
+			result.ConfirmRequested = true
+			if options.Confirm == nil {
+				confirmed = false
+			} else {
+				accepted, confirmErr := options.Confirm(cloneConfirmationGroups(planned.groups))
+				if confirmErr != nil {
+					resultErr = errors.Join(resultErr, fmt.Errorf("confirm whole-module prune: %w", confirmErr))
+					confirmed = false
+				} else {
+					confirmed = accepted
+					result.ConfirmAccepted = accepted
+				}
+			}
+		}
+		if !confirmed {
+			result.PruneDeferred = true
+		} else {
+			for index, action := range planned.prune {
+				if action.Deferred {
+					result.PruneDeferred = true
+					continue
+				}
+				result.PruneAttempts++
+				pruneResult, pruneErr := operations.pruneExecute(mutation.control(), action)
+				if pruneResult.TargetMutated {
+					result.PruneCommits++
+				}
+				success, failure, protocolErr := validatePruneResult(action, pruneResult, pruneErr)
+				if protocolErr != nil {
+					pruneErr = errors.Join(pruneErr, protocolErr)
+				}
+				switch {
+				case protocolErr != nil:
+				case success:
+					deletes = append(deletes, action.OnSuccess.Key)
+					result.PruneEffects++
+				case failure:
+					if pruneErr == nil {
+						pruneErr = fmt.Errorf("%w: prune action %d for %q returned failure effect without error", ErrExecutionProtocol, index, action.Target)
+					}
+				}
+				if pruneErr != nil {
+					if protocolErr == nil && errors.Is(pruneErr, executor.ErrPrecondition) {
+						result.UnresolvedConflicts++
+					} else {
+						resultErr = errors.Join(resultErr, fmt.Errorf("execute prune action %d for %q: %w", index, action.Target, pruneErr))
+					}
+					result.PruneDeferred = true
+					break
+				}
+			}
+		}
+	}
+
+	if len(updates) == 0 && len(deletes) == 0 {
 		return result, resultErr
 	}
-	candidate, changed, transitionErr := state.TransitionEntries(mutation.baseline(), updates)
+	candidate, changed, transitionErr := state.TransitionEntries(mutation.baseline(), updates, deletes...)
 	if transitionErr != nil {
 		return result, errors.Join(resultErr, transitionErr)
 	}
@@ -162,6 +250,33 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	}
 	result.StateCommitted = true
 	return result, resultErr
+}
+
+func validatePruneResult(
+	action planner.PruneAction,
+	result executor.PruneResult,
+	executeErr error,
+) (success, failure bool, err error) {
+	success = result.StateEffect == action.OnSuccess
+	failure = result.StateEffect == action.OnFailure
+	if !success && !failure {
+		return false, false, fmt.Errorf("%w: prune action %q returned an unknown state effect", ErrExecutionProtocol, action.Target)
+	}
+	if result.TargetMutated != (success && action.Mode == planner.PruneTargetAndState) {
+		return false, false, fmt.Errorf("%w: prune action %q returned inconsistent target commit", ErrExecutionProtocol, action.Target)
+	}
+	if success && executeErr != nil {
+		return false, false, fmt.Errorf("%w: prune action %q returned success with an error", ErrExecutionProtocol, action.Target)
+	}
+	return success, failure, nil
+}
+
+func cloneConfirmationGroups(groups []planner.PruneConfirmationGroup) []planner.PruneConfirmationGroup {
+	cloned := append([]planner.PruneConfirmationGroup(nil), groups...)
+	for index := range cloned {
+		cloned[index].Targets = append([]planner.PruneConfirmationTarget(nil), cloned[index].Targets...)
+	}
+	return cloned
 }
 
 func validateFileResult(
@@ -293,13 +408,15 @@ func defaultRunOperations() runOperations {
 				return executionPlan{}, err
 			}
 			return executionPlan{
-				value: plan,
-				files: plan.FileActions(),
-				prune: plan.Prune().Actions(),
-				hooks: plan.Hooks().Actions(),
+				value:  plan,
+				files:  plan.FileActions(),
+				prune:  plan.Prune().Actions(),
+				groups: plan.Prune().ConfirmationGroups(),
+				hooks:  plan.Hooks().Actions(),
 			}, nil
 		},
-		execute: executor.ExecuteFile,
-		now:     time.Now,
+		execute:      executor.ExecuteFile,
+		pruneExecute: executor.ExecutePrune,
+		now:          time.Now,
 	}
 }
