@@ -159,7 +159,7 @@ func runWithOperations(options Options, operations runOperations) (result Result
 			}
 		}
 		if executeErr != nil {
-			if protocolErr == nil && errors.Is(executeErr, executor.ErrPrecondition) {
+			if protocolErr == nil && executor.IsPurePreconditionMismatch(executeErr) {
 				result.UnresolvedConflicts++
 			} else {
 				resultErr = fmt.Errorf("execute file action %d for %q: %w", index, action.Target, executeErr)
@@ -223,7 +223,7 @@ func runWithOperations(options Options, operations runOperations) (result Result
 					}
 				}
 				if pruneErr != nil {
-					if protocolErr == nil && errors.Is(pruneErr, executor.ErrPrecondition) {
+					if protocolErr == nil && executor.IsPurePreconditionMismatch(pruneErr) {
 						result.UnresolvedConflicts++
 					} else {
 						resultErr = errors.Join(resultErr, fmt.Errorf("execute prune action %d for %q: %w", index, action.Target, pruneErr))

@@ -47,6 +47,8 @@ run_once 动作时会在一切 mutation 前硬拒绝。
 - [x] 2026-07-20：Milestone 3 以测试先行接入 runner 阶段、确认、prune 与 run_once 零写入门禁；apply 包测试通过。
 - [x] 2026-07-20：`go test ./internal/state ./internal/executor ./internal/apply`、branch diff check
   与隔离 cache `make check` 通过；保持计划 active 等待独立复核。
+- [x] 2026-07-20：首轮独立 review 确认 P1 finding：广义 `ErrPrecondition` 会把观测/cleanup IO
+  错误误降级 conflict；新增 executor 单一精确分类与 file/prune 回归，窄测通过，等待完整复审。
 
 ## Milestones
 
@@ -117,6 +119,8 @@ Checkpoint integration 后验收。
   继续复用只读的既有 module cache，只隔离 `GOCACHE`，未下载或修改依赖。
 - Observation: 首次 `make check` 在测试 helper 报告 staticcheck QF1003；改为封闭 switch 后
   apply 窄测与 scoped lint 通过，未改变产品行为。
+- Observation: `ErrPrecondition` 原先同时包装明确证据失配与 ResolveTarget/Lstat/cleanup 等运行
+  错误，`errors.Is` 无法证明联合错误仅含 mismatch；review 以 relink mismatch + cleanup 指出该边界。
 
 ## Decision Log
 
@@ -124,15 +128,20 @@ Checkpoint integration 后验收。
   Rationale: ownership、Precondition 与 deferred 已由 planner 统一表达，避免第二真相源。
 - Decision: run_once 硬门禁在任何 file executor/confirmation/prune/state commit 前检查整个 scoped hook slice。
   Rationale: CP5 明确要求 run 与 skip 都不得被静默忽略，partial scope 已由 PlanLoadedApply 缩小。
-- Decision: executor 的 `ErrPrecondition` 不作为运行错误返回，而由 Result 记录为 unresolved conflict；
-  generic IO/protocol 错误仍返回 error。
+- Decision: 只有 executor 精确分类的纯 Precondition mismatch 由 Result 记录为 unresolved conflict；
+  generic IO/protocol/cleanup 错误仍返回 error。
   Rationale: `docs/05-apply-engine.md` §6 要求提交时 Precondition 失配降级 conflict，同时保留
   target/state 并延迟 prune。
+- Decision: executor 暴露 `ErrPreconditionMismatch` 与 `IsPurePreconditionMismatch`，递归要求完整
+  error tree 的每个 leaf 都是明确 mismatch；runner 不解析错误文案，也不把混入 IO/cleanup 的
+  `errors.Join` 降级。
+  Rationale: 精确分类由产生错误的单一层表达，同时保留旧 `ErrPrecondition` 诊断族兼容。
 
 ## Outcomes and Handoff
 
 实现与本地门禁完成，计划保持 active 等待独立 reviewer。分支新增 mixed state transition、
 canonical prune executor，以及 files→confirmation→prune→single Store runner；scope 内任何
-run_once action 都在 mutation 前拒绝。提交时 Precondition 失配记录为 unresolved conflict，
-generic IO/protocol error 仍按运行错误返回。未接入 CLI、backup、force 或 hook execution；
+run_once action 都在 mutation 前拒绝。提交时纯证据 Precondition mismatch 记录为 unresolved
+conflict；路径解析、观测、权限、cleanup 或任何混合错误仍按运行错误返回。未接入 CLI、backup、
+force 或 hook execution；
 远端 macOS/Linux CI 未运行，留待 Checkpoint integration 验收。

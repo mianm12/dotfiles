@@ -34,7 +34,7 @@ func ExecutePrune(control paths.ControlPlanePaths, action planner.PruneAction) (
 	}
 	if err := os.Remove(action.Precondition.TargetPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return failure, fmt.Errorf("%w: prune target disappeared before delete: %w", ErrPrecondition, err)
+			return failure, fmt.Errorf("%w: prune target disappeared before delete", ErrPreconditionMismatch)
 		}
 		return failure, fmt.Errorf("delete owned prune target: %w", err)
 	}

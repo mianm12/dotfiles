@@ -19,7 +19,41 @@ var (
 	ErrUnsupportedFileAction = errors.New("unsupported file action")
 	// ErrPrecondition 表示计划时的 target、source、祖先或控制面事实已不成立。
 	ErrPrecondition = errors.New("file action precondition failed")
+	// ErrPreconditionMismatch 表示提交证据已明确不再等于计划快照，可安全降级为 conflict。
+	// 观测、路径解析、权限或 cleanup 错误不属于此分类。
+	ErrPreconditionMismatch error = preconditionMismatchError{}
 )
+
+type preconditionMismatchError struct{}
+
+func (preconditionMismatchError) Error() string { return "file action precondition evidence mismatch" }
+
+func (preconditionMismatchError) Is(target error) bool { return target == ErrPrecondition }
+
+// IsPurePreconditionMismatch 仅在整个错误链都由明确证据失配构成时返回 true。errors.Join 中
+// 只要混入 IO、cleanup 或其他运行错误即返回 false。
+func IsPurePreconditionMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !IsPurePreconditionMismatch(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return IsPurePreconditionMismatch(wrapped.Unwrap())
+	}
+	var mismatch preconditionMismatchError
+	return errors.As(err, &mismatch)
+}
 
 const (
 	temporaryDirectoryPrefix = ".dot-link-"
@@ -315,7 +349,7 @@ func validateTargetPrecondition(
 		return fmt.Errorf("%w: resolve target: %w", ErrPrecondition, err)
 	}
 	if !resolution.Equal(precondition.TargetResolution) {
-		return fmt.Errorf("%w: target identity changed", ErrPrecondition)
+		return fmt.Errorf("%w: target identity changed", ErrPreconditionMismatch)
 	}
 	observe := planner.ObserveTarget
 	if precondition.Leaf.RequiresRegularDigest() {
@@ -326,7 +360,7 @@ func validateTargetPrecondition(
 		return fmt.Errorf("%w: observe target: %w", ErrPrecondition, err)
 	}
 	if !precondition.Leaf.Matches(observed) {
-		return fmt.Errorf("%w: target leaf condition no longer holds", ErrPrecondition)
+		return fmt.Errorf("%w: target leaf condition no longer holds", ErrPreconditionMismatch)
 	}
 	return nil
 }
@@ -340,7 +374,7 @@ func validateRegularModuleSource(repository string, action planner.FileAction) e
 	if relative == "." || filepath.IsAbs(relative) || relative == ".." ||
 		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
 		filepath.ToSlash(relative) != action.Desired.Source {
-		return fmt.Errorf("%w: link source is outside its planned module path", ErrPrecondition)
+		return fmt.Errorf("%w: link source is outside its planned module path", ErrPreconditionMismatch)
 	}
 
 	components := []string{"modules", action.Desired.Module}
@@ -353,14 +387,14 @@ func validateRegularModuleSource(repository string, action planner.FileAction) e
 			return fmt.Errorf("%w: inspect link source component %q: %w", ErrPrecondition, current, err)
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("%w: link source component %q is a symlink", ErrPrecondition, current)
+			return fmt.Errorf("%w: link source component %q is a symlink", ErrPreconditionMismatch, current)
 		}
 		last := index == len(components)-1
 		switch {
 		case last && !info.Mode().IsRegular():
-			return fmt.Errorf("%w: link source %q is not a regular file", ErrPrecondition, current)
+			return fmt.Errorf("%w: link source %q is not a regular file", ErrPreconditionMismatch, current)
 		case !last && !info.IsDir():
-			return fmt.Errorf("%w: link source ancestor %q is not a directory", ErrPrecondition, current)
+			return fmt.Errorf("%w: link source ancestor %q is not a directory", ErrPreconditionMismatch, current)
 		}
 	}
 	return nil

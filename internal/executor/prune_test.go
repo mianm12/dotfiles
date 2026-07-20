@@ -98,8 +98,46 @@ func TestExecutePrune_PreconditionMismatchPreservesTargetAndState(t *testing.T) 
 	if result.TargetMutated || result.StateEffect != action.OnFailure {
 		t.Fatalf("ExecutePrune() result = %#v", result)
 	}
+	if !IsPurePreconditionMismatch(err) {
+		t.Fatalf("ExecutePrune() error = %v, want pure evidence mismatch", err)
+	}
 	if got, readErr := os.ReadFile(target); readErr != nil || string(got) != "replacement" {
 		t.Fatalf("target after failed prune = %q, %v", got, readErr)
+	}
+}
+
+func TestExecutePrune_ObservationIOIsNotPureMismatch(t *testing.T) {
+	fixture := newLinkFixture(t)
+	parent := filepath.Join(fixture.home, "loop-parent")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatalf("os.Mkdir() error = %v", err)
+	}
+	target := filepath.Join(parent, "owned")
+	if err := os.Symlink("/planned", target); err != nil {
+		t.Fatalf("os.Symlink(target) error = %v", err)
+	}
+	action := pruneAction(t, target, planner.PruneReasonOwned, planner.PruneTargetAndState, planner.LeafCondition{
+		Kind: planner.LeafExactSymlink, LinkDest: "/planned",
+	})
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("os.Remove(target) error = %v", err)
+	}
+	if err := os.Remove(parent); err != nil {
+		t.Fatalf("os.Remove(parent) error = %v", err)
+	}
+	if err := os.Symlink("loop-parent", parent); err != nil {
+		t.Fatalf("os.Symlink(loop parent) error = %v", err)
+	}
+
+	result, err := ExecutePrune(fixture.control, action)
+	if !errors.Is(err, ErrPrecondition) {
+		t.Fatalf("ExecutePrune() error = %v, want ErrPrecondition", err)
+	}
+	if IsPurePreconditionMismatch(err) {
+		t.Fatalf("ExecutePrune() error = %v, resolution IO must remain runtime error", err)
+	}
+	if result.TargetMutated || result.StateEffect != action.OnFailure {
+		t.Fatalf("ExecutePrune() result = %#v", result)
 	}
 }
 

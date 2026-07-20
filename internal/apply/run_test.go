@@ -2,6 +2,7 @@ package apply
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -298,7 +299,7 @@ func TestRun_PrunePreconditionBecomesConflictAndCommitsPriorPrune(t *testing.T) 
 		if action.Target == first.Target {
 			return executor.PruneResult{StateEffect: action.OnSuccess}, nil
 		}
-		return executor.PruneResult{StateEffect: action.OnFailure}, executor.ErrPrecondition
+		return executor.PruneResult{StateEffect: action.OnFailure}, executor.ErrPreconditionMismatch
 	}
 
 	result, err := runWithOperations(Options{}, operations)
@@ -314,6 +315,57 @@ func TestRun_PrunePreconditionBecomesConflictAndCommitsPriorPrune(t *testing.T) 
 	}
 	if _, exists := fixture.loaded.committed.Entry(second.Target); !exists {
 		t.Fatal("failed second prune removed state")
+	}
+}
+
+func TestRun_PreconditionClassificationRequiresPureMismatch(t *testing.T) {
+	runtimeErr := errors.New("observation IO failed")
+	cleanupErr := errors.New("cleanup failed")
+	tests := []struct {
+		name           string
+		prune          bool
+		executeErr     error
+		wantConflict   int
+		wantRuntimeErr error
+	}{
+		{name: "file pure mismatch", executeErr: executor.ErrPreconditionMismatch, wantConflict: 1},
+		{name: "file IO", executeErr: fmt.Errorf("%w: %w", executor.ErrPrecondition, runtimeErr), wantRuntimeErr: runtimeErr},
+		{name: "file mismatch plus cleanup", executeErr: errors.Join(executor.ErrPreconditionMismatch, cleanupErr), wantRuntimeErr: cleanupErr},
+		{name: "prune pure mismatch", prune: true, executeErr: executor.ErrPreconditionMismatch, wantConflict: 1},
+		{name: "prune IO", prune: true, executeErr: fmt.Errorf("%w: %w", executor.ErrPrecondition, runtimeErr), wantRuntimeErr: runtimeErr},
+		{name: "prune mismatch plus cleanup", prune: true, executeErr: errors.Join(executor.ErrPreconditionMismatch, cleanupErr), wantRuntimeErr: cleanupErr},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRunSeamFixture(t)
+			var operations runOperations
+			if test.prune {
+				action := seamPruneAction(t, fixture.loaded.controlPaths, "~/.orphan", planner.PruneReasonScaffold)
+				operations = fixture.operations(executionPlan{prune: []planner.PruneAction{action}})
+				operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+					return executor.PruneResult{StateEffect: action.OnFailure}, test.executeErr
+				}
+			} else {
+				action := seamLinkAction("~/.file")
+				operations = fixture.operations(executionPlan{files: []planner.FileAction{action}})
+				operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+					return executor.FileResult{StateEffect: action.OnFailure}, test.executeErr
+				}
+			}
+
+			result, err := runWithOperations(Options{}, operations)
+			if test.wantRuntimeErr == nil {
+				if err != nil {
+					t.Fatalf("runWithOperations() error = %v, want downgraded conflict", err)
+				}
+			} else if !errors.Is(err, test.wantRuntimeErr) {
+				t.Fatalf("runWithOperations() error = %v, want runtime error %v", err, test.wantRuntimeErr)
+			}
+			if result.UnresolvedConflicts != test.wantConflict || result.StateCommitted || fixture.loaded.commitCalls != 0 {
+				t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
+			}
+		})
 	}
 }
 

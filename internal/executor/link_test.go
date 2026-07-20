@@ -155,6 +155,22 @@ func TestExecuteLink_PreconditionFailuresPreserveTarget(t *testing.T) {
 		assertMissing(t, target)
 	})
 
+	t.Run("source observation IO is not a pure mismatch", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target := filepath.Join(fixture.home, "missing-source-io-target")
+		action := fixture.planLink(t, target, fixture.source, planner.HistoricalState{}, false)
+		if err := os.Remove(fixture.source); err != nil {
+			t.Fatalf("os.Remove() error = %v", err)
+		}
+
+		result, err := ExecuteFile(fixture.control, action)
+		assertPreconditionFailure(t, result, action, err)
+		if IsPurePreconditionMismatch(err) {
+			t.Fatalf("ExecuteFile() error = %v, source Lstat IO must remain runtime error", err)
+		}
+		assertMissing(t, target)
+	})
+
 	t.Run("source module became symlink", func(t *testing.T) {
 		fixture := newLinkFixture(t)
 		target := filepath.Join(fixture.home, "escaped-source-target")
@@ -286,6 +302,45 @@ func TestExecuteLink_RelinkFailuresPreserveCommitBoundary(t *testing.T) {
 
 		result, err := executeFile(fixture.control, action, operations)
 		assertPreconditionFailure(t, result, action, err)
+		if !IsPurePreconditionMismatch(err) {
+			t.Fatalf("executeFile() error = %v, want pure evidence mismatch", err)
+		}
+		assertLinkText(t, target, intruder)
+		assertNoExecutorTemps(t, filepath.Dir(target))
+	})
+
+	t.Run("target mismatch joined with cleanup error is runtime failure", func(t *testing.T) {
+		fixture := newLinkFixture(t)
+		target, _, action := fixture.planRelink(t)
+		operations := defaultFileOperations()
+		realSymlink := operations.symlink
+		realRemove := operations.remove
+		intruder := filepath.Join(fixture.root, "intruder-with-cleanup-error")
+		operations.symlink = func(oldname, newname string) error {
+			if err := realSymlink(oldname, newname); err != nil {
+				return err
+			}
+			if err := os.Remove(target); err != nil {
+				return err
+			}
+			return os.Symlink(intruder, target)
+		}
+		cleanupErr := errors.New("cleanup failed")
+		operations.remove = func(name string) error {
+			if filepath.Base(name) == temporaryLinkName {
+				if err := realRemove(name); err != nil {
+					return err
+				}
+				return cleanupErr
+			}
+			return realRemove(name)
+		}
+
+		result, err := executeFile(fixture.control, action, operations)
+		assertPreconditionFailure(t, result, action, err)
+		if !errors.Is(err, cleanupErr) || IsPurePreconditionMismatch(err) {
+			t.Fatalf("executeFile() error = %v, want mismatch joined with runtime cleanup", err)
+		}
 		assertLinkText(t, target, intruder)
 		assertNoExecutorTemps(t, filepath.Dir(target))
 	})
