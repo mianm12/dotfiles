@@ -141,6 +141,7 @@ func validateTargetSet(inputs []LabeledTarget, resolver *targetResolver) (Target
 		resolved[index] = resolvedLabeledTarget{input: input, resolution: resolution}
 	}
 
+	var firstNonEqualConflict *TargetConflictError
 	for leftIndex := range resolved {
 		for rightIndex := leftIndex + 1; rightIndex < len(resolved); rightIndex++ {
 			left := resolved[leftIndex]
@@ -149,12 +150,23 @@ func validateTargetSet(inputs []LabeledTarget, resolver *targetResolver) (Target
 			if relation == pathRelationNone {
 				continue
 			}
-			return TargetSet{}, &TargetConflictError{
+			conflict := &TargetConflictError{
 				left:     left.input,
 				right:    right.input,
 				relation: exportedTargetRelation(relation),
 			}
+			if relation&pathRelationEqual != 0 {
+				return TargetSet{}, conflict
+			}
+			if firstNonEqualConflict == nil {
+				firstNonEqualConflict = conflict
+			}
 		}
+	}
+	// equal identity 比单纯的 ancestor 拓扑冲突语义更强；无 equal 时仍按输入顺序报告首个
+	// non-equal pair，保持既有 provenance 稳定。
+	if firstNonEqualConflict != nil {
+		return TargetSet{}, firstNonEqualConflict
 	}
 	// pair relation 携带双方 provenance 与更具体的冲突事实；仅在集合没有 pair conflict 时报告
 	// unary self traversal，避免遮蔽 equal/ancestor 关系。
