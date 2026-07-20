@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mianm12/dotfiles/internal/backup"
 	"github.com/mianm12/dotfiles/internal/executor"
 	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/planner"
@@ -46,6 +47,7 @@ type Result struct {
 	ConfirmRequested    bool
 	ConfirmAccepted     bool
 	StateCommitted      bool
+	BackupPaths         []string
 }
 
 type mutationSession interface {
@@ -69,11 +71,13 @@ type executionPlan struct {
 }
 
 type runOperations struct {
-	begin        func(dotruntime.Overrides) (mutationSession, error)
-	plan         func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (executionPlan, error)
-	execute      func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error)
-	pruneExecute func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error)
-	now          func() time.Time
+	begin         func(dotruntime.Overrides) (mutationSession, error)
+	plan          func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (executionPlan, error)
+	execute       func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error)
+	backup        func(string) (*backup.Batch, error)
+	executeBackup func(paths.ControlPlanePaths, planner.FileAction, *backup.Batch) (executor.FileResult, error)
+	pruneExecute  func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error)
+	now           func() time.Time
 }
 
 // Run 在一个 mutation lock 周期内完成 strict load、exact-input plan、CP5 scope gate、file、
@@ -84,6 +88,7 @@ func Run(options Options) (Result, error) {
 
 func runWithOperations(options Options, operations runOperations) (result Result, resultErr error) {
 	if operations.begin == nil || operations.plan == nil || operations.execute == nil ||
+		operations.backup == nil || operations.executeBackup == nil ||
 		operations.pruneExecute == nil || operations.now == nil {
 		return Result{}, fmt.Errorf("%w: apply runner operations are incomplete", ErrExecutionProtocol)
 	}
@@ -121,12 +126,30 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	updates := make([]state.EntryUpdate, 0, len(planned.files))
 	deletes := make([]string, 0, len(planned.prune))
 	filesConverged := true
+	var backupBatch *backup.Batch
 	for index, action := range planned.files {
 		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
 			continue
 		}
+		if action.Verb == planner.FileBackupReplace && backupBatch == nil {
+			backupBatch, err = operations.backup(mutation.control().BackupRoot())
+			if err != nil {
+				resultErr = fmt.Errorf("begin force backup batch: %w", err)
+				filesConverged = false
+				break
+			}
+		}
 		result.FileAttempts++
-		fileResult, executeErr := operations.execute(mutation.control(), action)
+		var fileResult executor.FileResult
+		var executeErr error
+		if action.Verb == planner.FileBackupReplace {
+			fileResult, executeErr = operations.executeBackup(mutation.control(), action, backupBatch)
+		} else {
+			fileResult, executeErr = operations.execute(mutation.control(), action)
+		}
+		if fileResult.BackupPath != "" {
+			result.BackupPaths = append(result.BackupPaths, fileResult.BackupPath)
+		}
 		if fileResult.TargetMutated {
 			result.TargetCommits++
 		}
@@ -293,6 +316,21 @@ func validateFileResult(
 			action.Target,
 		)
 	}
+	if action.Verb == planner.FileBackupReplace {
+		if success && result.BackupPath == "" {
+			return false, false, fmt.Errorf(
+				"%w: backup-replace action %q returned success without a backup path",
+				ErrExecutionProtocol,
+				action.Target,
+			)
+		}
+	} else if result.BackupPath != "" {
+		return false, false, fmt.Errorf(
+			"%w: non-backup file action %q reported a backup path",
+			ErrExecutionProtocol,
+			action.Target,
+		)
+	}
 
 	switch action.Verb.ExecutionClass() {
 	case planner.FileStateOnly:
@@ -415,8 +453,10 @@ func defaultRunOperations() runOperations {
 				hooks:  plan.Hooks().Actions(),
 			}, nil
 		},
-		execute:      executor.ExecuteFile,
-		pruneExecute: executor.ExecutePrune,
-		now:          time.Now,
+		execute:       executor.ExecuteFile,
+		backup:        backup.NewBatch,
+		executeBackup: executor.ExecuteFileWithBackup,
+		pruneExecute:  executor.ExecutePrune,
+		now:           time.Now,
 	}
 }

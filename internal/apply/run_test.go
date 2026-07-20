@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mianm12/dotfiles/internal/backup"
 	"github.com/mianm12/dotfiles/internal/executor"
 	"github.com/mianm12/dotfiles/internal/lock"
 	"github.com/mianm12/dotfiles/internal/paths"
@@ -89,6 +90,30 @@ func TestRun_PartialSuccessCommitsOnceAndJoinsExecutionCommitCloseErrors(t *test
 	}
 	if !fixture.session.closed {
 		t.Fatal("session close was not attempted")
+	}
+}
+
+func TestRun_ReportsRetainedBackupAfterReplaceFailure(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	action := seamBackupReplaceAction("~/.forced")
+	operations := fixture.operations(executionPlan{files: []planner.FileAction{action}})
+	replaceErr := errors.New("replace failed")
+	wantPath := filepath.Join(fixture.loaded.controlPaths.BackupRoot(), "batch", "~", ".forced")
+	operations.executeBackup = func(
+		paths.ControlPlanePaths,
+		planner.FileAction,
+		*backup.Batch,
+	) (executor.FileResult, error) {
+		return executor.FileResult{StateEffect: action.OnFailure, BackupPath: wantPath}, replaceErr
+	}
+
+	result, err := runWithOperations(Options{}, operations)
+	if !errors.Is(err, replaceErr) {
+		t.Fatalf("runWithOperations() error = %v, want replace failure", err)
+	}
+	if result.FileAttempts != 1 || len(result.BackupPaths) != 1 || result.BackupPaths[0] != wantPath ||
+		result.StateCommitted || fixture.loaded.commitCalls != 0 {
+		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 	}
 }
 
@@ -575,6 +600,68 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	}
 }
 
+func TestRun_ForceBacksUpRegularAndConverges(t *testing.T) {
+	fixture := newRunIntegrationFixture(t)
+	original := []byte("user zshrc\n")
+	if err := os.WriteFile(fixture.linkTarget, original, 0o640); err != nil {
+		t.Fatalf("os.WriteFile(conflict target) error = %v", err)
+	}
+	options := fixture.options()
+	options.Force = true
+
+	first, err := Run(options)
+	if err != nil {
+		t.Fatalf("Run(force) error = %v", err)
+	}
+	if first.FileAttempts != 2 || first.TargetCommits != 2 || len(first.BackupPaths) != 1 ||
+		!first.StateCommitted {
+		t.Fatalf("force result = %#v", first)
+	}
+	backupContent, err := os.ReadFile(first.BackupPaths[0])
+	if err != nil || string(backupContent) != string(original) {
+		t.Fatalf("backup content = (%q, %v), want %q", backupContent, err, original)
+	}
+	backupInfo, err := os.Stat(first.BackupPaths[0])
+	if err != nil || backupInfo.Mode().Perm() != 0o640 {
+		t.Fatalf("backup mode = (%v, %v), want 0640", backupInfo, err)
+	}
+	assertRunTargets(t, fixture)
+
+	second, err := Run(options)
+	if err != nil {
+		t.Fatalf("Run(converged force) error = %v", err)
+	}
+	if second.FileAttempts != 0 || second.TargetCommits != 0 || len(second.BackupPaths) != 0 ||
+		second.StateCommitted {
+		t.Fatalf("converged force result = %#v", second)
+	}
+	if _, err := os.Lstat(first.BackupPaths[0]); err != nil {
+		t.Fatalf("successful backup was not retained: %v", err)
+	}
+}
+
+func TestRun_ForceRebuildsDeletedScaffoldWithoutBackup(t *testing.T) {
+	fixture := newRunIntegrationFixture(t)
+	if _, err := Run(fixture.options()); err != nil {
+		t.Fatalf("initial Run() error = %v", err)
+	}
+	if err := os.Remove(fixture.scaffoldTarget); err != nil {
+		t.Fatalf("os.Remove(scaffold) error = %v", err)
+	}
+	options := fixture.options()
+	options.Force = true
+
+	result, err := Run(options)
+	if err != nil {
+		t.Fatalf("Run(force rebuild) error = %v", err)
+	}
+	if result.FileAttempts != 1 || result.TargetCommits != 1 || len(result.BackupPaths) != 0 ||
+		!result.StateCommitted {
+		t.Fatalf("force rebuild result = %#v", result)
+	}
+	assertRunTargets(t, fixture)
+}
+
 func TestRun_RejectsSelfTraversingEffectiveTargetBeforeExecutor(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -969,6 +1056,14 @@ func (fixture runSeamFixture) operations(plan executionPlan) runOperations {
 		execute: func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
 			return executor.FileResult{}, nil
 		},
+		backup: backup.NewBatch,
+		executeBackup: func(
+			paths.ControlPlanePaths,
+			planner.FileAction,
+			*backup.Batch,
+		) (executor.FileResult, error) {
+			return executor.FileResult{}, nil
+		},
 		pruneExecute: func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
 			return executor.PruneResult{}, nil
 		},
@@ -1075,6 +1170,18 @@ func seamLinkAdoptAction(target string) planner.FileAction {
 	}
 	action.Precondition.SourcePath = ""
 	action.Precondition.RequireRegularSource = false
+	return action
+}
+
+func seamBackupReplaceAction(target string) planner.FileAction {
+	action := seamLinkAction(target)
+	action.Verb = planner.FileBackupReplace
+	action.Reason = planner.FileReasonRegularConflict
+	action.Precondition.Leaf = planner.LeafCondition{
+		Kind:        planner.LeafExactRegular,
+		Hash:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		Permissions: 0o600,
+	}
 	return action
 }
 
