@@ -138,9 +138,6 @@ func validateTargetSet(inputs []LabeledTarget, resolver *targetResolver) (Target
 		if err != nil {
 			return TargetSet{}, fmt.Errorf("resolve target %s path %q: %w", input.Label, input.Path, err)
 		}
-		if resolution.Traverses(resolution) {
-			return TargetSet{}, &TargetSelfTraversalError{target: input}
-		}
 		resolved[index] = resolvedLabeledTarget{input: input, resolution: resolution}
 	}
 
@@ -157,6 +154,13 @@ func validateTargetSet(inputs []LabeledTarget, resolver *targetResolver) (Target
 				right:    right.input,
 				relation: exportedTargetRelation(relation),
 			}
+		}
+	}
+	// pair relation 携带双方 provenance 与更具体的冲突事实；仅在集合没有 pair conflict 时报告
+	// unary self traversal，避免遮蔽 equal/ancestor 关系。
+	for _, target := range resolved {
+		if target.resolution.Traverses(target.resolution) {
+			return TargetSet{}, &TargetSelfTraversalError{target: target.input}
 		}
 	}
 
