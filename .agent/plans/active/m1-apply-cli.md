@@ -59,6 +59,11 @@
   `b8e91c4` 改为 CLI 校验并逐项投影，窄测通过。
 - [x] 2026-07-20：P2 修复后重新运行窄测、重复、race、Darwin/Linux 交叉编译、branch diff check
   与隔离 cache `make check`，全部通过；保持 active 等待完整 branch 复审。
+- [x] 2026-07-20：Round 2 独立 review 确认 P2：CLI 仍把 prune runtime conflict 展示为
+  deferred，且未强制 `ActionFailed` 必须伴随 runtime error；`fb3d309` 精确区分
+  succeeded/conflict/deferred，并为 failed 建立 fail-closed 一致性门禁，窄测通过。
+- [x] 2026-07-20：Round 2 修复后窄测、重复、race、Darwin/Linux 交叉编译、branch diff check
+  与隔离 cache `make check` 全部通过；保持 active 等待 Round 3 完整复审。
 
 ## Milestones
 
@@ -130,6 +135,11 @@ Darwin/Linux amd64 CLI 交叉编译均通过；首次 `make check` 仅发现 exp
 revive 注释，`af7b673` 修复后隔离 cache `make check` 通过（0 lint issues、全仓 race、build、
 manifest gate）。
 
+Round 2 修复后第三次运行相同门禁：CLI/apply 窄测与 count=5、race、Darwin/Linux amd64 CLI
+交叉编译、`git diff e0d22431...HEAD --check` 均通过；隔离 cache
+`make check BINARY=/private/tmp/dot-m1-cp5-cli-round2-check/dot` 通过（0 lint issues、全仓 race、
+build、manifest gate）。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 内创建 active plan、修改、stage、commit 与验证。所有 mutation 测试
@@ -145,6 +155,9 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
 - Observation: `PruneDeferred` 与 `PruneAttempts` 只能描述整轮摘要；当第一个 prune 已成功而第二个
   发生 Precondition mismatch 时，它们无法证明哪一行已经提交、哪一行必须 deferred。
   Evidence: reviewer 指出的 success→mismatch 场景原投影会把成功前缀也改写为 deferred。
+- Observation: “本轮仍有 deferred prune”不等于每个未成功 prune 都是 deferred；最终 Precondition
+  mismatch 是需要用户消解的具体 conflict，而 IO/protocol failure 必须由 runtime error 取得退出码 1。
+  Evidence: Round 2 reviewer 指出原逐项映射仍把 conflict/failed 合并进 deferred presentation。
 
 ## Decision Log
 
@@ -158,6 +171,10 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
 - Decision: runner 在 scope gate 后为每个可执行 file 与每个 prune 记录原 plan index、target 和
   succeeded/conflict/deferred/failed；CLI 先验证 coverage 与聚合一致性，再按逐项 outcome 投影。
   Rationale: 执行层是提交事实的唯一来源；presentation 不应从计数、错误文案或 slice 前缀猜测。
+- Decision: prune presentation 对 outcome 使用封闭映射：succeeded=`prune`、
+  conflict=`CONFLICT`、deferred=`prune (deferred)`；failed 只有同时存在 runner error 才合法。
+  Rationale: conflict 必须列出具体 target/reason，failed 必须保持 1 > 3 > 2 > 0 的 error 优先级，
+  不能伪装成 exit 2 的 deferred work。
 
 ## Outcomes and Handoff
 
