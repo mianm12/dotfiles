@@ -42,8 +42,9 @@ main。未 fetch/pull，不新增依赖。
   integration commit 同步 clean current main。
 - [x] 2026-07-20：以 `9eac25a` 提交 README 边界修正；CLI/apply/executor 窄测、branch
   diff check 与隔离 cache/output 下的 `make check` 全部通过。
-- [ ] 完成独立完整 review；有有效 finding 时以新 commit 修复并复审。
-- [ ] 更新 Outcomes/Handoff，迁移计划并创建纯 plan-closure commit。
+- [x] 2026-07-20：两名未参与修改的 reviewer 完成规范边界与 Go/测试完整复审，均 GO，
+  无 P0–P3 finding；原 README P2 不再复现。
+- [x] 2026-07-20：更新 Outcomes/Handoff，迁移计划并创建纯 plan-closure commit。
 
 ## Milestones
 
@@ -70,7 +71,7 @@ Commit：
 | README 不再声称 executor 尚未交付 | README 当前能力段落 | 通过 |
 | 真实 apply 仍明确标为未公开且 runtime 前拒绝 | README + CLI 拒绝回归 | 通过 |
 | 无产品行为、依赖或规范变化 | main...branch diff + `make check` | 通过 |
-| 独立完整 review | 未参与实现的 reviewer | 待验证 |
+| 独立完整 review | 未参与实现的 reviewer | 两份 GO；无 P0–P3 finding |
 
 ## Safety, Authorization, and Recovery
 
@@ -91,6 +92,9 @@ cherry-pick、squash、reset 或 force。
 - Observation: 现有 `TestApply_RejectsMutationAndAdoptBeforeRuntime` 已用无效 config/manifest
   fixture 证明非 dry-run apply 在加载 runtime 输入前拒绝，并断言隔离树零 mutation。
   Impact: README 修复不需要新增仅验证文字的脆弱测试；复用行为测试并以独立 review 核对描述。
+- Observation: 两名独立 reviewer 均确认新文案没有把内部 package 暗示为公开 API，也没有暗示
+  CP4 Non-goals 已实现；完整实质 diff 只有 README 与本计划。
+  Evidence: 两份 `main@8a0f8a1...866c702` 完整 branch review 均为 GO。
 
 ## Decision Log
 
@@ -101,9 +105,11 @@ cherry-pick、squash、reset 或 force。
 
 ## Outcomes and Handoff
 
-README 修复已实现并通过本地验证，计划保持 active 等待独立完整 review：
+本计划已完成，可以进入 freshness gate 与本地 main 集成：
 
 - `9eac25a docs(readme): 校正 apply 执行阶段边界` 只修改 README 当前能力段落。
 - `go test ./internal/cli ./internal/apply ./internal/executor`、`git diff main...HEAD --check`
   与 `make check BINARY=/private/tmp/dot-m1-cp4-acceptance-readme/dot` 均通过。
-- 未改变 CLI 行为、规范、依赖、state 或内部接口；远端 macOS/Linux CI 未运行。
+- 两名未参与修改的 reviewer 均给出 GO，无 P0–P3 finding；原 README P2 已关闭。
+- 未改变 CLI 行为、规范、依赖、state 或内部接口。本地 Darwin/arm64 验收通过；远端
+  macOS/Linux CI 未运行，仍待远端验收。
