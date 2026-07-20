@@ -225,6 +225,107 @@ func TestValidateTargetSet_PairConflictPrecedesSelfTraversal(t *testing.T) {
 	}
 }
 
+func TestValidateTargetSet_EqualPairPrecedesEarlierAncestor(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "a")
+	child := filepath.Join(parent, "child")
+	if err := os.MkdirAll(child, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", child, err)
+	}
+	realDirectory := filepath.Join(root, "real")
+	realFile := filepath.Join(realDirectory, "file")
+	if err := os.Mkdir(realDirectory, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", realDirectory, err)
+	}
+	if err := os.WriteFile(realFile, []byte("fixture\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", realFile, err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink("real", alias); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", "real", alias, err)
+	}
+	inputs := []LabeledTarget{
+		{Label: "earlier parent", Path: parent},
+		{Label: "earlier child", Path: child},
+		{Label: "later alias file", Path: filepath.Join(alias, "file")},
+		{Label: "later real file", Path: realFile},
+	}
+
+	validated, err := ValidateTargetSet(inputs)
+	if !errors.Is(err, ErrTargetOverlap) {
+		t.Fatalf("ValidateTargetSet() error = %v, want ErrTargetOverlap", err)
+	}
+	if validated.targets != nil {
+		t.Fatalf("ValidateTargetSet() targets = %#v, want zero result", validated.targets)
+	}
+	var conflict *TargetConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("ValidateTargetSet() error = %T %v, want *TargetConflictError", err, err)
+	}
+	if conflict.Left() != inputs[2] || conflict.Right() != inputs[3] {
+		t.Fatalf(
+			"TargetConflictError inputs = (%#v, %#v), want (%#v, %#v)",
+			conflict.Left(),
+			conflict.Right(),
+			inputs[2],
+			inputs[3],
+		)
+	}
+	if conflict.Relation() != TargetRelationEqual {
+		t.Fatalf("TargetConflictError.Relation() = %v, want equal", conflict.Relation())
+	}
+	var traversal *TargetSelfTraversalError
+	if errors.As(err, &traversal) {
+		t.Fatalf("equal pair conflict was masked by self traversal: %#v", traversal)
+	}
+}
+
+func TestValidateTargetSet_FirstAncestorPairStableWithoutEqual(t *testing.T) {
+	root := t.TempDir()
+	firstParent := filepath.Join(root, "a")
+	firstChild := filepath.Join(firstParent, "child")
+	secondParent := filepath.Join(root, "b")
+	secondChild := filepath.Join(secondParent, "child")
+	for _, child := range []string{firstChild, secondChild} {
+		if err := os.MkdirAll(child, 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", child, err)
+		}
+	}
+	inputs := []LabeledTarget{
+		{Label: "first parent", Path: firstParent},
+		{Label: "first child", Path: firstChild},
+		{Label: "second parent", Path: secondParent},
+		{Label: "second child", Path: secondChild},
+	}
+
+	validated, err := ValidateTargetSet(inputs)
+	if !errors.Is(err, ErrTargetOverlap) {
+		t.Fatalf("ValidateTargetSet() error = %v, want ErrTargetOverlap", err)
+	}
+	if validated.targets != nil {
+		t.Fatalf("ValidateTargetSet() targets = %#v, want zero result", validated.targets)
+	}
+	var conflict *TargetConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("ValidateTargetSet() error = %T %v, want *TargetConflictError", err, err)
+	}
+	if conflict.Left() != inputs[0] || conflict.Right() != inputs[1] {
+		t.Fatalf(
+			"TargetConflictError inputs = (%#v, %#v), want (%#v, %#v)",
+			conflict.Left(),
+			conflict.Right(),
+			inputs[0],
+			inputs[1],
+		)
+	}
+	if conflict.Relation() != TargetRelationLeftAncestor {
+		t.Fatalf(
+			"TargetConflictError.Relation() = %v, want left-ancestor",
+			conflict.Relation(),
+		)
+	}
+}
+
 func selfTraversingTargetPaths(t *testing.T) (direct, selfTraversing string) {
 	t.Helper()
 	root := t.TempDir()
@@ -407,6 +508,42 @@ func TestValidateTargetSet_FailsClosed(t *testing.T) {
 		}})
 		if !errors.Is(err, ErrPathBlocked) || !strings.Contains(err.Error(), "blocked alias child") {
 			t.Fatalf("ValidateTargetSet() error = %v, want labeled ErrPathBlocked", err)
+		}
+	})
+
+	t.Run("resolution failure precedes later equal pair", func(t *testing.T) {
+		root := t.TempDir()
+		dangling := filepath.Join(root, "dangling")
+		if err := os.Symlink("missing", dangling); err != nil {
+			t.Fatalf("os.Symlink(%q, %q) error = %v", "missing", dangling, err)
+		}
+		realDirectory := filepath.Join(root, "real")
+		realFile := filepath.Join(realDirectory, "file")
+		if err := os.Mkdir(realDirectory, 0o700); err != nil {
+			t.Fatalf("os.Mkdir(%q) error = %v", realDirectory, err)
+		}
+		if err := os.WriteFile(realFile, []byte("fixture\n"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) error = %v", realFile, err)
+		}
+		alias := filepath.Join(root, "alias")
+		if err := os.Symlink("real", alias); err != nil {
+			t.Fatalf("os.Symlink(%q, %q) error = %v", "real", alias, err)
+		}
+
+		validated, err := ValidateTargetSet([]LabeledTarget{
+			{Label: "blocked target", Path: filepath.Join(dangling, "child")},
+			{Label: "later alias file", Path: filepath.Join(alias, "file")},
+			{Label: "later real file", Path: realFile},
+		})
+		if !errors.Is(err, ErrPathBlocked) || !strings.Contains(err.Error(), "blocked target") {
+			t.Fatalf("ValidateTargetSet() error = %v, want labeled ErrPathBlocked", err)
+		}
+		if validated.targets != nil {
+			t.Fatalf("ValidateTargetSet() targets = %#v, want zero result", validated.targets)
+		}
+		var conflict *TargetConflictError
+		if errors.As(err, &conflict) {
+			t.Fatalf("resolution failure was masked by pair conflict: %#v", conflict)
 		}
 	})
 
