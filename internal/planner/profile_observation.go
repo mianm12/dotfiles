@@ -76,6 +76,7 @@ func observeProfileTargets(
 				continue
 			}
 			target.State = historical.state
+			target.HistoricalResolution = historical.resolution
 			target.HasState = true
 			matchedHistory[index] = true
 			break

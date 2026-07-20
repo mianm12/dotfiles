@@ -542,7 +542,7 @@ func TestPlanApply_RejectsFileUpsertOverlappingRetainedOrphan(t *testing.T) {
 			plan, err := PlanApply(options)
 			if !errors.Is(err, paths.ErrTargetOverlap) ||
 				!strings.Contains(err.Error(), "file state upsert") ||
-				!strings.Contains(err.Error(), "retained orphan") {
+				!strings.Contains(err.Error(), "retained state target") {
 				t.Fatalf("PlanApply() error = %v, want file-upsert/orphan target overlap", err)
 			}
 			if !reflect.DeepEqual(plan, ApplyPlan{}) {
@@ -563,7 +563,7 @@ func TestPlanApply_RejectsFileUpsertOverlappingRetainedOrphan(t *testing.T) {
 
 		plan, err := PlanApply(options)
 		if !errors.Is(err, paths.ErrTargetOverlap) ||
-			!strings.Contains(err.Error(), "retained orphan") ||
+			!strings.Contains(err.Error(), "retained state target") ||
 			!strings.Contains(err.Error(), "ancestor of file state upsert") {
 			t.Fatalf("PlanApply() error = %v, want orphan-ancestor state-only upsert rejection", err)
 		}
@@ -908,7 +908,7 @@ func TestPlanApply_FileUpsertTopologyDependsOnStateEffectNotPruneMode(t *testing
 			if test.wantRejected {
 				if !errors.Is(err, paths.ErrTargetOverlap) ||
 					!strings.Contains(err.Error(), "file state upsert") ||
-					!strings.Contains(err.Error(), "retained orphan") {
+					!strings.Contains(err.Error(), "retained state target") {
 					t.Fatalf("PlanApply(%s) error = %v, want file-upsert/orphan rejection", test.name, err)
 				}
 				if !reflect.DeepEqual(plan, ApplyPlan{}) {
@@ -959,7 +959,7 @@ func TestValidateActivePruneTopology_RejectsEqualIdentity(t *testing.T) {
 	}
 }
 
-func TestValidateFileUpsertStateTopology(t *testing.T) {
+func TestValidateFileStateTopology_OrphanRelations(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -997,7 +997,7 @@ func TestValidateFileUpsertStateTopology(t *testing.T) {
 			effect:           StateUpsert,
 			actionResolution: parent,
 			orphanResolution: child,
-			wantRelation:     "ancestor of retained orphan",
+			wantRelation:     "ancestor of retained state target",
 		},
 		{
 			name:             "orphan is ancestor",
@@ -1032,19 +1032,115 @@ func TestValidateFileUpsertStateTopology(t *testing.T) {
 				OnSuccess:    StateEffect{Kind: test.effect},
 			}}
 
-			err := validateFileUpsertStateTopology(profile, actions)
+			err := validateFileStateTopology(profile, actions)
 			if test.wantRelation == "" {
 				if err != nil {
-					t.Fatalf("validateFileUpsertStateTopology() error = %v, want nil", err)
+					t.Fatalf("validateFileStateTopology() error = %v, want nil", err)
 				}
 				return
 			}
 			if !errors.Is(err, paths.ErrTargetOverlap) || !strings.Contains(err.Error(), test.wantRelation) {
 				t.Fatalf(
-					"validateFileUpsertStateTopology() error = %v, want ErrTargetOverlap containing %q",
+					"validateFileStateTopology() error = %v, want ErrTargetOverlap containing %q",
 					err,
 					test.wantRelation,
 				)
+			}
+		})
+	}
+}
+
+func TestValidateFileStateTopology_MatchedHistoryPrefixes(t *testing.T) {
+	t.Parallel()
+
+	home := filepath.Join(t.TempDir(), "home")
+	realRoot := filepath.Join(home, "real")
+	if err := os.MkdirAll(realRoot, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(real root) error = %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(home, "alias")); err != nil {
+		t.Fatalf("os.Symlink(alias) error = %v", err)
+	}
+	writeApplyFile(t, filepath.Join(realRoot, "child"), "user data\n")
+	resolve := func(path string) paths.TargetResolution {
+		t.Helper()
+		resolution, err := paths.ResolveTarget(path)
+		if err != nil {
+			t.Fatalf("ResolveTarget(%q) error = %v", path, err)
+		}
+		return resolution
+	}
+	alias := resolve(filepath.Join(home, "alias"))
+	historicalChild := resolve(filepath.Join(home, "alias", "child"))
+	desiredChild := resolve(filepath.Join(realRoot, "child"))
+	unrelated := resolve(filepath.Join(home, "00"))
+	if !historicalChild.Equal(desiredChild) ||
+		alias.IsAncestorOf(desiredChild) || !alias.IsAncestorOf(historicalChild) {
+		t.Fatal("fixture does not distinguish matched historical and desired ancestor trails")
+	}
+
+	profile := ObservedProfile{targets: []ObservedTarget{{
+		Desired:              Desired{Target: "~/real/child"},
+		Resolution:           desiredChild,
+		State:                HistoricalState{Key: "~/alias/child"},
+		HistoricalResolution: historicalChild,
+		HasState:             true,
+	}}}
+	upsert := func(key, previousKey string, resolution paths.TargetResolution) FileAction {
+		return FileAction{
+			Target:       key,
+			Precondition: Precondition{TargetResolution: resolution},
+			OnSuccess: StateEffect{
+				Kind:        StateUpsert,
+				Key:         key,
+				PreviousKey: previousKey,
+			},
+		}
+	}
+	preserve := FileAction{Target: "~/real/child", OnSuccess: StateEffect{Kind: StatePreserve}}
+	parentUpsert := upsert("~/alias", "", alias)
+	childMigration := upsert("~/real/child", "~/alias/child", desiredChild)
+	unrelatedUpsert := upsert("~/00", "", unrelated)
+
+	tests := []struct {
+		name        string
+		actions     []FileAction
+		wantOverlap bool
+	}{
+		{
+			name:        "matched preserve retains alias key",
+			actions:     []FileAction{parentUpsert, preserve},
+			wantOverlap: true,
+		},
+		{
+			name:        "partial scope omits matched action",
+			actions:     []FileAction{parentUpsert},
+			wantOverlap: true,
+		},
+		{
+			name:        "late migration cannot repair unsafe prefix",
+			actions:     []FileAction{unrelatedUpsert, parentUpsert, childMigration},
+			wantOverlap: true,
+		},
+		{
+			name:    "early migration removes alias key",
+			actions: []FileAction{childMigration, parentUpsert},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateFileStateTopology(profile, test.actions)
+			if test.wantOverlap {
+				if !errors.Is(err, paths.ErrTargetOverlap) ||
+					!strings.Contains(err.Error(), "~/alias") ||
+					!strings.Contains(err.Error(), "~/alias/child") {
+					t.Fatalf("validateFileStateTopology() error = %v, want matched alias overlap", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateFileStateTopology() error = %v, want nil", err)
 			}
 		})
 	}

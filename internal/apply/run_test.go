@@ -348,21 +348,10 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 }
 
 func TestRun_RejectsUnsafeCandidateStateTopologyBeforeExecutor(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	repository := filepath.Join(root, "repo")
-	isolateRunMutationEnvironment(t, root, home, repository)
-	stateFile := filepath.Join(home, ".local", "state", "dot", "state.json")
-	target := filepath.Join(home, "parent")
-	writeRunFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
-	writeRunFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
-all = ["app"]
-`)
-	writeRunFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~"
-`)
-	writeRunFile(t, filepath.Join(repository, "modules", "app", "parent"), "link source\n")
-	writeRunFile(t, stateFile, `{
+	fixture := newRunCandidateTopologyFixture(t)
+	target := filepath.Join(fixture.home, "parent")
+	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "parent"), "link source\n")
+	writeRunFile(t, fixture.stateFile, `{
   "version": 1,
   "entries": {
     "~/parent/child": {
@@ -374,22 +363,14 @@ all = ["app"]
   },
   "run_once": {}
 }`)
-	options := Options{
-		Runtime: dotruntime.Overrides{
-			Home:       dotruntime.Override{Value: home, Set: true},
-			Repository: dotruntime.Override{Value: repository, Set: true},
-		},
-		CLIVersion: "dev",
-		NoPrune:    true,
-	}
-	stateBefore, err := os.ReadFile(stateFile)
+	stateBefore, err := os.ReadFile(fixture.stateFile)
 	if err != nil {
 		t.Fatalf("os.ReadFile(state before Run) error = %v", err)
 	}
-	metadataBefore := snapshotRunPathMetadata(t, stateFile)
+	metadataBefore := snapshotRunPathMetadata(t, fixture.stateFile)
 
 	for attempt := 1; attempt <= 2; attempt++ {
-		result, runErr := Run(options)
+		result, runErr := Run(fixture.options())
 		if !errors.Is(runErr, paths.ErrTargetOverlap) ||
 			errors.Is(runErr, state.ErrPathValidation) ||
 			!strings.Contains(runErr.Error(), "file state upsert") {
@@ -402,14 +383,82 @@ all = ["app"]
 		if _, statErr := os.Lstat(target); !errors.Is(statErr, fs.ErrNotExist) {
 			t.Fatalf("Run() attempt %d target Lstat error = %v, want missing", attempt, statErr)
 		}
-		stateAfter, readErr := os.ReadFile(stateFile)
+		stateAfter, readErr := os.ReadFile(fixture.stateFile)
 		if readErr != nil {
 			t.Fatalf("os.ReadFile(state after Run %d) error = %v", attempt, readErr)
 		}
 		if string(stateAfter) != string(stateBefore) {
 			t.Fatalf("Run() attempt %d changed state bytes", attempt)
 		}
-		assertRunPathMetadataUnchanged(t, stateFile, metadataBefore, snapshotRunPathMetadata(t, stateFile))
+		assertRunPathMetadataUnchanged(
+			t,
+			fixture.stateFile,
+			metadataBefore,
+			snapshotRunPathMetadata(t, fixture.stateFile),
+		)
+	}
+}
+
+func TestRun_RejectsMatchedAliasCandidateStateTopologyBeforeExecutor(t *testing.T) {
+	fixture := newRunCandidateTopologyFixture(t)
+	realRoot := filepath.Join(fixture.home, "real")
+	if err := os.MkdirAll(realRoot, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(real root) error = %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(fixture.home, "alias")); err != nil {
+		t.Fatalf("os.Symlink(alias) error = %v", err)
+	}
+	writeRunFile(t, filepath.Join(realRoot, "child"), "user data\n")
+	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "00"), "first link\n")
+	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "alias.template"), "scaffold\n")
+	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "real", "child"), "wanted link\n")
+	writeRunFile(t, fixture.stateFile, `{
+  "version": 1,
+  "entries": {
+    "~/alias/child": {
+      "module": "app",
+      "kind": "scaffold",
+      "source": "modules/app/old-child.template",
+      "applied_at": "2026-07-19T00:00:00Z"
+    }
+  },
+  "run_once": {}
+}`)
+	stateBefore, err := os.ReadFile(fixture.stateFile)
+	if err != nil {
+		t.Fatalf("os.ReadFile(state before Run) error = %v", err)
+	}
+	metadataBefore := snapshotRunPathMetadata(t, fixture.stateFile)
+	firstTarget := filepath.Join(fixture.home, "00")
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, runErr := Run(fixture.options())
+		if !errors.Is(runErr, paths.ErrTargetOverlap) ||
+			errors.Is(runErr, state.ErrPathValidation) ||
+			!strings.Contains(runErr.Error(), "file state upsert") ||
+			!strings.Contains(runErr.Error(), "~/alias/child") {
+			t.Fatalf("Run() attempt %d error = %v, want matched-history target overlap", attempt, runErr)
+		}
+		if result.FileAttempts != 0 || result.TargetCommits != 0 ||
+			result.AdoptionEffects != 0 || result.StateCommitted {
+			t.Fatalf("Run() attempt %d result = %#v, want zero mutation", attempt, result)
+		}
+		if _, statErr := os.Lstat(firstTarget); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Fatalf("Run() attempt %d first target Lstat error = %v, want missing", attempt, statErr)
+		}
+		stateAfter, readErr := os.ReadFile(fixture.stateFile)
+		if readErr != nil {
+			t.Fatalf("os.ReadFile(state after Run %d) error = %v", attempt, readErr)
+		}
+		if string(stateAfter) != string(stateBefore) {
+			t.Fatalf("Run() attempt %d changed state bytes", attempt)
+		}
+		assertRunPathMetadataUnchanged(
+			t,
+			fixture.stateFile,
+			metadataBefore,
+			snapshotRunPathMetadata(t, fixture.stateFile),
+		)
 	}
 }
 
@@ -657,6 +706,43 @@ type runIntegrationFixture struct {
 	stateFile      string
 	linkTarget     string
 	scaffoldTarget string
+}
+
+type runCandidateTopologyFixture struct {
+	home       string
+	repository string
+	stateFile  string
+}
+
+func newRunCandidateTopologyFixture(t *testing.T) runCandidateTopologyFixture {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	repository := filepath.Join(root, "repo")
+	isolateRunMutationEnvironment(t, root, home, repository)
+	writeRunFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
+	writeRunFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+all = ["app"]
+`)
+	writeRunFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~"
+`)
+	return runCandidateTopologyFixture{
+		home:       home,
+		repository: repository,
+		stateFile:  filepath.Join(home, ".local", "state", "dot", "state.json"),
+	}
+}
+
+func (fixture runCandidateTopologyFixture) options() Options {
+	return Options{
+		Runtime: dotruntime.Overrides{
+			Home:       dotruntime.Override{Value: fixture.home, Set: true},
+			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+		},
+		CLIVersion: "dev",
+		NoPrune:    true,
+	}
 }
 
 func newRunIntegrationFixture(t *testing.T) runIntegrationFixture {

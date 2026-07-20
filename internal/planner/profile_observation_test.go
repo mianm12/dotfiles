@@ -75,6 +75,13 @@ func TestObserveProfileTargets_MatchesHistoricalAliasAndKeepsOrphans(t *testing.
 		targets[0].Observed.LinkDest != "../../repository/source" {
 		t.Fatalf("matched target = %#v, want current desired display and raw link", targets[0])
 	}
+	wantHistoricalResolution, err := paths.ResolveTarget(filepath.Join(realRoot, "config"))
+	if err != nil {
+		t.Fatalf("paths.ResolveTarget(historical target) error = %v", err)
+	}
+	if !targets[0].HistoricalResolution.Equal(wantHistoricalResolution) {
+		t.Fatalf("matched historical resolution does not preserve state-key topology: %#v", targets[0])
+	}
 	if len(orphans) != 1 || orphans[0].State.Key != "~/orphan" || orphans[0].Observed.Kind != ObjectRegular {
 		t.Fatalf("Orphans() = %#v, want only historical orphan", orphans)
 	}
@@ -90,12 +97,16 @@ func TestObserveProfileTargets_MatchesHistoricalAliasAndKeepsOrphans(t *testing.
 	}
 
 	targets[0].Observed.LinkDest = "changed"
+	targets[0].HistoricalResolution = paths.TargetResolution{}
 	orphans[0].Observed.Hash = "changed"
 	orphans[0].Resolution = paths.TargetResolution{}
 	againTargets := observed.Targets()
 	againOrphans := observed.Orphans()
 	if againTargets[0].Observed.LinkDest != "../../repository/source" || againOrphans[0].Observed.Hash != "" {
 		t.Fatalf("mutating accessors changed observed set: targets=%#v orphans=%#v", againTargets, againOrphans)
+	}
+	if !againTargets[0].HistoricalResolution.Equal(wantHistoricalResolution) {
+		t.Fatalf("mutating matched historical resolution copy changed observed set: %#v", againTargets[0])
 	}
 	if !againOrphans[0].Resolution.Equal(wantOrphanResolution) {
 		t.Fatalf("mutating orphan resolution copy changed observed set: %#v", againOrphans)

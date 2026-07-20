@@ -81,12 +81,15 @@ type HistoricalState struct {
 }
 
 // ObservedTarget 把一个完整 desired 与其 current leaf 快照、可选历史 state 对齐。
+// HistoricalResolution 只在 HasState 时有效；它解析 State.Key，可能与 Resolution 具有相同 leaf
+// identity 但不同 ancestor 轨迹。
 type ObservedTarget struct {
-	Desired    Desired
-	Resolution paths.TargetResolution
-	Observed   Observation
-	State      HistoricalState
-	HasState   bool
+	Desired              Desired
+	Resolution           paths.TargetResolution
+	Observed             Observation
+	State                HistoricalState
+	HistoricalResolution paths.TargetResolution
+	HasState             bool
 }
 
 // OrphanTarget 保存不匹配任何 current desired 的历史 entry 及其 current leaf 快照。

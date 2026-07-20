@@ -389,7 +389,7 @@ func validateApplyPlan(plan ApplyPlan) error {
 	if err := validateActivePruneTopology(plan.observed, plan.prune); err != nil {
 		return err
 	}
-	if err := validateFileUpsertStateTopology(plan.observed, plan.fileActions); err != nil {
+	if err := validateFileStateTopology(plan.observed, plan.fileActions); err != nil {
 		return err
 	}
 	return validateHookPlan(plan.context, plan.hooks)
@@ -489,40 +489,116 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 	return nil
 }
 
-func validateFileUpsertStateTopology(profile ObservedProfile, actions []FileAction) error {
-	orphans := profile.Orphans()
+func validateFileStateTopology(profile ObservedProfile, actions []FileAction) error {
+	retained, err := historicalStateResolutions(profile)
+	if err != nil {
+		return err
+	}
 	for _, action := range actions {
-		if action.OnSuccess.Kind != StateUpsert {
+		effect := action.OnSuccess
+		if effect.Kind != StateUpsert {
 			continue
 		}
-		actionResolution := action.Precondition.TargetResolution
-		for _, orphan := range orphans {
-			switch {
-			case actionResolution.Equal(orphan.Resolution):
+		if effect.PreviousKey != "" {
+			if _, ok := retained[effect.PreviousKey]; !ok {
 				return fmt.Errorf(
-					"%w: file state upsert target %q has the same identity as retained orphan %q",
-					paths.ErrTargetOverlap,
-					action.Target,
-					orphan.State.Key,
-				)
-			case actionResolution.IsAncestorOf(orphan.Resolution):
-				return fmt.Errorf(
-					"%w: file state upsert target %q is an ancestor of retained orphan %q",
-					paths.ErrTargetOverlap,
-					action.Target,
-					orphan.State.Key,
-				)
-			case orphan.Resolution.IsAncestorOf(actionResolution):
-				return fmt.Errorf(
-					"%w: retained orphan %q is an ancestor of file state upsert target %q",
-					paths.ErrTargetOverlap,
-					orphan.State.Key,
-					action.Target,
+					"file state upsert target %q migrates absent historical key %q",
+					effect.Key,
+					effect.PreviousKey,
 				)
 			}
+			delete(retained, effect.PreviousKey)
 		}
+		delete(retained, effect.Key)
+
+		resolution := action.Precondition.TargetResolution
+		for _, key := range sortedStateResolutionKeys(retained) {
+			if err := validateStateResolutionPair(effect.Key, resolution, key, retained[key]); err != nil {
+				return err
+			}
+		}
+		retained[effect.Key] = resolution
 	}
 	return nil
+}
+
+func historicalStateResolutions(profile ObservedProfile) (map[string]paths.TargetResolution, error) {
+	targets := profile.Targets()
+	orphans := profile.Orphans()
+	resolutions := make(map[string]paths.TargetResolution, len(targets)+len(orphans))
+	add := func(key string, resolution paths.TargetResolution) error {
+		if key == "" {
+			return fmt.Errorf("observed historical state has an empty target key")
+		}
+		if _, exists := resolutions[key]; exists {
+			return fmt.Errorf("observed historical state target %q is duplicated", key)
+		}
+		resolutions[key] = resolution
+		return nil
+	}
+	for _, target := range targets {
+		if !target.HasState {
+			continue
+		}
+		if !target.HistoricalResolution.Equal(target.Resolution) {
+			return nil, fmt.Errorf(
+				"observed historical state target %q does not match desired target %q identity",
+				target.State.Key,
+				target.Desired.Target,
+			)
+		}
+		if err := add(target.State.Key, target.HistoricalResolution); err != nil {
+			return nil, err
+		}
+	}
+	for _, orphan := range orphans {
+		if err := add(orphan.State.Key, orphan.Resolution); err != nil {
+			return nil, err
+		}
+	}
+	return resolutions, nil
+}
+
+func sortedStateResolutionKeys(resolutions map[string]paths.TargetResolution) []string {
+	keys := make([]string, 0, len(resolutions))
+	for key := range resolutions {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func validateStateResolutionPair(
+	upsertKey string,
+	upsert paths.TargetResolution,
+	retainedKey string,
+	retained paths.TargetResolution,
+) error {
+	switch {
+	case upsert.Equal(retained):
+		return fmt.Errorf(
+			"%w: file state upsert target %q has the same identity as retained state target %q",
+			paths.ErrTargetOverlap,
+			upsertKey,
+			retainedKey,
+		)
+	case upsert.IsAncestorOf(retained):
+		return fmt.Errorf(
+			"%w: file state upsert target %q is an ancestor of retained state target %q",
+			paths.ErrTargetOverlap,
+			upsertKey,
+			retainedKey,
+		)
+	case retained.IsAncestorOf(upsert):
+		return fmt.Errorf(
+			"%w: retained state target %q is an ancestor of file state upsert target %q",
+			paths.ErrTargetOverlap,
+			retainedKey,
+			upsertKey,
+		)
+	default:
+		return nil
+	}
 }
 
 func validateCanonicalFileDecision(force bool, target ObservedTarget, action FileAction) error {
