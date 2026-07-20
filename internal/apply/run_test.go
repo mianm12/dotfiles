@@ -142,33 +142,49 @@ func TestRun_RejectsMalformedLinkUpsertBeforeExecutor(t *testing.T) {
 }
 
 func TestRun_RejectsExecutionResultsThatContradictActionClass(t *testing.T) {
+	type effectChoice uint8
+	const (
+		failureEffect effectChoice = iota
+		successEffect
+		unknownEffect
+	)
+
 	tests := []struct {
 		name          string
 		stateOnly     bool
 		targetMutated bool
-		successEffect bool
+		effect        effectChoice
 		executeErr    error
 	}{
 		{
-			name:          "target success without commit",
-			successEffect: true,
+			name:   "target success without commit",
+			effect: successEffect,
 		},
 		{
 			name:          "state-only reports target commit",
 			stateOnly:     true,
 			targetMutated: true,
-			successEffect: true,
+			effect:        successEffect,
 		},
 		{
-			name:          "state-only success with error",
-			stateOnly:     true,
-			successEffect: true,
-			executeErr:    errors.New("state-only executor failure"),
+			name:       "state-only success with error",
+			stateOnly:  true,
+			effect:     successEffect,
+			executeErr: errors.New("state-only executor failure"),
 		},
 		{
 			name:          "target commit with failure effect",
 			targetMutated: true,
+			effect:        failureEffect,
 			executeErr:    errors.New("executor failure"),
+		},
+		{
+			name:   "failure effect without error",
+			effect: failureEffect,
+		},
+		{
+			name:   "unknown state effect",
+			effect: unknownEffect,
 		},
 	}
 
@@ -179,9 +195,16 @@ func TestRun_RejectsExecutionResultsThatContradictActionClass(t *testing.T) {
 			if test.stateOnly {
 				action = seamLinkAdoptAction("~/.result-contract")
 			}
-			effect := action.OnFailure
-			if test.successEffect {
+			var effect planner.StateEffect
+			switch test.effect {
+			case failureEffect:
+				effect = action.OnFailure
+			case successEffect:
 				effect = action.OnSuccess
+			case unknownEffect:
+				effect = planner.StateEffect{Kind: planner.StateEffectKind("future")}
+			default:
+				t.Fatalf("test effect choice = %d, want closed test enum", test.effect)
 			}
 			operations := fixture.operations(executionPlan{files: []planner.FileAction{action}})
 			operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
