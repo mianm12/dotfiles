@@ -42,7 +42,7 @@ run_once 动作时会在一切 mutation 前硬拒绝。
 ## Progress
 
 - [x] 2026-07-20：确认 worktree、branch、clean baseline，阅读规范、既有实现、测试与 completed ExecPlans。
-- [ ] Milestone 1：以测试先行扩展 mixed state transition。
+- [x] 2026-07-20：Milestone 1 以测试先行扩展 mixed state transition；窄测通过。
 - [ ] Milestone 2：以测试先行实现 canonical prune executor。
 - [ ] Milestone 3：以测试先行接入 runner 阶段、确认与 run_once 零写入门禁。
 - [ ] 运行窄测、完整 diff check、隔离 cache `make check`，保持计划 active 等待独立复核。

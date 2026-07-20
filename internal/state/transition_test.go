@@ -90,6 +90,79 @@ func TestTransitionEntries_LoadedPreservesUnrelatedStateAndRunOnce(t *testing.T)
 	}
 }
 
+func TestTransitionEntries_MixesUpsertsAndDeletesAndPreservesRunOnce(t *testing.T) {
+	loaded := loadedTransitionFixture(t)
+	updates := []EntryUpdate{{
+		Key:       "~/.added",
+		Module:    "new",
+		Kind:      KindScaffold,
+		Source:    "modules/new/added.template",
+		AppliedAt: "2026-07-20T00:00:03Z",
+	}}
+
+	snapshot, changed, err := TransitionEntries(loaded, updates, "~/.old", "~/.zshrc")
+	if err != nil {
+		t.Fatalf("TransitionEntries() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("TransitionEntries() changed = false, want true")
+	}
+	if got := snapshot.EntryKeys(); !reflect.DeepEqual(got, []string{"~/.added", "~/.unrelated"}) {
+		t.Fatalf("transitioned keys = %v", got)
+	}
+	if record, exists := snapshot.RunOnce("keep/hooks/setup"); !exists ||
+		record.Hash() != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("run_once record = (%#v, %t), want preserved", record, exists)
+	}
+	if _, err := Encode(snapshot); err != nil {
+		t.Fatalf("Encode(transitioned snapshot) error = %v", err)
+	}
+}
+
+func TestTransitionEntries_RejectsAmbiguousDeletes(t *testing.T) {
+	valid := EntryUpdate{
+		Key:       "~/.zshrc",
+		Module:    "zsh",
+		Kind:      KindSymlink,
+		Source:    "modules/zsh/zshrc",
+		LinkDest:  "/repo/modules/zsh/zshrc",
+		AppliedAt: "2026-07-20T00:00:00Z",
+	}
+	tests := []struct {
+		name    string
+		updates []EntryUpdate
+		deletes []string
+	}{
+		{name: "duplicate delete", deletes: []string{"~/.old", "~/.old"}},
+		{name: "missing delete", deletes: []string{"~/.missing"}},
+		{name: "upsert and delete same key", updates: []EntryUpdate{valid}, deletes: []string{"~/.zshrc"}},
+		{
+			name: "migration previous key and delete same key",
+			updates: []EntryUpdate{{
+				Key:         "~/.new",
+				PreviousKey: "~/.old",
+				Module:      "app",
+				Kind:        KindScaffold,
+				Source:      "modules/app/new.template",
+				AppliedAt:   "2026-07-20T00:00:00Z",
+			}},
+			deletes: []string{"~/.old"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot, changed, err := TransitionEntries(loadedTransitionFixture(t), test.updates, test.deletes...)
+			if !errors.Is(err, ErrTransition) {
+				t.Fatalf("TransitionEntries() error = %v, want ErrTransition", err)
+			}
+			if changed || snapshot.Version() != 0 {
+				t.Fatalf("TransitionEntries() = (%#v, %t), want zero/false", snapshot, changed)
+			}
+		})
+	}
+}
+
 func TestTransitionEntries_EmptyUpdatesDoNotRequestStore(t *testing.T) {
 	for _, loaded := range []Loaded{{status: StatusMissing}, loadedTransitionFixture(t)} {
 		snapshot, changed, err := TransitionEntries(loaded, nil)
