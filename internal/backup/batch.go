@@ -26,6 +26,10 @@ func NewBatch(root string) (*Batch, error) {
 		return nil, fmt.Errorf("backup root must be a non-empty absolute path")
 	}
 	cleanRoot := filepath.Clean(root)
+	existingAncestor, err := nearestExistingDirectory(cleanRoot)
+	if err != nil {
+		return nil, err
+	}
 	if err := storage.EnsureRoot(cleanRoot); err != nil {
 		return nil, fmt.Errorf("prepare backup root: %w", err)
 	}
@@ -45,7 +49,7 @@ func NewBatch(root string) (*Batch, error) {
 		if err := os.Chmod(path, storage.PrivateDirectoryMode); err != nil {
 			return nil, fmt.Errorf("set backup batch permissions %q: %w", path, err)
 		}
-		if err := syncDirectory(cleanRoot); err != nil {
+		if err := syncDirectoryChain(path, existingAncestor); err != nil {
 			if removeErr := os.Remove(path); removeErr != nil {
 				return nil, errors.Join(
 					fmt.Errorf("persist backup batch %q: %w", path, err),
@@ -55,6 +59,24 @@ func NewBatch(root string) (*Batch, error) {
 			return nil, fmt.Errorf("persist backup batch %q: %w", path, err)
 		}
 		return &Batch{path: path}, nil
+	}
+}
+
+func nearestExistingDirectory(path string) (string, error) {
+	for candidate := path; ; candidate = filepath.Dir(candidate) {
+		info, err := os.Stat(candidate)
+		switch {
+		case err == nil:
+			if !info.IsDir() {
+				return "", fmt.Errorf("backup ancestor %q is not a directory", candidate)
+			}
+			return candidate, nil
+		case !errors.Is(err, os.ErrNotExist):
+			return "", fmt.Errorf("inspect backup ancestor %q: %w", candidate, err)
+		}
+		if filepath.Dir(candidate) == candidate {
+			return "", fmt.Errorf("backup root %q has no existing directory ancestor", path)
+		}
 	}
 }
 

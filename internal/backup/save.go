@@ -16,6 +16,17 @@ import (
 
 const sha256Prefix = "sha256:"
 
+type directorySyncer interface {
+	Sync() error
+	Close() error
+}
+
+type directorySyncOpener func(string) (directorySyncer, error)
+
+var openDirectoryForSync directorySyncOpener = func(path string) (directorySyncer, error) {
+	return os.Open(path)
+}
+
 // SaveRegular 保存 source 的普通文件字节与九个权限位，并核对计划摘要。
 func (batch *Batch) SaveRegular(
 	source string,
@@ -209,7 +220,7 @@ func validateSourceAfterCopy(source string, before fs.FileInfo, expectedMode fs.
 }
 
 func syncDirectory(path string) error {
-	directory, err := os.Open(path)
+	directory, err := openDirectoryForSync(path)
 	if err != nil {
 		return fmt.Errorf("open backup directory %q for sync: %w", path, err)
 	}
@@ -223,15 +234,22 @@ func syncDirectory(path string) error {
 	return nil
 }
 
-func (batch *Batch) syncParents(parent string) error {
-	for path := parent; ; path = filepath.Dir(path) {
+func syncDirectoryChain(start string, stop string) error {
+	for path := start; ; path = filepath.Dir(path) {
 		if err := syncDirectory(path); err != nil {
 			return err
 		}
-		if path == batch.path {
+		if path == stop {
 			return nil
 		}
+		if filepath.Dir(path) == path {
+			return fmt.Errorf("backup sync stop %q is not an ancestor of %q", stop, start)
+		}
 	}
+}
+
+func (batch *Batch) syncParents(parent string) error {
+	return syncDirectoryChain(parent, batch.path)
 }
 
 func cleanupFailedBackup(path string, cause error) error {
