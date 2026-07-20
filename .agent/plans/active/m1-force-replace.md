@@ -57,6 +57,9 @@ transition。当前 executor 对 `FileBackupReplace` 和 S2 scaffold rebuild 仍
   失败仍报告并保留精确 backup path。
 - [x] 2026-07-20：review fixes 后窄测试、完整 branch diff check 与隔离 cache `make check`
   重新通过；等待完整复审。
+- [x] 2026-07-20：Round 2 完整复审确认功能与安全无 blocking，提出一个有效 P3：`Run`
+  注释仍声称不执行 backup。`7b0a712` 校正为 runner 实际执行 force backup、但不连接 CLI 或
+  执行 hooks；窄测试和完整门禁重新通过，等待 Round 3 完整复审。
 
 ## Milestones
 
@@ -128,6 +131,8 @@ macOS/Linux 留待 Checkpoint Acceptance。
   与整棵 error tree 分类；混入 destination cleanup IO 时明确不是 pure mismatch。
 - 2026-07-20：`hardLink` 的 `EEXIST` 是提交点明确出现新 leaf 的证据，但 cleanup 失败会通过
   `errors.Join` 混入运行错误；executor 的递归 pure classifier 能精确区分这两种结果。
+- 2026-07-20：Round 2 复审发现 `Run` 的历史注释仍描述 CP4 职责，虽然不影响行为，但会误导
+  后续 CLI milestone 对 backup 所有权的判断；已随实现事实校正，不改变任何 contract。
 
 ## Decision Log
 
