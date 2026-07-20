@@ -45,9 +45,12 @@ transition。当前 executor 对 `FileBackupReplace` 和 S2 scaffold rebuild 仍
 ## Progress
 
 - [x] 2026-07-20：确认 worktree、branch、base 与 clean 状态，读取规范、相关实现和 completed plans。
-- [ ] 以测试先行交付 executor backup-replace 与 S2 rebuild。
-- [ ] 以测试先行连接 runner batch、路径报告、部分成功和 deferred/retry 行为。
-- [ ] 运行窄测试、branch diff check 与隔离 cache `make check`，保持计划 active 等待独立复核。
+- [x] 2026-07-20：以测试先行交付 executor backup-replace（`9eb17fd`）与 S2 rebuild
+  （`154110f`）；`82b8cbb` 补充最终 leaf/source 失效的精确分类回归。
+- [x] 2026-07-20：以测试先行连接 runner batch、精确路径报告、失败保留和重跑收敛
+  （`f66371e`）。
+- [x] 2026-07-20：backup/executor/apply 窄测试、branch diff check 与隔离 cache `make check`
+  通过；保持计划 active 等待独立复核。
 
 ## Milestones
 
@@ -109,7 +112,11 @@ macOS/Linux 留待 Checkpoint Acceptance。
 
 ## Surprises & Discoveries
 
-暂无。
+- 2026-07-20：`ExecuteFile` 已被大量非-force 测试与调用方消费；为避免让所有安全的非备份动作
+  接收无意义 capability，保留原入口并新增 `ExecuteFileWithBackup`。runner 只对 canonical
+  `FileBackupReplace` 分派新入口。
+- 2026-07-20：backup 后 source 的 `Lstat` 失败仍是 runtime IO，不是纯 evidence mismatch；target
+  内容/hash 变化则是精确 mismatch。故障注入测试固定两类错误不会混淆，且都保留 backup path。
 
 ## Decision Log
 
@@ -120,4 +127,14 @@ macOS/Linux 留待 Checkpoint Acceptance。
 
 ## Outcomes and Handoff
 
-尚未完成；保持 active，完成实现和本地门禁后等待未参与实现的 reviewer。
+实现与本地门禁已完成，计划保持 active 等待未参与实现的 reviewer。当前 branch 交付：
+
+- regular/symlink canonical backup-replace，保存 bytes/mode 或 raw link text 后再次完整 Precondition
+  并原子 rename；backup 失败零替换，成功路径不会因后续错误丢失。
+- S2 scaffold 只在 target 仍 missing 时无备份重建。
+- runner 每次 force apply 复用唯一 batch，通过 `Result.BackupPaths` 报告恢复事实；file 未收敛仍按
+  既有契约延迟 prune，成功 state effect 仍能部分提交。
+
+验证证据：`go test ./internal/backup ./internal/executor ./internal/apply`、
+`git diff 0499de9...HEAD --check` 与隔离 cache `make check` 均通过。仅在 Darwin/arm64 原生验证；
+远端 macOS/Linux 待 Checkpoint Acceptance。
