@@ -346,7 +346,7 @@ func TestExecuteScaffold_AdoptRefreshesMetadataWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestExecuteScaffold_RejectRebuildWithoutForceExecutor(t *testing.T) {
+func TestExecuteScaffold_ForceRebuild(t *testing.T) {
 	fixture := newScaffoldFixture(t)
 	target := filepath.Join(fixture.home, "deleted")
 	action := fixture.planScaffold(t, target, fixture.currentState(t, target), true, true)
@@ -355,13 +355,13 @@ func TestExecuteScaffold_RejectRebuildWithoutForceExecutor(t *testing.T) {
 	}
 
 	result, err := ExecuteFile(fixture.control, action)
-	if !errors.Is(err, ErrUnsupportedFileAction) {
-		t.Fatalf("ExecuteFile() error = %v, want ErrUnsupportedFileAction", err)
+	if err != nil {
+		t.Fatalf("ExecuteFile() error = %v", err)
 	}
-	if result.TargetMutated || result.StateEffect != action.OnFailure {
-		t.Fatalf("ExecuteFile() result = %#v, want uncommitted failure", result)
+	if !result.TargetMutated || result.StateEffect != action.OnSuccess || result.BackupPath != "" {
+		t.Fatalf("ExecuteFile() result = %#v, want committed rebuild without backup", result)
 	}
-	assertMissing(t, target)
+	assertRegularFile(t, target, fixture.content, fixture.mode)
 }
 
 func TestExecuteScaffold_MigrationOwnedLinkToIndependentFile(t *testing.T) {
