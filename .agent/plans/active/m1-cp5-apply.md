@@ -64,6 +64,9 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   `4e92a11` freshness 合入 backup main 后再次完整 review GO，closure `0499de9` FF-only 合入。
 - [x] 2026-07-20：Wave 1 完成。backup `79d3713`、prune `0499de9` 均在 main 上通过窄测与
   隔离 cache 的 `make check`；两个 worker worktree 已确认 clean/合入后无 force 移除。
+- [ ] 2026-07-20：force-replace 第一轮完整 review 发现 backup 准备期证据变化与 S2 EEXIST
+  未精确分类为 pure Precond mismatch 的两个 P2；finding 已验证有效，worker 正以新 commits
+  修复并补真实 cleanup/Store failure 的 backup path 恢复证据，之后完整复审。
 - [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
@@ -182,6 +185,11 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
   error 组合；单独使用 `errors.Is` 不能决定是否降级 conflict。
   Evidence: prune-executor round 1 review 对 file/prune executor 到 runner 错误链的完整审查。
   Impact: executor 必须提供精确、可组合的 mismatch 分类；任何 IO/cleanup 成分保持运行错误。
+
+- Observation: backup store 在复制过程中也会检测 target evidence 变化；S2 no-clobber 的 EEXIST
+  同样是 missing 前提失效，而不是普通 IO。
+  Evidence: force-replace round 1 review 对 backup.Save*、executor 与 runner 分类链的审查。
+  Impact: 两条路径必须进入同一 pure mismatch 协议；一旦混入 cleanup/IO 仍按运行错误处理。
 
 ## Decision Log
 
