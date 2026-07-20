@@ -71,6 +71,9 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
 - [ ] 2026-07-20：apply-cli 第一轮完整 review 发现 runner 聚合计数无法精确投影运行期 file
   conflict 与部分 prune 后的 deferred 边界 P2；finding 已验证有效，worker 正新增逐 action outcome
   和公开输出/exit 回归，之后完整复审。
+- [ ] 2026-07-20：apply-cli round 2 确认逐 action contract 已闭合第一轮 P2，但发现 prune
+  `ActionConflict` 仍被展示为 deferred 的 P2；worker 正校正为具体 `CONFLICT` target，之后进行
+  本有效基线第三轮完整 review。
 - [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
