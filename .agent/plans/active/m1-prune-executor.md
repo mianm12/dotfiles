@@ -45,7 +45,8 @@ run_once 动作时会在一切 mutation 前硬拒绝。
 - [x] 2026-07-20：Milestone 1 以测试先行扩展 mixed state transition；窄测通过。
 - [x] 2026-07-20：Milestone 2 以测试先行实现 canonical P1/P2/P3 prune executor；executor 窄测通过。
 - [x] 2026-07-20：Milestone 3 以测试先行接入 runner 阶段、确认、prune 与 run_once 零写入门禁；apply 包测试通过。
-- [ ] 运行窄测、完整 diff check、隔离 cache `make check`，保持计划 active 等待独立复核。
+- [x] 2026-07-20：`go test ./internal/state ./internal/executor ./internal/apply`、branch diff check
+  与隔离 cache `make check` 通过；保持计划 active 等待独立复核。
 
 ## Milestones
 
@@ -130,4 +131,8 @@ Checkpoint integration 后验收。
 
 ## Outcomes and Handoff
 
-尚未完成；保持 active，待实现、验证和独立复核。
+实现与本地门禁完成，计划保持 active 等待独立 reviewer。分支新增 mixed state transition、
+canonical prune executor，以及 files→confirmation→prune→single Store runner；scope 内任何
+run_once action 都在 mutation 前拒绝。提交时 Precondition 失配记录为 unresolved conflict，
+generic IO/protocol error 仍按运行错误返回。未接入 CLI、backup、force 或 hook execution；
+远端 macOS/Linux CI 未运行，留待 Checkpoint integration 验收。
