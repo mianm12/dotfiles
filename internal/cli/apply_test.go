@@ -70,6 +70,14 @@ func TestApply_ForceReportsExactBackupPath(t *testing.T) {
 	if !strings.HasPrefix(backupPath, filepath.Join(fixture.home, ".local", "state", "dot", "backup")+string(os.PathSeparator)) {
 		t.Fatalf("reported backup %q is outside isolated backup root", backupPath)
 	}
+	afterFirst := snapshotCLITree(t, fixture.root)
+	stdout, stderr, code = fixture.run(t, nil, "apply", "--force")
+	if code != exitOK || stderr != "" || !strings.HasSuffix(stdout, "Already up to date.\n") || strings.Contains(stdout, "backup  ") {
+		t.Fatalf("converged force apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if afterSecond := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(afterSecond, afterFirst) {
+		t.Fatalf("converged force apply changed tree\nafter first=%v\nafter second=%v", afterFirst, afterSecond)
+	}
 }
 
 func TestApply_ConfirmationAcceptsYesAndRejectsEOF(t *testing.T) {
@@ -278,6 +286,53 @@ func TestApply_YesSkipsTerminalAndHookGatePrecedesMutation(t *testing.T) {
 			t.Fatalf("hook-gated apply created backup root: %v", statErr)
 		}
 	})
+}
+
+func TestApply_NoPruneSkipsConfirmationAndPreservesOrphan(t *testing.T) {
+	fixture := newWholeModulePruneCLIFixture(t)
+	opened := false
+	stdout, stderr, code := fixture.run(t, func() (io.ReadCloser, error) {
+		opened = true
+		return nil, os.ErrNotExist
+	}, "apply", "--no-prune")
+	if code != exitOK || stderr != "" || opened || strings.Contains(stdout, "prune") {
+		t.Fatalf("apply --no-prune = stdout %q, stderr %q, exit %d, opened=%t", stdout, stderr, code, opened)
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.home, "old")); err != nil {
+		t.Fatalf("--no-prune changed orphan target: %v", err)
+	}
+	if _, exists := readPlanState(t, fixture.home).Entries["~/old"]; !exists {
+		t.Fatal("--no-prune removed orphan state")
+	}
+}
+
+func TestApply_OutputFailureHasErrorPriorityAfterCommittedMutation(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+	t.Setenv("HOME", fixture.realHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(fixture.home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(fixture.home, ".local", "state"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(fixture.home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(fixture.home, ".cache"))
+	t.Setenv("DOT_CONFIG", filepath.Join(fixture.home, ".config", "dot", "config.toml"))
+	t.Setenv("DOT_REPO", fixture.repository)
+	var stderr bytes.Buffer
+	code := run([]string{"apply", "--home", fixture.home, "--repo", fixture.repository}, environment{
+		stdout:      failingWriter{err: os.ErrClosed},
+		stderr:      &stderr,
+		lookupEnv:   os.LookupEnv,
+		userHomeDir: os.UserHomeDir,
+		build:       buildinfo.Info{Version: "v0.0.0"},
+		goos:        runtime.GOOS,
+	})
+	if code != exitError || !strings.Contains(stderr.String(), "write stdout") {
+		t.Fatalf("failed apply output = stderr %q, exit %d", stderr.String(), code)
+	}
+	if _, err := os.Readlink(filepath.Join(fixture.home, "alpha", "file")); err != nil {
+		t.Fatalf("output failure falsely rolled back committed target: %v", err)
+	}
+	if _, exists := readPlanState(t, fixture.home).Entries["~/alpha/file"]; !exists {
+		t.Fatal("output failure falsely rolled back committed state")
+	}
 }
 
 type mutationCLIFixture struct {
