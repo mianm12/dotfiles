@@ -50,7 +50,8 @@
   CLI 窄测通过。
 - [x] 2026-07-20：补齐隔离真实文件系统、partial scope、部分成功 state、P1/P2/P3、force backup、
   hook/managed/rendered fail-closed、确认拒绝与二次收敛回归。
-- [ ] 更新 README 当前实现事实。
+- [x] 2026-07-20：提交公开 apply 行为（`01067ac`）与独立恢复边界回归（`580af47`）；更新 README
+  当前实现事实。
 - [ ] 运行窄测、branch diff check、隔离 cache `make check`，保持计划 active 等待独立复核。
 
 ## Milestones
