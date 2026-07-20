@@ -68,6 +68,9 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   `004b09c` 修复；round 2 的失真注释 P3 由 `7b0a712` 修复；round 3 完整 review GO。
 - [x] 2026-07-20：force-replace closure `e0d2243` FF-only 合入 main；backup/executor/apply 窄测
   与隔离 cache `make check` 通过，worker worktree clean/已合入后无 force 移除。
+- [ ] 2026-07-20：apply-cli 第一轮完整 review 发现 runner 聚合计数无法精确投影运行期 file
+  conflict 与部分 prune 后的 deferred 边界 P2；finding 已验证有效，worker 正新增逐 action outcome
+  和公开输出/exit 回归，之后完整复审。
 - [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
@@ -191,6 +194,11 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
   同样是 missing 前提失效，而不是普通 IO。
   Evidence: force-replace round 1 review 对 backup.Save*、executor 与 runner 分类链的审查。
   Impact: 两条路径必须进入同一 pure mismatch 协议；一旦混入 cleanup/IO 仍按运行错误处理。
+
+- Observation: 静态 ApplyPlan 加聚合 `UnresolvedConflicts`/`PruneAttempts` 不能重建执行期每个
+  action 的最终展示状态。
+  Evidence: apply-cli round 1 review 对 runner Result 与 `projectApplyResult` 的交叉审查。
+  Impact: runner 必须提供逐 action outcome；CLI 只投影事实，不按计数或字符串前缀猜测。
 
 ## Decision Log
 
