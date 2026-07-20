@@ -81,7 +81,7 @@ type runOperations struct {
 }
 
 // Run 在一个 mutation lock 周期内完成 strict load、exact-input plan、CP5 scope gate、file、
-// confirmation、prune execution 和一次 state commit。它不连接 CLI，也不执行 backup/hooks。
+// force backup、confirmation、prune execution 和一次 state commit。它不连接 CLI，也不执行 hooks。
 func Run(options Options) (Result, error) {
 	return runWithOperations(options, defaultRunOperations())
 }
