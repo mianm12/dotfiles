@@ -348,6 +348,15 @@ func validateApplyOutcomes(result applyrunner.Result, hasRuntimeError bool) (
 			!validActionOutcome(outcome.Status) {
 			return nil, nil, fmt.Errorf("invalid prune outcome for index %d target %q", outcome.Index, outcome.Target)
 		}
+		if prune[outcome.Index].Deferred && outcome.Status != applyrunner.ActionDeferred {
+			return nil, nil, fmt.Errorf(
+				"static deferred prune outcome for index %d target %q is %q, want %q",
+				outcome.Index,
+				outcome.Target,
+				outcome.Status,
+				applyrunner.ActionDeferred,
+			)
+		}
 		if _, exists := pruneOutcomes[outcome.Index]; exists {
 			return nil, nil, fmt.Errorf("duplicate prune outcome for index %d", outcome.Index)
 		}
