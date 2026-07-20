@@ -40,7 +40,8 @@ main。未 fetch/pull，不新增依赖。
   执行内核本身无新的 P0–P3 finding。
 - [x] 2026-07-20：确认 acceptance branch 归属本 Goal 且已合入；创建专用 worktree，并以明确
   integration commit 同步 clean current main。
-- [ ] 提交 README 边界修正并运行验证。
+- [x] 2026-07-20：以 `9eac25a` 提交 README 边界修正；CLI/apply/executor 窄测、branch
+  diff check 与隔离 cache/output 下的 `make check` 全部通过。
 - [ ] 完成独立完整 review；有有效 finding 时以新 commit 修复并复审。
 - [ ] 更新 Outcomes/Handoff，迁移计划并创建纯 plan-closure commit。
 
@@ -66,9 +67,9 @@ Commit：
 
 | 必须成立的性质 | 证据 | 状态 |
 |---|---|---|
-| README 不再声称 executor 尚未交付 | README 当前能力段落 | 待验证 |
-| 真实 apply 仍明确标为未公开且 runtime 前拒绝 | README + CLI 拒绝回归 | 待验证 |
-| 无产品行为、依赖或规范变化 | main...branch diff + `make check` | 待验证 |
+| README 不再声称 executor 尚未交付 | README 当前能力段落 | 通过 |
+| 真实 apply 仍明确标为未公开且 runtime 前拒绝 | README + CLI 拒绝回归 | 通过 |
+| 无产品行为、依赖或规范变化 | main...branch diff + `make check` | 通过 |
 | 独立完整 review | 未参与实现的 reviewer | 待验证 |
 
 ## Safety, Authorization, and Recovery
@@ -87,6 +88,9 @@ cherry-pick、squash、reset 或 force。
 - Observation: 三路 Acceptance 的产品实现审查没有发现新缺陷；唯一新 finding 是 README 把
   内部 executor 交付与公开 CLI wiring 混成一个条件。
   Impact: 最佳修复是校正当前事实，不创建代码 adapter、feature flag 或未来接口。
+- Observation: 现有 `TestApply_RejectsMutationAndAdoptBeforeRuntime` 已用无效 config/manifest
+  fixture 证明非 dry-run apply 在加载 runtime 输入前拒绝，并断言隔离树零 mutation。
+  Impact: README 修复不需要新增仅验证文字的脆弱测试；复用行为测试并以独立 review 核对描述。
 
 ## Decision Log
 
@@ -97,4 +101,9 @@ cherry-pick、squash、reset 或 force。
 
 ## Outcomes and Handoff
 
-计划 active，等待 README 实施、验证和独立复核。
+README 修复已实现并通过本地验证，计划保持 active 等待独立完整 review：
+
+- `9eac25a docs(readme): 校正 apply 执行阶段边界` 只修改 README 当前能力段落。
+- `go test ./internal/cli ./internal/apply ./internal/executor`、`git diff main...HEAD --check`
+  与 `make check BINARY=/private/tmp/dot-m1-cp4-acceptance-readme/dot` 均通过。
+- 未改变 CLI 行为、规范、依赖、state 或内部接口；远端 macOS/Linux CI 未运行。
