@@ -61,8 +61,9 @@ symlink模式可作为实现参照。
   hard-link sibling 隔离和可验证 per-item result；add/paths 窄测通过。
 - [x] 2026-07-22：测试先行建立锁内 exact-input batch runner、执行结果 fail-closed、成功前缀
   单次 state 提交、Store 失败后的 apply L2 收养及等价 source 续跑；相关窄测通过。
-- [ ] 运行窄测、重复/race、完整 diff check、隔离 `make check` 与双目标交叉编译；更新证据并保持
-  active/clean 等待独立复核。
+- [x] 2026-07-22：add/apply/paths 普通、5 次重复、race 与定向 lint 通过；完整 base diff check、
+  独立 cache/BINARY `make check` 和 Darwin/Linux amd64 add test binary 交叉编译通过。保持 active
+  等待独立复核。
 
 ## Milestones
 
@@ -126,14 +127,14 @@ Commit 边界：
 
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
-| source 独立 inode、bytes/mode、no-clobber、sync | publication 真实 FS + seam tests | 待验证 |
-| temp/source cleanup 只删除本轮未变对象 | ownership/cleanup fault tests | 待验证 |
-| target/source/ancestor/control 最终 Precond | link executor mutation tests | 待验证 |
-| target 原子提交与提交后不回滚 | rename/cleanup/state failure tests | 待验证 |
-| locked exact-input 全批次 gate | runner/runtime tests | 待验证 |
-| 多输入成功前缀单次 state commit | runner integration tests | 待验证 |
-| state failure 后 apply L2、等价续跑、重复收敛 | add + apply recovery tests | 待验证 |
-| Darwin/Linux | 本地测试、双目标交叉编译、远端 CI | 待验证 |
+| source 独立 inode、bytes/mode、no-clobber、sync | publication 真实 FS + seam tests | 本地通过 |
+| temp/source cleanup 只删除本轮未变对象 | ownership/cleanup fault tests | 本地通过 |
+| target/source/ancestor/control 最终 Precond | link executor mutation tests | 本地通过 |
+| target 原子提交与提交后不回滚 | rename/cleanup/state failure tests | 本地通过 |
+| locked exact-input 全批次 gate | runner/runtime tests | 本地通过 |
+| 多输入成功前缀单次 state commit | runner integration tests | 本地通过 |
+| state failure 后 apply L2、等价续跑、重复收敛 | add + apply recovery tests | 本地通过 |
+| Darwin/Linux | 本地测试、双目标交叉编译、远端 CI | Darwin 本地通过；双目标交叉编译通过；远端待验收 |
 
 最终在 `/private/tmp/dot-m1-cp6-add-link` 运行相关 add/apply/runtime/state package tests、5 次重复、
 race、定向 lint、`git diff 669ea06c2a7fbf4807c1392eee3170d5bed74b58...HEAD --check`、唯一
@@ -180,6 +181,13 @@ no-clobber/cleanup 机制，不理解 manifest/ownership；runner 只消费 lock
   Impact: publication result 同时携带 source 与尚存 temp 的 inode/bytes/mode 证据；提交前 cleanup
   对二者分别重验，无法证明时保留并报错，target 提交后不再调用 source cleanup。
 
+- Observation: 唯一随机 temp pathname 只能证明创建时排他，不能证明 cleanup 时该目录项仍由
+  本轮拥有。
+  Evidence: 自审 replacement regressions 分别在 source write failure 与 target rename failure
+  前替换 temp path；仅按 pathname cleanup 会误删替代物。
+  Impact: `b90dfcd` 为 source temp、target temp symlink/directory 与新建 source directories 记录
+  inode/mode/link text 证据并在删除前重验；不匹配时保留并报告。
+
 ## Decision Log
 
 - Decision: 保持 `add-preflight → add-link → add-scaffold` 严格串行，并在本分支先固定
@@ -195,4 +203,14 @@ no-clobber/cleanup 机制，不理解 manifest/ownership；runner 只消费 lock
 
 ## Outcomes and Handoff
 
-尚未收口。当前完成上下文与契约核对，下一步先提交本 active ExecPlan，再测试先行实施。
+实现已完成，计划保持 active 等待独立复核。`e35dd07` 建立 source 独立 inode、no-clobber、
+文件/目录 sync 与等价 reuse；`8d9ed9a` 建立 target/source/ancestor/control 最终 Precond 和同父
+目录 symlink 原子替换；`ca22590` 建立锁内 exact-input runner、可验证结果、成功前缀单次 state
+提交、Store failure L2 收养与等价续跑；`b90dfcd` 以独立 fix commit 收紧全部临时产物 cleanup
+ownership。
+
+本机已通过 add/apply/paths 普通测试、5 次重复、race、定向 lint、完整
+`669ea06c...HEAD` diff check，以及独立 `GOCACHE`/`GOLANGCI_LINT_CACHE`/BINARY 的 `make check`；
+Darwin/Linux amd64 add test binary 交叉编译通过。真实 Linux 主机和远端 macOS/Linux CI 未运行，
+远端待验收。尚缺未参与实现的完整 branch review，因此当前不迁移计划、不创建 closure commit，
+也不声称 review-ready。
