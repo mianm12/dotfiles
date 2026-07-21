@@ -412,6 +412,49 @@ func TestRun_ScaffoldRevalidatesTargetImmediatelyBeforeStateCommit(t *testing.T)
 	assertRegularFile(t, target, "content", 0o644)
 }
 
+func TestRun_ScaffoldFinalPreconditionCommitsOnlyEarlierPrefix(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	firstTarget := fixture.writeTarget(t, "a", "first", 0o644)
+	secondTarget := fixture.writeTarget(t, "b", "second", 0o644)
+	options := fixture.runOptions(firstTarget, secondTarget)
+	options.Request.Mode = ModeScaffold
+	operations := defaultAddRunOperations()
+	realRevalidate := operations.revalidateScaffold
+	revalidations := 0
+	operations.revalidateScaffold = func(control paths.ControlPlanePaths, item ItemPlan, result linkItemResult) error {
+		revalidations++
+		if revalidations == 2 {
+			replacement := filepath.Join(fixture.home, "replacement-second-before-state")
+			writeAddFile(t, replacement, "second", 0o644)
+			if err := os.Rename(replacement, secondTarget); err != nil {
+				return err
+			}
+		}
+		return realRevalidate(control, item, result)
+	}
+
+	result, err := runWithOperations(options, operations)
+	if err == nil || !result.Valid() || !result.StateCommitted() ||
+		result.Outcomes()[0].Status != OutcomeSucceeded || result.Outcomes()[1].Status != OutcomeFailed {
+		t.Fatalf("runWithOperations(final prefix) = (%#v, %v)", result, err)
+	}
+	items := result.Plan().Items()
+	assertRegularFile(t, items[0].SourcePath(), "first", 0o644)
+	if _, statErr := os.Lstat(items[1].SourcePath()); !os.IsNotExist(statErr) {
+		t.Fatalf("failed final-precondition source Lstat() error = %v, want missing", statErr)
+	}
+	snapshot, ok := fixture.load(t).State().Snapshot()
+	if !ok {
+		t.Fatal("state snapshot missing")
+	}
+	if _, exists := snapshot.Entry(items[0].Target()); !exists {
+		t.Fatal("earlier final-precondition prefix missing from state")
+	}
+	if _, exists := snapshot.Entry(items[1].Target()); exists {
+		t.Fatal("failed final-precondition suffix appeared in state")
+	}
+}
+
 func TestRun_ScaffoldExecutorProtocolViolationsFailClosed(t *testing.T) {
 	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
 	target := fixture.writeTarget(t, "config", "content", 0o644)

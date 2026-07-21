@@ -2,10 +2,74 @@ package add
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestPublishSource_ScaffoldUsesSharedFailureAndCleanupProtocol(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*publicationOperations, error)
+	}{
+		{name: "create", mutate: func(operations *publicationOperations, injected error) {
+			operations.createTemp = func(string, string) (publicationFile, error) { return nil, injected }
+		}},
+		{name: "write", mutate: func(operations *publicationOperations, injected error) {
+			real := operations.createTemp
+			operations.createTemp = func(directory, pattern string) (publicationFile, error) {
+				file, err := real(directory, pattern)
+				return &publicationFileFailure{publicationFile: file, writeErr: injected}, err
+			}
+		}},
+		{name: "file sync", mutate: func(operations *publicationOperations, injected error) {
+			real := operations.createTemp
+			operations.createTemp = func(directory, pattern string) (publicationFile, error) {
+				file, err := real(directory, pattern)
+				return &publicationFileFailure{publicationFile: file, syncErr: injected}, err
+			}
+		}},
+		{name: "publish", mutate: func(operations *publicationOperations, injected error) {
+			operations.publish = func(string, string) error { return injected }
+		}},
+		{name: "directory sync", mutate: func(operations *publicationOperations, injected error) {
+			operations.syncDirectory = func(string) error { return injected }
+		}},
+		{name: "published temp cleanup", mutate: func(operations *publicationOperations, injected error) {
+			operations.remove = func(string) error { return injected }
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+			target := fixture.writeTarget(t, "config", "content", 0o644)
+			plan, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeScaffold})
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := plan.Items()[0]
+			operations := defaultPublicationOperations()
+			injected := errors.New("injected " + test.name)
+			test.mutate(&operations, injected)
+
+			publication, err := publishSource(item, operations)
+			if err == nil {
+				t.Fatal("publishSource() error = nil")
+			}
+			if publication.Created() {
+				if cleanupErr := cleanupSourcePublication(publication, defaultPublicationOperations()); cleanupErr != nil {
+					t.Fatalf("cleanupSourcePublication() error = %v", cleanupErr)
+				}
+			}
+			if _, statErr := os.Lstat(item.SourcePath()); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Fatalf("source Lstat() error = %v, want missing", statErr)
+			}
+			assertRegularFile(t, target, "content", 0o644)
+			assertNoAddTemporaryEntries(t, filepath.Dir(item.SourcePath()))
+		})
+	}
+}
 
 func TestExecuteScaffoldItem_PublishesSourceWithoutMutatingTargetOrHardLink(t *testing.T) {
 	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
