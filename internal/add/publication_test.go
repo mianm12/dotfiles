@@ -216,6 +216,37 @@ func TestPublishSource_NoClobberRacePreservesUnexpectedDestination(t *testing.T)
 	assertRegularFile(t, target, "content", 0o600)
 }
 
+func TestPublishSource_CleanupRefusesReplacedTemporaryPath(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o600)
+	plan, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := plan.Items()[0]
+	ops := defaultPublicationOperations()
+	realCreate := ops.createTemp
+	injected := errors.New("write failed after replacement")
+	var replaced string
+	ops.createTemp = func(directory, pattern string) (publicationFile, error) {
+		file, err := realCreate(directory, pattern)
+		if err != nil {
+			return nil, err
+		}
+		return &replaceTemporaryOnWrite{publicationFile: file, injected: injected, replaced: &replaced}, nil
+	}
+
+	publication, err := publishSource(item, ops)
+	if !errors.Is(err, injected) || publication.Valid() || replaced == "" {
+		t.Fatalf("publishSource() = (%#v, %v), replaced=%q", publication, err, replaced)
+	}
+	assertRegularFile(t, replaced, "foreign", 0o644)
+	assertRegularFile(t, target, "content", 0o600)
+	if _, statErr := os.Lstat(item.SourcePath()); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("source Lstat() error = %v, want missing", statErr)
+	}
+}
+
 type publicationFileFailure struct {
 	publicationFile
 	writeErr   error
@@ -223,6 +254,27 @@ type publicationFileFailure struct {
 	chmodErr   error
 	syncErr    error
 	closeErr   error
+}
+
+type replaceTemporaryOnWrite struct {
+	publicationFile
+	injected error
+	replaced *string
+}
+
+func (file *replaceTemporaryOnWrite) Write([]byte) (int, error) {
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		return 0, err
+	}
+	if err := os.Remove(name); err != nil {
+		return 0, err
+	}
+	if err := os.WriteFile(name, []byte("foreign"), 0o644); err != nil {
+		return 0, err
+	}
+	*file.replaced = name
+	return 0, file.injected
 }
 
 func (file *publicationFileFailure) Write(content []byte) (int, error) {

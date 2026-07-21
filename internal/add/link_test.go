@@ -250,6 +250,35 @@ func TestExecuteLinkItem_RejectsChangedAncestorTopologyAtFinalPrecondition(t *te
 	}
 }
 
+func TestExecuteLinkItem_CleanupRefusesReplacedTargetTemporarySymlink(t *testing.T) {
+	fixture, item := newLinkItemFixture(t)
+	operations := defaultLinkOperations()
+	injected := errors.New("publish failed after temp replacement")
+	var replaced string
+	operations.rename = func(prepared, _ string) error {
+		if err := os.Remove(prepared); err != nil {
+			return err
+		}
+		if err := os.Symlink("foreign", prepared); err != nil {
+			return err
+		}
+		replaced = prepared
+		return injected
+	}
+
+	result, err := executeLinkItem(fixture.control, item, operations)
+	if !errors.Is(err, injected) || result.targetCommitted || replaced == "" {
+		t.Fatalf("executeLinkItem() = (%#v, %v), replaced=%q", result, err, replaced)
+	}
+	if link, readErr := os.Readlink(replaced); readErr != nil || link != "foreign" {
+		t.Fatalf("replaced temporary symlink = (%q, %v), want preserved foreign", link, readErr)
+	}
+	assertRegularFile(t, item.TargetPath(), "content", 0o600)
+	if _, statErr := os.Lstat(item.SourcePath()); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("source Lstat() error = %v, want missing", statErr)
+	}
+}
+
 func newLinkItemFixture(t *testing.T) (*addFixture, ItemPlan) {
 	t.Helper()
 	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})

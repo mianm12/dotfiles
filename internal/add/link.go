@@ -58,6 +58,14 @@ type addTargetEvidence struct {
 	resolution paths.TargetResolution
 }
 
+type targetTemporaryOwnership struct {
+	directory     string
+	directoryInfo fs.FileInfo
+	link          string
+	linkInfo      fs.FileInfo
+	linkText      string
+}
+
 func executeLinkItem(
 	control paths.ControlPlanePaths,
 	item ItemPlan,
@@ -85,32 +93,50 @@ func executeLinkItem(
 		}
 		return result, err
 	}
-	failBeforeCommit := func(primary error, temporaryLink, temporaryDirectory string) (linkItemResult, error) {
+	failBeforeCommit := func(primary error, temporary targetTemporaryOwnership) (linkItemResult, error) {
 		return result, errors.Join(
 			primary,
-			cleanupTargetTemporary(temporaryLink, temporaryDirectory, operations),
+			cleanupTargetTemporary(temporary, operations),
 			cleanupSourcePublication(publication, operations.publication),
 		)
 	}
 
 	temporaryDirectory, err := operations.mkdirTemp(filepath.Dir(item.targetPath), targetTemporaryDirectoryPrefix)
 	if err != nil {
-		return failBeforeCommit(fmt.Errorf("create add target temporary directory: %w", err), "", "")
+		return failBeforeCommit(fmt.Errorf("create add target temporary directory: %w", err), targetTemporaryOwnership{})
 	}
+	temporary := targetTemporaryOwnership{directory: temporaryDirectory}
+	directoryInfo, err := operations.publication.lstat(temporaryDirectory)
+	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&fs.ModeSymlink != 0 {
+		if err == nil {
+			err = fmt.Errorf("created temporary path is not a real directory")
+		}
+		return failBeforeCommit(fmt.Errorf("inspect add target temporary directory: %w", err), temporary)
+	}
+	temporary.directoryInfo = directoryInfo
 	temporaryLink := filepath.Join(temporaryDirectory, targetTemporaryLinkName)
+	temporary.link = temporaryLink
+	temporary.linkText = item.sourcePath
 	if err := operations.symlink(item.sourcePath, temporaryLink); err != nil {
-		return failBeforeCommit(fmt.Errorf("prepare add target symlink: %w", err), temporaryLink, temporaryDirectory)
+		return failBeforeCommit(fmt.Errorf("prepare add target symlink: %w", err), temporary)
+	}
+	temporary.linkInfo, err = operations.publication.lstat(temporaryLink)
+	if err != nil || temporary.linkInfo.Mode()&fs.ModeSymlink == 0 {
+		if err == nil {
+			err = fmt.Errorf("prepared target temporary path is not a symlink")
+		}
+		return failBeforeCommit(fmt.Errorf("inspect prepared add target symlink: %w", err), temporary)
 	}
 	linkText, err := operations.readlink(temporaryLink)
 	if err != nil || linkText != item.sourcePath {
 		if err == nil {
 			err = fmt.Errorf("prepared link text %q does not equal source %q", linkText, item.sourcePath)
 		}
-		return failBeforeCommit(fmt.Errorf("validate prepared add target symlink: %w", err), temporaryLink, temporaryDirectory)
+		return failBeforeCommit(fmt.Errorf("validate prepared add target symlink: %w", err), temporary)
 	}
 
 	if err := validateSourceAncestors(item, operations.publication); err != nil {
-		return failBeforeCommit(fmt.Errorf("revalidate add link source topology: %w", err), temporaryLink, temporaryDirectory)
+		return failBeforeCommit(fmt.Errorf("revalidate add link source topology: %w", err), temporary)
 	}
 	if _, err := validateRegularFile(
 		item.sourcePath,
@@ -119,16 +145,16 @@ func executeLinkItem(
 		item.snapshot.mode,
 		operations.publication,
 	); err != nil {
-		return failBeforeCommit(fmt.Errorf("revalidate add link source: %w", err), temporaryLink, temporaryDirectory)
+		return failBeforeCommit(fmt.Errorf("revalidate add link source: %w", err), temporary)
 	}
 	if _, err := validateAddTarget(control, item, &evidence, operations.publication); err != nil {
-		return failBeforeCommit(fmt.Errorf("revalidate add target before commit: %w", err), temporaryLink, temporaryDirectory)
+		return failBeforeCommit(fmt.Errorf("revalidate add target before commit: %w", err), temporary)
 	}
 	if err := operations.rename(temporaryLink, item.targetPath); err != nil {
-		return failBeforeCommit(fmt.Errorf("commit add target symlink: %w", err), temporaryLink, temporaryDirectory)
+		return failBeforeCommit(fmt.Errorf("commit add target symlink: %w", err), temporary)
 	}
 	result.targetCommitted = true
-	if err := cleanupTargetTemporary(temporaryLink, temporaryDirectory, operations); err != nil {
+	if err := cleanupTargetTemporary(temporary, operations); err != nil {
 		return result, fmt.Errorf("cleanup committed add target temporary directory: %w", err)
 	}
 	return result, nil
@@ -194,16 +220,41 @@ func validateAddTarget(
 	return addTargetEvidence{info: after, resolution: resolution}, nil
 }
 
-func cleanupTargetTemporary(link, directory string, operations linkOperations) error {
+func cleanupTargetTemporary(temporary targetTemporaryOwnership, operations linkOperations) error {
 	var cleanupErrors []error
-	if link != "" {
-		if err := operations.remove(link); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove add target temporary symlink: %w", err))
+	if temporary.link != "" {
+		info, err := operations.publication.lstat(temporary.link)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil:
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("inspect add target temporary symlink: %w", err))
+		case temporary.linkInfo == nil || info.Mode()&fs.ModeSymlink == 0 || !os.SameFile(temporary.linkInfo, info):
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("refuse to clean changed add target temporary symlink %q", temporary.link))
+		default:
+			linkText, readErr := operations.readlink(temporary.link)
+			if readErr != nil || linkText != temporary.linkText {
+				if readErr == nil {
+					readErr = fmt.Errorf("link text changed")
+				}
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("refuse to clean changed add target temporary symlink %q: %w", temporary.link, readErr))
+			} else if removeErr := operations.remove(temporary.link); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("remove add target temporary symlink: %w", removeErr))
+			}
 		}
 	}
-	if directory != "" {
-		if err := operations.remove(directory); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove add target temporary directory: %w", err))
+	if temporary.directory != "" {
+		info, err := operations.publication.lstat(temporary.directory)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil:
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("inspect add target temporary directory: %w", err))
+		case temporary.directoryInfo == nil || !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 ||
+			!os.SameFile(temporary.directoryInfo, info) || info.Mode().Perm() != temporary.directoryInfo.Mode().Perm():
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("refuse to clean changed add target temporary directory %q", temporary.directory))
+		case err == nil:
+			if removeErr := operations.remove(temporary.directory); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("remove add target temporary directory: %w", removeErr))
+			}
 		}
 	}
 	return errors.Join(cleanupErrors...)

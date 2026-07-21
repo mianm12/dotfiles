@@ -113,16 +113,32 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 	if err != nil {
 		return sourcePublication{}, err
 	}
-	failBeforePublish := func(primary error, temporary string) (sourcePublication, error) {
-		cleanupErr := cleanupTemporaryAndDirectories(temporary, createdDirectories, operations)
+	failBeforePublish := func(primary error, temporary string, temporaryInfo fs.FileInfo) (sourcePublication, error) {
+		cleanupErr := cleanupTemporaryAndDirectories(temporary, temporaryInfo, createdDirectories, operations)
 		return sourcePublication{}, errors.Join(primary, cleanupErr)
 	}
 
 	file, err := operations.createTemp(filepath.Dir(item.sourcePath), sourceTemporaryPattern)
 	if err != nil {
-		return failBeforePublish(fmt.Errorf("create add source temporary file: %w", err), "")
+		return failBeforePublish(fmt.Errorf("create add source temporary file: %w", err), "", nil)
 	}
 	temporary := file.Name()
+	ownedTemporaryInfo, inspectErr := operations.lstat(temporary)
+	if inspectErr != nil || !ownedTemporaryInfo.Mode().IsRegular() {
+		closeErr := file.Close()
+		inspectFailure := inspectErr
+		if inspectFailure == nil {
+			inspectFailure = fmt.Errorf("created temporary path is not a regular file")
+		}
+		return failBeforePublish(
+			errors.Join(
+				fmt.Errorf("inspect created add source temporary file: %w", inspectFailure),
+				closeErr,
+			),
+			temporary,
+			nil,
+		)
+	}
 	closed := false
 	failFile := func(primary error) (sourcePublication, error) {
 		if !closed {
@@ -131,7 +147,7 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 			}
 			closed = true
 		}
-		return failBeforePublish(primary, temporary)
+		return failBeforePublish(primary, temporary, ownedTemporaryInfo)
 	}
 	written, err := file.Write(content)
 	if err != nil {
@@ -148,14 +164,14 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 	}
 	closed = true
 	if err := file.Close(); err != nil {
-		return failBeforePublish(fmt.Errorf("close add source temporary file: %w", err), temporary)
+		return failBeforePublish(fmt.Errorf("close add source temporary file: %w", err), temporary, ownedTemporaryInfo)
 	}
 	temporaryInfo, err := validateRegularFile(temporary, nil, content, mode, operations)
 	if err != nil {
-		return failBeforePublish(fmt.Errorf("validate prepared add source: %w", err), temporary)
+		return failBeforePublish(fmt.Errorf("validate prepared add source: %w", err), temporary, ownedTemporaryInfo)
 	}
 	if err := operations.publish(temporary, item.sourcePath); err != nil {
-		return failBeforePublish(fmt.Errorf("publish add source without clobber: %w", err), temporary)
+		return failBeforePublish(fmt.Errorf("publish add source without clobber: %w", err), temporary, temporaryInfo)
 	}
 
 	publication := sourcePublication{
@@ -334,16 +350,36 @@ func cleanupSourcePublication(publication sourcePublication, operations publicat
 
 func cleanupTemporaryAndDirectories(
 	temporary string,
+	temporaryInfo fs.FileInfo,
 	directories []createdSourceDirectory,
 	operations publicationOperations,
 ) error {
 	var cleanupErr error
 	if temporary != "" {
-		if err := operations.remove(temporary); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			cleanupErr = fmt.Errorf("remove incomplete add source temporary file: %w", err)
-		}
+		cleanupErr = cleanupOwnedRegularTemporary(temporary, temporaryInfo, operations)
 	}
 	return errors.Join(cleanupErr, cleanupCreatedDirectories(directories, operations))
+}
+
+func cleanupOwnedRegularTemporary(
+	temporary string,
+	expected fs.FileInfo,
+	operations publicationOperations,
+) error {
+	info, err := operations.lstat(temporary)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect incomplete add source temporary file %q: %w", temporary, err)
+	}
+	if expected == nil || !info.Mode().IsRegular() || !os.SameFile(expected, info) {
+		return fmt.Errorf("refuse to clean changed add source temporary file %q", temporary)
+	}
+	if err := operations.remove(temporary); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove incomplete add source temporary file: %w", err)
+	}
+	return nil
 }
 
 func cleanupCreatedDirectories(directories []createdSourceDirectory, operations publicationOperations) error {
@@ -358,7 +394,7 @@ func cleanupCreatedDirectories(directories []createdSourceDirectory, operations 
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("inspect created add source directory %q: %w", directory.path, err))
 			continue
 		}
-		if !info.IsDir() || !os.SameFile(directory.info, info) {
+		if !info.IsDir() || !os.SameFile(directory.info, info) || info.Mode().Perm() != directory.info.Mode().Perm() {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("refuse to clean changed add source directory %q", directory.path))
 			continue
 		}
