@@ -365,11 +365,13 @@ func TestResolveAddProfile_ProjectsOnlyExactRequestedTargetMapping(t *testing.T)
 			}
 
 			_, err = resolveAddProfile(repository, "base", goos, "app")
-			if !errors.Is(err, ErrModuleActivation) || !strings.Contains(err.Error(), "target."+goos) {
-				t.Fatalf("resolveAddProfile(exact) error = %v, want activation target guidance", err)
+			var targetErr *manifest.ModuleTargetMappingError
+			if !errors.As(err, &targetErr) || errors.Is(err, ErrModuleActivation) ||
+				!strings.Contains(err.Error(), "target."+goos) {
+				t.Fatalf("resolveAddProfile(exact) error = %v, want typed target error plus guidance", err)
 			}
 			_, err = resolveAddProfile(repository, "base", goos, "")
-			var targetErr *manifest.ModuleTargetMappingError
+			targetErr = nil
 			if !errors.As(err, &targetErr) || errors.Is(err, ErrModuleActivation) {
 				t.Fatalf("resolveAddProfile(infer) error = %v, want original target mapping error", err)
 			}
@@ -396,6 +398,37 @@ func TestResolveAddProfile_ProjectsOnlyExactRequestedTargetMapping(t *testing.T)
 			t.Fatalf("resolveAddProfile(other module) error = %v, want original alpha target error", err)
 		}
 	})
+}
+
+func TestValidateExplicitModule_SelectionActivationRemainsConflict(t *testing.T) {
+	otherGOOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherGOOS = "darwin"
+	}
+	for _, test := range []struct {
+		name     string
+		profiles string
+	}{
+		{name: "inactive", profiles: `base = ["app"]`},
+		{name: "nonmembership", profiles: "base = []\nother = [\"app\"]"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAddFixture(t, map[string]string{
+				"app": "os = [\"" + otherGOOS + "\"]\ntarget = \"~\"",
+			})
+			writeAddFile(t, filepath.Join(fixture.repo, "dot.toml"),
+				"requires = \">=0.3.0\"\n[profiles]\n"+test.profiles+"\n", 0o644)
+			inputs := fixture.load(t)
+			resolved, err := inputs.Manifest().Resolve("base", runtime.GOOS)
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			err = validateExplicitModule(inputs.Manifest(), resolved, "base", runtime.GOOS, "app")
+			if !errors.Is(err, ErrModuleActivation) {
+				t.Fatalf("validateExplicitModule() error = %v, want ErrModuleActivation", err)
+			}
+		})
+	}
 }
 
 func TestPreflight_RejectsManifestIgnoreAndDuplicateInputs(t *testing.T) {

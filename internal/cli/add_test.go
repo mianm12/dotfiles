@@ -227,7 +227,7 @@ all = ["alpha", "@shared"]
 	makeDirectory(t, filepath.Join(fixture.repository, "modules", "beta"))
 	beforeInactive := snapshotCLITree(t, fixture.root)
 	_, stderr, code = fixture.run(t, "add", "--dry-run", "-m", "beta", target)
-	if code != exitError || !strings.Contains(stderr, `module "beta" is not in the effective profile "all"`) ||
+	if code != exitConflict || !strings.Contains(stderr, `module "beta" is not in the effective profile "all"`) ||
 		!strings.Contains(stderr, `all = ["alpha", "@shared", "beta"]`) {
 		t.Fatalf("inactive module guidance = stderr %q, exit %d", stderr, code)
 	}
@@ -268,7 +268,7 @@ func TestAdd_ExplicitInactiveModuleGuidanceUsesCurrentGOOS(t *testing.T) {
 	before := snapshotCLITree(t, fixture.root)
 
 	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "alpha", target)
-	if code != exitError || !strings.Contains(stderr, `module "alpha" is declared in profile "all" but inactive on `+runtime.GOOS) ||
+	if code != exitConflict || !strings.Contains(stderr, `module "alpha" is declared in profile "all" but inactive on `+runtime.GOOS) ||
 		!strings.Contains(stderr, "next: in modules/alpha/dot.toml set os =") || strings.Contains(stderr, "[profiles]") {
 		t.Fatalf("inactive module guidance = stderr %q, exit %d", stderr, code)
 	}
@@ -293,7 +293,7 @@ func TestAdd_ExplicitModuleGuidanceCombinesProfileAndGOOSWithoutWrites(t *testin
 	profileStep := `next: all = ["@shared", "app"]`
 	osStep := "next: in modules/app/dot.toml set os ="
 	targetStep := "target." + runtime.GOOS
-	if code != exitError || !strings.Contains(stderr, profileStep) || !strings.Contains(stderr, osStep) ||
+	if code != exitConflict || !strings.Contains(stderr, profileStep) || !strings.Contains(stderr, osStep) ||
 		!strings.Contains(stderr, targetStep) || !strings.Contains(stderr, "complete every listed edit before retrying") {
 		t.Fatalf("combined CLI guidance = stderr %q, exit %d", stderr, code)
 	}
@@ -323,7 +323,7 @@ func TestAdd_MissingCurrentGOOSTargetProjectsOnlyExactExplicitModule(t *testing.
 		before := snapshotCLITree(t, fixture.root)
 
 		_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "app", target)
-		if code != exitConflict || !strings.Contains(stderr, "target."+runtime.GOOS) ||
+		if code != exitError || !strings.Contains(stderr, "target."+runtime.GOOS) ||
 			!strings.Contains(stderr, "modules/app/dot.toml") {
 			t.Fatalf("exact target guidance = stderr %q, exit %d", stderr, code)
 		}

@@ -187,14 +187,17 @@ func resolveAddProfile(
 	if guidanceErr != nil || !activation.InProfile || !activation.OSReady || activation.TargetReady {
 		return manifest.ResolvedProfile{}, err
 	}
-	return manifest.ResolvedProfile{}, moduleActivationError(
+	steps, guidanceErr := moduleActivationSteps(
 		repository,
 		profile,
 		goos,
 		explicitModule,
 		activation,
-		true,
 	)
+	if guidanceErr != nil {
+		return manifest.ResolvedProfile{}, err
+	}
+	return manifest.ResolvedProfile{}, fmt.Errorf("%w\n%s", err, strings.Join(steps, "\n"))
 }
 
 type inputSnapshot struct {
@@ -275,7 +278,7 @@ func validateExplicitModule(
 		if err != nil {
 			return fmt.Errorf("resolve add module activation guidance: %w", err)
 		}
-		return moduleActivationError(repository, profile, goos, module, activation, false)
+		return moduleActivationError(repository, profile, goos, module, activation)
 	}
 	return nil
 }
@@ -284,7 +287,6 @@ func moduleActivationError(
 	repository manifest.Repository,
 	profile, goos, module string,
 	activation manifest.ModuleActivation,
-	conflict bool,
 ) error {
 	message := fmt.Sprintf("add module %q is not in the effective profile %q", module, profile)
 	if activation.InProfile {
@@ -295,11 +297,24 @@ func moduleActivationError(
 			goos,
 		)
 	}
+	steps, err := moduleActivationSteps(repository, profile, goos, module, activation)
+	if err != nil {
+		return err
+	}
+	message += "\n" + strings.Join(steps, "\n")
+	return fmt.Errorf("%w: %s", ErrModuleActivation, message)
+}
+
+func moduleActivationSteps(
+	repository manifest.Repository,
+	profile, goos, module string,
+	activation manifest.ModuleActivation,
+) ([]string, error) {
 	steps := make([]string, 0, 3)
 	if !activation.InProfile {
 		profileLine, err := repository.ProfileLineWithModule(profile, module)
 		if err != nil {
-			return fmt.Errorf("format add profile guidance: %w", err)
+			return nil, fmt.Errorf("format add profile guidance: %w", err)
 		}
 		steps = append(steps, "next: "+profileLine)
 	}
@@ -325,11 +340,7 @@ func moduleActivationError(
 	if len(steps) > 1 {
 		steps = append(steps, "next: complete every listed edit before retrying dot add")
 	}
-	message += "\n" + strings.Join(steps, "\n")
-	if conflict {
-		return fmt.Errorf("%w: %s", ErrModuleActivation, message)
-	}
-	return errors.New(message)
+	return steps, nil
 }
 
 func normalizeInput(raw, home, cwd string) (string, error) {
