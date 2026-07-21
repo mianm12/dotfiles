@@ -38,8 +38,11 @@
 
 - [x] 2026-07-22：确认 worktree、branch、effective base 与 clean 状态；读取前两份 completed plan、
   CLI classifier、preflight activation tests 与 Acceptance finding。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先行恢复显式 activation exit 1，运行完整本地门禁。
+- [x] 2026-07-22：以 `1eddcbc` 提交本 active ExecPlan 起点。
+- [x] 2026-07-22：先修改 CLI 回归并确认旧 classifier 把 explicit nonmembership、OS-inactive 与组合
+  activation 投影为 exit 3；以 `90b423b` 将 conflict 分类收紧为仅 `ErrModuleAmbiguous`。
+- [x] 2026-07-22：manifest/add/CLI 普通、add/CLI 5 次重复、三包 race、定向 lint、base/checkpoint
+  diff check、隔离 `make check` 与 Darwin/Linux amd64 add/CLI test binary 交叉编译通过。
 - [ ] 保持计划 active、worktree clean，等待未参与实现的完整工程复核。
 
 ## Milestones
@@ -63,6 +66,9 @@ classifier，不改变底层 error identity 与文本。
 `git diff 5d176497a75c9f8e43b413d43f04f3ea41720c51...HEAD --check`、隔离 `make check` 与
 Darwin/Linux amd64 add/CLI test binary 交叉编译。真实 Linux/远端 CI 标记待验收。
 
+当前上述命令均通过。`make check` 完成 tidy/format diff、0 lint issue、全仓 race、build 与 manifest
+check；真实 Linux 主机与远端 macOS/Linux CI 未运行，远端待验收。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 的新 active plan、范围内修改、stage、commit 与验证。失败使用新
@@ -74,7 +80,11 @@ commit，不 amend/rebase/reset/cherry-pick/squash；不操作 main/其他 workt
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: `ErrModuleActivation` 的内部 identity 对测试/诊断仍有价值，但不属于公开 conflict
+  分类。
+  Evidence: preflight 可继续 `errors.Is(ErrModuleActivation)`，CLI 只检查 `ErrModuleAmbiguous` 后，
+  exact recovery 文本完全不变而 exit 从 3 恢复为 1。
+  Impact: 不需删除或替换底层 sentinel；单一最小改动位于 CLI classifier，避免触碰 selection/manifest。
 
 ## Decision Log
 
