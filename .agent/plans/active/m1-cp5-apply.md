@@ -81,7 +81,16 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
 - [x] 2026-07-20：用户明确授权把上述 P2 建立为新的串行 fix Milestone，使用独立 ExecPlan
   和新的 review 轮次；Goal 已恢复 active。fix 从 clean `feat/apply-cli@bf021c9` 创建，通过后
   FF-only 回并 apply-cli，再完成其完整复核、closure 与 main 集成。
-- [ ] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
+- [x] 2026-07-20：outcome-validation fix round 1 的 canonical static-deferred 协议矩阵 P2 由
+  `7b6ee2c` 修复，round 2 完整复审 GO；closure `5f7c4cf` FF-only 回并 apply-cli，完整 diff
+  check、相关窄测和隔离 cache `make check` 通过。
+- [x] 2026-07-21：运行环境清理了 `/private/tmp` 目录但保留 stale worktree metadata；主 agent
+  验证 main/branch heads 与三个 checkout 均无代码损失，prune 精确 stale 记录后从原 branch refs
+  重建 coordinator 与 apply-cli worktree。main 仍为 `e0d2243`，未 fetch/pull 或改写历史。
+- [ ] 2026-07-21：用户授权后的 apply-cli 新完整复核 round 1 发现新的 P2：runner 返回 invalid/
+  zero `Result.Plan` 且 `nil` error 时 CLI 会静默 exit 0。该 finding 已验证有效；worker 正在原
+  apply-cli active ExecPlan 内以测试先行修复，之后执行本 review 单元的完整 round 2。
+- [x] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
 
@@ -217,6 +226,13 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
   Evidence: apply-cli round 3 review 构造 deferred plan + succeeded outcome，当前可输出 deferred
   文案却返回 exit 0。
   Impact: 这是有效 P2，但第三轮完整 review 后仍存在 blocking finding，已按停止条件暂停。
+
+- Observation: CLI 不能把 `runner` 的 `Result` 视为在 `nil` error 下天然有效；zero/invalid
+  `Result.Plan` 不提供可验证的投影与退出事实。
+  Evidence: 用户授权后的 apply-cli 新完整 review 以 injected runner 返回 zero Result + nil error，
+  `runMutationApply` 未输出错误且返回 exit 0。
+  Impact: 投影前必须 fail closed 校验 plan；invalid plan + 原始 error 保留原错，invalid plan + nil
+  error 返回明确 execution protocol error，且不得先输出动作或成功信息。
 
 ## Decision Log
 
