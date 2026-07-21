@@ -98,6 +98,13 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
 - [x] Wave 3：apply-cli 独立计划、实现、串行 outcome fix、新 review 单元、closure 和 main 集成。
 - [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成；
   main 当前 clean `e6d6189`，即将从 checkpoint base 审查完整 Checkpoint。
+- [x] 2026-07-21：三路首次 Checkpoint Acceptance 完成；规范/数据流 reviewer 发现确认 EOF
+  路径吞掉 terminal Close IO error 的 P2，安全 reviewer 与 Go/平台 reviewer 独立发现 L1
+  symlink EEXIST 未归类 pure Precondition mismatch 的 P2。主 agent 验证两项均有效；其余范围
+  无 P0–P3，完整 diff check、相关测试与至少两次隔离 cache `make check` 通过。
+- [ ] 2026-07-21：从 clean `main@e6d6189` 创建既定 `fix/m1-apply-acceptance` 与独立 active
+  ExecPlan，按共同的失败事实精确分类根因修复两项 P2；完成新 review 单元后重新验收整个
+  `checkpoint_base...main`。
 
 ## Milestone DAG and Scheduling
 
@@ -239,6 +246,19 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
   Impact: 投影前必须 fail closed 校验 plan；invalid plan + 原始 error 保留原错，invalid plan + nil
   error 返回明确 execution protocol error，且不得先输出动作或成功信息。
 
+- Observation: 确认 reader 的 EOF 表示普通拒绝，但同一次读取后的 terminal Close failure 仍是
+  独立 IO error，不能被 EOF 分支吞掉。
+  Evidence: Acceptance reviewer 注入 EOF + sentinel Close error，原 CLI 只输出 deferred warning
+  并 exit 2。
+  Impact: EOF warning write、Close 与其他 IO 失败必须保持 error 优先级 1，同时 prune 安全 deferred。
+
+- Observation: 最终 no-clobber symlink 返回 EEXIST 已明确证明 `LeafMissing` 快照失效；包装广义
+  `ErrPrecondition` 会让 pure mismatch classifier 把它当 runtime error。
+  Evidence: 两名 Acceptance reviewer 从 `createMissingLink` 到 runner/CLI 独立追踪得到 exit 1，
+  而 target/state 保留且 prune deferred。
+  Impact: L1 提交竞态必须和 scaffold EEXIST 使用同一 pure `ErrPreconditionMismatch` 语义，公开
+  投影为具体 conflict/exit 3。
+
 ## Decision Log
 
 - Decision: Wave 1 条件并行，预定 backup-store 后 prune-executor 集成。
@@ -258,6 +278,12 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
   Rationale: 用户在停止后明确授权独立 ExecPlan 与新的 review 轮次；新节点只闭合 planner
   deferred prune 与 outcome 单调性，不扩大公开行为、state 格式或 CP5 Scope。
   Date: 2026-07-20
+
+- Decision: 两项首次 Acceptance P2 在既定 `fix/m1-apply-acceptance` 中按失败事实精确分类共同
+  根因处理，并使用独立 ExecPlan 与新 review 单元。
+  Rationale: 两项都不改变规范、持久化或 ownership，只修正已存在的 IO error 与 Precondition
+  mismatch 分类，使公开退出码恢复规范定义；合并后必须重跑三路完整 Checkpoint Acceptance。
+  Date: 2026-07-21
 
 ## Outcomes and Handoff
 
