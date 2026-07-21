@@ -17,6 +17,33 @@ type ResolvedProfile struct {
 	dataKeys []string
 }
 
+// ModuleTargetMappingError 表示 active module 的 effective target table 缺当前 GOOS 映射。
+// 私有字段只由严格 Resolve 构造，调用方通过 accessor 精确匹配恢复诊断。
+type ModuleTargetMappingError struct {
+	module string
+	goos   string
+}
+
+func (e *ModuleTargetMappingError) Error() string {
+	return fmt.Sprintf("module %q is active on %s but target table has no %s entry", e.module, e.goos, e.goos)
+}
+
+// Module 返回缺 target mapping 的 active module。
+func (e *ModuleTargetMappingError) Module() string { return e.module }
+
+// GOOS 返回缺 target mapping 的当前 GOOS。
+func (e *ModuleTargetMappingError) GOOS() string { return e.goos }
+
+// ModuleNames 返回当前 GOOS 下按字节序排列的 effective module 名。
+func (p ResolvedProfile) ModuleNames() []string {
+	names := make([]string, len(p.modules))
+	for index, module := range p.modules {
+		names[index] = module.Name
+	}
+	slices.Sort(names)
+	return names
+}
+
 // ResolvedModule 表示已经应用 defaults、ignore 合并和 OS 过滤的模块配置。
 type ResolvedModule struct {
 	// Name 是模块目录名。
@@ -77,27 +104,15 @@ func (r Repository) Resolve(profile, goos string) (ResolvedProfile, error) {
 
 func (r Repository) resolveModule(name string, loaded loadedModule, goos string) (ResolvedModule, bool, error) {
 	// os 与 target 分别按“内建缺省 → 顶层 defaults → 模块”整键替换，不做逐项合并。
-	operatingSystems := []string{goosDarwin, goosLinux}
-	if r.manifest.defaults.os.set {
-		operatingSystems = r.manifest.defaults.os.value
-	}
-	if loaded.manifest.os.set {
-		operatingSystems = loaded.manifest.os.value
-	}
+	operatingSystems := r.moduleOperatingSystems(loaded)
 	if !slices.Contains(operatingSystems, goos) {
 		return ResolvedModule{}, false, nil
 	}
 
-	target := targetSpec{common: stringPointer("~")}
-	if r.manifest.defaults.target.set {
-		target = r.manifest.defaults.target.value
-	}
-	if loaded.manifest.target.set {
-		target = loaded.manifest.target.value
-	}
+	target := r.moduleTarget(loaded)
 	targetRoot, exists := target.forOS(goos)
 	if !exists {
-		return ResolvedModule{}, false, fmt.Errorf("module %q is active on %s but target table has no %s entry", name, goos, goos)
+		return ResolvedModule{}, false, &ModuleTargetMappingError{module: name, goos: goos}
 	}
 
 	fileRules, err := resolveFileRules(name, loaded.manifest.files, targetRoot)
@@ -113,6 +128,28 @@ func (r Repository) resolveModule(name string, loaded loadedModule, goos string)
 		FileRules:  fileRules,
 		RunOnce:    append([]string(nil), loaded.manifest.runOnce...),
 	}, true, nil
+}
+
+func (r Repository) moduleOperatingSystems(loaded loadedModule) []string {
+	operatingSystems := []string{goosDarwin, goosLinux}
+	if r.manifest.defaults.os.set {
+		operatingSystems = r.manifest.defaults.os.value
+	}
+	if loaded.manifest.os.set {
+		operatingSystems = loaded.manifest.os.value
+	}
+	return append([]string(nil), operatingSystems...)
+}
+
+func (r Repository) moduleTarget(loaded loadedModule) targetSpec {
+	target := targetSpec{common: stringPointer("~")}
+	if r.manifest.defaults.target.set {
+		target = r.manifest.defaults.target.value
+	}
+	if loaded.manifest.target.set {
+		target = loaded.manifest.target.value
+	}
+	return target
 }
 
 func (t targetSpec) forOS(goos string) (string, bool) {

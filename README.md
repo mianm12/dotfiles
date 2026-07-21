@@ -5,11 +5,15 @@
 被攻陷的本机或主动并发篡改当作需要对抗的环境。
 
 项目正在实现 M1。目前已提供 `dot version`、`dot doctor --manifest-only`、`dot diff`、
-`dot apply` 和 `dot status`。diff、apply dry-run 与 status 通过同一个严格 planner 分别展示
+`dot apply`、`dot status` 和 `dot add`。diff、apply dry-run 与 status 通过同一个严格 planner 分别展示
 动作计划和当前 profile 的健康巡检；这些只读入口不取锁，也不写 target、state 或 backup。
 非 dry-run apply 已接入 link/scaffold、force backup replacement 与 P1/P2/P3 prune 执行，支持
 full/partial scope、整模块 orphan 确认和部分成功后的安全重跑；在 hook 执行能力交付前，作用域
 内含 run_once 的 apply 会在 file、backup、prune 或 state mutation 前明确拒绝。
+add 支持把 HOME 中的普通文件收编为默认 link 或 `--scaffold`，可用 `-m` 显式选择当前 profile
+中的既有 module；它先对整个输入批次完成同源 manifest、路径与系统 Git 可跟踪性预检，再按
+source-first 协议提交，且不会创建 module、修改 manifest 或执行 `git add`/`git commit`。
+`add --dry-run` 无锁零写入；M1 的 `add --template` 明确报不支持，不会按 link 静默处理。
 `doctor --manifest-only` 检查仓库 manifest、当前 GOOS 下各 profile 的 effective 路径边界、模板和
 Git index 中已跟踪的 `*.local`，不读取机器配置或 state。裸 `dot doctor` 的完整环境巡检属于
 M2；当前会明确提示改用 `--manifest-only` 并失败，不把静态子集伪装成完整检查。其他命令以

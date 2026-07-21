@@ -1,11 +1,39 @@
 package manifest
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestResolve_MissingActiveModuleTargetReturnsClassifiedError(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			otherGOOS := "linux"
+			if goos == "linux" {
+				otherGOOS = "darwin"
+			}
+			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
+			writeModule(t, repo, "app", "[target]\n"+otherGOOS+" = \"~\"")
+			loaded, err := Load(repo)
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+
+			_, err = loaded.Resolve("base", goos)
+			var targetErr *ModuleTargetMappingError
+			if !errors.As(err, &targetErr) {
+				t.Fatalf("Resolve() error = %v, want ModuleTargetMappingError", err)
+			}
+			if targetErr.Module() != "app" || targetErr.GOOS() != goos ||
+				!strings.Contains(err.Error(), "target table has no "+goos+" entry") {
+				t.Fatalf("ModuleTargetMappingError = module %q, GOOS %q, error %v", targetErr.Module(), targetErr.GOOS(), err)
+			}
+		})
+	}
+}
 
 func TestResolve_AppliesBuiltInDefaults(t *testing.T) {
 	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"zsh\"]")

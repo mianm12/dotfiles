@@ -1,0 +1,215 @@
+# feat/add-preflight：建立安全 add 全批次预检
+
+本 ExecPlan 是 living document。实施期间必须持续更新 `Progress`、
+`Surprises & Discoveries`、`Decision Log` 和 `Outcomes and Handoff`，并遵循
+`.agent/PLANS.md`。
+
+## Purpose / Big Picture
+
+完成后，后续 add runner 与 CLI 能调用一个只读、自包含的批次预检入口：它先快照 HOME 中
+的普通文件，保守确定当前 profile 内模块，再把本批精确 source 作为虚拟普通文件送入正常
+manifest 严格枚举、ignore、`[files]`、suffix、render 与完整 profile 路径边界；只有全部输入
+同时满足 state、控制面、碰撞、source no-clobber 与系统 Git 可跟踪性要求时才返回稳定排序的
+link/scaffold 动作计划。任何失败都不创建 lock、source、target、state 或临时文件。
+
+## Scope / Non-goals
+
+范围内：
+
+- 普通文件输入规范化、bytes/九位 mode/identity 快照，以及 `*.local`、重复和控制面重叠拒绝。
+- 已有 state 拒绝、当前 profile 内保守 module inference 与显式 module 校验。
+- manifest prospective overlay：只豁免本批精确候选，复用正常严格枚举和完整 profile 路径边界。
+- link/scaffold source 三变体 no-clobber、完全等价遗留 source 续跑与渲染一致性。
+- 使用系统 Git 判断 tracked 或可跟踪；repository、local 与 global exclude 均生效，异常 fail closed。
+- 自包含、确定排序的 batch/item plan；M1 template 在任何写入前明确拒绝。
+
+明确不做：
+
+- 不创建 `modules/`、不修改 manifest，不执行产品 `git add`/`git commit`，不获取 mutation lock。
+- 不发布 source、不修改 target/state，不实现提交时 Precond、runner 或 Cobra CLI。
+- 不新增依赖，不实现 M2 managed/template、目录递归、特殊文件或自动创建 module。
+- 不读取或修改真实 modules、机器配置、state、backup、`.env` 或主力 HOME。
+
+## Contract and Context
+
+- `docs/02-architecture.md` §2–§6：复用控制面和完整 profile target 身份边界；预检保持只读。
+- `docs/03-manifest-spec.md` §2–§6/§8：候选仅按已加入的精确普通 source 豁免，[files]、ignore、
+  suffix、路径和严格解码继续成立，无关悬空引用仍失败。
+- `docs/04-cli-spec.md` §2–§4.5/§5：全批次预检、Git 可跟踪性、source 变体、M1 template 和 dry-run
+  零写入行为。
+- `docs/05-apply-engine.md` §1–§7/§9–§10：输入快照、反向映射、完整 profile 碰撞和等价续跑契约。
+- `docs/06-templates.md`：scaffold 必须渲染 bytes/mode 等于输入；`*.local` 硬拒绝。
+- `docs/08-testing.md`：真实隔离 Git ignore/exclude、候选 overlay、碰撞和零写入证据。
+- `docs/09-roadmap.md` §1/§3：只交付 M1 link/scaffold preflight，不预建 mutation。
+
+有效 base 为 clean `main@5d176497a75c9f8e43b413d43f04f3ea41720c51`，branch
+`feat/add-preflight`。现有 `manifest.ResolvedProfile.ValidatePathBoundaries` 会从真实 source 树
+严格枚举；`runtime.LoadReadOnly` 提供 strict manifest/state/control；`paths` 提供统一 target 与
+control identity；缺口是精确 prospective source seam 和 add batch 组合层。
+
+## Progress
+
+- [x] 2026-07-21：确认分配 worktree、branch、base 与 clean 状态；完整阅读执行规则、CP6 规范、
+  coordinator 计划、相关 completed ExecPlans 和现有 manifest/runtime/state/path 实现。
+- [x] 2026-07-21：以 `57ab63c` 提交本 active ExecPlan 起点。
+- [x] 2026-07-21：测试先行建立 manifest prospective overlay，同源覆盖严格枚举、ignore/[files]/suffix/render、
+  无关悬空和完整 profile target 边界。
+- [x] 2026-07-21：测试先行建立 add batch preflight/model、module inference、state/control/source/Git
+  全批次 gate；定向重复/race/lint 通过。
+- [x] 2026-07-21：相关两包普通/5 次重复/race 与定向 lint 通过；Darwin/Linux amd64 add test
+  binary 交叉编译、完整 base diff check、独立 cache/BINARY 的 `make check` 全部通过。保持 active
+  等待独立复核。
+- [x] 2026-07-22：Round 1 reviewer 确认三项有效 finding：批内 source variant family 未整体保留、
+  Git 继承环境可重定向 repo/index/config、公开 plan 字段可伪造未验证计划。分别以 `14d9329`、
+  `339fb10`、`8d1fbf8` 测试先行修复。
+- [x] 2026-07-22：fix 后两包普通/5 次重复/race、定向 lint、完整 base diff check、Darwin/Linux
+  amd64 add test binary 交叉编译及独立 cache/BINARY `make check` 全部通过。
+- [x] 2026-07-22：未参与实现的 Round 2 reviewer 复审完整 branch，结论 GO，无 P0–P3 finding；
+  主 agent 确认 `main` 仍为有效 base `5d176497`，并通过最终窄测、完整 diff check 与隔离
+  `make check` freshness gate。
+- [x] 2026-07-22：完成 ExecPlan 终态记录并迁移到 `completed/`；实现、测试和契约不再变更。
+
+## Milestones
+
+### Milestone 1：提交 ExecPlan 起点
+
+只提交本计划，固定范围、单一语义源、零写入与验证边界。
+
+Commit 边界：
+
+    docs(add): 新建 add preflight ExecPlan
+
+### Milestone 2：建立 manifest prospective source overlay
+
+先在 `internal/manifest` 测试中证明当前真实枚举无法接受尚未发布但由 `[files]` 预声明的候选。
+增加只读精确候选输入；枚举仍遍历全部真实模块对象并执行同一 ignore/内置 ignore、source 引用、
+后缀定级、render 和 target 形成逻辑，只把与候选精确同路径的 missing source 视为带 bytes/mode 的
+普通文件。候选不得遮蔽既有对象，无关悬空 `[files]`/hook 继续失败。完整 profile 与 control
+boundary 在 overlay 后一次性校验，返回与候选唯一对应的 rendered desired。
+
+验收：普通 link/scaffold 候选通过；manifest ignore/hooks/不匹配 target/kind 拒绝；无关 missing
+规则、现存同路径、source/target collision 和完整 profile 其他碰撞均拒绝；真实 repo 树零变化。
+
+Commit 边界：
+
+    feat(manifest): 支持 add prospective source 校验
+
+### Milestone 3：组合 add 全批次只读计划
+
+在新 `internal/add` 包先写真实 FS/Git 测试。入口消费已严格加载的 runtime inputs、显式模式、可选
+module 与 path 列表；形成普通文件 snapshot，拒绝 state/control/local/重复，保守推断或校验 module，
+计算 source 三变体并调用 manifest prospective API。随后逐候选验证 source 等价/no-clobber、
+scaffold render bytes/mode 和系统 Git tracked/ignored 结果。Git adapter 只运行参数固定、repo-relative、
+带 `--` 的命令，并允许窄 runner seam 注入启动/退出异常；真实测试隔离 HOME/XDG、system/global
+config 和 `.git/info/exclude`/`core.excludesFile`。任一失败不返回部分 plan。
+
+验收：显式/推断 module、输入类型、已有 state、完整碰撞、source variants、等价遗留 source、
+tracked/ignore/local/global exclude、Git unavailable、M1 template 与多输入原子预检均有证据；计划
+只含后续 runner 所需 snapshot、source/target、kind、content/mode 和 source reuse 事实。
+
+Commit 边界：
+
+    feat(add): 建立全批次安全预检
+
+## Validation and Acceptance
+
+| 必须成立的性质 | 验证证据 | 状态 |
+|---|---|---|
+| prospective 与正常 manifest/ignore/[files]/render 同源 | manifest overlay tests | 本地通过 |
+| state/control/module/碰撞全批次 gate | add 真实 FS tests | 本地通过 |
+| Git tracked/ignore/local/global 与异常 fail closed | 隔离真实 Git + runner seam | 本地通过 |
+| source 三变体、等价续跑、scaffold 一致性 | add plan tests | 本地通过 |
+| 批内 source family alias/identity 与首次 Git 前拒绝 | add batch + paths identity tests | Round 1 fix 后本地通过 |
+| Git inherited repo/index/config override 隔离 | 真实 Git + environment seam tests | Round 1 fix 后本地通过 |
+| validated plan seal 与 accessor 深复制 | add model tests | Round 1 fix 后本地通过 |
+| 零 lock/source/target/state/temp 写入 | fixture 完整树快照 | 本地通过 |
+| 完整 branch 独立复审 | Round 2 reviewer | GO；无 P0–P3 finding |
+| freshness 与最终本地门禁 | main/base 核对、窄测、完整 diff check、隔离 `make check` | 主 agent 确认通过 |
+| Darwin/Linux | 本地测试、交叉编译与远端 CI | Darwin 本地通过；双目标交叉编译通过；真实 Linux/远端待验收 |
+
+最终在 `/private/tmp/dot-m1-cp6-add-preflight` 运行相关 package tests、重复/race、双目标 test
+binary 交叉编译、`git diff 5d176497a75c9f8e43b413d43f04f3ea41720c51...HEAD --check` 和使用
+唯一 `/private/tmp` cache/BINARY 的 `make check`。成功要求命令退出 0、完整 diff 仅含本计划、
+manifest prospective seam 与 add preflight/model、worktree clean。
+
+## Safety, Authorization, and Recovery
+
+用户已授权本 branch/worktree 的 active plan、范围内修改、stage、commit 和验证。所有测试只使用
+`t.TempDir()` 的合成 HOME/repo/config/state 与隔离 Git 配置；不运行产品 mutation，不读取真实私人
+数据。失败用新 fix commit，不 amend/rebase/reset/cherry-pick/squash；不切换或合并 main/其他 branch。
+
+若 prospective 只能靠写真实 `modules/`、放宽无关 missing `[files]`、复制 ignore/path/Git matcher，
+或必须改变公开/ownership/state 契约，则更新计划并停止。测试中 Git 初始化只写合成 repo，不做网络
+访问。
+
+## Interfaces and Dependencies
+
+不新增依赖。manifest 暴露的 prospective 输入只表达精确 module-relative source bytes/mode，并返回
+已通过完整 profile boundary 的 desired；add 包负责 target 输入、module inference、state 与 Git
+组合，不获得绕过 manifest 规则的能力。Git 使用标准库 `os/exec` 调系统 Git；窄 seam 只用于故障
+分类测试，不实现 matcher。
+
+## Surprises & Discoveries
+
+- Observation: 正常 `enumerateModuleSources` 同时收集全部对象并在末尾严格校验 `[files]`/hook 引用。
+  Evidence: `internal/manifest/source.go`。
+  Impact: overlay 应进入这一个枚举接缝，而不是为 add 复制定级或 ignore。
+
+- Observation: prospective scaffold 的模板 bytes 不能从尚不存在的 `SourcePath` 读取。
+  Evidence: `compileScaffoldTemplate` 原先只调用 `os.ReadFile(entry.SourcePath)`。
+  Impact: desired 内部携带不可导出的候选 bytes，正常 source 仍走文件读取；render API 和公开 entry
+  字段不增加绕过严格枚举的能力。
+
+- Observation: 如果逐输入完成 source/Git 检查，后项 control overlap 会晚于前项 Git 启动才暴露。
+  Evidence: 初版 add 组合循环把 snapshot、candidate、source 和 Git 放在同一轮。
+  Impact: 调整为 normalize 全批次 → shared path boundary → snapshot/state → source/Git → manifest
+  prospective；控制面重叠、重复 identity 和 topology 在读取输入内容或启动 Git 前整体拒绝。
+
+- Observation: 精确 source 去重不能覆盖一个输入的 base/`.tmpl`/`.template` 与另一输入 source
+  相交，也不能表达大小写或 Unicode 名称 alias。
+  Evidence: Round 1 P1；原 `seenSources` 只以 repo-relative string key 去重。
+  Impact: 候选确定后先用 `paths.ValidateTargetSet` 一次校验整批三位置 family；shared paths 无法建立
+  missing Unicode identity 时同样 fail closed，首次 Git 前整体拒绝。
+
+- Observation: `git -C` 不会覆盖 inherited `GIT_DIR`、alternate index 或 config-count override。
+  Evidence: Round 1 P1 与真实 Git 回归。
+  Impact: 从明确 base environment 移除全部 inherited `GIT_*` 和 HOME/XDG home variables，再注入
+  effective HOME/XDG 与 `GIT_CONFIG_NOSYSTEM=1`；repo/local/user-global exclude 仍由系统 Git 判定。
+
+- Observation: 自包含计划若导出可写字段，后续 runner 无法区分 preflight 结果与任意 struct literal。
+  Evidence: Round 1 P2；原 `BatchPlan`/`ItemPlan`/`Snapshot` 全部字段公开。
+  Impact: 字段私有化并由成功完整 preflight 添加 package-private seal；零值/局部构造无效，Items、
+  Snapshot 和 Content accessors 深复制，opaque target identity 只通过窄匹配方法消费。
+
+## Decision Log
+
+- Decision: manifest prospective overlay 使用内存候选，不在 repo/modules 创建临时文件。
+  Rationale: 预检必须零写入；同一枚举接缝可只豁免精确候选并保持其他严格错误。
+  Date: 2026-07-21
+
+- Decision: module inference 只接受唯一 prospective source，或由同目录/祖先目录 state 证据缩小到
+  唯一 module 且该 module 内仍只有一个 source；其他情况返回可分类歧义。
+  Rationale: state 只用于消除歧义，不能让多个 [files] 反向映射或多个 module 被启发式猜中。
+  Date: 2026-07-21
+
+## Outcomes and Handoff
+
+Milestone 已完成并通过两轮独立复审。`8d22f24` 建立精确 prospective source overlay，
+不修改真实 repo，并让候选继续经过正常严格枚举、ignore/[files]/suffix/render 与完整 profile
+boundary；`11c72dc` 建立只读 `internal/add` batch plan、输入 snapshot、保守 module inference、
+state/control/source 三变体与系统 Git trackability gate，M1 template fail closed。Round 1 后，
+`14d9329` 以 shared paths identity 整体保留批内 source families，`339fb10` 隔离 inherited Git
+repo/index/config 与 HOME/XDG 覆盖，`8d1fbf8` 封存 validated plan 并提供深复制窄 accessor。
+
+Round 1 的三项有效 finding 均由独立 fix commit 测试先行解决；Round 2 reviewer 对完整 branch 给出
+GO，未报告 P0–P3 finding。主 agent 随后确认 `main` 仍等于有效 base `5d176497`，最终窄测、完整
+diff check 与隔离 `make check` 通过，无 unresolved blocking finding，满足 fast-forward integration
+前的 freshness 要求。
+
+本机已通过 `go test ./internal/add ./internal/manifest`、5 次重复、race、定向 lint、完整
+`5d176497...HEAD` diff check、Darwin/Linux amd64 add test binary 交叉编译，以及独立
+`GOCACHE`/`GOLANGCI_LINT_CACHE`/BINARY 的 `make check`。worktree clean 前仅剩本次计划证据更新；
+没有新增依赖或持久化/公开 CLI 改动。真实 Linux 主机和远端 macOS/Linux CI 未运行：本地
+Darwin 验收与 Darwin/Linux amd64 test binary 交叉编译通过，远端待验收。本计划现迁移至
+`completed/`，handoff 为由主 agent 创建纯计划收口 commit、确认 worktree clean，并按 CP6 DAG
+执行本地 `main` fast-forward integration；本 Milestone 无剩余实现工作。

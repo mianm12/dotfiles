@@ -3,14 +3,22 @@ package manifest
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/mianm12/dotfiles/internal/paths"
 )
 
 var manifestNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+var tomlBareKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// ValidModuleName 报告 name 是否满足 manifest module 单路径段语法。
+func ValidModuleName(name string) bool { return manifestNamePattern.MatchString(name) }
 
 // Repository 表示已经严格加载、但尚未按 profile 和 OS 解析的仓库 manifest。
 type Repository struct {
@@ -82,6 +90,86 @@ func (r Repository) ModuleNames() []string {
 // ProfileNames 返回按字节序排列的全部 profile 名。
 func (r Repository) ProfileNames() []string {
 	return append([]string(nil), r.profileNames...)
+}
+
+// ProfileLineWithModule 返回可直接放入 [profiles] 的确切声明行。
+// 它保留严格解码后的直接成员顺序和 @profile 引用，只在缺少时追加 module。
+func (r Repository) ProfileLineWithModule(profile, module string) (string, error) {
+	members, exists := r.manifest.declaredProfiles[profile]
+	if !exists {
+		return "", fmt.Errorf("unknown profile %q", profile)
+	}
+	if !ValidModuleName(module) {
+		return "", fmt.Errorf("invalid module name %q", module)
+	}
+	result := append([]string(nil), members...)
+	if !slices.Contains(result, module) {
+		result = append(result, module)
+	}
+	quoted := make([]string, len(result))
+	for index, member := range result {
+		quoted[index] = strconv.Quote(member)
+	}
+	return fmt.Sprintf("%s = [%s]", formatTOMLKey(profile), strings.Join(quoted, ", ")), nil
+}
+
+// ModuleActivation 描述一个已发现 module 相对 profile 与当前 GOOS 的只读激活事实。
+// TargetLines 仅在 effective target 是 OS table 时保存可直接复用的既有 TOML 成员行。
+type ModuleActivation struct {
+	InProfile    bool
+	ManifestPath string
+	OSReady      bool
+	OSLine       string
+	TargetReady  bool
+	TargetLines  []string
+}
+
+// ModuleActivationGuidance 返回 module-local 手工激活需要的稳定事实，不修改 manifest。
+func (r Repository) ModuleActivationGuidance(profile, module, goos string) (ModuleActivation, error) {
+	profileModules, exists := r.expandedProfiles[profile]
+	if !exists {
+		return ModuleActivation{}, fmt.Errorf("unknown profile %q", profile)
+	}
+	loaded, exists := r.modules[module]
+	if !exists {
+		return ModuleActivation{}, fmt.Errorf("unknown module %q", module)
+	}
+	if !isSupportedGOOS(goos) {
+		return ModuleActivation{}, fmt.Errorf("unsupported GOOS %q: want %s or %s", goos, goosDarwin, goosLinux)
+	}
+	operatingSystems := r.moduleOperatingSystems(loaded)
+	osReady := slices.Contains(operatingSystems, goos)
+	if !osReady {
+		operatingSystems = append(operatingSystems, goos)
+	}
+	quoted := make([]string, len(operatingSystems))
+	for index, value := range operatingSystems {
+		quoted[index] = strconv.Quote(value)
+	}
+	target := r.moduleTarget(loaded)
+	_, targetReady := target.forOS(goos)
+	var targetLines []string
+	if len(target.byOS) > 0 {
+		targetLines = make([]string, 0, len(target.byOS))
+		for _, targetGOOS := range sortedKeys(target.byOS) {
+			targetLines = append(targetLines, fmt.Sprintf("%s = %s", targetGOOS, strconv.Quote(target.byOS[targetGOOS])))
+		}
+	}
+	return ModuleActivation{
+		InProfile:    slices.Contains(profileModules, module),
+		ManifestPath: path.Join("modules", module, filename),
+		OSReady:      osReady,
+		OSLine:       "os = [" + strings.Join(quoted, ", ") + "]",
+		TargetReady:  targetReady,
+		TargetLines:  targetLines,
+	}, nil
+}
+
+func formatTOMLKey(key string) string {
+	if tomlBareKeyPattern.MatchString(key) {
+		return key
+	}
+	return strconv.Quote(key)
 }
 
 // DataKeys 返回根 manifest 声明的用户 data key，结果按字节序排列。
