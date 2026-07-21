@@ -102,9 +102,15 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   路径吞掉 terminal Close IO error 的 P2，安全 reviewer 与 Go/平台 reviewer 独立发现 L1
   symlink EEXIST 未归类 pure Precondition mismatch 的 P2。主 agent 验证两项均有效；其余范围
   无 P0–P3，完整 diff check、相关测试与至少两次隔离 cache `make check` 通过。
-- [ ] 2026-07-21：从 clean `main@e6d6189` 创建既定 `fix/m1-apply-acceptance` 与独立 active
+- [x] 2026-07-21：从 clean `main@e6d6189` 创建既定 `fix/m1-apply-acceptance` 与独立 active
   ExecPlan，按共同的失败事实精确分类根因修复两项 P2；完成新 review 单元后重新验收整个
   `checkpoint_base...main`。
+- [x] 2026-07-21：acceptance-fix 以 `42f7587` 修复 L1 EEXIST pure mismatch、`9bea7ce`
+  修复 EOF Close error 聚合；完整 branch round 1 独立复审 GO，无 P0–P3。closure `d7f62f5`
+  通过 freshness 后 FF-only 合入 main，集成窄测与隔离 cache `make check` 通过，clean
+  worktree 已无 force 移除。
+- [ ] 2026-07-21：三名原 Acceptance 只读 reviewer 正从 checkpoint base 重新审查完整
+  `f7da6a6...main@d7f62f5`，不只审查 acceptance fix；等待 round 2 整体结论。
 
 ## Milestone DAG and Scheduling
 
