@@ -149,22 +149,12 @@ func TestApplyDryRun_MatchesDiffProjection(t *testing.T) {
 	}
 }
 
-func TestApply_RejectsMutationAndAdoptBeforeRuntime(t *testing.T) {
+func TestApply_RejectsAdoptBeforeRuntime(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{
-			name: "naked apply",
-			args: []string{"apply"},
-			want: "real apply is not available in this build; use dot apply --dry-run",
-		},
-		{
-			name: "module mutation flags",
-			args: []string{"apply", "alpha", "--force", "--no-prune"},
-			want: "real apply is not available in this build; use dot apply --dry-run",
-		},
 		{
 			name: "dry-run adopt",
 			args: []string{"apply", "alpha", "--dry-run", "--adopt"},
@@ -196,6 +186,15 @@ func TestApply_RejectsMutationAndAdoptBeforeRuntime(t *testing.T) {
 				t.Fatalf("rejected apply changed isolated tree\nbefore=%v\nafter=%v", before, after)
 			}
 		})
+	}
+}
+
+func TestApply_ReportsRuntimeErrors(t *testing.T) {
+	fixture := newPlanCLIFixture(t)
+	writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), "invalid = [")
+	stdout, stderr, code := fixture.run(t, "apply")
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "decode machine config") {
+		t.Fatalf("invalid mutation apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 	}
 }
 

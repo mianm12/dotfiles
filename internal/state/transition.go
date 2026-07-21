@@ -20,16 +20,19 @@ type EntryUpdate struct {
 	AppliedAt   string
 }
 
-// TransitionEntries 在 missing 或 strict loaded 基线上原子应用成功 entry upsert。
+// TransitionEntries 在 missing 或 strict loaded 基线上原子应用成功 entry upsert 与 delete。
 // 返回值不共享基线 map；未涉及 entries 与全部 run_once 原样保留。changed=false 表示调用方
 // 不需要 Store，仍返回一个有效且等价的 Snapshot。
-func TransitionEntries(loaded Loaded, updates []EntryUpdate) (Snapshot, bool, error) {
+func TransitionEntries(loaded Loaded, updates []EntryUpdate, deletes ...string) (Snapshot, bool, error) {
 	baseline, err := transitionBaseline(loaded)
 	if err != nil {
 		return Snapshot{}, false, err
 	}
 	validated, err := validateEntryUpdates(baseline, updates)
 	if err != nil {
+		return Snapshot{}, false, err
+	}
+	if err := validateEntryDeletes(baseline, updates, deletes); err != nil {
 		return Snapshot{}, false, err
 	}
 
@@ -40,10 +43,40 @@ func TransitionEntries(loaded Loaded, updates []EntryUpdate) (Snapshot, bool, er
 		}
 		candidate.entries[update.Key] = validated[index]
 	}
+	for _, key := range deletes {
+		delete(candidate.entries, key)
+	}
 	if snapshotsEqual(baseline, candidate) {
 		return candidate, false, nil
 	}
 	return candidate, true, nil
+}
+
+func validateEntryDeletes(baseline Snapshot, updates []EntryUpdate, deletes []string) error {
+	reserved := make(map[string]struct{}, len(updates)*2)
+	for _, update := range updates {
+		reserved[update.Key] = struct{}{}
+		if update.PreviousKey != "" {
+			reserved[update.PreviousKey] = struct{}{}
+		}
+	}
+	seen := make(map[string]struct{}, len(deletes))
+	for index, key := range deletes {
+		if err := validateTargetKey(key); err != nil {
+			return fmt.Errorf("%w: delete %d key %q: %w", ErrTransition, index, key, err)
+		}
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("%w: duplicate delete key %q", ErrTransition, key)
+		}
+		seen[key] = struct{}{}
+		if _, exists := reserved[key]; exists {
+			return fmt.Errorf("%w: key %q is both updated and deleted", ErrTransition, key)
+		}
+		if _, exists := baseline.entries[key]; !exists {
+			return fmt.Errorf("%w: delete key %q is absent", ErrTransition, key)
+		}
+	}
+	return nil
 }
 
 func transitionBaseline(loaded Loaded) (Snapshot, error) {

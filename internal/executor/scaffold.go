@@ -29,7 +29,7 @@ func executeScaffoldFile(
 		return FileResult{StateEffect: action.OnSuccess}, nil
 	case planner.FileScaffold:
 		switch action.Reason {
-		case planner.FileReasonTargetMissing:
+		case planner.FileReasonTargetMissing, planner.FileReasonScaffoldRebuild:
 			return createMissingScaffold(control, action, operations)
 		case planner.FileReasonOwnedLinkToScaffold:
 			return migrateOwnedLinkToScaffold(control, action, operations)
@@ -125,9 +125,9 @@ func createMissingScaffold(
 	if err := operations.hardLink(temporaryFile, action.Precondition.TargetPath); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return failPrepared(fmt.Errorf(
-				"%w: target appeared before scaffold publish: %w",
-				ErrPrecondition,
-				err,
+				"%w: target appeared before scaffold publish: %s",
+				ErrPreconditionMismatch,
+				err.Error(),
 			))
 		}
 		return failPrepared(fmt.Errorf("publish scaffold without clobber: %w", err))
@@ -230,17 +230,12 @@ func validateScaffoldAction(action planner.FileAction) error {
 			return err
 		}
 		if action.Reason != planner.FileReasonTargetMissing &&
+			action.Reason != planner.FileReasonScaffoldRebuild &&
 			action.Reason != planner.FileReasonOwnedLinkToScaffold {
-			if action.Reason == planner.FileReasonScaffoldRebuild {
-				return fmt.Errorf(
-					"%w: force scaffold rebuild is outside the current execution slice",
-					ErrUnsupportedFileAction,
-				)
-			}
 			return fmt.Errorf("%w: reason %q is not a scaffold create", ErrUnsupportedFileAction, action.Reason)
 		}
 		switch action.Reason {
-		case planner.FileReasonTargetMissing:
+		case planner.FileReasonTargetMissing, planner.FileReasonScaffoldRebuild:
 			if action.Precondition.Leaf.Kind != planner.LeafMissing {
 				return fmt.Errorf("%w: scaffold create target was not planned missing", ErrUnsupportedFileAction)
 			}

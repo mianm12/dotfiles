@@ -26,34 +26,21 @@ func validateExecutionScope(
 		}
 	}
 	for index, action := range prune {
-		if !action.Deferred {
-			return fmt.Errorf(
-				"%w: active prune action %d for %q",
-				ErrUnsupportedPlan,
-				index,
-				action.Target,
-			)
+		if action.Deferred {
+			continue
+		}
+		if err := executor.ValidatePruneAction(action); err != nil {
+			return fmt.Errorf("%w: prune action %d for %q: %w", ErrUnsupportedPlan, index, action.Target, err)
 		}
 	}
 	for index, action := range hooks {
-		switch action.Verb {
-		case planner.HookSkip:
-			// 非执行事实，保留既有 run_once。
-		case planner.HookRun:
-			return fmt.Errorf(
-				"%w: hook action %d for %q requires execution",
-				ErrUnsupportedPlan,
-				index,
-				action.StateKey,
-			)
-		default:
-			return fmt.Errorf(
-				"%w: hook action %d uses verb %q",
-				ErrUnsupportedPlan,
-				index,
-				action.Verb,
-			)
-		}
+		return fmt.Errorf(
+			"%w: hook action %d for %q uses %q before hook execution is available",
+			ErrUnsupportedPlan,
+			index,
+			action.StateKey,
+			action.Verb,
+		)
 	}
 	return nil
 }
