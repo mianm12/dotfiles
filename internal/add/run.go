@@ -66,6 +66,7 @@ func (result Result) Valid() bool {
 		return false
 	}
 	succeeded := 0
+	linkSucceeded := 0
 	scaffoldSucceeded := 0
 	for index, outcome := range result.outcomes {
 		if outcome.Index != index || outcome.Target != items[index].Target() {
@@ -85,14 +86,20 @@ func (result Result) Valid() bool {
 		}
 		if outcome.Status == OutcomeSucceeded {
 			succeeded++
-			if items[index].Kind() == manifest.FileKindScaffold {
+			switch items[index].Kind() {
+			case manifest.FileKindLink:
+				linkSucceeded++
+			case manifest.FileKindScaffold:
 				scaffoldSucceeded++
+			default:
+				return false
 			}
 		}
 	}
-	if result.targetCommits > succeeded || (result.stateCommitted && succeeded == 0) ||
+	if result.sourcePublications < succeeded || result.targetCommits != linkSucceeded ||
+		(result.stateCommitted && succeeded == 0) ||
 		(scaffoldSucceeded > 0 && !result.stateCommitted) ||
-		(len(items) > 0 && items[0].Kind() == manifest.FileKindScaffold && result.targetCommits != 0) {
+		(scaffoldSucceeded > 0 && result.targetCommits != 0) {
 		return false
 	}
 	return true

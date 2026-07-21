@@ -43,6 +43,55 @@ func TestRun_LinkCommitsTargetAndState(t *testing.T) {
 	}
 }
 
+func TestResultValid_RequiresSucceededKindCounters(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		mode          Mode
+		mutate        func(*Result)
+		wantInitially bool
+	}{
+		{
+			name:          "link success",
+			mode:          ModeLink,
+			wantInitially: true,
+			mutate:        func(result *Result) { result.sourcePublications = 0 },
+		},
+		{
+			name:          "link target count",
+			mode:          ModeLink,
+			wantInitially: true,
+			mutate:        func(result *Result) { result.targetCommits = 0 },
+		},
+		{
+			name:          "scaffold publication",
+			mode:          ModeScaffold,
+			wantInitially: true,
+			mutate:        func(result *Result) { result.sourcePublications = 0 },
+		},
+		{
+			name:          "scaffold target count",
+			mode:          ModeScaffold,
+			wantInitially: true,
+			mutate:        func(result *Result) { result.targetCommits = 1 },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+			target := fixture.writeTarget(t, "config", "content", 0o644)
+			options := fixture.runOptions(target)
+			options.Request.Mode = test.mode
+			result, err := Run(options)
+			if err != nil || result.Valid() != test.wantInitially {
+				t.Fatalf("Run() = (%#v, %v), want valid %t", result, err, test.wantInitially)
+			}
+			test.mutate(&result)
+			if result.Valid() || result.Plan().Valid() || result.Outcomes() != nil {
+				t.Fatalf("counter-deficient result remained valid: %#v", result)
+			}
+		})
+	}
+}
+
 func TestRun_RebuildsWholePreflightBeforeAnyExecution(t *testing.T) {
 	fixture, item := newLinkItemFixture(t)
 	seam := newRunSeam(t, fixture, []ItemPlan{item})
