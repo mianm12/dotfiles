@@ -32,9 +32,10 @@ func runSystemGit(repository string, environment, arguments []string) (gitResult
 
 func gitTrackable(
 	run gitRunner,
-	repository, home, source string,
+	repository string,
+	environment []string,
+	source string,
 ) error {
-	environment := gitEnvironment(home)
 	tracked, err := run(repository, environment, []string{"ls-files", "--error-unmatch", "--", source})
 	if err != nil {
 		return fmt.Errorf("inspect Git tracking for %q: %w", source, err)
@@ -62,14 +63,22 @@ func gitTrackable(
 	}
 }
 
-func gitEnvironment(home string) []string {
-	result := make([]string, 0, len(os.Environ())+2)
-	for _, entry := range os.Environ() {
+func gitEnvironment(base []string, home string) []string {
+	result := make([]string, 0, len(base)+6)
+	for _, entry := range base {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "HOME" || name == "XDG_CONFIG_HOME" {
+		if name == "HOME" || strings.HasPrefix(name, "XDG_") || strings.HasPrefix(name, "GIT_") {
 			continue
 		}
 		result = append(result, entry)
 	}
-	return append(result, "HOME="+home, "XDG_CONFIG_HOME="+home+string(os.PathSeparator)+".config")
+	return append(
+		result,
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+home+string(os.PathSeparator)+".config",
+		"XDG_DATA_HOME="+home+string(os.PathSeparator)+".local"+string(os.PathSeparator)+"share",
+		"XDG_STATE_HOME="+home+string(os.PathSeparator)+".local"+string(os.PathSeparator)+"state",
+		"XDG_CACHE_HOME="+home+string(os.PathSeparator)+".cache",
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
 }

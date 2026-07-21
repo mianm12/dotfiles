@@ -21,10 +21,11 @@ type operations struct {
 	git      gitRunner
 	hostname func() (string, error)
 	getwd    func() (string, error)
+	environ  func() []string
 }
 
 func defaultOperations() operations {
-	return operations{git: runSystemGit, hostname: os.Hostname, getwd: os.Getwd}
+	return operations{git: runSystemGit, hostname: os.Hostname, getwd: os.Getwd, environ: os.Environ}
 }
 
 // Preflight 只读建立完整 add batch plan，不获取 lock，也不写 source、target 或 state。
@@ -43,7 +44,7 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 	if len(request.Paths) == 0 {
 		return BatchPlan{}, fmt.Errorf("add requires at least one path")
 	}
-	if operations.git == nil || operations.hostname == nil || operations.getwd == nil {
+	if operations.git == nil || operations.hostname == nil || operations.getwd == nil || operations.environ == nil {
 		return BatchPlan{}, fmt.Errorf("add preflight operations are unavailable")
 	}
 
@@ -120,12 +121,13 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 
 	items := make([]ItemPlan, 0, len(provisional))
 	prospective := make([]manifest.ProspectiveSource, 0, len(provisional))
+	gitEnv := gitEnvironment(operations.environ(), home)
 	for _, candidate := range provisional {
 		sourceExists, err := validateSourceVariants(candidate.plan.SourcePath, candidate.plan.Snapshot)
 		if err != nil {
 			return BatchPlan{}, err
 		}
-		if err := gitTrackable(operations.git, repositoryPath, home, candidate.repositorySource); err != nil {
+		if err := gitTrackable(operations.git, repositoryPath, gitEnv, candidate.repositorySource); err != nil {
 			return BatchPlan{}, err
 		}
 		if !sourceExists {

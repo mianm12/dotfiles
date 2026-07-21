@@ -372,6 +372,111 @@ func TestPreflight_GitTrackabilityUsesRepositoryLocalAndGlobalRules(t *testing.T
 	}
 }
 
+func TestGitEnvironment_StripsInheritedGitAndHomeOverrides(t *testing.T) {
+	base := []string{
+		"PATH=/usr/bin",
+		"HOME=/wrong",
+		"XDG_CONFIG_HOME=/wrong/config",
+		"XDG_DATA_HOME=/wrong/data",
+		"XDG_STATE_HOME=/wrong/state",
+		"XDG_CACHE_HOME=/wrong/cache",
+		"GIT_DIR=/alternate/repo",
+		"GIT_INDEX_FILE=/alternate/index",
+		"GIT_CONFIG_SYSTEM=/alternate/system",
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=core.excludesFile",
+		"GIT_CONFIG_VALUE_0=/alternate/excludes",
+		"UNRELATED=value",
+	}
+	home := filepath.Join(t.TempDir(), "home")
+	environment := gitEnvironment(base, home)
+	values := environmentMap(environment)
+
+	for _, name := range []string{
+		"GIT_DIR", "GIT_INDEX_FILE", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT",
+		"GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+	} {
+		if _, exists := values[name]; exists {
+			t.Fatalf("gitEnvironment() retained inherited %s", name)
+		}
+	}
+	want := map[string]string{
+		"HOME":                home,
+		"XDG_CONFIG_HOME":     filepath.Join(home, ".config"),
+		"XDG_DATA_HOME":       filepath.Join(home, ".local", "share"),
+		"XDG_STATE_HOME":      filepath.Join(home, ".local", "state"),
+		"XDG_CACHE_HOME":      filepath.Join(home, ".cache"),
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"PATH":                "/usr/bin",
+		"UNRELATED":           "value",
+	}
+	for name, value := range want {
+		if values[name] != value {
+			t.Fatalf("gitEnvironment()[%q] = %q, want %q", name, values[name], value)
+		}
+	}
+}
+
+func TestPreflight_GitEnvironmentCannotRedirectEffectiveRepositoryOrConfig(t *testing.T) {
+	t.Run("GIT_DIR", func(t *testing.T) {
+		fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+		target := fixture.writeTarget(t, "config", "same", 0o644)
+		writeAddFile(t, filepath.Join(fixture.repo, ".gitignore"), "modules/app/config\n", 0o644)
+		alternate := filepath.Join(fixture.root, "alternate")
+		if err := os.MkdirAll(alternate, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		alternateFixture := &addFixture{repo: alternate, home: fixture.home}
+		runGit(t, alternateFixture, "init", "-q")
+		writeAddFile(t, filepath.Join(alternate, "modules", "app", "config"), "same", 0o644)
+		runGit(t, alternateFixture, "add", "--", "modules/app/config")
+		t.Setenv("GIT_DIR", filepath.Join(alternate, ".git"))
+
+		_, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+		if err == nil || !strings.Contains(err.Error(), "ignored by Git") {
+			t.Fatalf("Preflight() error = %v, want effective repository ignore rejection", err)
+		}
+	})
+
+	t.Run("GIT_INDEX_FILE", func(t *testing.T) {
+		fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+		target := fixture.writeTarget(t, "config", "same", 0o644)
+		sourceRelative := "modules/app/config"
+		writeAddFile(t, filepath.Join(fixture.repo, filepath.FromSlash(sourceRelative)), "same", 0o644)
+		runGit(t, fixture, "add", "--", sourceRelative)
+		writeAddFile(t, filepath.Join(fixture.repo, ".gitignore"), sourceRelative+"\n", 0o644)
+		alternateIndex := filepath.Join(fixture.root, "alternate.index")
+		command := exec.Command("git", "-C", fixture.repo, "read-tree", "--empty")
+		command.Env = append(os.Environ(), "GIT_INDEX_FILE="+alternateIndex)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("create alternate index: %v: %s", err, output)
+		}
+		t.Setenv("GIT_INDEX_FILE", alternateIndex)
+
+		if _, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink}); err != nil {
+			t.Fatalf("Preflight() error = %v, want effective index tracked source", err)
+		}
+	})
+
+	t.Run("config count", func(t *testing.T) {
+		fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+		target := fixture.writeTarget(t, "config", "same", 0o644)
+		excludes := filepath.Join(fixture.home, "global-excludes")
+		writeAddFile(t, excludes, "modules/app/config\n", 0o644)
+		runGit(t, fixture, "config", "--global", "core.excludesFile", excludes)
+		empty := filepath.Join(fixture.home, "empty-excludes")
+		writeAddFile(t, empty, "", 0o644)
+		t.Setenv("GIT_CONFIG_COUNT", "1")
+		t.Setenv("GIT_CONFIG_KEY_0", "core.excludesFile")
+		t.Setenv("GIT_CONFIG_VALUE_0", empty)
+
+		_, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+		if err == nil || !strings.Contains(err.Error(), "ignored by Git") {
+			t.Fatalf("Preflight() error = %v, want effective HOME global exclude rejection", err)
+		}
+	})
+}
+
 func TestPreflight_RejectsTemplateAndGitRunnerFailure(t *testing.T) {
 	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
 	target := fixture.writeTarget(t, "config", "x", 0o644)
@@ -498,6 +603,15 @@ func runGit(t *testing.T, fixture *addFixture, args ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v error = %v, output = %s", args, err, output)
 	}
+}
+
+func environmentMap(environment []string) map[string]string {
+	result := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		name, value, _ := strings.Cut(entry, "=")
+		result[name] = value
+	}
+	return result
 }
 
 type addTreeEntry struct {
