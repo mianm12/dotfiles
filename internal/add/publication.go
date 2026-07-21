@@ -98,6 +98,9 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 	content := item.snapshot.content
 	mode := item.snapshot.mode.Perm()
 	if item.sourceExists {
+		if err := validateSourceAncestors(item, operations); err != nil {
+			return sourcePublication{}, fmt.Errorf("revalidate equivalent add source topology: %w", err)
+		}
 		info, err := validateRegularFile(item.sourcePath, nil, content, mode, operations)
 		if err != nil {
 			return sourcePublication{}, fmt.Errorf("revalidate equivalent add source: %w", err)
@@ -184,17 +187,9 @@ func validatePublicationOperations(operations publicationOperations) error {
 }
 
 func ensureSourceParent(item ItemPlan, operations publicationOperations) ([]createdSourceDirectory, error) {
-	relative := filepath.Clean(filepath.FromSlash(item.source))
-	if relative == "." || filepath.IsAbs(relative) || relative == ".." ||
-		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("add source %q is not module-relative", item.source)
-	}
-	moduleRoot := item.sourcePath
-	for range strings.Split(relative, string(filepath.Separator)) {
-		moduleRoot = filepath.Dir(moduleRoot)
-	}
-	if filepath.Join(moduleRoot, relative) != filepath.Clean(item.sourcePath) {
-		return nil, fmt.Errorf("add source path does not match its module-relative source")
+	moduleRoot, _, err := sourceLayout(item)
+	if err != nil {
+		return nil, err
 	}
 	rootInfo, err := operations.lstat(moduleRoot)
 	if err != nil {
@@ -247,6 +242,50 @@ func ensureSourceParent(item ItemPlan, operations publicationOperations) ([]crea
 		}
 	}
 	return created, nil
+}
+
+func sourceLayout(item ItemPlan) (moduleRoot, relative string, err error) {
+	relative = filepath.Clean(filepath.FromSlash(item.source))
+	if relative == "." || filepath.IsAbs(relative) || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("add source %q is not module-relative", item.source)
+	}
+	moduleRoot = item.sourcePath
+	for range strings.Split(relative, string(filepath.Separator)) {
+		moduleRoot = filepath.Dir(moduleRoot)
+	}
+	if filepath.Join(moduleRoot, relative) != filepath.Clean(item.sourcePath) {
+		return "", "", fmt.Errorf("add source path does not match its module-relative source")
+	}
+	return moduleRoot, relative, nil
+}
+
+func validateSourceAncestors(item ItemPlan, operations publicationOperations) error {
+	moduleRoot, relative, err := sourceLayout(item)
+	if err != nil {
+		return err
+	}
+	current := moduleRoot
+	components := strings.Split(relative, string(filepath.Separator))
+	for index, component := range append([]string{""}, components...) {
+		if component != "" {
+			current = filepath.Join(current, component)
+		}
+		info, err := operations.lstat(current)
+		if err != nil {
+			return fmt.Errorf("inspect add source component %q: %w", current, err)
+		}
+		last := index == len(components)
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			return fmt.Errorf("add source component %q is a symlink", current)
+		case last && !info.Mode().IsRegular():
+			return fmt.Errorf("add source %q is not a regular file", current)
+		case !last && !info.IsDir():
+			return fmt.Errorf("add source ancestor %q is not a directory", current)
+		}
+	}
+	return nil
 }
 
 func cleanupSourcePublication(publication sourcePublication, operations publicationOperations) error {

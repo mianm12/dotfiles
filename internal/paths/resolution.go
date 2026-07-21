@@ -27,6 +27,20 @@ func (resolution TargetResolution) Equal(other TargetResolution) bool {
 	return resolution.identity.Equal(other.identity)
 }
 
+// SameTopology 报告两个有效 resolution 的 leaf 身份和展示路径实际经过的祖先拓扑均相同。
+// mutation 提交前需要它来证明准备工作期间没有换用另一条祖先路径到达同一 leaf。
+func (resolution TargetResolution) SameTopology(other TargetResolution) bool {
+	if !resolution.identity.Equal(other.identity) || len(resolution.ancestors) != len(other.ancestors) {
+		return false
+	}
+	for index := range resolution.ancestors {
+		if !resolution.ancestors[index].Equal(other.ancestors[index]) {
+			return false
+		}
+	}
+	return true
+}
+
 // IsAncestorOf 报告 resolution 的 leaf 是否是 other 展示路径经过的严格祖先。
 func (resolution TargetResolution) IsAncestorOf(other TargetResolution) bool {
 	if resolution.Equal(other) {

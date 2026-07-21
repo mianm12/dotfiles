@@ -57,7 +57,8 @@ symlink模式可作为实现参照。
   coordinator、completed preflight 计划、相关规范和 add/runtime/state/apply/executor 实现。
 - [x] 2026-07-22：以 `5cfedca` 提交本 active ExecPlan 起点。
 - [x] 2026-07-22：测试先行建立独立 source publication 与保守 cleanup；普通窄测和格式检查通过。
-- [ ] 测试先行建立 link target 提交、最终 Precond 和可验证 per-item result。
+- [x] 2026-07-22：测试先行建立 link target 原子提交、source/target/ancestor 最终 Precond、
+  hard-link sibling 隔离和可验证 per-item result；add/paths 窄测通过。
 - [ ] 测试先行建立锁内 batch runner、成功前缀单次 state 提交与恢复。
 - [ ] 运行窄测、重复/race、完整 diff check、隔离 `make check` 与双目标交叉编译；更新证据并保持
   active/clean 等待独立复核。
@@ -165,6 +166,12 @@ no-clobber/cleanup 机制，不理解 manifest/ownership；runner 只消费 lock
   内建规则排除，进程中断后可能被枚举成 desired。
   Evidence: `docs/03-manifest-spec.md` 的内建 `*.swp` ignore 与 `internal/manifest` 正常枚举路径。
   Impact: publication 临时名固定以 `.swp` 结尾，复用正常 manifest ignore，不增加第二套枚举例外。
+
+- Observation: 既有 `TargetResolution.Equal` 只比较 leaf identity，不能证明准备期间实际经过的
+  祖先拓扑未改变。
+  Evidence: `internal/paths/resolution.go` 的 opaque ancestors 与 executor 现有 leaf 比较。
+  Impact: paths 增加只读 `SameTopology` 比较，add target 提交前同时要求 leaf 与祖先序列一致；
+  不改变持久化或公开 CLI。
 
 ## Decision Log
 
