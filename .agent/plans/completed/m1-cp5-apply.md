@@ -68,13 +68,13 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   `004b09c` 修复；round 2 的失真注释 P3 由 `7b0a712` 修复；round 3 完整 review GO。
 - [x] 2026-07-20：force-replace closure `e0d2243` FF-only 合入 main；backup/executor/apply 窄测
   与隔离 cache `make check` 通过，worker worktree clean/已合入后无 force 移除。
-- [ ] 2026-07-20：apply-cli 第一轮完整 review 发现 runner 聚合计数无法精确投影运行期 file
+- [x] 2026-07-20：apply-cli 第一轮完整 review 发现 runner 聚合计数无法精确投影运行期 file
   conflict 与部分 prune 后的 deferred 边界 P2；finding 已验证有效，worker 正新增逐 action outcome
   和公开输出/exit 回归，之后完整复审。
-- [ ] 2026-07-20：apply-cli round 2 确认逐 action contract 已闭合第一轮 P2，但发现 prune
+- [x] 2026-07-20：apply-cli round 2 确认逐 action contract 已闭合第一轮 P2，但发现 prune
   `ActionConflict` 仍被展示为 deferred 的 P2；worker 正校正为具体 `CONFLICT` target，之后进行
   本有效基线第三轮完整 review。
-- [ ] 2026-07-20：**停止条件命中**。apply-cli round 3 确认 round 2 P2 已修复，但发现新的
+- [x] 2026-07-20：**停止条件命中**。apply-cli round 3 确认 round 2 P2 已修复，但发现新的
   blocking P2：outcome validator 未拒绝“planner 已 deferred 的 prune 却报告 succeeded”，可导致
   stdout 显示 deferred 而 exit 0。按本 Goal 规则第三轮后停止，不继续补丁、不 closure、不合入 main；
   等待用户裁决后续处理方式。
@@ -96,8 +96,8 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   worktree 确认 clean/已合入后无 force 移除。
 - [x] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
 - [x] Wave 3：apply-cli 独立计划、实现、串行 outcome fix、新 review 单元、closure 和 main 集成。
-- [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成；
-  main 当前 clean `e6d6189`，即将从 checkpoint base 审查完整 Checkpoint。
+- [x] 三路完整 Checkpoint Acceptance、必要 fix 与最终 round 2 整体验收；coordinator closure
+  正在执行，随后 FF-only 集成回 main。
 - [x] 2026-07-21：三路首次 Checkpoint Acceptance 完成；规范/数据流 reviewer 发现确认 EOF
   路径吞掉 terminal Close IO error 的 P2，安全 reviewer 与 Go/平台 reviewer 独立发现 L1
   symlink EEXIST 未归类 pure Precondition mismatch 的 P2。主 agent 验证两项均有效；其余范围
@@ -109,8 +109,13 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
   修复 EOF Close error 聚合；完整 branch round 1 独立复审 GO，无 P0–P3。closure `d7f62f5`
   通过 freshness 后 FF-only 合入 main，集成窄测与隔离 cache `make check` 通过，clean
   worktree 已无 force 移除。
-- [ ] 2026-07-21：三名原 Acceptance 只读 reviewer 正从 checkpoint base 重新审查完整
-  `f7da6a6...main@d7f62f5`，不只审查 acceptance fix；等待 round 2 整体结论。
+- [x] 2026-07-21：三名原 Acceptance 只读 reviewer 从 checkpoint base 重新审查完整
+  `f7da6a6...main@d7f62f5`，不只审查 acceptance fix；三路 round 2 均 GO，无 P0–P3。
+- [x] 2026-07-21：主 agent 最终运行精确 checkpoint diff check 与沙箱外独立 cache 的
+  `make check BINARY=/private/tmp/dot-m1-cp5-final-acceptance/dot`，全部通过；无 lint、race、
+  build 或 manifest 问题。真实 Linux 主机与远端 macOS/Linux CI 未运行。
+- [x] 2026-07-21：最终 clean `main@d7f62f5` 以明确 integration commit `56320ec` 非重写合入
+  coordinator；开始更新 Outcomes/Handoff 与纯计划收口。
 
 ## Milestone DAG and Scheduling
 
@@ -122,6 +127,8 @@ Wave 1 @ checkpoint_base
 预定集成：backup-store ─┘ then prune-executor
 
 apply-cli ──> fix/m1-apply-cli-outcome-validation ──> apply-cli closure
+
+main ──> fix/m1-apply-acceptance ──> Acceptance round 2 ──> coordinator closure
 ```
 
 backup-store 只允许新增独立 backup 机制及测试，不修改 planner/state/executor/apply/CLI shared
@@ -170,13 +177,13 @@ non-dry-run `apply` 调用内部 runner，连接终端确认与 `--yes`，稳定
 
 | 必须成立的性质 | 主要证据 | 状态 |
 |---|---|---|
-| backup bytes/mode/raw link text/0700/不覆盖/持久化/精确路径 | backup 真实 FS 与故障注入 tests | 待验证 |
-| force Precond、regular/symlink、目录/特殊拒绝、S2 | executor + apply integration | 待验证 |
-| P1/P2/P3、scope、deferred、确认、dead-link ownership | planner/executor/apply integration | 待验证 |
-| mixed state、部分成功、Store 失败恢复、run_once 保留 | state/apply tests | 待验证 |
-| 公开输出、1/3/2/0、确认拒绝、重跑幂等 | CLI 隔离 tests | 待验证 |
-| dry-run 全新 HOME 零写入；run_once 在 action mutation 前拒绝 | CLI/apply filesystem tests | 待验证 |
-| macOS/Linux | 本地 Darwin + 远端 CI | 本地待验收；远端待验收 |
+| backup bytes/mode/raw link text/0700/不覆盖/持久化/精确路径 | backup 真实 FS 与故障注入 tests | 本地通过 |
+| force Precond、regular/symlink、目录/特殊拒绝、S2 | executor + apply integration | 本地通过 |
+| P1/P2/P3、scope、deferred、确认、dead-link ownership | planner/executor/apply integration | 本地通过 |
+| mixed state、部分成功、Store 失败恢复、run_once 保留 | state/apply tests | 本地通过 |
+| 公开输出、1/3/2/0、确认拒绝、重跑幂等 | CLI 隔离 tests | 本地通过 |
+| dry-run 全新 HOME 零写入；run_once 在 action mutation 前拒绝 | CLI/apply filesystem tests | 本地通过 |
+| macOS/Linux | 本地 Darwin + 交叉编译 + 远端 CI | Darwin 本地通过；Linux 交叉编译通过；真实 Linux/远端待验收 |
 
 每个节点在其 worktree 运行窄测、`git diff <effective-base>...HEAD --check` 和使用唯一 `/private/tmp`
 BINARY/cache 的 `make check`。Checkpoint 最终至少运行：
@@ -293,4 +300,17 @@ callback；prune-executor 先定稿，force 扩展 backup result，apply-cli 最
 
 ## Outcomes and Handoff
 
-尚未完成。Plan Gate 已通过；下一步提交 coordinator ExecPlan，然后启动 Wave 1。
+CP5 已完成本地实施与阶段 Acceptance。backup-store `79d3713`、prune-executor `0499de9`、
+force-replace `e0d2243`、apply-cli `e6d6189` 及 acceptance-fix `d7f62f5` 均按 DAG、独立
+ExecPlan、语义 commits、freshness、完整 review 和 FF-only 流程进入 main。用户授权的串行
+outcome-validation fix 也已完成并归档。
+
+首次三路 Acceptance 的两个有效 P2 已由 acceptance-fix 闭合；修复后的三路完整 checkpoint
+round 2 均 GO，无 unresolved P0–P3。最终 `git diff f7da6a63...main --check` 与无降级
+`make check` 通过，包括 tidy diff、format、0 lint issues、全仓 race、build 与 synthetic manifest
+gate。所有 mutation 测试使用合成隔离环境；未读取或修改真实 modules、machine config、state、
+backup、`.env` 或主力 HOME。
+
+最终 main 已由 `56320ec` 合入 coordinator。迁移本 ExecPlan并提交纯计划收口后，coordinator
+可 FF-only 合入 main；该终态不再包含代码修改。远端 macOS/Linux CI 与独立真实 Linux 文件系统
+未运行：本地验收通过、远端待验收。
