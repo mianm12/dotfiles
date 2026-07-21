@@ -95,9 +95,8 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 		})
 	}
 
-	items := make([]ItemPlan, 0, len(request.Paths))
-	prospective := make([]manifest.ProspectiveSource, 0, len(request.Paths))
-	seenSources := make(map[string]string, len(request.Paths))
+	provisional := make([]provisionalItem, 0, len(inputsToPlan))
+	families := make([]sourceFamily, 0, len(inputsToPlan))
 	for _, input := range inputsToPlan {
 		candidate, err := selectCandidate(resolved, inputs.State(), home, input.targetPath, request.Module, kind)
 		if err != nil {
@@ -105,28 +104,38 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 		}
 		sourcePath := filepath.Join(repositoryPath, "modules", candidate.Module, filepath.FromSlash(candidate.Source))
 		repositorySource := filepath.ToSlash(filepath.Join("modules", candidate.Module, filepath.FromSlash(candidate.Source)))
-		if previous, exists := seenSources[repositorySource]; exists {
-			return BatchPlan{}, fmt.Errorf("add inputs %q and %q collide at source %q", previous, input.targetPath, repositorySource)
-		}
-		seenSources[repositorySource] = input.targetPath
-		sourceExists, err := validateSourceVariants(sourcePath, input.snapshot)
+		provisional = append(provisional, provisionalItem{
+			plan: ItemPlan{
+				Target: input.target, TargetPath: input.targetPath, Module: candidate.Module,
+				Source: candidate.Source, SourcePath: sourcePath, Kind: kind,
+				Snapshot: input.snapshot,
+			},
+			repositorySource: repositorySource,
+		})
+		families = append(families, sourceFamily{input: input.targetPath, paths: sourceVariantPaths(sourcePath)})
+	}
+	if err := validateSourceFamilies(families); err != nil {
+		return BatchPlan{}, err
+	}
+
+	items := make([]ItemPlan, 0, len(provisional))
+	prospective := make([]manifest.ProspectiveSource, 0, len(provisional))
+	for _, candidate := range provisional {
+		sourceExists, err := validateSourceVariants(candidate.plan.SourcePath, candidate.plan.Snapshot)
 		if err != nil {
 			return BatchPlan{}, err
 		}
-		if err := gitTrackable(operations.git, repositoryPath, home, repositorySource); err != nil {
+		if err := gitTrackable(operations.git, repositoryPath, home, candidate.repositorySource); err != nil {
 			return BatchPlan{}, err
 		}
 		if !sourceExists {
 			prospective = append(prospective, manifest.ProspectiveSource{
-				Module: candidate.Module, Source: candidate.Source,
-				Content: input.snapshot.Content, Mode: input.snapshot.Mode,
+				Module: candidate.plan.Module, Source: candidate.plan.Source,
+				Content: candidate.plan.Snapshot.Content, Mode: candidate.plan.Snapshot.Mode,
 			})
 		}
-		items = append(items, ItemPlan{
-			Target: input.target, TargetPath: input.targetPath, Module: candidate.Module,
-			Source: candidate.Source, SourcePath: sourcePath, Kind: kind,
-			Snapshot: input.snapshot, SourceExists: sourceExists,
-		})
+		candidate.plan.SourceExists = sourceExists
+		items = append(items, candidate.plan)
 	}
 	validated, err := resolved.ValidateProspectivePathBoundaries(control, prospective)
 	if err != nil {
@@ -163,6 +172,32 @@ type inputSnapshot struct {
 type normalizedInput struct {
 	target     string
 	targetPath string
+}
+
+type provisionalItem struct {
+	plan             ItemPlan
+	repositorySource string
+}
+
+type sourceFamily struct {
+	input string
+	paths []string
+}
+
+func validateSourceFamilies(families []sourceFamily) error {
+	targets := make([]paths.LabeledTarget, 0, len(families)*3)
+	for _, family := range families {
+		for _, variant := range family.paths {
+			targets = append(targets, paths.LabeledTarget{
+				Label: fmt.Sprintf("add input %q source variant", family.input),
+				Path:  variant,
+			})
+		}
+	}
+	if _, err := paths.ValidateTargetSet(targets); err != nil {
+		return fmt.Errorf("validate add batch source variant families: %w", err)
+	}
+	return nil
 }
 
 func requestedKind(mode Mode) (manifest.FileKind, error) {
@@ -363,13 +398,7 @@ func stateEvidenceModules(
 }
 
 func validateSourceVariants(sourcePath string, input Snapshot) (bool, error) {
-	base := sourcePath
-	if strings.HasSuffix(base, ".template") {
-		base = strings.TrimSuffix(base, ".template")
-	} else if strings.HasSuffix(base, ".tmpl") {
-		base = strings.TrimSuffix(base, ".tmpl")
-	}
-	variants := []string{base, base + ".tmpl", base + ".template"}
+	variants := sourceVariantPaths(sourcePath)
 	expectedExists := false
 	for _, variant := range variants {
 		info, err := os.Lstat(variant)
@@ -395,6 +424,16 @@ func validateSourceVariants(sourcePath string, input Snapshot) (bool, error) {
 		expectedExists = true
 	}
 	return expectedExists, nil
+}
+
+func sourceVariantPaths(sourcePath string) []string {
+	base := sourcePath
+	if strings.HasSuffix(base, ".template") {
+		base = strings.TrimSuffix(base, ".template")
+	} else if strings.HasSuffix(base, ".tmpl") {
+		base = strings.TrimSuffix(base, ".tmpl")
+	}
+	return []string{base, base + ".tmpl", base + ".template"}
 }
 
 func validateDesiredItems(items []ItemPlan, entries []manifest.DesiredEntry) error {

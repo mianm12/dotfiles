@@ -229,6 +229,70 @@ func TestPreflight_SourceVariantsAndEquivalentRetry(t *testing.T) {
 	}
 }
 
+func TestPreflight_RejectsBatchSourceVariantFamilyBeforeGit(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"
+[files."a.template"]
+kind = "link"
+target = "~/b"
+[files.b]
+kind = "scaffold"`})
+	first := fixture.writeTarget(t, "a", "first", 0o644)
+	second := fixture.writeTarget(t, "b", "second", 0o644)
+	operations := defaultOperations()
+	calls := 0
+	operations.git = func(string, []string, []string) (gitResult, error) {
+		calls++
+		return gitResult{exitCode: 1}, nil
+	}
+
+	_, err := preflight(fixture.load(t), Request{
+		Paths: []string{first, second}, Module: "app", Mode: ModeLink,
+	}, operations)
+	if err == nil || !strings.Contains(err.Error(), "source variant families") {
+		t.Fatalf("preflight() error = %v, want batch source family rejection", err)
+	}
+	if calls != 0 {
+		t.Fatalf("Git calls = %d, want zero before source families pass", calls)
+	}
+}
+
+func TestValidateSourceFamilies_UsesSharedFilesystemNameIdentity(t *testing.T) {
+	root := t.TempDir()
+	for _, test := range []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{name: "case alias", left: "Config", right: "config"},
+		{name: "unicode alias", left: "caf\u00e9", right: "cafe\u0301"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			leftPath := filepath.Join(root, test.left)
+			rightPath := filepath.Join(root, test.right)
+			leftIdentity, leftErr := paths.ResolveTargetIdentity(leftPath)
+			rightIdentity, rightErr := paths.ResolveTargetIdentity(rightPath)
+
+			err := validateSourceFamilies([]sourceFamily{
+				{input: "left", paths: []string{leftPath}},
+				{input: "right", paths: []string{rightPath}},
+			})
+			if leftErr != nil || rightErr != nil {
+				if err == nil {
+					t.Fatalf("validateSourceFamilies() accepted identities paths could not establish: (%v, %v)", leftErr, rightErr)
+				}
+				return
+			}
+			sharedSaysAlias := leftIdentity.Equal(rightIdentity)
+			if sharedSaysAlias && err == nil {
+				t.Fatal("validateSourceFamilies() accepted alias identified by paths")
+			}
+			if !sharedSaysAlias && err != nil {
+				t.Fatalf("validateSourceFamilies() error = %v for distinct shared identities", err)
+			}
+		})
+	}
+}
+
 func TestPreflight_ScaffoldRequiresRenderedBytesAndMode(t *testing.T) {
 	t.Run("matching", func(t *testing.T) {
 		fixture := newAddFixture(t, map[string]string{"app": `target = "~"
