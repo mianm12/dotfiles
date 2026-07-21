@@ -253,7 +253,7 @@ func confirmationCallback(
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
 				_, writeErr := fmt.Fprintln(writer, "warning: confirmation input ended; prune deferred")
-				return false, writeErr
+				return false, errors.Join(writeErr, closeErr)
 			}
 			return false, errors.Join(readErr, closeErr)
 		}

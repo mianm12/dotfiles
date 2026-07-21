@@ -16,6 +16,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/mianm12/dotfiles/internal/planner"
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
+	"github.com/spf13/cobra"
 )
 
 func TestApply_MutatesAndConvergesWithoutRepeatWrites(t *testing.T) {
@@ -123,6 +124,44 @@ func TestApply_ConfirmationAcceptsYesAndRejectsEOF(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestApply_ConfirmationEOFReportsTerminalCloseError(t *testing.T) {
+	fixture := newWholeModulePruneCLIFixture(t)
+	closeErr := errors.New("terminal close failed")
+	stdout, stderr, code := fixture.run(t, func() (io.ReadCloser, error) {
+		return closeErrorReadCloser{Reader: strings.NewReader(""), err: closeErr}, nil
+	}, "apply")
+	if code != exitError || !strings.Contains(stderr, closeErr.Error()) ||
+		!strings.Contains(stderr, "confirmation input ended; prune deferred") ||
+		!strings.Contains(stdout, "prune (deferred)  ~/old") {
+		t.Fatalf("EOF close error = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.home, "old")); err != nil {
+		t.Fatalf("EOF close error changed prune target: %v", err)
+	}
+	if _, exists := readPlanState(t, fixture.home).Entries["~/old"]; !exists {
+		t.Fatal("EOF close error removed orphan state")
+	}
+}
+
+func TestConfirmationCallback_EOFJoinsWarningAndCloseErrors(t *testing.T) {
+	warningErr := errors.New("warning write failed")
+	closeErr := errors.New("terminal close failed")
+	writer := &failOnSubstringWriter{
+		needle: "confirmation input ended",
+		err:    warningErr,
+	}
+	command := &cobra.Command{}
+	command.SetErr(writer)
+	confirm := confirmationCallback(command, false, func() (io.ReadCloser, error) {
+		return closeErrorReadCloser{Reader: strings.NewReader(""), err: closeErr}, nil
+	})
+
+	accepted, err := confirm(nil)
+	if accepted || !errors.Is(err, warningErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("confirmation = accepted %t, error %v; want joined warning/close errors", accepted, err)
 	}
 }
 
@@ -815,4 +854,24 @@ func snapshotCLIPath(t *testing.T, path string) []byte {
 
 func errorsMatchNotExist(left, right error) bool {
 	return left == nil && right == nil || os.IsNotExist(left) && os.IsNotExist(right)
+}
+
+type closeErrorReadCloser struct {
+	io.Reader
+	err error
+}
+
+func (closer closeErrorReadCloser) Close() error { return closer.err }
+
+type failOnSubstringWriter struct {
+	buffer bytes.Buffer
+	needle string
+	err    error
+}
+
+func (writer *failOnSubstringWriter) Write(data []byte) (int, error) {
+	if strings.Contains(string(data), writer.needle) {
+		return 0, writer.err
+	}
+	return writer.buffer.Write(data)
 }
