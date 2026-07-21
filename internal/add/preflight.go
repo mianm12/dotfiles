@@ -2,6 +2,7 @@ package add
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -248,45 +249,46 @@ func validateExplicitModule(
 		if err != nil {
 			return fmt.Errorf("resolve add module activation guidance: %w", err)
 		}
+		message := fmt.Sprintf("add module %q is not in the effective profile %q", module, profile)
 		if activation.InProfile {
-			message := fmt.Sprintf(
+			message = fmt.Sprintf(
 				"add module %q is declared in profile %q but inactive on %s",
 				module,
 				profile,
 				goos,
 			)
-			if activation.TargetReady {
-				return fmt.Errorf(
-					"%s\nnext: in %s set %s",
-					message,
-					activation.ManifestPath,
-					activation.OSLine,
-				)
+		}
+		steps := make([]string, 0, 3)
+		if !activation.InProfile {
+			profileLine, lineErr := repository.ProfileLineWithModule(profile, module)
+			if lineErr != nil {
+				return fmt.Errorf("format add profile guidance: %w", lineErr)
 			}
+			steps = append(steps, "next: "+profileLine)
+		}
+		if !activation.OSReady {
+			steps = append(steps, fmt.Sprintf(
+				"next: in %s set %s",
+				activation.ManifestPath,
+				activation.OSLine,
+			))
+		}
+		if !activation.TargetReady {
 			targetContext := ""
 			if len(activation.TargetLines) > 0 {
 				targetContext = "; preserve " + strings.Join(activation.TargetLines, ", ")
 			}
-			return fmt.Errorf(
-				"%s\nnext: in %s update [target]%s and add target.%s using the intended canonical ~/ path\nnext: in %s set %s; both edits are required",
-				message,
+			steps = append(steps, fmt.Sprintf(
+				"next: in %s update [target]%s and add target.%s using the intended canonical ~/ path",
 				activation.ManifestPath,
 				targetContext,
 				goos,
-				activation.ManifestPath,
-				activation.OSLine,
-			)
+			))
 		}
-		profileLine, err := repository.ProfileLineWithModule(profile, module)
-		if err != nil {
-			return fmt.Errorf("format add profile guidance: %w", err)
+		if len(steps) > 1 {
+			steps = append(steps, "next: complete every listed edit before retrying dot add")
 		}
-		return fmt.Errorf(
-			"add module %q is not in the effective profile %q\nnext: %s",
-			module,
-			profile,
-			profileLine,
-		)
+		return errors.New(message + "\n" + strings.Join(steps, "\n"))
 	}
 	return nil
 }

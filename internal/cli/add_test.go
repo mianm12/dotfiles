@@ -277,6 +277,38 @@ func TestAdd_ExplicitInactiveModuleGuidanceUsesCurrentGOOS(t *testing.T) {
 	}
 }
 
+func TestAdd_ExplicitModuleGuidanceCombinesProfileAndGOOSWithoutWrites(t *testing.T) {
+	fixture := newAddCLIFixture(t, []string{"active", "app"})
+	otherGOOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherGOOS = "darwin"
+	}
+	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "requires = \">=0.0.0\"\n"+
+		"[defaults]\nos = [\""+otherGOOS+"\"]\ntarget = { "+otherGOOS+" = \"~/other\" }\n"+
+		"[profiles]\nshared = [\"active\"]\nall = [\"@shared\"]\nelsewhere = [\"app\"]\n")
+	target := fixture.writeTarget(t, "guided", "content\n")
+	before := snapshotCLITree(t, fixture.root)
+
+	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "app", target)
+	profileStep := `next: all = ["@shared", "app"]`
+	osStep := "next: in modules/app/dot.toml set os ="
+	targetStep := "target." + runtime.GOOS
+	if code != exitError || !strings.Contains(stderr, profileStep) || !strings.Contains(stderr, osStep) ||
+		!strings.Contains(stderr, targetStep) || !strings.Contains(stderr, "complete every listed edit before retrying") {
+		t.Fatalf("combined CLI guidance = stderr %q, exit %d", stderr, code)
+	}
+	if strings.Index(stderr, profileStep) > strings.Index(stderr, osStep) ||
+		strings.Index(stderr, osStep) > strings.Index(stderr, targetStep) {
+		t.Fatalf("combined CLI guidance order = %q", stderr)
+	}
+	if strings.Contains(stderr, fixture.repository) || strings.Contains(stderr, fixture.home) {
+		t.Fatalf("combined CLI guidance leaked control-plane absolute path: %q", stderr)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("combined guidance dry-run changed isolated tree\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
 func TestAdd_LinkThenApplyIsImmediatelyConverged(t *testing.T) {
 	fixture := newAddCLIFixture(t, []string{"alpha"})
 	target := fixture.writeTarget(t, ".config/app/config", "user config\n")

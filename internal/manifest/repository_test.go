@@ -141,6 +141,7 @@ func TestRepositoryModuleActivationGuidance_UsesExpandedMembershipAndEffectiveOv
 		moduleManifest  string
 		goos            string
 		wantInProfile   bool
+		wantOSReady     bool
 		wantOSLine      string
 		wantTargetReady bool
 		wantTargetLines []string
@@ -172,6 +173,11 @@ func TestRepositoryModuleActivationGuidance_UsesExpandedMembershipAndEffectiveOv
 			profile: `base = []`, moduleManifest: `os = ["darwin"]`,
 			goos: "linux", wantOSLine: `os = ["darwin", "linux"]`, wantTargetReady: true,
 		},
+		{
+			name:    "outside profile with OS and target ready",
+			profile: `base = []`, moduleManifest: `target = "~"`,
+			goos: "darwin", wantOSReady: true, wantOSLine: `os = ["darwin", "linux"]`, wantTargetReady: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -191,7 +197,8 @@ func TestRepositoryModuleActivationGuidance_UsesExpandedMembershipAndEffectiveOv
 			if err != nil {
 				t.Fatalf("ModuleActivationGuidance() error = %v, want nil", err)
 			}
-			if guidance.InProfile != tt.wantInProfile || guidance.ManifestPath != "modules/app/dot.toml" ||
+			if guidance.InProfile != tt.wantInProfile || guidance.OSReady != tt.wantOSReady ||
+				guidance.ManifestPath != "modules/app/dot.toml" ||
 				guidance.OSLine != tt.wantOSLine || guidance.TargetReady != tt.wantTargetReady ||
 				!reflect.DeepEqual(guidance.TargetLines, tt.wantTargetLines) {
 				t.Fatalf("ModuleActivationGuidance() = %#v", guidance)

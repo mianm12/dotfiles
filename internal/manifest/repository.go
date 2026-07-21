@@ -118,6 +118,7 @@ func (r Repository) ProfileLineWithModule(profile, module string) (string, error
 type ModuleActivation struct {
 	InProfile    bool
 	ManifestPath string
+	OSReady      bool
 	OSLine       string
 	TargetReady  bool
 	TargetLines  []string
@@ -137,7 +138,8 @@ func (r Repository) ModuleActivationGuidance(profile, module, goos string) (Modu
 		return ModuleActivation{}, fmt.Errorf("unsupported GOOS %q: want %s or %s", goos, goosDarwin, goosLinux)
 	}
 	operatingSystems := r.moduleOperatingSystems(loaded)
-	if !slices.Contains(operatingSystems, goos) {
+	osReady := slices.Contains(operatingSystems, goos)
+	if !osReady {
 		operatingSystems = append(operatingSystems, goos)
 	}
 	quoted := make([]string, len(operatingSystems))
@@ -156,6 +158,7 @@ func (r Repository) ModuleActivationGuidance(profile, module, goos string) (Modu
 	return ModuleActivation{
 		InProfile:    slices.Contains(profileModules, module),
 		ManifestPath: path.Join("modules", module, filename),
+		OSReady:      osReady,
 		OSLine:       "os = [" + strings.Join(quoted, ", ") + "]",
 		TargetReady:  targetReady,
 		TargetLines:  targetLines,

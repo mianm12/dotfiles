@@ -272,6 +272,83 @@ target = "~"`,
 	}
 }
 
+func TestPreflight_ExplicitModuleGuidanceReportsEveryMissingActivationDimension(t *testing.T) {
+	otherGOOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherGOOS = "darwin"
+	}
+	for _, test := range []struct {
+		name           string
+		rootDefaults   string
+		moduleManifest string
+		profile        string
+		wantTargetStep bool
+	}{
+		{
+			name:           "module OS and separate profile membership",
+			moduleManifest: "os = [\"" + otherGOOS + "\"]\ntarget = \"~\"",
+			profile:        "shared = []\nbase = [\"@shared\"]\nelsewhere = [\"app\"]",
+		},
+		{
+			name:         "root defaults and no module manifest",
+			rootDefaults: "os = [\"" + otherGOOS + "\"]\ntarget = \"~\"",
+			profile:      "base = []\nelsewhere = [\"app\"]",
+		},
+		{
+			name: "module target table also lacks current GOOS",
+			moduleManifest: "os = [\"" + otherGOOS + "\"]\n[target]\n" +
+				otherGOOS + " = \"~/module\"",
+			profile:        "base = []\nelsewhere = [\"app\"]",
+			wantTargetStep: true,
+		},
+		{
+			name: "root target table also lacks current GOOS",
+			rootDefaults: "os = [\"" + otherGOOS + "\"]\ntarget = { " +
+				otherGOOS + " = \"~/root\" }",
+			profile:        "base = []\nelsewhere = [\"app\"]",
+			wantTargetStep: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAddFixture(t, map[string]string{"app": test.moduleManifest})
+			root := "requires = \">=0.3.0\"\n"
+			if test.rootDefaults != "" {
+				root += "[defaults]\n" + test.rootDefaults + "\n"
+			}
+			root += "[profiles]\n" + test.profile + "\n"
+			writeAddFile(t, filepath.Join(fixture.repo, "dot.toml"), root, 0o644)
+			target := fixture.writeTarget(t, "config", "x", 0o644)
+
+			_, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+			if err == nil {
+				t.Fatal("Preflight() error = nil, want combined activation guidance")
+			}
+			message := err.Error()
+			profileStep := `next: base = ["@shared", "app"]`
+			if !strings.Contains(test.profile, "shared") {
+				profileStep = `next: base = ["app"]`
+			}
+			osStep := "next: in modules/app/dot.toml set os ="
+			if !strings.Contains(message, profileStep) || !strings.Contains(message, osStep) {
+				t.Fatalf("combined guidance = %q, want profile and OS steps", message)
+			}
+			if strings.Index(message, profileStep) > strings.Index(message, osStep) {
+				t.Fatalf("combined guidance order = %q, want profile before OS", message)
+			}
+			targetStep := "target." + runtime.GOOS
+			if got := strings.Contains(message, targetStep); got != test.wantTargetStep {
+				t.Fatalf("combined target guidance = %q, got target step %t, want %t", message, got, test.wantTargetStep)
+			}
+			if test.wantTargetStep && strings.Index(message, osStep) > strings.Index(message, targetStep) {
+				t.Fatalf("combined guidance order = %q, want OS before target", message)
+			}
+			if !strings.Contains(message, "complete every listed edit before retrying") {
+				t.Fatalf("combined guidance = %q, want all-steps warning", message)
+			}
+		})
+	}
+}
+
 func TestPreflight_RejectsManifestIgnoreAndDuplicateInputs(t *testing.T) {
 	t.Run("manifest ignore", func(t *testing.T) {
 		fixture := newAddFixture(t, map[string]string{"app": `target = "~"
