@@ -43,7 +43,10 @@
   activation 投影为 exit 3；以 `90b423b` 将 conflict 分类收紧为仅 `ErrModuleAmbiguous`。
 - [x] 2026-07-22：manifest/add/CLI 普通、add/CLI 5 次重复、三包 race、定向 lint、base/checkpoint
   diff check、隔离 `make check` 与 Darwin/Linux amd64 add/CLI test binary 交叉编译通过。
-- [ ] 保持计划 active、worktree clean，等待未参与实现的完整工程复核。
+- [x] 2026-07-22：未参与实现的完整工程复核结论为 GO，无 P0–P3 finding；确认 main 仍为有效
+  base，worktree clean。
+- [x] 2026-07-22：主线程重新运行最终三包测试、两级 diff check 与隔离 `make check`，全部通过；
+  完成本计划并迁移至 completed。
 
 ## Milestones
 
@@ -67,7 +70,9 @@ classifier，不改变底层 error identity 与文本。
 Darwin/Linux amd64 add/CLI test binary 交叉编译。真实 Linux/远端 CI 标记待验收。
 
 当前上述命令均通过。`make check` 完成 tidy/format diff、0 lint issue、全仓 race、build 与 manifest
-check；真实 Linux 主机与远端 macOS/Linux CI 未运行，远端待验收。
+check；独立工程复核结论为 GO，无 P0–P3 finding。主线程在 closure 前重新运行最终三包测试、两级
+diff check 与隔离 `make check`，全部通过。Darwin/Linux amd64 add/CLI test binary 交叉编译通过；
+真实 Linux 主机与远端 macOS/Linux CI 未运行，远端待验收。
 
 ## Safety, Authorization, and Recovery
 
@@ -94,4 +99,10 @@ commit，不 amend/rebase/reset/cherry-pick/squash；不操作 main/其他 workt
 
 ## Outcomes and Handoff
 
-尚未完成；等待实现、验证与独立复核。
+- `90b423b` 仅收紧 CLI classifier：只有 `ErrModuleAmbiguous` 映射为 conflict/exit 3。
+- 显式 module nonmembership、current GOOS inactive 与组合 activation 错误保留确切恢复文本并退出 1；
+  missing/invalid explicit module 与 exact target-missing typed hard error 也保持 exit 1。
+- 未显式选择时零/多 prospective candidate 保持 exit 3；dry-run 零写入与隐私回归通过。
+- 完整本地门禁与独立工程复核通过；真实 Linux 主机与远端 macOS/Linux CI 待验收。
+- 本计划已迁移至 completed。交回主线程确认 closure commit 与 clean worktree 后按 Checkpoint DAG
+  集成本 branch。
