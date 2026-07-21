@@ -59,7 +59,8 @@ symlink模式可作为实现参照。
 - [x] 2026-07-22：测试先行建立独立 source publication 与保守 cleanup；普通窄测和格式检查通过。
 - [x] 2026-07-22：测试先行建立 link target 原子提交、source/target/ancestor 最终 Precond、
   hard-link sibling 隔离和可验证 per-item result；add/paths 窄测通过。
-- [ ] 测试先行建立锁内 batch runner、成功前缀单次 state 提交与恢复。
+- [x] 2026-07-22：测试先行建立锁内 exact-input batch runner、执行结果 fail-closed、成功前缀
+  单次 state 提交、Store 失败后的 apply L2 收养及等价 source 续跑；相关窄测通过。
 - [ ] 运行窄测、重复/race、完整 diff check、隔离 `make check` 与双目标交叉编译；更新证据并保持
   active/clean 等待独立复核。
 
@@ -172,6 +173,12 @@ no-clobber/cleanup 机制，不理解 manifest/ownership；runner 只消费 lock
   Evidence: `internal/paths/resolution.go` 的 opaque ancestors 与 executor 现有 leaf 比较。
   Impact: paths 增加只读 `SameTopology` 比较，add target 提交前同时要求 leaf 与祖先序列一致；
   不改变持久化或公开 CLI。
+
+- Observation: source 已 no-clobber 发布后，摘除临时名称本身也可能失败；只记录最终 source
+  ownership 会让同 inode 的崩溃临时名称失去可验证 cleanup 路径。
+  Evidence: publication temp-remove fault test 在 source publish 后返回错误。
+  Impact: publication result 同时携带 source 与尚存 temp 的 inode/bytes/mode 证据；提交前 cleanup
+  对二者分别重验，无法证明时保留并报错，target 提交后不再调用 source cleanup。
 
 ## Decision Log
 

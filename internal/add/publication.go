@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mianm12/dotfiles/internal/manifest"
 )
 
 const sourceTemporaryPattern = ".dot-add-source-*.swp"
@@ -17,11 +19,6 @@ type publicationFile interface {
 	Name() string
 	Write([]byte) (int, error)
 	Chmod(fs.FileMode) error
-	Sync() error
-	Close() error
-}
-
-type directorySyncer interface {
 	Sync() error
 	Close() error
 }
@@ -48,6 +45,7 @@ type sourcePublication struct {
 	info        fs.FileInfo
 	created     bool
 	createdDirs []createdSourceDirectory
+	temporary   string
 	validation  *validationSeal
 }
 
@@ -89,7 +87,7 @@ func defaultPublicationOperations() publicationOperations {
 }
 
 func publishSource(item ItemPlan, operations publicationOperations) (sourcePublication, error) {
-	if !item.Valid() || item.Kind() != "link" {
+	if !item.Valid() || item.Kind() != manifest.FileKindLink {
 		return sourcePublication{}, fmt.Errorf("add source publication requires a validated link item")
 	}
 	if err := validatePublicationOperations(operations); err != nil {
@@ -163,7 +161,7 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 	publication := sourcePublication{
 		source: item.sourcePath, content: append([]byte(nil), content...), mode: mode,
 		info: temporaryInfo, created: true, createdDirs: createdDirectories,
-		validation: successfulPreflightSeal,
+		temporary: temporary, validation: successfulPreflightSeal,
 	}
 	if _, err := validateRegularFile(item.sourcePath, temporaryInfo, content, mode, operations); err != nil {
 		return publication, fmt.Errorf("validate published add source: %w", err)
@@ -171,6 +169,7 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 	if err := operations.remove(temporary); err != nil {
 		return publication, fmt.Errorf("remove published add source temporary file: %w", err)
 	}
+	publication.temporary = ""
 	if err := operations.syncDirectory(filepath.Dir(item.sourcePath)); err != nil {
 		return publication, fmt.Errorf("persist published add source directory: %w", err)
 	}
@@ -311,6 +310,20 @@ func cleanupSourcePublication(publication sourcePublication, operations publicat
 		}
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return fmt.Errorf("inspect uncommitted add source %q: %w", publication.source, statErr)
+	}
+	if publication.temporary != "" {
+		if _, err := validateRegularFile(
+			publication.temporary,
+			publication.info,
+			publication.content,
+			publication.mode,
+			operations,
+		); err != nil {
+			return fmt.Errorf("refuse to clean changed add source temporary file %q: %w", publication.temporary, err)
+		}
+		if err := operations.remove(publication.temporary); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove uncommitted add source temporary file %q: %w", publication.temporary, err)
+		}
 	}
 	var cleanupErr error
 	if err := operations.syncDirectory(filepath.Dir(publication.source)); err != nil {

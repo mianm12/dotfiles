@@ -77,6 +77,27 @@ func TestExecuteLinkItem_FinalPreconditionsPreserveTargetAndCleanSource(t *testi
 				return os.WriteFile(item.SourcePath(), []byte("changed"), item.Snapshot().Mode())
 			}
 		}},
+		{name: "source mode", mutate: func(t *testing.T, _ *addFixture, item ItemPlan, operations *linkOperations) {
+			real := operations.symlink
+			operations.symlink = func(source, target string) error {
+				if err := real(source, target); err != nil {
+					return err
+				}
+				return os.Chmod(item.SourcePath(), 0o644)
+			}
+		}},
+		{name: "source identity", mutate: func(t *testing.T, _ *addFixture, item ItemPlan, operations *linkOperations) {
+			real := operations.symlink
+			operations.symlink = func(source, target string) error {
+				if err := real(source, target); err != nil {
+					return err
+				}
+				if err := os.Remove(item.SourcePath()); err != nil {
+					return err
+				}
+				return os.WriteFile(item.SourcePath(), item.Snapshot().Content(), item.Snapshot().Mode())
+			}
+		}},
 	}
 
 	for _, test := range tests {
@@ -95,14 +116,20 @@ func TestExecuteLinkItem_FinalPreconditionsPreserveTargetAndCleanSource(t *testi
 			if err == nil || result.targetCommitted {
 				t.Fatalf("executeLinkItem() = (%#v, %v), want precommit failure", result, err)
 			}
-			if _, statErr := os.Lstat(item.SourcePath()); !errors.Is(statErr, fs.ErrNotExist) && test.name != "source bytes" {
+			sourceChanged := test.name == "source bytes" || test.name == "source mode" || test.name == "source identity"
+			if _, statErr := os.Lstat(item.SourcePath()); !errors.Is(statErr, fs.ErrNotExist) && !sourceChanged {
 				t.Fatalf("source Lstat() error = %v, want missing", statErr)
 			}
-			if test.name == "source bytes" {
+			switch test.name {
+			case "source bytes":
 				assertRegularFile(t, item.SourcePath(), "changed", 0o640)
-			} else if test.name == "target bytes" {
+			case "source mode":
+				assertRegularFile(t, item.SourcePath(), "content", 0o644)
+			case "source identity":
+				assertRegularFile(t, item.SourcePath(), "content", 0o640)
+			case "target bytes":
 				assertRegularFile(t, target, "changed", 0o640)
-			} else {
+			default:
 				assertRegularFile(t, target, "content", 0o640)
 			}
 		})
@@ -110,6 +137,38 @@ func TestExecuteLinkItem_FinalPreconditionsPreserveTargetAndCleanSource(t *testi
 }
 
 func TestExecuteLinkItem_TargetPublishAndCleanupFailuresRespectCommitPoint(t *testing.T) {
+	t.Run("temporary directory failure", func(t *testing.T) {
+		fixture, item := newLinkItemFixture(t)
+		operations := defaultLinkOperations()
+		injected := errors.New("mkdir temp failed")
+		operations.mkdirTemp = func(string, string) (string, error) { return "", injected }
+
+		result, err := executeLinkItem(fixture.control, item, operations)
+		if !errors.Is(err, injected) || result.targetCommitted {
+			t.Fatalf("executeLinkItem() = (%#v, %v)", result, err)
+		}
+		assertRegularFile(t, item.TargetPath(), "content", 0o600)
+		if _, statErr := os.Lstat(item.SourcePath()); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Fatalf("source Lstat() error = %v, want missing", statErr)
+		}
+	})
+
+	t.Run("temporary symlink failure", func(t *testing.T) {
+		fixture, item := newLinkItemFixture(t)
+		operations := defaultLinkOperations()
+		injected := errors.New("symlink failed")
+		operations.symlink = func(string, string) error { return injected }
+
+		result, err := executeLinkItem(fixture.control, item, operations)
+		if !errors.Is(err, injected) || result.targetCommitted {
+			t.Fatalf("executeLinkItem() = (%#v, %v)", result, err)
+		}
+		assertRegularFile(t, item.TargetPath(), "content", 0o600)
+		if _, statErr := os.Lstat(item.SourcePath()); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Fatalf("source Lstat() error = %v, want missing", statErr)
+		}
+	})
+
 	t.Run("publish failure", func(t *testing.T) {
 		fixture, item := newLinkItemFixture(t)
 		operations := defaultLinkOperations()

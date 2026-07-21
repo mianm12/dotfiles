@@ -167,6 +167,55 @@ func TestPublishSource_DirectorySyncFailureReturnsOwnedPublicationForCleanup(t *
 	}
 }
 
+func TestPublishSource_PostPublishTemporaryCleanupCanBeRetriedSafely(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o600)
+	plan, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := plan.Items()[0]
+	ops := defaultPublicationOperations()
+	injected := errors.New("temporary cleanup failed")
+	ops.remove = func(string) error { return injected }
+
+	publication, err := publishSource(item, ops)
+	if !errors.Is(err, injected) || !publication.Created() || publication.temporary == "" {
+		t.Fatalf("publishSource() = (%#v, %v), want owned source/temp cleanup failure", publication, err)
+	}
+	if cleanupErr := cleanupSourcePublication(publication, defaultPublicationOperations()); cleanupErr != nil {
+		t.Fatalf("cleanupSourcePublication() retry error = %v", cleanupErr)
+	}
+	if _, statErr := os.Lstat(item.SourcePath()); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("source Lstat() error = %v, want missing", statErr)
+	}
+	assertNoAddTemporaryEntries(t, filepath.Dir(item.SourcePath()))
+}
+
+func TestPublishSource_NoClobberRacePreservesUnexpectedDestination(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o600)
+	plan, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := plan.Items()[0]
+	ops := defaultPublicationOperations()
+	ops.publish = func(_, destination string) error {
+		if err := os.WriteFile(destination, []byte("racer"), 0o644); err != nil {
+			return err
+		}
+		return fs.ErrExist
+	}
+
+	publication, err := publishSource(item, ops)
+	if err == nil || publication.Valid() {
+		t.Fatalf("publishSource() = (%#v, %v), want no-clobber failure", publication, err)
+	}
+	assertRegularFile(t, item.SourcePath(), "racer", 0o644)
+	assertRegularFile(t, target, "content", 0o600)
+}
+
 type publicationFileFailure struct {
 	publicationFile
 	writeErr   error
