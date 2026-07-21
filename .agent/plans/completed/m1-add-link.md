@@ -68,6 +68,10 @@ symlink模式可作为实现参照。
   的实际 content/mode/inode 证据，`65c3da2` 让 invalid/mismatched/contradictory executor result
   返回不可投影的无效 Result，并补 post-commit cleanup 成功前缀回归。修复后完整本地门禁重新通过，
   等待 Round 2 完整复审。
+- [x] 2026-07-22：未参与实现的 Round 2 reviewer 复审完整 branch，结论 GO，无 P0–P3 finding；
+  主 agent 确认 `main` 仍等于有效 base `669ea06c`，最终窄测、完整 diff check 与隔离 `make check`
+  freshness gate 通过。
+- [x] 2026-07-22：完成 ExecPlan 终态记录并迁移到 `completed/`；实现、测试与契约不再变更。
 
 ## Milestones
 
@@ -138,6 +142,8 @@ Commit 边界：
 | locked exact-input 全批次 gate | runner/runtime tests | 本地通过 |
 | 多输入成功前缀单次 state commit | runner integration tests | 本地通过 |
 | state failure 后 apply L2、等价续跑、重复收敛 | add + apply recovery tests | 本地通过 |
+| 完整 branch 独立复审 | Round 2 reviewer | GO；无 P0–P3 finding |
+| freshness 与最终本地门禁 | main/base 核对、窄测、完整 diff check、隔离 `make check` | 主 agent 确认通过 |
 | Darwin/Linux | 本地测试、双目标交叉编译、远端 CI | Darwin 本地通过；双目标交叉编译通过；远端待验收 |
 
 最终在 `/private/tmp/dot-m1-cp6-add-link` 运行相关 add/apply/runtime/state package tests、5 次重复、
@@ -220,7 +226,7 @@ no-clobber/cleanup 机制，不理解 manifest/ownership；runner 只消费 lock
 
 ## Outcomes and Handoff
 
-实现已完成，计划保持 active 等待 Round 2 独立复核。`e35dd07` 建立 source 独立 inode、no-clobber、
+Milestone 已完成并通过两轮独立复审。`e35dd07` 建立 source 独立 inode、no-clobber、
 文件/目录 sync 与等价 reuse；`8d9ed9a` 建立 target/source/ancestor/control 最终 Precond 和同父
 目录 symlink 原子替换；`ca22590` 建立锁内 exact-input runner、可验证结果、成功前缀单次 state
 提交、Store failure L2 收养与等价续跑；`b90dfcd` 以独立 fix commit 收紧全部临时产物 cleanup
@@ -228,9 +234,15 @@ ownership。Round 1 后，`97ce057` 进一步把 source temp 的实际 bytes/mod
 `65c3da2` 关闭 invalid executor result 的可信投影路径，并证明 target post-commit cleanup error
 仍产生 succeeded outcome、唯一一次 state commit 且保留 source/link。
 
+Round 1 两项有效 P2 均由独立 fix commit 测试先行解决；Round 2 reviewer 对完整 branch 给出 GO，
+未报告 P0–P3 finding。主 agent随后确认 `main` 仍等于有效 base `669ea06c`，最终窄测、完整 diff
+check 与隔离 `make check` 通过，无 unresolved blocking finding，满足 fast-forward integration 前的
+freshness 要求。
+
 本机已通过 add/apply/paths 普通测试、5 次重复、race、定向 lint、完整
 `669ea06c...HEAD` diff check，以及 Round 1 修复后独立 `GOCACHE`/`GOLANGCI_LINT_CACHE`/BINARY
 的 `make check`；
 Darwin/Linux amd64 add test binary 交叉编译通过。真实 Linux 主机和远端 macOS/Linux CI 未运行，
-远端待验收。尚缺未参与实现的完整 branch review，因此当前不迁移计划、不创建 closure commit，
-也不声称 review-ready。
+本地 Darwin 验收与双目标交叉编译通过，远端待验收。本计划现迁移至 `completed/`；handoff 为
+由主 agent 创建纯计划收口 commit、确认 worktree clean，并按 CP6 DAG 执行本地 `main`
+fast-forward integration。本 Milestone 无剩余实现工作，满足正式分支流程的 review-ready 条件。
