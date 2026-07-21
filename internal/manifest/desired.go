@@ -26,6 +26,9 @@ type DesiredEntry struct {
 	Kind       FileKind
 	Mode       fs.FileMode
 	Content    []byte
+
+	prospectiveContent []byte
+	prospective        bool
 }
 
 // RuntimeContext 是 desired 形成时唯一允许传给模板的显式运行输入。
@@ -62,14 +65,17 @@ func (p ResolvedProfile) Enumerate(context RuntimeContext) ([]DesiredEntry, erro
 	if err != nil {
 		return nil, err
 	}
-	entries, err := p.enumerateStructure(renderContext.Home)
+	entries, err := p.enumerateStructure(renderContext.Home, nil)
 	if err != nil {
 		return nil, err
 	}
 	return renderScaffolds(entries, p.dataKeys, renderContext)
 }
 
-func (p ResolvedProfile) enumerateStructure(home string) ([]DesiredEntry, error) {
+func (p ResolvedProfile) enumerateStructure(
+	home string,
+	prospective prospectiveSources,
+) ([]DesiredEntry, error) {
 	// 不依赖 Resolve 的既有顺序，也不原地排序 receiver，保持值语义和稳定结果。
 	modules := append([]ResolvedModule(nil), p.modules...)
 	slices.SortFunc(modules, func(left, right ResolvedModule) int {
@@ -81,7 +87,7 @@ func (p ResolvedProfile) enumerateStructure(home string) ([]DesiredEntry, error)
 
 	entries := make([]DesiredEntry, 0)
 	for _, module := range modules {
-		moduleEntries, err := enumerateModuleDesired(module, home)
+		moduleEntries, err := enumerateModuleDesired(module, home, prospective[module.Name])
 		if err != nil {
 			return nil, err
 		}
@@ -100,7 +106,7 @@ func (p ResolvedProfile) enumerateStructure(home string) ([]DesiredEntry, error)
 // 并在不渲染 scaffold 的前提下整体校验 target identity/topology。
 // 该接缝保持私有，避免消费者绕过 control-plane 全局入口直接取得结构性 desired。
 func (p ResolvedProfile) validateTargetStructure(home string) ([]DesiredEntry, error) {
-	entries, targets, err := p.targetStructure(home)
+	entries, targets, err := p.targetStructure(home, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +126,7 @@ func (p ResolvedProfile) ValidatePathBoundaries(
 	if err != nil {
 		return ValidatedProfile{}, err
 	}
-	entries, targets, err := p.targetStructure(home)
+	entries, targets, err := p.targetStructure(home, nil)
 	if err != nil {
 		return ValidatedProfile{}, err
 	}
@@ -137,7 +143,10 @@ func (p ResolvedProfile) ValidatePathBoundaries(
 	}, nil
 }
 
-func (p ResolvedProfile) targetStructure(home string) ([]DesiredEntry, []paths.LabeledTarget, error) {
+func (p ResolvedProfile) targetStructure(
+	home string,
+	prospective prospectiveSources,
+) ([]DesiredEntry, []paths.LabeledTarget, error) {
 	if !manifestNamePattern.MatchString(p.name) {
 		return nil, nil, fmt.Errorf("invalid resolved profile name %q", p.name)
 	}
@@ -148,7 +157,7 @@ func (p ResolvedProfile) targetStructure(home string) ([]DesiredEntry, []paths.L
 	if err != nil {
 		return nil, nil, err
 	}
-	entries, err := p.enumerateStructure(cleanHome)
+	entries, err := p.enumerateStructure(cleanHome, prospective)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -171,6 +180,7 @@ func cloneDesiredEntries(entries []DesiredEntry) []DesiredEntry {
 	cloned := append([]DesiredEntry(nil), entries...)
 	for index := range cloned {
 		cloned[index].Content = append([]byte(nil), cloned[index].Content...)
+		cloned[index].prospectiveContent = append([]byte(nil), cloned[index].prospectiveContent...)
 	}
 	return cloned
 }
@@ -265,14 +275,20 @@ func validateScaffolds(entries []DesiredEntry, dataKeys []string) error {
 // compileScaffoldTemplate 是 manifest 层连接 source 文件系统与纯模板引擎的唯一桥接点；
 // 读取完成后，parser 与 renderer 都只接收内存中的显式输入。
 func compileScaffoldTemplate(entry DesiredEntry, dataKeys []string) (*templateengine.Template, error) {
-	source, err := os.ReadFile(entry.SourcePath)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"read scaffold template for module %q source %q: %w",
-			entry.Module,
-			entry.Source,
-			err,
-		)
+	var source []byte
+	if entry.prospective {
+		source = append([]byte(nil), entry.prospectiveContent...)
+	} else {
+		var err error
+		source, err = os.ReadFile(entry.SourcePath)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"read scaffold template for module %q source %q: %w",
+				entry.Module,
+				entry.Source,
+				err,
+			)
+		}
 	}
 	compiled, err := templateengine.Compile(entry.Module+"/"+entry.Source, source, dataKeys)
 	if err != nil {
@@ -292,9 +308,15 @@ type classifiedModuleSource struct {
 	Kind           FileKind
 	Mode           fs.FileMode
 	TargetOverride string
+	Content        []byte
+	Prospective    bool
 }
 
-func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry, error) {
+func enumerateModuleDesired(
+	module ResolvedModule,
+	home string,
+	prospective map[string]prospectiveSourceData,
+) ([]DesiredEntry, error) {
 	if err := validateResolvedModuleSource(module); err != nil {
 		return nil, err
 	}
@@ -302,7 +324,7 @@ func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry,
 		return nil, fmt.Errorf("module %q target root: %w", module.Name, err)
 	}
 
-	sources, err := classifyModuleSources(module)
+	sources, err := classifyModuleSources(module, prospective)
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +342,9 @@ func enumerateModuleDesired(module ResolvedModule, home string) ([]DesiredEntry,
 			TargetPath: expandDesiredTarget(home, target),
 			Kind:       source.Kind,
 			Mode:       source.Mode,
+
+			prospectiveContent: append([]byte(nil), source.Content...),
+			prospective:        source.Prospective,
 		})
 	}
 	return entries, nil
@@ -331,7 +356,7 @@ func enumerateModuleScaffolds(module ResolvedModule) ([]DesiredEntry, error) {
 	if err := validateResolvedModuleSource(module); err != nil {
 		return nil, err
 	}
-	sources, err := classifyModuleSources(module)
+	sources, err := classifyModuleSources(module, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -361,12 +386,15 @@ func validateResolvedModuleSource(module ResolvedModule) error {
 	return nil
 }
 
-func classifyModuleSources(module ResolvedModule) ([]classifiedModuleSource, error) {
+func classifyModuleSources(
+	module ResolvedModule,
+	prospective map[string]prospectiveSourceData,
+) ([]classifiedModuleSource, error) {
 	rules, err := indexFileRules(module)
 	if err != nil {
 		return nil, err
 	}
-	sources, err := enumerateModuleSources(module)
+	sources, err := enumerateModuleSourcesProspective(module, prospective)
 	if err != nil {
 		return nil, err
 	}
@@ -405,6 +433,8 @@ func classifyModuleSources(module ResolvedModule) ([]classifiedModuleSource, err
 			Kind:           kind,
 			Mode:           mode,
 			TargetOverride: targetOverride,
+			Content:        append([]byte(nil), source.prospectiveContent...),
+			Prospective:    source.prospective,
 		})
 	}
 
