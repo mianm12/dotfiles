@@ -14,6 +14,7 @@ import (
 	addrunner "github.com/mianm12/dotfiles/internal/add"
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
+	"github.com/spf13/cobra"
 )
 
 func TestAdd_RequiresPathsAndRejectsModesBeforeRuntime(t *testing.T) {
@@ -94,6 +95,48 @@ func TestAddExecutionIncomplete_RequiresStateAndEveryOutcome(t *testing.T) {
 				t.Fatalf("addExecutionIncomplete() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestAddRecoveryWarnings_UsesTrustedCommitFacts(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		targetCommits  int
+		stateCommitted bool
+		wantWarning    bool
+	}{
+		{name: "nothing committed"},
+		{name: "state committed", targetCommits: 1, stateCommitted: true},
+		{name: "link committed without state", targetCommits: 1, wantWarning: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			warnings := addRecoveryWarnings(test.targetCommits, test.stateCommitted)
+			if got := len(warnings) == 1; got != test.wantWarning {
+				t.Fatalf("addRecoveryWarnings() = %#v, want warning %t", warnings, test.wantWarning)
+			}
+			if test.wantWarning && !strings.Contains(warnings[0], "rerun dot apply") {
+				t.Fatalf("recovery warning = %q, want explicit dot apply instruction", warnings[0])
+			}
+		})
+	}
+}
+
+func TestPrintAddProjection_PreservesRecoveryActionsAndGitHint(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	printAddProjection(command, addProjection{
+		contextLine: "repo=/repo profile=all os=linux",
+		actions:     []string{"link  ~/config  (added)"},
+		warnings:    addRecoveryWarnings(1, false),
+		showGitHint: true,
+	})
+	if !strings.Contains(stdout.String(), "link  ~/config  (added)") ||
+		!strings.Contains(stdout.String(), "git add") ||
+		!strings.Contains(stderr.String(), "rerun dot apply") {
+		t.Fatalf("recovery projection = stdout %q, stderr %q", stdout.String(), stderr.String())
 	}
 }
 

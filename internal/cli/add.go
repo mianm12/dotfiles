@@ -30,6 +30,7 @@ type addOptions struct {
 type addProjection struct {
 	contextLine string
 	actions     []string
+	warnings    []string
 	notices     []string
 	showGitHint bool
 	exitCode    int
@@ -189,6 +190,13 @@ func projectAddPlan(plan addrunner.BatchPlan, dryRun bool) (addProjection, error
 	return projection, nil
 }
 
+func addRecoveryWarnings(targetCommits int, stateCommitted bool) []string {
+	if targetCommits == 0 || stateCommitted {
+		return nil
+	}
+	return []string{"add committed link targets but state was not stored; rerun dot apply to recover state"}
+}
+
 func projectAddResult(result addrunner.Result) (addProjection, error) {
 	if !result.Valid() {
 		return addProjection{}, fmt.Errorf("%w: add projection received an invalid result", addrunner.ErrExecutionProtocol)
@@ -204,6 +212,10 @@ func projectAddResult(result addrunner.Result) (addProjection, error) {
 	if plan.DevelopmentBuild() {
 		projection.notices = append(projection.notices, "development build skipped the requires version comparison")
 	}
+	projection.warnings = append(
+		projection.warnings,
+		addRecoveryWarnings(result.TargetCommits(), result.StateCommitted())...,
+	)
 	for index, item := range items {
 		verb, err := addVerb(item.Kind())
 		if err != nil {
@@ -245,6 +257,9 @@ func printAddProjection(command *cobra.Command, projection addProjection) {
 	}
 	if projection.showGitHint {
 		command.Println("Next: run git add for the published source paths, then git commit.")
+	}
+	for _, warning := range projection.warnings {
+		command.PrintErrf("warning: %s\n", warning)
 	}
 	for _, notice := range projection.notices {
 		command.PrintErrf("notice: %s\n", notice)
