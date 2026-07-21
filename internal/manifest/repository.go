@@ -12,6 +12,9 @@ import (
 
 var manifestNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
+// ValidModuleName 报告 name 是否满足 manifest module 单路径段语法。
+func ValidModuleName(name string) bool { return manifestNamePattern.MatchString(name) }
+
 // Repository 表示已经严格加载、但尚未按 profile 和 OS 解析的仓库 manifest。
 type Repository struct {
 	manifest         rootSpec

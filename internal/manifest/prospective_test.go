@@ -172,3 +172,49 @@ base = ["app"]`)
 		})
 	}
 }
+
+func TestResolvedProfileProspectiveCandidates_UsesTargetRootsAndFileRules(t *testing.T) {
+	repo := writeRepositoryManifest(t, `requires = ">=0.3.0"
+[profiles]
+base = ["broad", "narrow"]`)
+	writeModule(t, repo, "broad", `target = "~"
+[files."special.seed"]
+kind = "scaffold"
+target = "~/.config/app/special"`)
+	writeModule(t, repo, "narrow", `target = "~/.config/app"`)
+	loaded, err := Load(repo)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	resolved, err := loaded.Resolve("base", "darwin")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	home := filepath.Join(t.TempDir(), "home")
+	target := filepath.Join(home, ".config", "app", "special")
+
+	link, err := resolved.ProspectiveCandidates(home, target, FileKindLink)
+	if err != nil {
+		t.Fatalf("ProspectiveCandidates(link) error = %v", err)
+	}
+	wantLink := []ProspectiveCandidate{
+		{Module: "broad", Source: ".config/app/special"},
+		{Module: "narrow", Source: "special"},
+	}
+	if !reflect.DeepEqual(link, wantLink) {
+		t.Fatalf("ProspectiveCandidates(link) = %#v, want %#v", link, wantLink)
+	}
+
+	scaffold, err := resolved.ProspectiveCandidates(home, target, FileKindScaffold)
+	if err != nil {
+		t.Fatalf("ProspectiveCandidates(scaffold) error = %v", err)
+	}
+	wantScaffold := []ProspectiveCandidate{
+		{Module: "broad", Source: ".config/app/special.template"},
+		{Module: "broad", Source: "special.seed"},
+		{Module: "narrow", Source: "special.template"},
+	}
+	if !reflect.DeepEqual(scaffold, wantScaffold) {
+		t.Fatalf("ProspectiveCandidates(scaffold) = %#v, want %#v", scaffold, wantScaffold)
+	}
+}

@@ -3,6 +3,9 @@ package manifest
 import (
 	"fmt"
 	"io/fs"
+	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/mianm12/dotfiles/internal/paths"
@@ -23,6 +26,96 @@ type prospectiveSourceData struct {
 }
 
 type prospectiveSources map[string]map[string]prospectiveSourceData
+
+// ProspectiveCandidate 是一个 target 在 effective module 下可能发布的 source 位置。
+type ProspectiveCandidate struct {
+	Module string
+	Source string
+}
+
+// ProspectiveCandidates 使用 effective target root、显式 [files] 与后缀规则反向枚举候选。
+// 返回值按 module/source 字节序稳定排序；它不读取或修改 source/target。
+func (p ResolvedProfile) ProspectiveCandidates(
+	home string,
+	targetPath string,
+	kind FileKind,
+) ([]ProspectiveCandidate, error) {
+	cleanHome, err := cleanEffectiveHome(home)
+	if err != nil {
+		return nil, err
+	}
+	if targetPath == "" || !filepath.IsAbs(targetPath) {
+		return nil, fmt.Errorf("prospective target path must be a non-empty absolute path")
+	}
+	cleanTarget := filepath.Clean(targetPath)
+	if kind != FileKindLink && kind != FileKindScaffold {
+		return nil, fmt.Errorf("unsupported prospective kind %q", kind)
+	}
+
+	result := make([]ProspectiveCandidate, 0)
+	seen := make(map[ProspectiveCandidate]struct{})
+	for _, module := range p.modules {
+		rootPath := expandDesiredTarget(cleanHome, module.TargetRoot)
+		relative, ok := descendantRelativePath(rootPath, cleanTarget)
+		if !ok {
+			continue
+		}
+		defaultSource := filepath.ToSlash(relative)
+		if kind == FileKindScaffold {
+			defaultSource += ".template"
+		}
+		if candidateMatches(module, defaultSource, cleanTarget, cleanHome, kind) {
+			candidate := ProspectiveCandidate{Module: module.Name, Source: defaultSource}
+			seen[candidate] = struct{}{}
+		}
+		for _, rule := range module.FileRules {
+			if rule.Kind != kind {
+				continue
+			}
+			target, targetErr := desiredTarget(module, rule.Source, rule.TargetOverride)
+			if targetErr != nil {
+				return nil, targetErr
+			}
+			if expandDesiredTarget(cleanHome, target) != cleanTarget {
+				continue
+			}
+			candidate := ProspectiveCandidate{Module: module.Name, Source: rule.Source}
+			seen[candidate] = struct{}{}
+		}
+	}
+	for candidate := range seen {
+		result = append(result, candidate)
+	}
+	slices.SortFunc(result, func(left, right ProspectiveCandidate) int {
+		if order := strings.Compare(left.Module, right.Module); order != 0 {
+			return order
+		}
+		return strings.Compare(left.Source, right.Source)
+	})
+	return result, nil
+}
+
+func candidateMatches(module ResolvedModule, source, targetPath, home string, kind FileKind) bool {
+	rules, err := indexFileRules(module)
+	if err != nil {
+		return false
+	}
+	rule, explicit := rules[source]
+	effectiveKind, _, override, err := classifyDesiredSource(module.Name, source, rule, explicit)
+	if err != nil || effectiveKind != kind {
+		return false
+	}
+	target, err := desiredTarget(module, source, override)
+	return err == nil && expandDesiredTarget(home, target) == targetPath
+}
+
+func descendantRelativePath(root, target string) (string, bool) {
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return relative, true
+}
 
 // ValidateProspectivePathBoundaries 只把 candidates 中的精确 source 视为虚拟普通文件，
 // 再执行与正常 profile 相同的严格枚举和完整路径边界校验。真实仓库不会被修改。

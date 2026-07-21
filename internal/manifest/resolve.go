@@ -17,6 +17,16 @@ type ResolvedProfile struct {
 	dataKeys []string
 }
 
+// ModuleNames 返回当前 GOOS 下按字节序排列的 effective module 名。
+func (p ResolvedProfile) ModuleNames() []string {
+	names := make([]string, len(p.modules))
+	for index, module := range p.modules {
+		names[index] = module.Name
+	}
+	slices.Sort(names)
+	return names
+}
+
 // ResolvedModule 表示已经应用 defaults、ignore 合并和 OS 过滤的模块配置。
 type ResolvedModule struct {
 	// Name 是模块目录名。
