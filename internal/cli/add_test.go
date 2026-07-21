@@ -23,6 +23,7 @@ func TestAdd_RequiresPathsAndRejectsModesBeforeRuntime(t *testing.T) {
 		want string
 	}{
 		{name: "missing path", args: []string{"add"}, want: "requires at least 1 arg"},
+		{name: "empty module", args: []string{"add", "--module=", "/input"}, want: "--module must not be empty"},
 		{name: "mutually exclusive modes", args: []string{"add", "--template", "--scaffold", "/input"}, want: "must not be used together"},
 		{name: "M1 template", args: []string{"add", "--template", "--dry-run", "/input"}, want: "requires M2"},
 	} {

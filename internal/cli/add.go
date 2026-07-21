@@ -46,6 +46,9 @@ func newAddCommand(env environment, global *globalOptions) *cobra.Command {
 		Short: "Add existing files to the dotfiles repository",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(command *cobra.Command, paths []string) error {
+			if command.Flags().Changed(moduleFlagName) && module == "" {
+				return errors.New("--module must not be empty")
+			}
 			if template && scaffold {
 				return errors.New("--template and --scaffold must not be used together")
 			}
