@@ -63,7 +63,10 @@ state commit。`internal/add.Preflight` 返回 sealed `BatchPlan`；`internal/ad
   `dd6bdc4` 与 `ca98d74` 分别测试先行修复；真实 partial/Store failure/post-commit error 语义保持。
 - [x] 2026-07-22：Round 1 fix 后相关包普通、add/CLI 5 次重复与 add/CLI/apply race、完整 diff
   check、Darwin/Linux amd64 CLI test binary 交叉编译及独立 cache/BINARY `make check` 重新通过。
-- [ ] 保持 active、worktree clean，等待未参与实现的完整独立复核。
+- [x] 2026-07-22：原 reviewer 对有效 base `9206981...HEAD` 完成 Round 2 全分支复审，结论 GO，
+  无 P0–P3 finding；主 agent 确认 main 仍为有效 base，最终相关测试、完整 diff check 与隔离
+  `make check` freshness gate 通过。
+- [x] 2026-07-22：完成 ExecPlan 终态记录并迁移到 `completed/`；实现、测试与 README 不再变更。
 
 ## Milestones
 
@@ -182,12 +185,15 @@ accessor 获得，CLI 不获得构造可信 plan/result 的能力。
 
 ## Outcomes and Handoff
 
-实现与 Round 1 fixes、本地门禁已完成，保持 active 等待 Round 2 完整独立复核。当前 branch 提供公开 add flags、M1 template
+实现与 Round 1 fixes 已完成并通过 Round 2 完整独立复核。当前 branch 提供公开 add flags、M1 template
 早拒绝、只读 dry-run、sealed mutation result 投影、确定 context/action/Git 提示与 1/3/2/0 映射；
 README 已同步。自审 fix 关闭 compatibility/GOOS 第二真相源、nil-error 未完整提交、空 module 与
 缺失手工指引。无新依赖、持久化格式或 ownership 变化。
 
 本机已通过相关包普通/重复、全仓 race/lint、完整 diff check、隔离 `make check` 和 Darwin/Linux
 amd64 test binary 交叉编译；Round 1 两项有效 finding 修复后上述关键门禁已完整重跑。真实 Linux
-主机和远端 macOS/Linux CI 未运行，远端待验收。handoff 为原 reviewer 对有效 base
-`9206981...HEAD` 做 Round 2 完整 branch 复核；计划在复核通过前保持 active。
+主机和远端 macOS/Linux CI 未运行，远端待验收。Round 2 reviewer 结论 GO，无 P0–P3 finding；
+主 agent 确认 main 仍等于有效 base `9206981`，最终相关测试、完整 diff check 与隔离
+`make check` freshness gate 通过，无 unresolved blocking finding。本计划现迁移至 `completed/`；
+handoff 为主 agent 创建纯计划收口 commit、确认 worktree clean，并按 CP6 DAG 执行本地 main
+fast-forward integration。本 Milestone 无剩余实现工作。
