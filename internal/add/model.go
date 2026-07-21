@@ -106,11 +106,12 @@ func (item ItemPlan) SourceExists() bool { return item.sourceExists }
 
 // BatchPlan 只有在全部输入通过时才 sealed；零值或局部构造值不可执行。
 type BatchPlan struct {
-	profile    string
-	home       string
-	repository string
-	items      []ItemPlan
-	seal       *validationSeal
+	profile          string
+	home             string
+	repository       string
+	developmentBuild bool
+	items            []ItemPlan
+	seal             *validationSeal
 }
 
 // Valid 报告计划是否由成功的完整 batch preflight sealed。
@@ -136,6 +137,9 @@ func (plan BatchPlan) Home() string { return plan.home }
 // Repository 返回 effective repository path。
 func (plan BatchPlan) Repository() string { return plan.repository }
 
+// DevelopmentBuild 报告 strict runtime 是否按开发构建规则跳过版本大小比较。
+func (plan BatchPlan) DevelopmentBuild() bool { return plan.Valid() && plan.developmentBuild }
+
 // Items 返回稳定排序 item 的深副本；无效计划返回 nil。
 func (plan BatchPlan) Items() []ItemPlan {
 	if !plan.Valid() {
@@ -144,14 +148,14 @@ func (plan BatchPlan) Items() []ItemPlan {
 	return cloneItems(plan.items)
 }
 
-func sealBatchPlan(profile, home, repository string, items []ItemPlan) BatchPlan {
+func sealBatchPlan(profile, home, repository string, developmentBuild bool, items []ItemPlan) BatchPlan {
 	sealed := cloneItems(items)
 	for index := range sealed {
 		sealed[index].snapshot.seal = successfulPreflightSeal
 		sealed[index].seal = successfulPreflightSeal
 	}
 	return BatchPlan{
-		profile: profile, home: home, repository: repository,
+		profile: profile, home: home, repository: repository, developmentBuild: developmentBuild,
 		items: sealed, seal: successfulPreflightSeal,
 	}
 }

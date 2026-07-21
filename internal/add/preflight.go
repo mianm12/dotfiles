@@ -56,7 +56,7 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 	if err != nil {
 		return BatchPlan{}, err
 	}
-	if err := validateExplicitModule(inputs.Manifest(), resolved, request.Module); err != nil {
+	if err := validateExplicitModule(inputs.Manifest(), resolved, context.Profile(), request.Module); err != nil {
 		return BatchPlan{}, err
 	}
 	cwd, err := operations.getwd()
@@ -160,7 +160,9 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 	slices.SortFunc(items, func(left, right ItemPlan) int {
 		return strings.Compare(left.targetPath, right.targetPath)
 	})
-	plan := sealBatchPlan(context.Profile(), home, repositoryPath, items)
+	plan := sealBatchPlan(
+		context.Profile(), home, repositoryPath, inputs.Compatibility().DevelopmentBuild(), items,
+	)
 	if !plan.Valid() {
 		return BatchPlan{}, fmt.Errorf("add preflight produced an invalid sealed plan")
 	}
@@ -215,7 +217,12 @@ func requestedKind(mode Mode) (manifest.FileKind, error) {
 	}
 }
 
-func validateExplicitModule(repository manifest.Repository, resolved manifest.ResolvedProfile, module string) error {
+func validateExplicitModule(
+	repository manifest.Repository,
+	resolved manifest.ResolvedProfile,
+	profile string,
+	module string,
+) error {
 	if module == "" {
 		return nil
 	}
@@ -223,10 +230,22 @@ func validateExplicitModule(repository manifest.Repository, resolved manifest.Re
 		return fmt.Errorf("invalid add module name %q", module)
 	}
 	if !slices.Contains(repository.ModuleNames(), module) {
-		return fmt.Errorf("add module %q does not exist", module)
+		return fmt.Errorf(
+			"add module %q does not exist\nnext: mkdir -p modules/%s\nnext: add %q to [profiles].%s",
+			module,
+			module,
+			module,
+			profile,
+		)
 	}
 	if !slices.Contains(resolved.ModuleNames(), module) {
-		return fmt.Errorf("add module %q is not in the effective profile", module)
+		return fmt.Errorf(
+			"add module %q is not in the effective profile %q\nnext: add %q to [profiles].%s",
+			module,
+			profile,
+			module,
+			profile,
+		)
 	}
 	return nil
 }

@@ -565,7 +565,7 @@ func newRunSeam(t *testing.T, fixture *addFixture, items []ItemPlan) runSeam {
 	t.Helper()
 	loaded := &runSeamLoaded{loaded: fixture.load(t), controlPath: fixture.control}
 	session := &runSeamSession{loaded: loaded}
-	plan := sealBatchPlan("base", fixture.home, fixture.repo, items)
+	plan := sealBatchPlan("base", fixture.home, fixture.repo, false, items)
 	return runSeam{
 		loaded: loaded,
 		operations: addRunOperations{

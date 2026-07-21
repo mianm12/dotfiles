@@ -26,7 +26,8 @@ func TestPreflight_LinkPlanIsSelfContainedAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
-	if plan.Profile() != "base" || plan.Home() != fixture.home || plan.Repository() != fixture.repo || len(plan.Items()) != 1 {
+	if plan.Profile() != "base" || plan.Home() != fixture.home || plan.Repository() != fixture.repo ||
+		!plan.DevelopmentBuild() || len(plan.Items()) != 1 {
 		t.Fatalf("Preflight() plan = %#v", plan)
 	}
 	item := plan.Items()[0]
@@ -45,7 +46,7 @@ func TestPreflight_LinkPlanIsSelfContainedAndReadOnly(t *testing.T) {
 
 func TestBatchPlanSeal_ZeroForgedAndReturnedCopies(t *testing.T) {
 	var zero BatchPlan
-	if zero.Valid() || zero.Items() != nil {
+	if zero.Valid() || zero.Items() != nil || zero.DevelopmentBuild() {
 		t.Fatalf("zero BatchPlan = %#v, want invalid without items", zero)
 	}
 	forged := BatchPlan{profile: "base", home: "/home", repository: "/repo"}

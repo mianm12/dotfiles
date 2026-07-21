@@ -31,6 +31,7 @@ type addOptions struct {
 type addProjection struct {
 	contextLine string
 	actions     []string
+	notices     []string
 	showGitHint bool
 	exitCode    int
 }
@@ -123,6 +124,9 @@ func runAdd(command *cobra.Command, options addOptions, env environment) error {
 		}
 		return fmt.Errorf("%w: runner returned an invalid result without an error", addrunner.ErrExecutionProtocol)
 	}
+	if runErr == nil && addOutcomesIncomplete(result.Outcomes()) {
+		return fmt.Errorf("%w: runner returned incomplete outcomes without an error", addrunner.ErrExecutionProtocol)
+	}
 	projection, err := projectAddResult(result, addOS(env))
 	if err != nil {
 		return errors.Join(runErr, err)
@@ -132,6 +136,15 @@ func runAdd(command *cobra.Command, options addOptions, env environment) error {
 		return classifyAddError(command, runErr)
 	}
 	return commandExit(projection.exitCode)
+}
+
+func addOutcomesIncomplete(outcomes []addrunner.ItemOutcome) bool {
+	for _, outcome := range outcomes {
+		if outcome.Status != addrunner.OutcomeSucceeded {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyAddError(command *cobra.Command, err error) error {
@@ -158,6 +171,9 @@ func projectAddPlan(plan addrunner.BatchPlan, goos string, dryRun bool) (addProj
 		actions:     make([]string, 0, len(items)),
 		exitCode:    exitCode,
 	}
+	if plan.DevelopmentBuild() {
+		projection.notices = append(projection.notices, "development build skipped the requires version comparison")
+	}
 	for _, item := range items {
 		verb, err := addVerb(item.Kind())
 		if err != nil {
@@ -179,6 +195,9 @@ func projectAddResult(result addrunner.Result, goos string) (addProjection, erro
 		contextLine: fmt.Sprintf("repo=%s profile=%s os=%s", plan.Repository(), plan.Profile(), goos),
 		actions:     make([]string, 0, len(items)),
 		exitCode:    exitOK,
+	}
+	if plan.DevelopmentBuild() {
+		projection.notices = append(projection.notices, "development build skipped the requires version comparison")
 	}
 	for index, item := range items {
 		verb, err := addVerb(item.Kind())
@@ -221,6 +240,9 @@ func printAddProjection(command *cobra.Command, projection addProjection) {
 	}
 	if projection.showGitHint {
 		command.Println("Next: run git add for the published source paths, then git commit.")
+	}
+	for _, notice := range projection.notices {
+		command.PrintErrf("notice: %s\n", notice)
 	}
 }
 

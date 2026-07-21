@@ -13,6 +13,7 @@ import (
 
 	addrunner "github.com/mianm12/dotfiles/internal/add"
 	"github.com/mianm12/dotfiles/internal/buildinfo"
+	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 )
 
 func TestAdd_RequiresPathsAndRejectsModesBeforeRuntime(t *testing.T) {
@@ -23,7 +24,7 @@ func TestAdd_RequiresPathsAndRejectsModesBeforeRuntime(t *testing.T) {
 	}{
 		{name: "missing path", args: []string{"add"}, want: "requires at least 1 arg"},
 		{name: "mutually exclusive modes", args: []string{"add", "--template", "--scaffold", "/input"}, want: "must not be used together"},
-		{name: "M1 template", args: []string{"add", "--template", "/input"}, want: "requires M2"},
+		{name: "M1 template", args: []string{"add", "--template", "--dry-run", "/input"}, want: "requires M2"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			called := false
@@ -47,6 +48,25 @@ func TestAdd_InvalidResultWithoutErrorFailsClosed(t *testing.T) {
 	})
 	if code != exitError || stdout != "" || !strings.Contains(stderr, addrunner.ErrExecutionProtocol.Error()) {
 		t.Fatalf("invalid add result = stdout %q, stderr %q, exit %d; want protocol error", stdout, stderr, code)
+	}
+}
+
+func TestAddResultIncomplete_RequiresEveryOutcomeToSucceed(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		outcomes []addrunner.ItemOutcome
+		want     bool
+	}{
+		{name: "empty"},
+		{name: "succeeded", outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeSucceeded}}},
+		{name: "failed", outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeFailed}}, want: true},
+		{name: "deferred", outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeDeferred}}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := addOutcomesIncomplete(test.outcomes); got != test.want {
+				t.Fatalf("addOutcomesIncomplete() = %t, want %t", got, test.want)
+			}
+		})
 	}
 }
 
@@ -88,6 +108,47 @@ func TestAdd_DryRunIsReadOnlyAndAmbiguityExitsThree(t *testing.T) {
 	})
 }
 
+func TestAdd_DevelopmentNoticeDoesNotChangeExitCode(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		name := "mutation"
+		args := []string{"add", "-m", "alpha"}
+		wantCode := exitOK
+		if dryRun {
+			name = "dry-run"
+			args = append(args, "--dry-run")
+			wantCode = exitActionable
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newAddCLIFixture(t, []string{"alpha"})
+			target := fixture.writeTarget(t, "development", "content\n")
+			argsWithTarget := append(append([]string(nil), args...), target)
+			stdout, stderr, code := fixture.runWithBuild(t, buildinfo.Info{Version: "dev"}, argsWithTarget...)
+			if code != wantCode || !strings.Contains(stdout, "~/development") ||
+				!strings.Contains(stderr, "notice: development build skipped the requires version comparison") {
+				t.Fatalf("development add = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+			}
+		})
+	}
+}
+
+func TestAdd_ExplicitModuleErrorsProvideManualManifestGuidance(t *testing.T) {
+	fixture := newAddCLIFixture(t, []string{"alpha"})
+	target := fixture.writeTarget(t, "guided", "content\n")
+
+	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "new-module", target)
+	if code != exitError || !strings.Contains(stderr, "mkdir -p modules/new-module") ||
+		!strings.Contains(stderr, `add "new-module" to [profiles].all`) {
+		t.Fatalf("missing module guidance = stderr %q, exit %d", stderr, code)
+	}
+
+	makeDirectory(t, filepath.Join(fixture.repository, "modules", "beta"))
+	_, stderr, code = fixture.run(t, "add", "--dry-run", "-m", "beta", target)
+	if code != exitError || !strings.Contains(stderr, `module "beta" is not in the effective profile "all"`) ||
+		!strings.Contains(stderr, `add "beta" to [profiles].all`) {
+		t.Fatalf("inactive module guidance = stderr %q, exit %d", stderr, code)
+	}
+}
+
 func TestAdd_LinkThenApplyIsImmediatelyConverged(t *testing.T) {
 	fixture := newAddCLIFixture(t, []string{"alpha"})
 	target := fixture.writeTarget(t, ".config/app/config", "user config\n")
@@ -112,6 +173,11 @@ func TestAdd_LinkThenApplyIsImmediatelyConverged(t *testing.T) {
 	}
 	if content, err := os.ReadFile(source); err != nil || string(content) != "user config\n" {
 		t.Fatalf("link add source = %q, %v", content, err)
+	}
+	tracked := exec.Command("git", "-C", fixture.repository, "ls-files", "--error-unmatch", "--", "modules/alpha/.config/app/config")
+	tracked.Env = os.Environ()
+	if output, err := tracked.CombinedOutput(); err == nil {
+		t.Fatalf("dot add staged or tracked its source unexpectedly: %s", output)
 	}
 	state := readPlanState(t, fixture.home)
 	if entry, ok := state.Entries["~/.config/app/config"]; !ok || entry.Kind != "symlink" || entry.Module != "alpha" {
@@ -307,6 +373,15 @@ func (fixture addCLIFixture) setEnvironment(t *testing.T) {
 
 func (fixture addCLIFixture) run(t *testing.T, commandArgs ...string) (string, string, int) {
 	t.Helper()
+	return fixture.runWithBuild(t, buildinfo.Info{Version: "v0.0.0", Commit: "test", BuildTime: "test"}, commandArgs...)
+}
+
+func (fixture addCLIFixture) runWithBuild(
+	t *testing.T,
+	build buildinfo.Info,
+	commandArgs ...string,
+) (string, string, int) {
+	t.Helper()
 	fixture.setEnvironment(t)
 	args := append([]string(nil), commandArgs...)
 	args = append(args, "--home", fixture.home, "--repo", fixture.repository)
@@ -317,7 +392,7 @@ func (fixture addCLIFixture) run(t *testing.T, commandArgs ...string) (string, s
 		stderr:      &stderr,
 		lookupEnv:   os.LookupEnv,
 		userHomeDir: os.UserHomeDir,
-		build:       buildinfo.Info{Version: "v0.0.0", Commit: "test", BuildTime: "test"},
+		build:       build,
 		goos:        runtime.GOOS,
 	})
 	return stdout.String(), stderr.String(), code
@@ -339,6 +414,9 @@ func runInjectedAdd(
 		build:       buildinfo.Info{Version: "v0.0.0"},
 		goos:        runtime.GOOS,
 		addRun:      runner,
+		addLoad: func(dotruntime.Overrides, string) (dotruntime.LoadedInputs, error) {
+			return dotruntime.LoadedInputs{}, errors.New("unexpected injected add load")
+		},
 	})
 	return stdout.String(), stderr.String(), code
 }
