@@ -204,7 +204,10 @@ func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes b
 			return commandExit(projection.exitCode)
 		}
 	}
-	return runErr
+	if runErr != nil {
+		return runErr
+	}
+	return fmt.Errorf("%w: runner returned an invalid plan without an error", applyrunner.ErrExecutionProtocol)
 }
 
 func confirmationCallback(

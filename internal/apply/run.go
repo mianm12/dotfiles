@@ -13,8 +13,8 @@ import (
 	"github.com/mianm12/dotfiles/internal/state"
 )
 
-// ErrExecutionProtocol 表示 file executor 返回值无法按计划的成功/失败 effect 解释。
-var ErrExecutionProtocol = errors.New("file execution result violates apply protocol")
+// ErrExecutionProtocol 表示 runner 或 executor 的返回值无法按 apply 执行协议解释。
+var ErrExecutionProtocol = errors.New("apply execution protocol violation")
 
 // Options 保存内部 M1 link/scaffold runner 的严格 runtime 与 scope 输入。
 type Options struct {

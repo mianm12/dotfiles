@@ -396,6 +396,26 @@ func TestApply_RuntimeFileOutcomeProjectsExactConflict(t *testing.T) {
 	})
 }
 
+func TestApply_InvalidRunnerPlanPreservesErrorOrFailsProtocol(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+
+	t.Run("existing runner error", func(t *testing.T) {
+		runtimeErr := errors.New("existing runner failure")
+		stdout, stderr, code := runInjectedApply(t, fixture, applyrunner.Result{}, runtimeErr)
+		if code != exitError || stdout != "" || !strings.Contains(stderr, runtimeErr.Error()) ||
+			strings.Contains(stderr, "apply execution protocol violation") {
+			t.Fatalf("invalid plan with error = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
+
+	t.Run("nil runner error", func(t *testing.T) {
+		stdout, stderr, code := runInjectedApply(t, fixture, applyrunner.Result{}, nil)
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "apply execution protocol violation") {
+			t.Fatalf("invalid plan without error = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+	})
+}
+
 func TestApply_PruneOutcomesPreserveSuccessAndDeferMismatchSuffix(t *testing.T) {
 	fixture := newMutationCLIFixture(t)
 	source := filepath.Join(fixture.repository, "modules", "alpha", "file")
