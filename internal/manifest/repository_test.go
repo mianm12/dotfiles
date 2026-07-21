@@ -95,6 +95,111 @@ all = ["alpha", "@shared"]
 	}
 }
 
+func TestRepositoryProfileLineWithModule_QuotesDottedProfileRoundTrip(t *testing.T) {
+	repo := writeRepositoryManifest(t, `
+requires = ">=0.3.0"
+[profiles]
+"work.mac" = ["alpha"]
+`)
+	for _, module := range []string{"alpha", "beta"} {
+		writeModule(t, repo, module, "")
+	}
+	loaded, err := Load(repo)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	line, err := loaded.ProfileLineWithModule("work.mac", "beta")
+	if err != nil {
+		t.Fatalf("ProfileLineWithModule() error = %v, want nil", err)
+	}
+	if want := `"work.mac" = ["alpha", "beta"]`; line != want {
+		t.Fatalf("ProfileLineWithModule() = %q, want %q", line, want)
+	}
+
+	roundTrip := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\n"+line+"\n")
+	for _, module := range []string{"alpha", "beta"} {
+		writeModule(t, roundTrip, module, "")
+	}
+	roundTripped, err := Load(roundTrip)
+	if err != nil {
+		t.Fatalf("Load(round-trip) error = %v, want nil", err)
+	}
+	resolved, err := roundTripped.Resolve("work.mac", "darwin")
+	if err != nil {
+		t.Fatalf("Resolve(work.mac) error = %v, want nil", err)
+	}
+	if want := []string{"alpha", "beta"}; !reflect.DeepEqual(resolved.ModuleNames(), want) {
+		t.Fatalf("Resolve(work.mac).ModuleNames() = %v, want %v", resolved.ModuleNames(), want)
+	}
+}
+
+func TestRepositoryModuleActivationGuidance_UsesExpandedMembershipAndEffectiveOverrides(t *testing.T) {
+	tests := []struct {
+		name            string
+		profile         string
+		rootDefaults    string
+		moduleManifest  string
+		goos            string
+		wantInProfile   bool
+		wantOSLine      string
+		wantTargetReady bool
+		wantTargetLines []string
+	}{
+		{
+			name:    "direct module override adds linux",
+			profile: `base = ["app"]`, moduleManifest: "os = [\"darwin\"]\ntarget = \"~\"",
+			goos: "linux", wantInProfile: true, wantOSLine: `os = ["darwin", "linux"]`, wantTargetReady: true,
+		},
+		{
+			name:    "referenced root defaults add darwin without module manifest",
+			profile: "shared = [\"app\"]\nbase = [\"@shared\"]", rootDefaults: "os = [\"linux\"]\ntarget = \"~\"",
+			goos: "darwin", wantInProfile: true, wantOSLine: `os = ["linux", "darwin"]`, wantTargetReady: true,
+		},
+		{
+			name:    "module target table lacks linux",
+			profile: `base = ["app"]`, moduleManifest: "os = [\"darwin\"]\n[target]\ndarwin = \"~/Library/App\"",
+			goos: "linux", wantInProfile: true, wantOSLine: `os = ["darwin", "linux"]`,
+			wantTargetLines: []string{`darwin = "~/Library/App"`},
+		},
+		{
+			name:    "root target table lacks darwin",
+			profile: `base = ["app"]`, rootDefaults: "os = [\"linux\"]\ntarget = { linux = \"~/.config/app\" }",
+			goos: "darwin", wantInProfile: true, wantOSLine: `os = ["linux", "darwin"]`,
+			wantTargetLines: []string{`linux = "~/.config/app"`},
+		},
+		{
+			name:    "module is outside expanded profile",
+			profile: `base = []`, moduleManifest: `os = ["darwin"]`,
+			goos: "linux", wantOSLine: `os = ["darwin", "linux"]`, wantTargetReady: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := "requires = \">=0.3.0\"\n"
+			if tt.rootDefaults != "" {
+				root += "[defaults]\n" + tt.rootDefaults + "\n"
+			}
+			root += "[profiles]\n" + tt.profile + "\n"
+			repo := writeRepositoryManifest(t, root)
+			writeModule(t, repo, "app", tt.moduleManifest)
+			loaded, err := Load(repo)
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+
+			guidance, err := loaded.ModuleActivationGuidance("base", "app", tt.goos)
+			if err != nil {
+				t.Fatalf("ModuleActivationGuidance() error = %v, want nil", err)
+			}
+			if guidance.InProfile != tt.wantInProfile || guidance.ManifestPath != "modules/app/dot.toml" ||
+				guidance.OSLine != tt.wantOSLine || guidance.TargetReady != tt.wantTargetReady ||
+				!reflect.DeepEqual(guidance.TargetLines, tt.wantTargetLines) {
+				t.Fatalf("ModuleActivationGuidance() = %#v", guidance)
+			}
+		})
+	}
+}
+
 func TestRepositoryValidateModuleRules_CoversUnassignedModules(t *testing.T) {
 	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
 	writeModule(t, repo, "unassigned", `target = { darwin = "~/.config/app" }`)

@@ -56,7 +56,7 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 	if err != nil {
 		return BatchPlan{}, err
 	}
-	if err := validateExplicitModule(inputs.Manifest(), resolved, context.Profile(), request.Module); err != nil {
+	if err := validateExplicitModule(inputs.Manifest(), resolved, context.Profile(), goruntime.GOOS, request.Module); err != nil {
 		return BatchPlan{}, err
 	}
 	cwd, err := operations.getwd()
@@ -222,6 +222,7 @@ func validateExplicitModule(
 	repository manifest.Repository,
 	resolved manifest.ResolvedProfile,
 	profile string,
+	goos string,
 	module string,
 ) error {
 	if module == "" {
@@ -243,6 +244,39 @@ func validateExplicitModule(
 		)
 	}
 	if !slices.Contains(resolved.ModuleNames(), module) {
+		activation, err := repository.ModuleActivationGuidance(profile, module, goos)
+		if err != nil {
+			return fmt.Errorf("resolve add module activation guidance: %w", err)
+		}
+		if activation.InProfile {
+			message := fmt.Sprintf(
+				"add module %q is declared in profile %q but inactive on %s",
+				module,
+				profile,
+				goos,
+			)
+			if activation.TargetReady {
+				return fmt.Errorf(
+					"%s\nnext: in %s set %s",
+					message,
+					activation.ManifestPath,
+					activation.OSLine,
+				)
+			}
+			targetContext := ""
+			if len(activation.TargetLines) > 0 {
+				targetContext = "; preserve " + strings.Join(activation.TargetLines, ", ")
+			}
+			return fmt.Errorf(
+				"%s\nnext: in %s update [target]%s and add target.%s using the intended canonical ~/ path\nnext: in %s set %s; both edits are required",
+				message,
+				activation.ManifestPath,
+				targetContext,
+				goos,
+				activation.ManifestPath,
+				activation.OSLine,
+			)
+		}
 		profileLine, err := repository.ProfileLineWithModule(profile, module)
 		if err != nil {
 			return fmt.Errorf("format add profile guidance: %w", err)

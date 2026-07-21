@@ -208,6 +208,70 @@ base = ["app", "@shared"]
 	}
 }
 
+func TestPreflight_ExplicitInactiveModuleGuidanceUsesModuleLocalOS(t *testing.T) {
+	otherGOOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherGOOS = "darwin"
+	}
+	for _, test := range []struct {
+		name           string
+		rootDefaults   string
+		profile        string
+		moduleManifest string
+		wantTargetStep bool
+	}{
+		{
+			name:    "direct module override",
+			profile: `base = ["app"]`,
+			moduleManifest: `os = ["` + otherGOOS + `"]
+target = "~"`,
+		},
+		{
+			name:         "profile reference and root defaults without module manifest",
+			rootDefaults: `os = ["` + otherGOOS + `"]` + "\ntarget = \"~\"",
+			profile:      "shared = [\"app\"]\nbase = [\"@shared\"]",
+		},
+		{
+			name:    "module target table needs current GOOS",
+			profile: `base = ["app"]`,
+			moduleManifest: `os = ["` + otherGOOS + `"]
+[target]
+` + otherGOOS + ` = "~"`,
+			wantTargetStep: true,
+		},
+		{
+			name:           "root target table needs current GOOS",
+			rootDefaults:   `os = ["` + otherGOOS + `"]` + "\ntarget = { " + otherGOOS + " = \"~\" }",
+			profile:        `base = ["app"]`,
+			wantTargetStep: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAddFixture(t, map[string]string{"app": test.moduleManifest})
+			root := "requires = \">=0.3.0\"\n"
+			if test.rootDefaults != "" {
+				root += "[defaults]\n" + test.rootDefaults + "\n"
+			}
+			root += "[profiles]\n" + test.profile + "\n"
+			writeAddFile(t, filepath.Join(fixture.repo, "dot.toml"), root, 0o644)
+			target := fixture.writeTarget(t, "config", "x", 0o644)
+
+			_, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+			if err == nil || !strings.Contains(err.Error(), `module "app" is declared in profile "base" but inactive on `+runtime.GOOS) ||
+				!strings.Contains(err.Error(), "next: in modules/app/dot.toml set os =") {
+				t.Fatalf("inactive module guidance = %v", err)
+			}
+			gotTargetStep := strings.Contains(err.Error(), "target."+runtime.GOOS)
+			if gotTargetStep != test.wantTargetStep {
+				t.Fatalf("inactive module target guidance = %v, want target step %t", err, test.wantTargetStep)
+			}
+			if test.wantTargetStep && strings.Contains(err.Error(), `target.`+runtime.GOOS+` = "~"`) {
+				t.Fatalf("inactive module guidance guessed target path: %v", err)
+			}
+		})
+	}
+}
+
 func TestPreflight_RejectsManifestIgnoreAndDuplicateInputs(t *testing.T) {
 	t.Run("manifest ignore", func(t *testing.T) {
 		fixture := newAddFixture(t, map[string]string{"app": `target = "~"

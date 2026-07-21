@@ -236,6 +236,47 @@ all = ["alpha", "@shared"]
 	}
 }
 
+func TestAdd_ExplicitModuleGuidanceQuotesDottedProfile(t *testing.T) {
+	fixture := newAddCLIFixture(t, []string{"alpha", "core"})
+	writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), `profile = "work.mac"`)
+	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+shared = ["core"]
+"work.mac" = ["alpha", "@shared"]
+`)
+	target := fixture.writeTarget(t, "guided", "content\n")
+	before := snapshotCLITree(t, fixture.root)
+
+	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "new-module", target)
+	if code != exitError || !strings.Contains(stderr, `"work.mac" = ["alpha", "@shared", "new-module"]`) {
+		t.Fatalf("dotted profile guidance = stderr %q, exit %d", stderr, code)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("dotted profile dry-run changed isolated tree\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestAdd_ExplicitInactiveModuleGuidanceUsesCurrentGOOS(t *testing.T) {
+	fixture := newAddCLIFixture(t, []string{"alpha"})
+	otherGOOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherGOOS = "darwin"
+	}
+	writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"),
+		"os = [\""+otherGOOS+"\"]\ntarget = \"~\"\n")
+	target := fixture.writeTarget(t, "guided", "content\n")
+	before := snapshotCLITree(t, fixture.root)
+
+	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "alpha", target)
+	if code != exitError || !strings.Contains(stderr, `module "alpha" is declared in profile "all" but inactive on `+runtime.GOOS) ||
+		!strings.Contains(stderr, "next: in modules/alpha/dot.toml set os =") || strings.Contains(stderr, "[profiles]") {
+		t.Fatalf("inactive module guidance = stderr %q, exit %d", stderr, code)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("inactive module dry-run changed isolated tree\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
 func TestAdd_LinkThenApplyIsImmediatelyConverged(t *testing.T) {
 	fixture := newAddCLIFixture(t, []string{"alpha"})
 	target := fixture.writeTarget(t, ".config/app/config", "user config\n")

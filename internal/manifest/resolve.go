@@ -87,24 +87,12 @@ func (r Repository) Resolve(profile, goos string) (ResolvedProfile, error) {
 
 func (r Repository) resolveModule(name string, loaded loadedModule, goos string) (ResolvedModule, bool, error) {
 	// os 与 target 分别按“内建缺省 → 顶层 defaults → 模块”整键替换，不做逐项合并。
-	operatingSystems := []string{goosDarwin, goosLinux}
-	if r.manifest.defaults.os.set {
-		operatingSystems = r.manifest.defaults.os.value
-	}
-	if loaded.manifest.os.set {
-		operatingSystems = loaded.manifest.os.value
-	}
+	operatingSystems := r.moduleOperatingSystems(loaded)
 	if !slices.Contains(operatingSystems, goos) {
 		return ResolvedModule{}, false, nil
 	}
 
-	target := targetSpec{common: stringPointer("~")}
-	if r.manifest.defaults.target.set {
-		target = r.manifest.defaults.target.value
-	}
-	if loaded.manifest.target.set {
-		target = loaded.manifest.target.value
-	}
+	target := r.moduleTarget(loaded)
 	targetRoot, exists := target.forOS(goos)
 	if !exists {
 		return ResolvedModule{}, false, fmt.Errorf("module %q is active on %s but target table has no %s entry", name, goos, goos)
@@ -123,6 +111,28 @@ func (r Repository) resolveModule(name string, loaded loadedModule, goos string)
 		FileRules:  fileRules,
 		RunOnce:    append([]string(nil), loaded.manifest.runOnce...),
 	}, true, nil
+}
+
+func (r Repository) moduleOperatingSystems(loaded loadedModule) []string {
+	operatingSystems := []string{goosDarwin, goosLinux}
+	if r.manifest.defaults.os.set {
+		operatingSystems = r.manifest.defaults.os.value
+	}
+	if loaded.manifest.os.set {
+		operatingSystems = loaded.manifest.os.value
+	}
+	return append([]string(nil), operatingSystems...)
+}
+
+func (r Repository) moduleTarget(loaded loadedModule) targetSpec {
+	target := targetSpec{common: stringPointer("~")}
+	if r.manifest.defaults.target.set {
+		target = r.manifest.defaults.target.value
+	}
+	if loaded.manifest.target.set {
+		target = loaded.manifest.target.value
+	}
+	return target
 }
 
 func (t targetSpec) forOS(goos string) (string, bool) {

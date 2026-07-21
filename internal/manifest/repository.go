@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -13,6 +14,8 @@ import (
 )
 
 var manifestNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+var tomlBareKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // ValidModuleName 报告 name 是否满足 manifest module 单路径段语法。
 func ValidModuleName(name string) bool { return manifestNamePattern.MatchString(name) }
@@ -107,7 +110,63 @@ func (r Repository) ProfileLineWithModule(profile, module string) (string, error
 	for index, member := range result {
 		quoted[index] = strconv.Quote(member)
 	}
-	return fmt.Sprintf("%s = [%s]", profile, strings.Join(quoted, ", ")), nil
+	return fmt.Sprintf("%s = [%s]", formatTOMLKey(profile), strings.Join(quoted, ", ")), nil
+}
+
+// ModuleActivation 描述一个已发现 module 相对 profile 与当前 GOOS 的只读激活事实。
+// TargetLines 仅在 effective target 是 OS table 时保存可直接复用的既有 TOML 成员行。
+type ModuleActivation struct {
+	InProfile    bool
+	ManifestPath string
+	OSLine       string
+	TargetReady  bool
+	TargetLines  []string
+}
+
+// ModuleActivationGuidance 返回 module-local 手工激活需要的稳定事实，不修改 manifest。
+func (r Repository) ModuleActivationGuidance(profile, module, goos string) (ModuleActivation, error) {
+	profileModules, exists := r.expandedProfiles[profile]
+	if !exists {
+		return ModuleActivation{}, fmt.Errorf("unknown profile %q", profile)
+	}
+	loaded, exists := r.modules[module]
+	if !exists {
+		return ModuleActivation{}, fmt.Errorf("unknown module %q", module)
+	}
+	if !isSupportedGOOS(goos) {
+		return ModuleActivation{}, fmt.Errorf("unsupported GOOS %q: want %s or %s", goos, goosDarwin, goosLinux)
+	}
+	operatingSystems := r.moduleOperatingSystems(loaded)
+	if !slices.Contains(operatingSystems, goos) {
+		operatingSystems = append(operatingSystems, goos)
+	}
+	quoted := make([]string, len(operatingSystems))
+	for index, value := range operatingSystems {
+		quoted[index] = strconv.Quote(value)
+	}
+	target := r.moduleTarget(loaded)
+	_, targetReady := target.forOS(goos)
+	var targetLines []string
+	if len(target.byOS) > 0 {
+		targetLines = make([]string, 0, len(target.byOS))
+		for _, targetGOOS := range sortedKeys(target.byOS) {
+			targetLines = append(targetLines, fmt.Sprintf("%s = %s", targetGOOS, strconv.Quote(target.byOS[targetGOOS])))
+		}
+	}
+	return ModuleActivation{
+		InProfile:    slices.Contains(profileModules, module),
+		ManifestPath: path.Join("modules", module, filename),
+		OSLine:       "os = [" + strings.Join(quoted, ", ") + "]",
+		TargetReady:  targetReady,
+		TargetLines:  targetLines,
+	}, nil
+}
+
+func formatTOMLKey(key string) string {
+	if tomlBareKeyPattern.MatchString(key) {
+		return key
+	}
+	return strconv.Quote(key)
 }
 
 // DataKeys 返回根 manifest 声明的用户 data key，结果按字节序排列。
