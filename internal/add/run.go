@@ -180,15 +180,23 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 	}
 
 	updates := make([]state.EntryUpdate, 0, len(items))
+	protocolViolation := false
 	for index, item := range items {
 		result.attempts++
 		execution, executeErr := operations.execute(mutation.control(), item)
 		committed, protocolErr := validateLinkExecutionResult(item, execution, executeErr)
-		if execution.Valid() && execution.sourcePublished {
-			result.sourcePublications++
-		}
 		if protocolErr != nil {
-			executeErr = errors.Join(executeErr, protocolErr)
+			protocolViolation = true
+			resultErr = fmt.Errorf(
+				"execute add link item %d for %q: %w",
+				index,
+				item.Target(),
+				errors.Join(executeErr, protocolErr),
+			)
+			break
+		}
+		if execution.sourcePublished {
+			result.sourcePublications++
 		}
 		if committed {
 			result.targetCommits++
@@ -210,25 +218,36 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 		}
 	}
 
-	if len(updates) == 0 {
-		if !result.Valid() {
-			return result, errors.Join(resultErr, fmt.Errorf("%w: runner produced an invalid result", ErrExecutionProtocol))
+	if len(updates) > 0 {
+		candidate, changed, transitionErr := state.TransitionEntries(mutation.baseline(), updates)
+		if transitionErr != nil {
+			resultErr = errors.Join(resultErr, transitionErr)
+			if protocolViolation {
+				return Result{}, resultErr
+			}
+			return result, resultErr
 		}
-		return result, resultErr
+		if !changed {
+			resultErr = errors.Join(resultErr, fmt.Errorf("%w: successful add prefix produced no state change", ErrExecutionProtocol))
+			if protocolViolation {
+				return Result{}, resultErr
+			}
+			return result, resultErr
+		}
+		if commitErr := mutation.commit(candidate); commitErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("commit add state: %w", commitErr))
+			if protocolViolation {
+				return Result{}, resultErr
+			}
+			return result, resultErr
+		}
+		result.stateCommitted = true
 	}
-	candidate, changed, transitionErr := state.TransitionEntries(mutation.baseline(), updates)
-	if transitionErr != nil {
-		return result, errors.Join(resultErr, transitionErr)
+	if protocolViolation {
+		return Result{}, resultErr
 	}
-	if !changed {
-		return result, errors.Join(resultErr, fmt.Errorf("%w: successful add prefix produced no state change", ErrExecutionProtocol))
-	}
-	if commitErr := mutation.commit(candidate); commitErr != nil {
-		return result, errors.Join(resultErr, fmt.Errorf("commit add state: %w", commitErr))
-	}
-	result.stateCommitted = true
 	if !result.Valid() {
-		return result, errors.Join(resultErr, fmt.Errorf("%w: runner produced an invalid committed result", ErrExecutionProtocol))
+		return Result{}, errors.Join(resultErr, fmt.Errorf("%w: runner produced an invalid result", ErrExecutionProtocol))
 	}
 	return result, resultErr
 }

@@ -3,6 +3,7 @@ package add
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -68,8 +69,43 @@ func TestRun_FailsClosedOnZeroExecutorResultWithNilError(t *testing.T) {
 	}
 
 	result, err := runWithOperations(RunOptions{}, seam.operations)
-	if !errors.Is(err, ErrExecutionProtocol) || !result.Valid() || result.TargetCommits() != 0 || seam.loaded.commitCalls != 0 {
+	if !errors.Is(err, ErrExecutionProtocol) || result.Valid() || result.Plan().Valid() || result.Outcomes() != nil || seam.loaded.commitCalls != 0 {
 		t.Fatalf("runWithOperations() = (%#v, %v), commits=%d", result, err, seam.loaded.commitCalls)
+	}
+}
+
+func TestRun_FailsClosedWithoutProjectableResultForExecutorProtocolViolations(t *testing.T) {
+	tests := []struct {
+		name   string
+		result func(ItemPlan) linkItemResult
+	}{
+		{name: "mismatched item", result: func(item ItemPlan) linkItemResult {
+			mismatched := item
+			mismatched.target = "~/.different"
+			return linkItemResult{item: mismatched, seal: successfulLinkExecutionSeal}
+		}},
+		{name: "target without source", result: func(item ItemPlan) linkItemResult {
+			return linkItemResult{item: item, targetCommitted: true, seal: successfulLinkExecutionSeal}
+		}},
+		{name: "invalid seal", result: func(item ItemPlan) linkItemResult {
+			return linkItemResult{item: item}
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, item := newLinkItemFixture(t)
+			seam := newRunSeam(t, fixture, []ItemPlan{item})
+			seam.operations.execute = func(paths.ControlPlanePaths, ItemPlan) (linkItemResult, error) {
+				return test.result(item), errors.New("executor error")
+			}
+
+			result, err := runWithOperations(RunOptions{}, seam.operations)
+			if !errors.Is(err, ErrExecutionProtocol) || result.Valid() || result.Plan().Valid() ||
+				result.Outcomes() != nil || seam.loaded.commitCalls != 0 {
+				t.Fatalf("runWithOperations() = (%#v, %v), commits=%d", result, err, seam.loaded.commitCalls)
+			}
+		})
 	}
 }
 
@@ -148,6 +184,37 @@ func TestRun_StateStoreFailurePreservesSourceAndLinkForApplyRecovery(t *testing.
 	converged, err := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
 	if err != nil || converged.AdoptionEffects != 0 || converged.TargetCommits != 0 || converged.StateCommitted {
 		t.Fatalf("second apply result/error = (%#v, %v), want no mutation/adopt", converged, err)
+	}
+}
+
+func TestRun_PostCommitCleanupErrorKeepsSucceededOutcomeAndCommitsStateOnce(t *testing.T) {
+	fixture, item := newLinkItemFixture(t)
+	seam := newRunSeam(t, fixture, []ItemPlan{item})
+	injected := errors.New("post-commit cleanup failed")
+	seam.operations.execute = func(control paths.ControlPlanePaths, planned ItemPlan) (linkItemResult, error) {
+		operations := defaultLinkOperations()
+		realRemove := operations.remove
+		operations.remove = func(path string) error {
+			if filepath.Base(path) != targetTemporaryLinkName {
+				return injected
+			}
+			return realRemove(path)
+		}
+		return executeLinkItem(control, planned, operations)
+	}
+
+	result, err := runWithOperations(RunOptions{}, seam.operations)
+	if !errors.Is(err, injected) || !result.Valid() || result.TargetCommits() != 1 ||
+		!result.StateCommitted() || seam.loaded.commitCalls != 1 ||
+		result.Outcomes()[0].Status != OutcomeSucceeded {
+		t.Fatalf("runWithOperations() = (%#v, %v), commits=%d", result, err, seam.loaded.commitCalls)
+	}
+	if link, readErr := os.Readlink(item.TargetPath()); readErr != nil || link != item.SourcePath() {
+		t.Fatalf("committed target = (%q, %v)", link, readErr)
+	}
+	assertRegularFile(t, item.SourcePath(), "content", 0o600)
+	if _, ok := seam.loaded.committed.Entry(item.Target()); !ok {
+		t.Fatal("committed state is missing post-cleanup-error target")
 	}
 }
 
