@@ -49,11 +49,16 @@ state commit。`internal/add.Preflight` 返回 sealed `BatchPlan`；`internal/ad
 
 - [x] 2026-07-22：确认分配 worktree、branch、有效 base 和 clean 状态；读取执行规则、CP6 规范、
   coordinator 与前三个 completed plans，以及现有 CLI/add/runtime/apply 实现和测试。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先行固定 flags、投影、输出/退出码和 invalid result fail-closed。
-- [ ] 实现只读 dry-run 与 mutation wiring，覆盖全隔离 link/scaffold E2E 与 apply 收敛。
-- [ ] 同步 README，运行窄测、race、diff check、隔离 `make check` 和双目标交叉编译。
-- [ ] 保持 active 等待未参与实现的完整独立复核。
+- [x] 2026-07-22：以 `5a275b7` 提交本 active ExecPlan 起点。
+- [x] 2026-07-22：以 `c6024d8` 测试先行注册公开 add、dry-run/mutation wiring、稳定投影与退出码；
+  全隔离覆盖 link/scaffold、hard-link、部分成功、template/歧义/invalid result 和 apply 收敛。
+- [x] 2026-07-22：以 `95623d8` 同步 README 当前 M1 add 事实。
+- [x] 2026-07-22：自审以 `8f1206e`、`0f462c2`、`b2c8303`、`b7a6cfe` 分别补齐 compatibility
+  notice/成功结果协议、空 module、sealed GOOS 与 state-committed fail-closed，并补 module 指引和
+  公开 flag 回归。
+- [x] 2026-07-22：相关包普通、5 次重复、全仓 race/lint、完整 base diff check、独立
+  cache/BINARY `make check` 与 Darwin/Linux amd64 CLI test binary 交叉编译通过。
+- [ ] 保持 active、worktree clean，等待未参与实现的完整独立复核。
 
 ## Milestones
 
@@ -79,7 +84,7 @@ override 都来自统一 global options。全隔离 fixture 创建 synthetic HOM
 Git repository，直接覆盖 link/scaffold、module inference/显式 module、部分成功、hard-link、
 dry-run 零写入及 add→apply→apply 收敛；下层已有 ignore/source/故障点覆盖不在 CLI 重复实现。
 
-    test(cli): 覆盖 add 隔离端到端行为
+实际 E2E 与 wiring 测试随 `c6024d8` 对应实现提交，未拆成脱离实现的测试 commit。
 
 ### Milestone 4：同步当前实现说明
 
@@ -96,6 +101,13 @@ cache/BINARY 的 `make check`，以及 Darwin/Linux amd64 CLI test binary 交叉
 测试使用 `t.TempDir()` 的合成 HOME/repo/config/state/backup，显式隔离 DOT/HOME/XDG/Git，并检查
 真实 HOME sentinel 不变。真实 Linux 与远端 macOS/Linux CI 未运行时明确标为待验收。
 
+当前证据：`go test ./internal/cli ./internal/add ./internal/apply ./internal/runtime ./internal/state`
+通过；CLI/add 5 次重复通过；最终隔离 `make check` 完成 `go mod tidy -diff`、format diff、0 lint
+issue、`go test -race ./...`、build 和 manifest check；完整 base diff check 与 Darwin/Linux amd64
+CLI test binary 交叉编译通过。前三个 Milestone 已直接覆盖 manifest/Git ignore/exclude、Git
+unavailable、source variants、等价续跑及 link/scaffold 故障接缝；本分支不复制这些机制，只以 CLI
+E2E 证明公开 wiring、输出和退出码。真实 Linux 主机与远端 CI 待验收。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 的 active plan、范围内修改、stage、commit 与验证。失败使用新 fix
@@ -110,7 +122,27 @@ accessor 获得，CLI 不获得构造可信 plan/result 的能力。
 
 ## Surprises & Discoveries
 
-尚无。
+- Observation: sealed `BatchPlan` 原先不携带 development compatibility 与实际 GOOS，CLI 若从
+  build/environment 独立推断会形成第二个 context 真相源。
+  Evidence: 首版投影只能用 `env.goos`，且无法输出 development notice。
+  Impact: plan 在成功 strict preflight 时封存 GOOS 与 compatibility，只读/mutation 投影统一消费
+  accessor；零值/伪造 plan 仍无效。
+
+- Observation: `Result.Valid` 合法允许“已越过 link target 提交点但 state Store 失败”，供 non-nil
+  error 的恢复投影；因此 validity 本身不能证明 nil-error 的整体成功。
+  Evidence: link Store failure 需要保留 source/link、返回 valid result 与 error。
+  Impact: CLI 在 `runErr == nil` 时额外要求全部 outcome succeeded 且 `StateCommitted`，否则按
+  `ErrExecutionProtocol` fail closed。
+
+- Observation: 公开 `-m` 的不存在/不在 profile 错误原先只有诊断，没有规范要求的手工修复步骤；
+  显式 `-m=` 还会退化为 inference。
+  Evidence: `validateExplicitModule` 与 Cobra string flag 的默认空值。
+  Impact: 保持下层 module 校验为单一语义源并返回当前 profile 指引；CLI 在 runtime 前拒绝显式空值。
+
+- Observation: 不需要新增 CLI 专用故障 seam 即可直接证明多输入部分成功。
+  Evidence: 隔离 E2E 让排序靠后的 target parent 在预检可读、执行不可写，首项 link/state 提交而
+  次项保持原文件。
+  Impact: CLI 测试消费真实 `add.Run`，没有复制或绕过 publication/Precond/state 逻辑。
 
 ## Decision Log
 
@@ -119,6 +151,20 @@ accessor 获得，CLI 不获得构造可信 plan/result 的能力。
   Rationale: 下层已经以 validity seal 固定完整预检和执行事实；CLI 应保持纯投影。
   Date: 2026-07-22
 
+- Decision: CLI E2E 只直接覆盖公开 wiring/output/exit 与代表性的真实安全流；ignore、Git
+  unavailable、source variants 和提交点故障继续复用前三个 Milestone 的下层测试。
+  Rationale: 这些机制的唯一实现位于 manifest/add/runtime；在 CLI 重建同类 fault seam 会产生重复
+  语义，真实 link/scaffold/partial/hard-link/apply convergence 已证明 production wiring。
+  Date: 2026-07-22
+
 ## Outcomes and Handoff
 
-尚未收口；本计划提交后进入测试先行实现。
+实现与本地门禁已完成，保持 active 等待独立复核。当前 branch 提供公开 add flags、M1 template
+早拒绝、只读 dry-run、sealed mutation result 投影、确定 context/action/Git 提示与 1/3/2/0 映射；
+README 已同步。自审 fix 关闭 compatibility/GOOS 第二真相源、nil-error 未完整提交、空 module 与
+缺失手工指引。无新依赖、持久化格式或 ownership 变化。
+
+本机已通过相关包普通/重复、全仓 race/lint、完整 diff check、隔离 `make check` 和 Darwin/Linux
+amd64 test binary 交叉编译。真实 Linux 主机和远端 macOS/Linux CI 未运行，远端待验收。handoff
+为未参与实现的 reviewer 对有效 base `9206981...HEAD` 做完整 branch 复核；finding 以新 fix commit
+修复，计划在复核通过前保持 active。
