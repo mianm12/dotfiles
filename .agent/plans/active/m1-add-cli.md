@@ -58,6 +58,11 @@ state commit。`internal/add.Preflight` 返回 sealed `BatchPlan`；`internal/ad
   公开 flag 回归。
 - [x] 2026-07-22：相关包普通、5 次重复、全仓 race/lint、完整 base diff check、独立
   cache/BINARY `make check` 与 Darwin/Linux amd64 CLI test binary 交叉编译通过。
+- [x] 2026-07-22：Round 1 reviewer 报告两个有效 finding：sealed `Result.Valid` 未按 kind 绑定
+  succeeded/counter 事实，且 link target 已提交但 state Store 失败时 CLI 缺少明确恢复提示。
+  `dd6bdc4` 与 `ca98d74` 分别测试先行修复；真实 partial/Store failure/post-commit error 语义保持。
+- [x] 2026-07-22：Round 1 fix 后相关包普通、add/CLI 5 次重复与 add/CLI/apply race、完整 diff
+  check、Darwin/Linux amd64 CLI test binary 交叉编译及独立 cache/BINARY `make check` 重新通过。
 - [ ] 保持 active、worktree clean，等待未参与实现的完整独立复核。
 
 ## Milestones
@@ -108,6 +113,11 @@ CLI test binary 交叉编译通过。前三个 Milestone 已直接覆盖 manifes
 unavailable、source variants、等价续跑及 link/scaffold 故障接缝；本分支不复制这些机制，只以 CLI
 E2E 证明公开 wiring、输出和退出码。真实 Linux 主机与远端 CI 待验收。
 
+Round 1 fix 后再次证明：counter 缺失的全 succeeded/state-committed sealed result 无效；真实 link
+partial、Store failure、post-target cleanup error 与 scaffold Store failure 仍合法。恢复提示投影只
+消费 valid result 的 `TargetCommits`/`StateCommitted`，同时保留成功 action、Git hint 与原始运行
+error。随后 5 次重复、相关 race、完整 diff check、双目标编译和隔离 `make check` 全部通过。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 的 active plan、范围内修改、stage、commit 与验证。失败使用新 fix
@@ -144,6 +154,19 @@ accessor 获得，CLI 不获得构造可信 plan/result 的能力。
   次项保持原文件。
   Impact: CLI 测试消费真实 `add.Run`，没有复制或绕过 publication/Precond/state 逻辑。
 
+- Observation: `Result.Valid` 原先只校验 counter 上界，不能证明每个 succeeded item 都有 source
+  publication，或每个 succeeded link 都对应一次 target commit。
+  Evidence: Round 1 reviewer 可从真实 sealed success result 删除 publication/target counter，结果仍
+  被 CLI 当作可信；scaffold 也可能伪报 target commit。
+  Impact: validity 按 item kind 统计 succeeded；publication 覆盖全部 succeeded，link succeeded 数
+  精确等于 `TargetCommits`，scaffold target commit 为零。失败项已发布 source 仍允许 counter 更大。
+
+- Observation: link Store failure 的 valid result 已精确证明 target commit，但普通 runtime error
+  文本本身不能安全指导 ownership/recovery。
+  Evidence: Round 1 P2；`TargetCommits>0 && !StateCommitted` 是 sealed result 中唯一需要的事实。
+  Impact: CLI 仅由这两个 accessor 生成明确 `rerun dot apply` warning，保留 action、Git hint 和随后
+  的原始 error；scaffold/预提交错误不会误触发。
+
 ## Decision Log
 
 - Decision: dry-run 与 mutation 分别消费 `Preflight` sealed plan 和 `Run` sealed result，不为二者
@@ -159,12 +182,12 @@ accessor 获得，CLI 不获得构造可信 plan/result 的能力。
 
 ## Outcomes and Handoff
 
-实现与本地门禁已完成，保持 active 等待独立复核。当前 branch 提供公开 add flags、M1 template
+实现与 Round 1 fixes、本地门禁已完成，保持 active 等待 Round 2 完整独立复核。当前 branch 提供公开 add flags、M1 template
 早拒绝、只读 dry-run、sealed mutation result 投影、确定 context/action/Git 提示与 1/3/2/0 映射；
 README 已同步。自审 fix 关闭 compatibility/GOOS 第二真相源、nil-error 未完整提交、空 module 与
 缺失手工指引。无新依赖、持久化格式或 ownership 变化。
 
 本机已通过相关包普通/重复、全仓 race/lint、完整 diff check、隔离 `make check` 和 Darwin/Linux
-amd64 test binary 交叉编译。真实 Linux 主机和远端 macOS/Linux CI 未运行，远端待验收。handoff
-为未参与实现的 reviewer 对有效 base `9206981...HEAD` 做完整 branch 复核；finding 以新 fix commit
-修复，计划在复核通过前保持 active。
+amd64 test binary 交叉编译；Round 1 两项有效 finding 修复后上述关键门禁已完整重跑。真实 Linux
+主机和远端 macOS/Linux CI 未运行，远端待验收。handoff 为原 reviewer 对有效 base
+`9206981...HEAD` 做 Round 2 完整 branch 复核；计划在复核通过前保持 active。
