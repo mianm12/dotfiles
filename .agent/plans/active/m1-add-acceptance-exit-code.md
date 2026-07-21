@@ -40,8 +40,12 @@ P2：exact target-missing 被包装为 `ErrModuleActivation`，使 strict manife
 
 - [x] 2026-07-22：确认分配 worktree、branch、effective base 与 clean 状态；读取 completed
   acceptance plan、typed Resolve/preflight/CLI 实现及最终 Acceptance finding。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先行保持 target mapping exit 1 并重新运行完整本地门禁。
+- [x] 2026-07-22：以 `278420a` 提交本 active ExecPlan 起点。
+- [x] 2026-07-22：先修改回归并确认旧实现把 exact target-missing 包装为
+  `ErrModuleActivation`/exit 3；以 `e379b41` 抽出纯 activation steps，exact path wrap 原 typed
+  manifest error 并附步骤，selection activation 继续使用 conflict identity。
+- [x] 2026-07-22：manifest/add/CLI 普通、add/CLI 5 次重复、三包 race、定向 lint、branch-base 与
+  checkpoint diff check、隔离 `make check`、Darwin/Linux amd64 add/CLI test binary 交叉编译通过。
 - [ ] 保持计划 active、worktree clean，等待未参与实现的完整 branch 复核。
 
 ## Milestones
@@ -65,6 +69,9 @@ P2：exact target-missing 被包装为 `ErrModuleActivation`，使 strict manife
 `git diff 5d176497a75c9f8e43b413d43f04f3ea41720c51...HEAD --check`、隔离 cache/BINARY 的
 `make check` 与 Darwin/Linux amd64 add/CLI test binary 交叉编译。真实 Linux/远端 CI 标记待验收。
 
+当前上述命令均通过。`make check` 完成 tidy/format diff、0 lint issue、全仓 race、build 与 manifest
+check；真实 Linux 主机与远端 macOS/Linux CI 未运行，远端待验收。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 acceptance fix branch/worktree 的新计划、范围内修改、stage、commit 与验证。失败用
@@ -77,7 +84,11 @@ P2：exact target-missing 被包装为 `ErrModuleActivation`，使 strict manife
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: 恢复步骤与错误分类可以独立组合，无需为附加文本创建新的 error identity。
+  Evidence: `fmt.Errorf("%w\n%s", targetErr, steps)` 保持 `errors.As` 命中
+  `*manifest.ModuleTargetMappingError`，同时不再 `errors.Is(ErrModuleActivation)`。
+  Impact: CLI 继续只按 error identity 判级；exact target-missing exit 1，selection activation 与普通
+  ambiguity exit 3，文本不会意外改变 `1 > 3`。
 
 ## Decision Log
 
