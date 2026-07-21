@@ -161,7 +161,8 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 		return strings.Compare(left.targetPath, right.targetPath)
 	})
 	plan := sealBatchPlan(
-		context.Profile(), home, repositoryPath, inputs.Compatibility().DevelopmentBuild(), items,
+		context.Profile(), home, repositoryPath, goruntime.GOOS,
+		inputs.Compatibility().DevelopmentBuild(), items,
 	)
 	if !plan.Valid() {
 		return BatchPlan{}, fmt.Errorf("add preflight produced an invalid sealed plan")

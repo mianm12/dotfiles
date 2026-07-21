@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"runtime"
 
 	addrunner "github.com/mianm12/dotfiles/internal/add"
 	"github.com/mianm12/dotfiles/internal/manifest"
@@ -106,7 +105,7 @@ func runAdd(command *cobra.Command, options addOptions, env environment) error {
 		if err != nil {
 			return classifyAddError(command, err)
 		}
-		projection, err := projectAddPlan(plan, addOS(env), true)
+		projection, err := projectAddPlan(plan, true)
 		if err != nil {
 			return err
 		}
@@ -130,7 +129,7 @@ func runAdd(command *cobra.Command, options addOptions, env environment) error {
 	if runErr == nil && addOutcomesIncomplete(result.Outcomes()) {
 		return fmt.Errorf("%w: runner returned incomplete outcomes without an error", addrunner.ErrExecutionProtocol)
 	}
-	projection, err := projectAddResult(result, addOS(env))
+	projection, err := projectAddResult(result)
 	if err != nil {
 		return errors.Join(runErr, err)
 	}
@@ -158,7 +157,7 @@ func classifyAddError(command *cobra.Command, err error) error {
 	return commandExit(exitConflict)
 }
 
-func projectAddPlan(plan addrunner.BatchPlan, goos string, dryRun bool) (addProjection, error) {
+func projectAddPlan(plan addrunner.BatchPlan, dryRun bool) (addProjection, error) {
 	items := plan.Items()
 	if !plan.Valid() || len(items) == 0 {
 		return addProjection{}, fmt.Errorf("%w: add projection received an invalid plan", addrunner.ErrExecutionProtocol)
@@ -170,7 +169,7 @@ func projectAddPlan(plan addrunner.BatchPlan, goos string, dryRun bool) (addProj
 		exitCode = exitActionable
 	}
 	projection := addProjection{
-		contextLine: fmt.Sprintf("repo=%s profile=%s os=%s", plan.Repository(), plan.Profile(), goos),
+		contextLine: fmt.Sprintf("repo=%s profile=%s os=%s", plan.Repository(), plan.Profile(), plan.GOOS()),
 		actions:     make([]string, 0, len(items)),
 		exitCode:    exitCode,
 	}
@@ -187,7 +186,7 @@ func projectAddPlan(plan addrunner.BatchPlan, goos string, dryRun bool) (addProj
 	return projection, nil
 }
 
-func projectAddResult(result addrunner.Result, goos string) (addProjection, error) {
+func projectAddResult(result addrunner.Result) (addProjection, error) {
 	if !result.Valid() {
 		return addProjection{}, fmt.Errorf("%w: add projection received an invalid result", addrunner.ErrExecutionProtocol)
 	}
@@ -195,7 +194,7 @@ func projectAddResult(result addrunner.Result, goos string) (addProjection, erro
 	items := plan.Items()
 	outcomes := result.Outcomes()
 	projection := addProjection{
-		contextLine: fmt.Sprintf("repo=%s profile=%s os=%s", plan.Repository(), plan.Profile(), goos),
+		contextLine: fmt.Sprintf("repo=%s profile=%s os=%s", plan.Repository(), plan.Profile(), plan.GOOS()),
 		actions:     make([]string, 0, len(items)),
 		exitCode:    exitOK,
 	}
@@ -247,11 +246,4 @@ func printAddProjection(command *cobra.Command, projection addProjection) {
 	for _, notice := range projection.notices {
 		command.PrintErrf("notice: %s\n", notice)
 	}
-}
-
-func addOS(env environment) string {
-	if env.goos != "" {
-		return env.goos
-	}
-	return runtime.GOOS
 }

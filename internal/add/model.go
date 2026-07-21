@@ -109,6 +109,7 @@ type BatchPlan struct {
 	profile          string
 	home             string
 	repository       string
+	goos             string
 	developmentBuild bool
 	items            []ItemPlan
 	seal             *validationSeal
@@ -117,7 +118,7 @@ type BatchPlan struct {
 // Valid 报告计划是否由成功的完整 batch preflight sealed。
 func (plan BatchPlan) Valid() bool {
 	if plan.seal != successfulPreflightSeal || plan.profile == "" || plan.home == "" ||
-		plan.repository == "" || len(plan.items) == 0 {
+		plan.repository == "" || plan.goos == "" || len(plan.items) == 0 {
 		return false
 	}
 	for _, item := range plan.items {
@@ -137,6 +138,9 @@ func (plan BatchPlan) Home() string { return plan.home }
 // Repository 返回 effective repository path。
 func (plan BatchPlan) Repository() string { return plan.repository }
 
+// GOOS 返回 preflight 实际采用的平台。
+func (plan BatchPlan) GOOS() string { return plan.goos }
+
 // DevelopmentBuild 报告 strict runtime 是否按开发构建规则跳过版本大小比较。
 func (plan BatchPlan) DevelopmentBuild() bool { return plan.Valid() && plan.developmentBuild }
 
@@ -148,14 +152,18 @@ func (plan BatchPlan) Items() []ItemPlan {
 	return cloneItems(plan.items)
 }
 
-func sealBatchPlan(profile, home, repository string, developmentBuild bool, items []ItemPlan) BatchPlan {
+func sealBatchPlan(
+	profile, home, repository, goos string,
+	developmentBuild bool,
+	items []ItemPlan,
+) BatchPlan {
 	sealed := cloneItems(items)
 	for index := range sealed {
 		sealed[index].snapshot.seal = successfulPreflightSeal
 		sealed[index].seal = successfulPreflightSeal
 	}
 	return BatchPlan{
-		profile: profile, home: home, repository: repository, developmentBuild: developmentBuild,
+		profile: profile, home: home, repository: repository, goos: goos, developmentBuild: developmentBuild,
 		items: sealed, seal: successfulPreflightSeal,
 	}
 }

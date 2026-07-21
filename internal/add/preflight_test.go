@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestPreflight_LinkPlanIsSelfContainedAndReadOnly(t *testing.T) {
 		t.Fatalf("Preflight() error = %v", err)
 	}
 	if plan.Profile() != "base" || plan.Home() != fixture.home || plan.Repository() != fixture.repo ||
-		!plan.DevelopmentBuild() || len(plan.Items()) != 1 {
+		plan.GOOS() != runtime.GOOS || !plan.DevelopmentBuild() || len(plan.Items()) != 1 {
 		t.Fatalf("Preflight() plan = %#v", plan)
 	}
 	item := plan.Items()[0]

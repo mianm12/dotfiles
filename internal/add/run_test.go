@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -565,7 +566,7 @@ func newRunSeam(t *testing.T, fixture *addFixture, items []ItemPlan) runSeam {
 	t.Helper()
 	loaded := &runSeamLoaded{loaded: fixture.load(t), controlPath: fixture.control}
 	session := &runSeamSession{loaded: loaded}
-	plan := sealBatchPlan("base", fixture.home, fixture.repo, false, items)
+	plan := sealBatchPlan("base", fixture.home, fixture.repo, runtime.GOOS, false, items)
 	return runSeam{
 		loaded: loaded,
 		operations: addRunOperations{
