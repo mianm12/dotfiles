@@ -126,7 +126,7 @@ func runAdd(command *cobra.Command, options addOptions, env environment) error {
 		}
 		return fmt.Errorf("%w: runner returned an invalid result without an error", addrunner.ErrExecutionProtocol)
 	}
-	if runErr == nil && addOutcomesIncomplete(result.Outcomes()) {
+	if runErr == nil && addExecutionIncomplete(result.StateCommitted(), result.Outcomes()) {
 		return fmt.Errorf("%w: runner returned incomplete outcomes without an error", addrunner.ErrExecutionProtocol)
 	}
 	projection, err := projectAddResult(result)
@@ -140,7 +140,10 @@ func runAdd(command *cobra.Command, options addOptions, env environment) error {
 	return commandExit(projection.exitCode)
 }
 
-func addOutcomesIncomplete(outcomes []addrunner.ItemOutcome) bool {
+func addExecutionIncomplete(stateCommitted bool, outcomes []addrunner.ItemOutcome) bool {
+	if !stateCommitted {
+		return true
+	}
 	for _, outcome := range outcomes {
 		if outcome.Status != addrunner.OutcomeSucceeded {
 			return true

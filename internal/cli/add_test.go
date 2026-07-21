@@ -43,6 +43,31 @@ func TestAdd_RequiresPathsAndRejectsModesBeforeRuntime(t *testing.T) {
 	}
 }
 
+func TestAdd_CommandAndFlagsAreRegistered(t *testing.T) {
+	root, err := newRootCommand(environment{})
+	if err != nil {
+		t.Fatalf("newRootCommand() error = %v", err)
+	}
+	command, _, err := root.Find([]string{"add"})
+	if err != nil || command == root {
+		t.Fatalf("root.Find(add) = command %v, error %v", command, err)
+	}
+	for _, test := range []struct {
+		name      string
+		shorthand string
+	}{
+		{name: moduleFlagName, shorthand: "m"},
+		{name: templateFlagName},
+		{name: scaffoldFlagName},
+		{name: dryRunFlagName, shorthand: "n"},
+	} {
+		flag := command.Flags().Lookup(test.name)
+		if flag == nil || flag.Shorthand != test.shorthand {
+			t.Errorf("add flag %q = %#v, want shorthand %q", test.name, flag, test.shorthand)
+		}
+	}
+}
+
 func TestAdd_InvalidResultWithoutErrorFailsClosed(t *testing.T) {
 	stdout, stderr, code := runInjectedAdd(t, []string{"add", "/input"}, func(addrunner.RunOptions) (addrunner.Result, error) {
 		return addrunner.Result{}, nil
@@ -52,20 +77,21 @@ func TestAdd_InvalidResultWithoutErrorFailsClosed(t *testing.T) {
 	}
 }
 
-func TestAddResultIncomplete_RequiresEveryOutcomeToSucceed(t *testing.T) {
+func TestAddExecutionIncomplete_RequiresStateAndEveryOutcome(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		outcomes []addrunner.ItemOutcome
-		want     bool
+		name           string
+		stateCommitted bool
+		outcomes       []addrunner.ItemOutcome
+		want           bool
 	}{
-		{name: "empty"},
-		{name: "succeeded", outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeSucceeded}}},
-		{name: "failed", outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeFailed}}, want: true},
-		{name: "deferred", outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeDeferred}}, want: true},
+		{name: "state missing", outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeSucceeded}}, want: true},
+		{name: "succeeded", stateCommitted: true, outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeSucceeded}}},
+		{name: "failed", stateCommitted: true, outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeFailed}}, want: true},
+		{name: "deferred", stateCommitted: true, outcomes: []addrunner.ItemOutcome{{Status: addrunner.OutcomeDeferred}}, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := addOutcomesIncomplete(test.outcomes); got != test.want {
-				t.Fatalf("addOutcomesIncomplete() = %t, want %t", got, test.want)
+			if got := addExecutionIncomplete(test.stateCommitted, test.outcomes); got != test.want {
+				t.Fatalf("addExecutionIncomplete() = %t, want %t", got, test.want)
 			}
 		})
 	}
