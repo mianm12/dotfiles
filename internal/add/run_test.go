@@ -123,7 +123,7 @@ func TestRun_PartialSuccessCommitsPrefixOnce(t *testing.T) {
 	seam.operations.execute = func(_ paths.ControlPlanePaths, item ItemPlan) (linkItemResult, error) {
 		if item.Target() == items[0].Target() {
 			return linkItemResult{
-				item: item, sourcePublished: true, targetCommitted: true, seal: successfulLinkExecutionSeal,
+				item: item, sourcePublished: true, stateReady: true, targetCommitted: true, seal: successfulLinkExecutionSeal,
 			}, nil
 		}
 		return linkItemResult{item: item, seal: successfulLinkExecutionSeal}, injected
@@ -248,6 +248,212 @@ func TestRun_ResumesEquivalentSourcePublishedBeforeTargetCommit(t *testing.T) {
 	}
 }
 
+func TestRun_ScaffoldCommitsStateWithoutTargetMutationAndApplyStaysConverged(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o644)
+	before, _ := os.Lstat(target)
+	options := fixture.runOptions(target)
+	options.Request.Mode = ModeScaffold
+
+	result, err := Run(options)
+	if err != nil || !result.Valid() || result.TargetCommits() != 0 || !result.StateCommitted() ||
+		result.Outcomes()[0].Status != OutcomeSucceeded {
+		t.Fatalf("Run(scaffold) = (%#v, %v)", result, err)
+	}
+	item := result.Plan().Items()[0]
+	after, _ := os.Lstat(target)
+	if !os.SameFile(before, after) {
+		t.Fatal("scaffold Run changed target identity")
+	}
+	assertRegularFile(t, target, "content", 0o644)
+	assertRegularFile(t, item.SourcePath(), "content", 0o644)
+	snapshot, ok := fixture.load(t).State().Snapshot()
+	entry, exists := snapshot.Entry(item.Target())
+	if !ok || !exists || entry.Kind() != state.KindScaffold || entry.LinkDest() != "" {
+		t.Fatalf("scaffold state entry = (%#v, %t, %t)", entry, ok, exists)
+	}
+	for run := 0; run < 2; run++ {
+		converged, applyErr := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
+		if applyErr != nil || converged.TargetCommits != 0 || converged.AdoptionEffects != 0 || converged.StateCommitted {
+			t.Fatalf("apply run %d = (%#v, %v), want no mutation/adopt", run+1, converged, applyErr)
+		}
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
+	if err != nil || deleted.TargetCommits != 0 || deleted.AdoptionEffects != 0 {
+		t.Fatalf("apply(deleted scaffold) = (%#v, %v)", deleted, err)
+	}
+	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("deleted scaffold target was rebuilt: %v", statErr)
+	}
+}
+
+func TestRun_ScaffoldStateStoreFailurePreservesSourceForS1bRecovery(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o644)
+	options := fixture.runOptions(target)
+	options.Request.Mode = ModeScaffold
+	injected := errors.New("store failed")
+	operations := defaultAddRunOperations()
+	operations.begin = func(overrides dotruntime.Overrides) (addMutationSession, error) {
+		session, err := dotruntime.BeginMutationWithStateStore(overrides, func(string, string, state.Snapshot) error {
+			return injected
+		})
+		if err != nil {
+			return nil, err
+		}
+		return runtimeAddMutationSession{session: session}, nil
+	}
+
+	result, err := runWithOperations(options, operations)
+	if !errors.Is(err, injected) || !result.Valid() || result.StateCommitted() ||
+		result.TargetCommits() != 0 || result.Outcomes()[0].Status != OutcomeFailed {
+		t.Fatalf("runWithOperations(scaffold store failure) = (%#v, %v)", result, err)
+	}
+	item := result.Plan().Items()[0]
+	assertRegularFile(t, target, "content", 0o644)
+	assertRegularFile(t, item.SourcePath(), "content", 0o644)
+	recovered, err := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
+	if err != nil || recovered.AdoptionEffects != 1 || recovered.TargetCommits != 0 || !recovered.StateCommitted {
+		t.Fatalf("apply S1b recovery = (%#v, %v)", recovered, err)
+	}
+	converged, err := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
+	if err != nil || converged.AdoptionEffects != 0 || converged.TargetCommits != 0 || converged.StateCommitted {
+		t.Fatalf("second apply = (%#v, %v)", converged, err)
+	}
+}
+
+func TestRun_TemplateRejectedBeforeMutationBegin(t *testing.T) {
+	beginCalled := false
+	operations := addRunOperations{
+		begin: func(dotruntime.Overrides) (addMutationSession, error) {
+			beginCalled = true
+			return nil, nil
+		},
+		preflight: func(dotruntime.LoadedInputs, Request) (BatchPlan, error) { return BatchPlan{}, nil },
+		execute:   func(paths.ControlPlanePaths, ItemPlan) (linkItemResult, error) { return linkItemResult{}, nil },
+		now:       time.Now,
+	}
+	result, err := runWithOperations(RunOptions{Request: Request{Mode: ModeTemplate}}, operations)
+	if !errors.Is(err, ErrTemplateUnsupported) || result.Valid() || beginCalled {
+		t.Fatalf("runWithOperations(template) = (%#v, %v), beginCalled=%t", result, err, beginCalled)
+	}
+}
+
+func TestRun_ScaffoldPartialSuccessCommitsOnlyPreparedPrefix(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	firstTarget := fixture.writeTarget(t, "a", "first", 0o644)
+	secondTarget := fixture.writeTarget(t, "b", "second", 0o644)
+	options := fixture.runOptions(firstTarget, secondTarget)
+	options.Request.Mode = ModeScaffold
+	operations := defaultAddRunOperations()
+	injected := errors.New("second scaffold failed")
+	executions := 0
+	operations.execute = func(control paths.ControlPlanePaths, item ItemPlan) (linkItemResult, error) {
+		executions++
+		if executions == 2 {
+			return linkItemResult{item: item, seal: successfulLinkExecutionSeal}, injected
+		}
+		return executeScaffoldItem(control, item, defaultPublicationOperations())
+	}
+
+	result, err := runWithOperations(options, operations)
+	if !errors.Is(err, injected) || !result.Valid() || result.Attempts() != 2 || result.TargetCommits() != 0 ||
+		!result.StateCommitted() || result.Outcomes()[0].Status != OutcomeSucceeded ||
+		result.Outcomes()[1].Status != OutcomeFailed {
+		t.Fatalf("runWithOperations(partial scaffold) = (%#v, %v)", result, err)
+	}
+	items := result.Plan().Items()
+	assertRegularFile(t, items[0].SourcePath(), "first", 0o644)
+	if _, statErr := os.Lstat(items[1].SourcePath()); !os.IsNotExist(statErr) {
+		t.Fatalf("failed suffix source Lstat() error = %v, want missing", statErr)
+	}
+	snapshot, ok := fixture.load(t).State().Snapshot()
+	if !ok {
+		t.Fatal("state snapshot missing")
+	}
+	if _, exists := snapshot.Entry(items[0].Target()); !exists {
+		t.Fatal("prepared scaffold prefix missing from state")
+	}
+	if _, exists := snapshot.Entry(items[1].Target()); exists {
+		t.Fatal("failed scaffold suffix appeared in state")
+	}
+}
+
+func TestRun_ScaffoldRevalidatesTargetImmediatelyBeforeStateCommit(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o644)
+	options := fixture.runOptions(target)
+	options.Request.Mode = ModeScaffold
+	operations := defaultAddRunOperations()
+	realRevalidate := operations.revalidateScaffold
+	operations.revalidateScaffold = func(control paths.ControlPlanePaths, item ItemPlan, result linkItemResult) error {
+		replacement := filepath.Join(fixture.home, "replacement-before-state")
+		writeAddFile(t, replacement, "content", 0o644)
+		if err := os.Rename(replacement, target); err != nil {
+			return err
+		}
+		return realRevalidate(control, item, result)
+	}
+
+	result, err := runWithOperations(options, operations)
+	if err == nil || !result.Valid() || result.StateCommitted() || result.Outcomes()[0].Status != OutcomeFailed {
+		t.Fatalf("runWithOperations(final target change) = (%#v, %v)", result, err)
+	}
+	item := result.Plan().Items()[0]
+	if _, statErr := os.Lstat(item.SourcePath()); !os.IsNotExist(statErr) {
+		t.Fatalf("uncommitted source Lstat() error = %v, want missing", statErr)
+	}
+	if _, statErr := os.Lstat(fixture.control.StateFile()); !os.IsNotExist(statErr) {
+		t.Fatalf("state file Lstat() error = %v, want missing", statErr)
+	}
+	assertRegularFile(t, target, "content", 0o644)
+}
+
+func TestRun_ScaffoldExecutorProtocolViolationsFailClosed(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o644)
+	plan, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeScaffold})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := plan.Items()[0]
+	valid, err := executeScaffoldItem(fixture.control, item, defaultPublicationOperations())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		result linkItemResult
+	}{
+		{name: "zero", result: linkItemResult{}},
+		{name: "state ready without evidence", result: linkItemResult{
+			item: item, sourcePublished: true, stateReady: true, seal: successfulLinkExecutionSeal,
+		}},
+		{name: "contradictory target commit", result: func() linkItemResult {
+			contradictory := valid
+			contradictory.targetCommitted = true
+			return contradictory
+		}()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			seam := newRunSeam(t, fixture, []ItemPlan{item})
+			seam.operations.revalidateScaffold = func(paths.ControlPlanePaths, ItemPlan, linkItemResult) error { return nil }
+			seam.operations.cleanupScaffold = func(linkItemResult) error { return nil }
+			seam.operations.execute = func(paths.ControlPlanePaths, ItemPlan) (linkItemResult, error) {
+				return test.result, nil
+			}
+			result, runErr := runWithOperations(RunOptions{Request: Request{Mode: ModeScaffold}}, seam.operations)
+			if !errors.Is(runErr, ErrExecutionProtocol) || result.Valid() || seam.loaded.commitCalls != 0 {
+				t.Fatalf("runWithOperations() = (%#v, %v), commits=%d", result, runErr, seam.loaded.commitCalls)
+			}
+		})
+	}
+}
+
 type runSeam struct {
 	operations addRunOperations
 	loaded     *runSeamLoaded
@@ -291,7 +497,7 @@ func newRunSeam(t *testing.T, fixture *addFixture, items []ItemPlan) runSeam {
 			begin:     func(dotruntime.Overrides) (addMutationSession, error) { return session, nil },
 			preflight: func(dotruntime.LoadedInputs, Request) (BatchPlan, error) { return plan, nil },
 			execute: func(_ paths.ControlPlanePaths, item ItemPlan) (linkItemResult, error) {
-				return linkItemResult{item: item, sourcePublished: true, targetCommitted: true, seal: successfulLinkExecutionSeal}, nil
+				return linkItemResult{item: item, sourcePublished: true, stateReady: true, targetCommitted: true, seal: successfulLinkExecutionSeal}, nil
 			},
 			now: func() time.Time { return time.Date(2026, 7, 22, 1, 2, 3, 0, time.UTC) },
 		},

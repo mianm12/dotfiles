@@ -27,7 +27,7 @@ type RunOptions struct {
 type OutcomeStatus string
 
 const (
-	// OutcomeSucceeded 表示 target 已越过提交点；即使后续 cleanup/state 失败也保持成功事实。
+	// OutcomeSucceeded 表示 item 已越过其提交点；link 为 target 替换，scaffold 为 state 提交。
 	OutcomeSucceeded OutcomeStatus = "succeeded"
 	// OutcomeFailed 表示 item 在 target 提交点前失败。
 	OutcomeFailed OutcomeStatus = "failed"
@@ -62,10 +62,11 @@ func (result Result) Valid() bool {
 	items := result.plan.Items()
 	if result.seal != successfulRunResultSeal || !result.plan.Valid() || len(result.outcomes) != len(items) ||
 		result.attempts < 0 || result.attempts > len(items) || result.sourcePublications < result.targetCommits ||
-		result.sourcePublications > result.attempts || result.targetCommits > result.attempts ||
-		(result.stateCommitted && result.targetCommits == 0) {
+		result.sourcePublications > result.attempts || result.targetCommits > result.attempts {
 		return false
 	}
+	succeeded := 0
+	scaffoldSucceeded := 0
 	for index, outcome := range result.outcomes {
 		if outcome.Index != index || outcome.Target != items[index].Target() {
 			return false
@@ -82,6 +83,17 @@ func (result Result) Valid() bool {
 		default:
 			return false
 		}
+		if outcome.Status == OutcomeSucceeded {
+			succeeded++
+			if items[index].Kind() == manifest.FileKindScaffold {
+				scaffoldSucceeded++
+			}
+		}
+	}
+	if result.targetCommits > succeeded || (result.stateCommitted && succeeded == 0) ||
+		(scaffoldSucceeded > 0 && !result.stateCommitted) ||
+		(len(items) > 0 && items[0].Kind() == manifest.FileKindScaffold && result.targetCommits != 0) {
+		return false
 	}
 	return true
 }
@@ -127,19 +139,24 @@ type addLoadedMutation interface {
 }
 
 type addRunOperations struct {
-	begin     func(dotruntime.Overrides) (addMutationSession, error)
-	preflight func(dotruntime.LoadedInputs, Request) (BatchPlan, error)
-	execute   func(paths.ControlPlanePaths, ItemPlan) (linkItemResult, error)
-	now       func() time.Time
+	begin              func(dotruntime.Overrides) (addMutationSession, error)
+	preflight          func(dotruntime.LoadedInputs, Request) (BatchPlan, error)
+	execute            func(paths.ControlPlanePaths, ItemPlan) (linkItemResult, error)
+	revalidateScaffold func(paths.ControlPlanePaths, ItemPlan, linkItemResult) error
+	cleanupScaffold    func(linkItemResult) error
+	now                func() time.Time
 }
 
-// Run 在一个 mutation lock 周期内完成 strict load、exact-input batch preflight、link 执行与
-// 成功前缀单次 state 提交。它不连接 CLI，也不实现 scaffold/template。
+// Run 在一个 mutation lock 周期内完成 strict load、exact-input batch preflight、link/scaffold
+// 执行与成功前缀单次 state 提交。它不连接 CLI，也不实现 managed/template。
 func Run(options RunOptions) (Result, error) {
 	return runWithOperations(options, defaultAddRunOperations())
 }
 
 func runWithOperations(options RunOptions, operations addRunOperations) (result Result, resultErr error) {
+	if options.Request.Mode == ModeTemplate {
+		return Result{}, ErrTemplateUnsupported
+	}
 	if operations.begin == nil || operations.preflight == nil || operations.execute == nil || operations.now == nil {
 		return Result{}, fmt.Errorf("%w: runner operations are incomplete", ErrExecutionProtocol)
 	}
@@ -169,10 +186,18 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 	if !plan.Valid() || len(items) == 0 {
 		return Result{}, fmt.Errorf("%w: preflight returned an invalid batch plan", ErrExecutionProtocol)
 	}
+	expectedKind, kindErr := requestedKind(options.Request.Mode)
+	if kindErr != nil {
+		return Result{}, errors.Join(kindErr, fmt.Errorf("%w: request mode has no executable M1 kind", ErrExecutionProtocol))
+	}
 	for index, item := range items {
-		if !item.Valid() || item.Kind() != manifest.FileKindLink {
-			return Result{}, fmt.Errorf("%w: plan item %d is not a validated link", ErrExecutionProtocol, index)
+		if !item.Valid() || item.Kind() != expectedKind {
+			return Result{}, fmt.Errorf("%w: plan item %d does not match request kind %q", ErrExecutionProtocol, index, expectedKind)
 		}
+	}
+	if expectedKind == manifest.FileKindScaffold &&
+		(operations.revalidateScaffold == nil || operations.cleanupScaffold == nil) {
+		return Result{}, fmt.Errorf("%w: scaffold commit operations are incomplete", ErrExecutionProtocol)
 	}
 	result = Result{plan: plan, outcomes: make([]ItemOutcome, len(items)), seal: successfulRunResultSeal}
 	for index, item := range items {
@@ -180,11 +205,14 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 	}
 
 	updates := make([]state.EntryUpdate, 0, len(items))
+	preparedScaffolds := make([]int, 0, len(items))
+	executions := make([]linkItemResult, len(items))
 	protocolViolation := false
 	for index, item := range items {
 		result.attempts++
 		execution, executeErr := operations.execute(mutation.control(), item)
-		committed, protocolErr := validateLinkExecutionResult(item, execution, executeErr)
+		executions[index] = execution
+		stateReady, protocolErr := validateItemExecutionResult(item, execution, executeErr)
 		if protocolErr != nil {
 			protocolViolation = true
 			resultErr = fmt.Errorf(
@@ -198,23 +226,51 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 		if execution.sourcePublished {
 			result.sourcePublications++
 		}
-		if committed {
-			result.targetCommits++
-			result.outcomes[index].Status = OutcomeSucceeded
-			updates = append(updates, state.EntryUpdate{
+		if stateReady {
+			update := state.EntryUpdate{
 				Key:       item.Target(),
 				Module:    item.Module(),
-				Kind:      state.KindSymlink,
 				Source:    path.Join("modules", item.Module(), item.Source()),
-				LinkDest:  item.SourcePath(),
 				AppliedAt: operations.now().UTC().Format(time.RFC3339Nano),
-			})
+			}
+			switch item.Kind() {
+			case manifest.FileKindLink:
+				result.targetCommits++
+				result.outcomes[index].Status = OutcomeSucceeded
+				update.Kind = state.KindSymlink
+				update.LinkDest = item.SourcePath()
+			case manifest.FileKindScaffold:
+				// scaffold 只有 state Store 成功后才越过提交点；此前保持 failed 投影。
+				result.outcomes[index].Status = OutcomeFailed
+				update.Kind = state.KindScaffold
+				preparedScaffolds = append(preparedScaffolds, index)
+			}
+			updates = append(updates, update)
 		} else {
 			result.outcomes[index].Status = OutcomeFailed
 		}
 		if executeErr != nil {
 			resultErr = fmt.Errorf("execute add link item %d for %q: %w", index, item.Target(), executeErr)
 			break
+		}
+	}
+	if len(preparedScaffolds) > 0 {
+		validPrepared := len(preparedScaffolds)
+		for position, index := range preparedScaffolds {
+			if err := operations.revalidateScaffold(mutation.control(), items[index], executions[index]); err != nil {
+				validPrepared = position
+				resultErr = errors.Join(resultErr, fmt.Errorf(
+					"revalidate add scaffold item %d for state commit: %w", index, err,
+				))
+				break
+			}
+		}
+		if validPrepared < len(preparedScaffolds) {
+			for _, index := range preparedScaffolds[validPrepared:] {
+				resultErr = errors.Join(resultErr, operations.cleanupScaffold(executions[index]))
+			}
+			preparedScaffolds = preparedScaffolds[:validPrepared]
+			updates = updates[:validPrepared]
 		}
 	}
 
@@ -242,6 +298,9 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 			return result, resultErr
 		}
 		result.stateCommitted = true
+		for _, index := range preparedScaffolds {
+			result.outcomes[index].Status = OutcomeSucceeded
+		}
 	}
 	if protocolViolation {
 		return Result{}, resultErr
@@ -252,7 +311,7 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 	return result, resultErr
 }
 
-func validateLinkExecutionResult(
+func validateItemExecutionResult(
 	expected ItemPlan,
 	result linkItemResult,
 	executeErr error,
@@ -260,13 +319,28 @@ func validateLinkExecutionResult(
 	if !result.Valid() || !sameItemPlan(expected, result.item) {
 		return false, fmt.Errorf("%w: executor returned an invalid or mismatched item result", ErrExecutionProtocol)
 	}
-	if result.targetCommitted && !result.sourcePublished {
-		return false, fmt.Errorf("%w: target commit lacks a published source", ErrExecutionProtocol)
+	if result.stateReady && !result.sourcePublished {
+		return false, fmt.Errorf("%w: state-ready item lacks a published source", ErrExecutionProtocol)
 	}
-	if executeErr == nil && !result.targetCommitted {
-		return false, fmt.Errorf("%w: executor returned nil error without target commit", ErrExecutionProtocol)
+	if result.targetCommitted && !result.stateReady {
+		return false, fmt.Errorf("%w: target commit lacks a state-ready effect", ErrExecutionProtocol)
 	}
-	return result.targetCommitted, nil
+	switch expected.Kind() {
+	case manifest.FileKindLink:
+		if result.stateReady != result.targetCommitted {
+			return false, fmt.Errorf("%w: link state effect does not match target commit", ErrExecutionProtocol)
+		}
+	case manifest.FileKindScaffold:
+		if result.targetCommitted {
+			return false, fmt.Errorf("%w: scaffold executor reported a target commit", ErrExecutionProtocol)
+		}
+	default:
+		return false, fmt.Errorf("%w: unsupported executable item kind %q", ErrExecutionProtocol, expected.Kind())
+	}
+	if executeErr == nil && !result.stateReady {
+		return false, fmt.Errorf("%w: executor returned nil error without state-ready effect", ErrExecutionProtocol)
+	}
+	return result.stateReady, nil
 }
 
 func sameItemPlan(left, right ItemPlan) bool {
@@ -329,7 +403,20 @@ func defaultAddRunOperations() addRunOperations {
 		},
 		preflight: Preflight,
 		execute: func(control paths.ControlPlanePaths, item ItemPlan) (linkItemResult, error) {
-			return executeLinkItem(control, item, defaultLinkOperations())
+			switch item.Kind() {
+			case manifest.FileKindLink:
+				return executeLinkItem(control, item, defaultLinkOperations())
+			case manifest.FileKindScaffold:
+				return executeScaffoldItem(control, item, defaultPublicationOperations())
+			default:
+				return linkItemResult{}, fmt.Errorf("%w: unsupported add item kind %q", ErrExecutionProtocol, item.Kind())
+			}
+		},
+		revalidateScaffold: func(control paths.ControlPlanePaths, item ItemPlan, result linkItemResult) error {
+			return revalidateScaffoldStatePrecondition(control, item, result, defaultPublicationOperations())
+		},
+		cleanupScaffold: func(result linkItemResult) error {
+			return cleanupUncommittedScaffold(result, defaultPublicationOperations())
 		},
 		now: time.Now,
 	}

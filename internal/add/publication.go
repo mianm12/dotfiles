@@ -93,8 +93,8 @@ func defaultPublicationOperations() publicationOperations {
 }
 
 func publishSource(item ItemPlan, operations publicationOperations) (sourcePublication, error) {
-	if !item.Valid() || item.Kind() != manifest.FileKindLink {
-		return sourcePublication{}, fmt.Errorf("add source publication requires a validated link item")
+	if !item.Valid() || (item.Kind() != manifest.FileKindLink && item.Kind() != manifest.FileKindScaffold) {
+		return sourcePublication{}, fmt.Errorf("add source publication requires a validated link or scaffold item")
 	}
 	if err := validatePublicationOperations(operations); err != nil {
 		return sourcePublication{}, err

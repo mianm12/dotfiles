@@ -33,13 +33,22 @@ var successfulLinkExecutionSeal = &linkExecutionSeal{}
 type linkItemResult struct {
 	item            ItemPlan
 	sourcePublished bool
+	stateReady      bool
 	targetCommitted bool
+	publication     sourcePublication
+	targetEvidence  addTargetEvidence
 	seal            *linkExecutionSeal
 }
 
 func (result linkItemResult) Valid() bool {
-	return result.seal == successfulLinkExecutionSeal && result.item.Valid() &&
-		(!result.targetCommitted || result.sourcePublished)
+	if result.seal != successfulLinkExecutionSeal || !result.item.Valid() ||
+		(result.stateReady && !result.sourcePublished) || (result.targetCommitted && !result.stateReady) {
+		return false
+	}
+	if result.item.Kind() == manifest.FileKindScaffold && result.stateReady {
+		return result.publication.Valid() && result.targetEvidence.info != nil
+	}
+	return true
 }
 
 func defaultLinkOperations() linkOperations {
@@ -153,6 +162,7 @@ func executeLinkItem(
 	if err := operations.rename(temporaryLink, item.targetPath); err != nil {
 		return failBeforeCommit(fmt.Errorf("commit add target symlink: %w", err), temporary)
 	}
+	result.stateReady = true
 	result.targetCommitted = true
 	if err := cleanupTargetTemporary(temporary, operations); err != nil {
 		return result, fmt.Errorf("cleanup committed add target temporary directory: %w", err)
@@ -178,7 +188,7 @@ func validateAddTarget(
 	operations publicationOperations,
 ) (addTargetEvidence, error) {
 	if _, err := paths.ValidatePathBoundaries(control, []paths.LabeledTarget{{
-		Label: "add link target " + item.target,
+		Label: "add target " + item.target,
 		Path:  item.targetPath,
 	}}); err != nil {
 		return addTargetEvidence{}, fmt.Errorf("validate target/control boundary: %w", err)
