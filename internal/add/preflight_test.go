@@ -26,13 +26,13 @@ func TestPreflight_LinkPlanIsSelfContainedAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
-	if plan.Profile != "base" || plan.Home != fixture.home || plan.Repository != fixture.repo || len(plan.Items) != 1 {
+	if plan.Profile() != "base" || plan.Home() != fixture.home || plan.Repository() != fixture.repo || len(plan.Items()) != 1 {
 		t.Fatalf("Preflight() plan = %#v", plan)
 	}
-	item := plan.Items[0]
-	if item.TargetPath != target || item.Target != "~/.config/app/config" || item.Module != "app" ||
-		item.Source != ".config/app/config" || item.SourcePath != filepath.Join(fixture.repo, "modules", "app", ".config", "app", "config") ||
-		item.Kind != manifest.FileKindLink || item.SourceExists || item.Snapshot.Mode != 0o640 || string(item.Snapshot.Content) != "content\n" {
+	item := plan.Items()[0]
+	if item.TargetPath() != target || item.Target() != "~/.config/app/config" || item.Module() != "app" ||
+		item.Source() != ".config/app/config" || item.SourcePath() != filepath.Join(fixture.repo, "modules", "app", ".config", "app", "config") ||
+		item.Kind() != manifest.FileKindLink || item.SourceExists() || item.Snapshot().Mode() != 0o640 || string(item.Snapshot().Content()) != "content\n" {
 		t.Fatalf("Preflight() item = %#v", item)
 	}
 	if after := snapshotAddTree(t, fixture.root); !reflect.DeepEqual(after, before) {
@@ -40,6 +40,46 @@ func TestPreflight_LinkPlanIsSelfContainedAndReadOnly(t *testing.T) {
 	}
 	if _, err := os.Lstat(fixture.control.StateLock()); !os.IsNotExist(err) {
 		t.Fatalf("Preflight() lock Lstat error = %v, want missing", err)
+	}
+}
+
+func TestBatchPlanSeal_ZeroForgedAndReturnedCopies(t *testing.T) {
+	var zero BatchPlan
+	if zero.Valid() || zero.Items() != nil {
+		t.Fatalf("zero BatchPlan = %#v, want invalid without items", zero)
+	}
+	forged := BatchPlan{profile: "base", home: "/home", repository: "/repo"}
+	if forged.Valid() {
+		t.Fatal("field-populated BatchPlan without successful preflight is valid")
+	}
+
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o640)
+	plan, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+	if err != nil {
+		t.Fatalf("Preflight() error = %v", err)
+	}
+	if !plan.Valid() {
+		t.Fatal("successful Preflight() returned invalid plan")
+	}
+	items := plan.Items()
+	if len(items) != 1 || !items[0].Valid() || !items[0].Snapshot().Valid() {
+		t.Fatalf("Items() = %#v, want one sealed item and snapshot", items)
+	}
+	content := items[0].Snapshot().Content()
+	content[0] = 'X'
+	items[0] = ItemPlan{}
+
+	again := plan.Items()
+	if len(again) != 1 || !again[0].Valid() || string(again[0].Snapshot().Content()) != "content" {
+		t.Fatalf("mutating accessor results changed plan: %#v", again)
+	}
+	identity, err := paths.ResolveTargetIdentity(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again[0].Snapshot().MatchesTargetIdentity(identity) {
+		t.Fatal("sealed snapshot did not preserve target identity evidence")
 	}
 }
 
@@ -54,7 +94,7 @@ func TestPreflight_ModuleInferenceUsesUniqueCandidateOrStateEvidence(t *testing.
 		if err != nil {
 			t.Fatalf("Preflight() error = %v", err)
 		}
-		if got := plan.Items[0]; got.Module != "app" || got.Source != "config" {
+		if got := plan.Items()[0]; got.Module() != "app" || got.Source() != "config" {
 			t.Fatalf("inferred item = %#v", got)
 		}
 	})
@@ -70,8 +110,8 @@ func TestPreflight_ModuleInferenceUsesUniqueCandidateOrStateEvidence(t *testing.
 		if err != nil {
 			t.Fatalf("Preflight() error = %v", err)
 		}
-		if plan.Items[0].Module != "app" {
-			t.Fatalf("inferred module = %q, want app", plan.Items[0].Module)
+		if plan.Items()[0].Module() != "app" {
+			t.Fatalf("inferred module = %q, want app", plan.Items()[0].Module())
 		}
 	})
 
@@ -182,7 +222,7 @@ func TestPreflight_RejectsInputBeforeReturningPartialPlan(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Preflight() error = %v, want containing %q", err, tt.want)
 			}
-			if len(plan.Items) != 0 {
+			if len(plan.Items()) != 0 {
 				t.Fatalf("Preflight() returned partial plan %#v", plan)
 			}
 			if after := snapshotAddTree(t, fixture.root); !reflect.DeepEqual(after, before) {
@@ -202,7 +242,7 @@ func TestPreflight_SourceVariantsAndEquivalentRetry(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Preflight() error = %v", err)
 		}
-		if !plan.Items[0].SourceExists {
+		if !plan.Items()[0].SourceExists() {
 			t.Fatal("equivalent source was not marked reusable")
 		}
 	})
@@ -303,7 +343,7 @@ mode = "0600"`})
 		if err != nil {
 			t.Fatalf("Preflight() error = %v", err)
 		}
-		if item := plan.Items[0]; item.Kind != manifest.FileKindScaffold || item.Source != "config.template" {
+		if item := plan.Items()[0]; item.Kind() != manifest.FileKindScaffold || item.Source() != "config.template" {
 			t.Fatalf("scaffold item = %#v", item)
 		}
 	})

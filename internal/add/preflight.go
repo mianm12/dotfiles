@@ -88,7 +88,7 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 		if err != nil {
 			return BatchPlan{}, err
 		}
-		if err := rejectExistingState(inputs.State(), home, input.targetPath, snapshot.Identity); err != nil {
+		if err := rejectExistingState(inputs.State(), home, input.targetPath, snapshot.identity); err != nil {
 			return BatchPlan{}, err
 		}
 		inputsToPlan = append(inputsToPlan, inputSnapshot{
@@ -107,9 +107,9 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 		repositorySource := filepath.ToSlash(filepath.Join("modules", candidate.Module, filepath.FromSlash(candidate.Source)))
 		provisional = append(provisional, provisionalItem{
 			plan: ItemPlan{
-				Target: input.target, TargetPath: input.targetPath, Module: candidate.Module,
-				Source: candidate.Source, SourcePath: sourcePath, Kind: kind,
-				Snapshot: input.snapshot,
+				target: input.target, targetPath: input.targetPath, module: candidate.Module,
+				source: candidate.Source, sourcePath: sourcePath, kind: kind,
+				snapshot: input.snapshot,
 			},
 			repositorySource: repositorySource,
 		})
@@ -123,7 +123,7 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 	prospective := make([]manifest.ProspectiveSource, 0, len(provisional))
 	gitEnv := gitEnvironment(operations.environ(), home)
 	for _, candidate := range provisional {
-		sourceExists, err := validateSourceVariants(candidate.plan.SourcePath, candidate.plan.Snapshot)
+		sourceExists, err := validateSourceVariants(candidate.plan.sourcePath, candidate.plan.snapshot)
 		if err != nil {
 			return BatchPlan{}, err
 		}
@@ -132,11 +132,11 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 		}
 		if !sourceExists {
 			prospective = append(prospective, manifest.ProspectiveSource{
-				Module: candidate.plan.Module, Source: candidate.plan.Source,
-				Content: candidate.plan.Snapshot.Content, Mode: candidate.plan.Snapshot.Mode,
+				Module: candidate.plan.module, Source: candidate.plan.source,
+				Content: candidate.plan.snapshot.content, Mode: candidate.plan.snapshot.mode,
 			})
 		}
-		candidate.plan.SourceExists = sourceExists
+		candidate.plan.sourceExists = sourceExists
 		items = append(items, candidate.plan)
 	}
 	validated, err := resolved.ValidateProspectivePathBoundaries(control, prospective)
@@ -158,11 +158,13 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 		return BatchPlan{}, err
 	}
 	slices.SortFunc(items, func(left, right ItemPlan) int {
-		return strings.Compare(left.TargetPath, right.TargetPath)
+		return strings.Compare(left.targetPath, right.targetPath)
 	})
-	return BatchPlan{
-		Profile: context.Profile(), Home: home, Repository: repositoryPath, Items: items,
-	}, nil
+	plan := sealBatchPlan(context.Profile(), home, repositoryPath, items)
+	if !plan.Valid() {
+		return BatchPlan{}, fmt.Errorf("add preflight produced an invalid sealed plan")
+	}
+	return plan, nil
 }
 
 type inputSnapshot struct {
@@ -293,7 +295,7 @@ func snapshotInput(target string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("resolve add input %q identity: %w", target, err)
 	}
-	return Snapshot{Content: content, Mode: after.Mode().Perm(), Identity: identity}, nil
+	return Snapshot{content: content, mode: after.Mode().Perm(), identity: identity}, nil
 }
 
 func rejectExistingState(loaded state.Loaded, home, target string, identity paths.TargetIdentity) error {
@@ -420,7 +422,7 @@ func validateSourceVariants(sourcePath string, input Snapshot) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("read source variant %q: %w", variant, err)
 		}
-		if !bytes.Equal(content, input.Content) || info.Mode().Perm() != input.Mode {
+		if !bytes.Equal(content, input.content) || info.Mode().Perm() != input.mode {
 			return false, fmt.Errorf("source variant %q is not equivalent to add input", variant)
 		}
 		expectedExists = true
@@ -442,28 +444,28 @@ func validateDesiredItems(items []ItemPlan, entries []manifest.DesiredEntry) err
 	for _, item := range items {
 		matches := make([]manifest.DesiredEntry, 0, 1)
 		for _, entry := range entries {
-			if entry.Module == item.Module && entry.Source == item.Source {
+			if entry.Module == item.module && entry.Source == item.source {
 				matches = append(matches, entry)
 			}
 		}
 		if len(matches) != 1 {
-			return fmt.Errorf("add candidate %s/%s produced %d desired entries; want one", item.Module, item.Source, len(matches))
+			return fmt.Errorf("add candidate %s/%s produced %d desired entries; want one", item.module, item.source, len(matches))
 		}
 		entry := matches[0]
-		if filepath.Clean(entry.TargetPath) != item.TargetPath || entry.Kind != item.Kind {
+		if filepath.Clean(entry.TargetPath) != item.targetPath || entry.Kind != item.kind {
 			return fmt.Errorf(
 				"add candidate %s/%s resolves to target %q kind %q; want %q kind %q",
-				item.Module,
-				item.Source,
+				item.module,
+				item.source,
 				entry.TargetPath,
 				entry.Kind,
-				item.TargetPath,
-				item.Kind,
+				item.targetPath,
+				item.kind,
 			)
 		}
-		if item.Kind == manifest.FileKindScaffold &&
-			(!bytes.Equal(entry.Content, item.Snapshot.Content) || entry.Mode != item.Snapshot.Mode) {
-			return fmt.Errorf("add scaffold %q rendered bytes or mode do not match input snapshot", item.TargetPath)
+		if item.kind == manifest.FileKindScaffold &&
+			(!bytes.Equal(entry.Content, item.snapshot.content) || entry.Mode != item.snapshot.mode) {
+			return fmt.Errorf("add scaffold %q rendered bytes or mode do not match input snapshot", item.targetPath)
 		}
 	}
 	return nil
