@@ -55,8 +55,8 @@ symlink模式可作为实现参照。
 
 - [x] 2026-07-22：确认分配 worktree、branch、有效 base 与 clean 状态；完整阅读执行规则、CP6
   coordinator、completed preflight 计划、相关规范和 add/runtime/state/apply/executor 实现。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 测试先行建立独立 source publication 与保守 cleanup。
+- [x] 2026-07-22：以 `5cfedca` 提交本 active ExecPlan 起点。
+- [x] 2026-07-22：测试先行建立独立 source publication 与保守 cleanup；普通窄测和格式检查通过。
 - [ ] 测试先行建立 link target 提交、最终 Precond 和可验证 per-item result。
 - [ ] 测试先行建立锁内 batch runner、成功前缀单次 state 提交与恢复。
 - [ ] 运行窄测、重复/race、完整 diff check、隔离 `make check` 与双目标交叉编译；更新证据并保持
@@ -161,13 +161,22 @@ no-clobber/cleanup 机制，不理解 manifest/ownership；runner 只消费 lock
 
 ## Surprises & Discoveries
 
-暂无。
+- Observation: add source 临时文件位于 module source parent；普通隐藏前缀本身不会被 manifest
+  内建规则排除，进程中断后可能被枚举成 desired。
+  Evidence: `docs/03-manifest-spec.md` 的内建 `*.swp` ignore 与 `internal/manifest` 正常枚举路径。
+  Impact: publication 临时名固定以 `.swp` 结尾，复用正常 manifest ignore，不增加第二套枚举例外。
 
 ## Decision Log
 
 - Decision: 保持 `add-preflight → add-link → add-scaffold` 严格串行，并在本分支先固定
   publication/result/state 成功前缀协议。
   Rationale: link 与 scaffold 共享 source/state/cleanup 安全不变量，复制实现会形成多处真相源。
+  Date: 2026-07-22
+
+- Decision: source no-clobber publication 对已经完整同步的独立临时副本使用 `link(2)`，随后摘除
+  临时名称；不 hard-link 或 rename 原 target。
+  Rationale: 该方式在 Darwin/Linux 都提供排他、不覆盖的单目录项发布，并保持 source inode 与
+  target/hard-link sibling 独立；直接 rename 缺少可移植 no-clobber 语义。
   Date: 2026-07-22
 
 ## Outcomes and Handoff
