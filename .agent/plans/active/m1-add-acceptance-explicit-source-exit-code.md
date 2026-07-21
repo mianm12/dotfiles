@@ -40,12 +40,14 @@
 
 - [x] 2026-07-22：确认 worktree、branch、effective base 与 clean 状态；定位 preflight selection
   单一真相源、CLI classifier 和现有 inference/explicit 回归。
-- [ ] 提交本 active ExecPlan 起点。
-- [ ] 先补 preflight 与 CLI 回归，证明显式 selected zero/multiple 当前误带
-  `ErrModuleAmbiguous` 并退出 3。
-- [ ] 在 preflight 单点区分 explicit mapping failure 与 inference ambiguity，形成 fix commit。
-- [ ] 运行窄测试、count 5、race、两级 diff check、隔离 `make check` 与 Darwin/Linux add/CLI
-  test binary 交叉编译；保持 active 与 worktree clean，交独立 spec/safety review。
+- [x] 2026-07-22：以 `d7726a9` 提交本 active ExecPlan 起点。
+- [x] 2026-07-22：先补 preflight 与 CLI 回归；修复前证明显式 selected zero/multiple 均误带
+  `ErrModuleAmbiguous`，CLI 打印 `conflict:` 并退出 3。
+- [x] 2026-07-22：以 `c72c3f4` 在 preflight 单点区分 explicit mapping failure 与 inference
+  ambiguity；CLI classifier 无改动。
+- [x] 2026-07-22：窄测试、三包普通测试、count 5、三包 race、两级 diff check、隔离
+  `make check` 与 Darwin/Linux amd64 add/CLI test binary 交叉编译通过。
+- [ ] 保持计划 active、worktree clean，等待未参与实现的 spec/safety 完整复核。
 
 ## Milestones
 
@@ -82,6 +84,10 @@ active，等待独立 spec/safety review。
 `make check` 使用隔离 cache 环境。额外交叉编译 Darwin/Linux amd64 的 add/CLI test binary；真实 Linux
 与远端 macOS/Linux CI 未实际运行时明确标记待验收。
 
+上述命令均已通过。隔离 `make check` 完成 tidy/format diff、0 lint issue、全仓 race、build 与
+manifest check。Darwin/Linux amd64 add/CLI test binary 交叉编译通过；真实 Linux 主机与远端
+macOS/Linux CI 未运行，远端待验收。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 的新 active plan、范围内修改、stage、commit 与验证。失败使用新
@@ -94,7 +100,14 @@ commit，不 amend/rebase/reset/cherry-pick/squash；不操作 main/其他 workt
 
 ## Surprises & Discoveries
 
-尚无。
+- Observation: 首次窄测试被默认 macOS Go build cache 的 sandbox 权限阻止，并未执行到测试逻辑。
+  Evidence: 重定向 `GOCACHE` 至 `/private/tmp` 后，修复前四个新增断言稳定失败，均显示显式分支
+  wrap `ErrModuleAmbiguous`；修复后全部通过。
+  Impact: 所有最终 Go 测试和 `make check` 均使用隔离 cache，权限失败不计为代码结果。
+- Observation: candidate 生成、排序和诊断行无需修改；唯一错误是显式与 inference 分支共享 sentinel。
+  Evidence: 修复仅移动 `ErrModuleAmbiguous` wrapping 至 `explicitModule == ""` 分支；显式 zero/multiple
+  继续输出 `candidate modules`、`requested module` 和适用的稳定 source 列表。
+  Impact: 没有新的 candidate 语义冲突，也不需要 CLI adapter 或文本分类。
 
 ## Decision Log
 
@@ -105,4 +118,10 @@ commit，不 amend/rebase/reset/cherry-pick/squash；不操作 main/其他 workt
 
 ## Outcomes and Handoff
 
-尚未完成；等待计划起点、测试、实现、验证与独立复核。
+- `c72c3f4` 让未显式 inference failure 独占 `ErrModuleAmbiguous`；显式 selected zero/multiple 返回
+  普通 mapping error，CLI 因而退出 1。
+- 显式 zero/multiple 保留稳定 module/source 诊断，不含 `specify -m` 或 control-plane 绝对路径；
+  CLI dry-run 回归确认零写入。未显式 zero/multiple inference 保持 sentinel/exit 3。
+- 所有要求的本地验证和双平台交叉编译通过；真实 Linux 主机与远端 macOS/Linux CI 待验收。
+- 计划保持 active。交回主线程安排未参与实现的 spec/safety 完整复核；finding 由主线程验证后以新
+  fix commit 处理，不重写历史。
