@@ -493,8 +493,9 @@ func candidateSelectionError(
 	}
 	if explicitModule == "" {
 		lines = append(lines, "next: specify -m <module>")
+		return fmt.Errorf("%w: %s", ErrModuleAmbiguous, strings.Join(lines, "\n"))
 	}
-	return fmt.Errorf("%w: %s", ErrModuleAmbiguous, strings.Join(lines, "\n"))
+	return errors.New(strings.Join(lines, "\n"))
 }
 
 func filterCandidates(candidates []manifest.ProspectiveCandidate, module string) []manifest.ProspectiveCandidate {

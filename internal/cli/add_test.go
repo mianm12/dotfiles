@@ -200,6 +200,50 @@ func TestAdd_DryRunIsReadOnlyAndAmbiguityExitsThree(t *testing.T) {
 			t.Fatalf("zero-candidate add changed isolated tree\nbefore=%v\nafter=%v", before, after)
 		}
 	})
+
+	t.Run("zero explicit candidates", func(t *testing.T) {
+		fixture := newAddCLIFixture(t, []string{"alpha"})
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"),
+			`target = "~/.config/app"`)
+		target := fixture.writeTarget(t, "outside", "unmapped\n")
+		before := snapshotCLITree(t, fixture.root)
+
+		stdout, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "alpha", target)
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "candidate modules: (none)") ||
+			!strings.Contains(stderr, "requested module: alpha") || strings.Contains(stderr, "conflict:") ||
+			strings.Contains(stderr, "specify -m") {
+			t.Fatalf("zero-candidate explicit add = stdout %q, stderr %q, exit %d; want ordinary error", stdout, stderr, code)
+		}
+		if strings.Contains(stderr, fixture.repository) || strings.Contains(stderr, fixture.home) {
+			t.Fatalf("zero-candidate explicit add leaked control-plane absolute path: %q", stderr)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("zero-candidate explicit add changed isolated tree\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+
+	t.Run("multiple explicit sources", func(t *testing.T) {
+		fixture := newAddCLIFixture(t, []string{"alpha"})
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"), `target = "~"
+[files.alt]
+target = "~/config"`)
+		target := fixture.writeTarget(t, "config", "ambiguous source\n")
+		before := snapshotCLITree(t, fixture.root)
+
+		stdout, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "alpha", target)
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "candidate modules: alpha") ||
+			!strings.Contains(stderr, "requested module: alpha") ||
+			!strings.Contains(stderr, `candidate sources for module "alpha": alt, config`) ||
+			strings.Contains(stderr, "conflict:") || strings.Contains(stderr, "specify -m") {
+			t.Fatalf("multiple-source explicit add = stdout %q, stderr %q, exit %d; want ordinary error", stdout, stderr, code)
+		}
+		if strings.Contains(stderr, fixture.repository) || strings.Contains(stderr, fixture.home) {
+			t.Fatalf("multiple-source explicit add leaked control-plane absolute path: %q", stderr)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("multiple-source explicit add changed isolated tree\nbefore=%v\nafter=%v", before, after)
+		}
+	})
 }
 
 func TestAdd_DevelopmentNoticeDoesNotChangeExitCode(t *testing.T) {

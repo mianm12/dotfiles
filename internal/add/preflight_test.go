@@ -135,23 +135,66 @@ func TestPreflight_ModuleInferenceUsesUniqueCandidateOrStateEvidence(t *testing.
 		}
 	})
 
+	t.Run("explicit module with no source candidate", func(t *testing.T) {
+		fixture := newAddFixture(t, map[string]string{"app": `target = "~/.config/app"`})
+		target := fixture.writeTarget(t, "outside", "x", 0o644)
+		_, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+		if err == nil || errors.Is(err, ErrModuleAmbiguous) {
+			t.Fatalf("Preflight() error = %v, want non-ambiguous explicit mapping error", err)
+		}
+		message := err.Error()
+		for _, want := range []string{`candidate modules: (none)`, `requested module: app`} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("Preflight() error = %q, want %q", message, want)
+			}
+		}
+		if strings.Contains(message, "specify -m") || strings.Contains(message, fixture.home) ||
+			strings.Contains(message, fixture.repo) {
+			t.Fatalf("Preflight() explicit mapping error has invalid guidance or leaked path: %q", message)
+		}
+	})
+
 	t.Run("one module with multiple sources", func(t *testing.T) {
 		fixture := newAddFixture(t, map[string]string{"app": `target = "~"
 [files.alt]
 target = "~/config"`})
 		target := fixture.writeTarget(t, "config", "x", 0o644)
-		_, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+		inputs := fixture.load(t)
+		_, err := Preflight(inputs, Request{Paths: []string{target}, Mode: ModeLink})
 		if !errors.Is(err, ErrModuleAmbiguous) {
 			t.Fatalf("Preflight() error = %v, want ErrModuleAmbiguous", err)
 		}
 		message := err.Error()
-		for _, want := range []string{`candidate modules: app`, `candidate sources for module "app": alt, config`} {
+		for _, want := range []string{
+			`candidate modules: app`,
+			`candidate sources for module "app": alt, config`,
+			`specify -m <module>`,
+		} {
 			if !strings.Contains(message, want) {
 				t.Fatalf("Preflight() error = %q, want %q", message, want)
 			}
 		}
 		if strings.Contains(message, fixture.home) || strings.Contains(message, fixture.repo) {
 			t.Fatalf("Preflight() error leaked control-plane absolute path: %q", message)
+		}
+
+		_, err = Preflight(inputs, Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+		if err == nil || errors.Is(err, ErrModuleAmbiguous) {
+			t.Fatalf("Preflight() explicit error = %v, want non-ambiguous mapping error", err)
+		}
+		message = err.Error()
+		for _, want := range []string{
+			`candidate modules: app`,
+			`requested module: app`,
+			`candidate sources for module "app": alt, config`,
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("Preflight() explicit error = %q, want %q", message, want)
+			}
+		}
+		if strings.Contains(message, "specify -m") || strings.Contains(message, fixture.home) ||
+			strings.Contains(message, fixture.repo) {
+			t.Fatalf("Preflight() explicit mapping error has invalid guidance or leaked path: %q", message)
 		}
 	})
 }
