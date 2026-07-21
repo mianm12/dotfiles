@@ -69,6 +69,11 @@
   existing error 的原始根因。
 - [x] 2026-07-21：修复后 CLI/apply 窄测、count=5、race、branch diff check 与隔离 cache
   `make check` 全部通过；保持 active 等待完整复审。
+- [x] 2026-07-21：用户授权后的新 review 单元 round 2 对 `e0d2243...c2005ea` 完整分支复审
+  GO，无 P0–P3；独立 reviewer 复跑窄测、关键协议测试、完整 `make check` 和 Darwin/Linux
+  amd64 交叉编译均通过，worktree clean。
+- [x] 2026-07-21：主 agent 最终 freshness 确认 main 仍等于有效 base `e0d2243`；相关四包窄测、
+  完整 diff check 与隔离 cache `make check` 再次通过，开始 plan closure。
 
 ## Milestones
 
@@ -150,6 +155,12 @@ freshness 后 invalid Plan 修复再次运行：`go test ./internal/cli ./intern
 `make check BINARY=/private/tmp/dot-m1-cp5-cli-invalid-plan-check/dot` 通过（0 lint issues、全仓 race、
 build、manifest gate）。
 
+用户授权后的完整 round 2 reviewer 复跑四包窄测、三组关键协议测试十次、完整 diff check、
+隔离 cache `make check` 与 Darwin/Linux amd64 CLI 交叉编译，全部通过。主 agent 随后再次运行
+四包窄测、`git diff e0d22431...HEAD --check` 与
+`make check BINARY=/private/tmp/dot-m1-cp5-cli-final/dot`，全部退出 0。独立真实 Linux 主机与
+远端 macOS/Linux CI 未运行，留待 Checkpoint 远端验收。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 内创建 active plan、修改、stage、commit 与验证。所有 mutation 测试
@@ -195,4 +206,13 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
 
 ## Outcomes and Handoff
 
-尚未完成；保持 active 等待实施和独立复核。
+Milestone 已完成并通过独立复核。公开 `apply` 现以锁内 runner 作为执行事实源，稳定投影
+link/scaffold、force backup、canonical prune、确认与部分成功 state，并按 1 > 3 > 2 > 0
+退出；dry-run 继续走只读 planner。逐 action outcome contract 与 CLI validator 对 identity、
+coverage、聚合、失败错误和 planner static-deferred 单调性 fail closed；invalid/zero runner Plan
+也不能静默成功。
+
+分支相对 `e0d2243` 的完整 diff、相关窄测、重复/race、隔离 `make check` 和双目标交叉编译均
+通过，独立完整 round 2 无 P0–P3。没有新增依赖、state 格式或 M2/M3 行为。完成计划迁移后可由
+主 agent FF-only 合入 main，并立即复跑集成门禁。远端 macOS/Linux CI 未运行：本地 Milestone
+验收通过，远端待验收。
