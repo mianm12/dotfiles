@@ -453,6 +453,39 @@ func TestRun_PreconditionClassificationRequiresPureMismatch(t *testing.T) {
 	}
 }
 
+func TestRun_FilePreconditionMismatchDefersAllPrune(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	file := seamLinkAction("~/.file")
+	prune := seamPruneAction(t, fixture.loaded.controlPaths, "~/.orphan", planner.PruneReasonScaffold)
+	operations := fixture.operations(executionPlan{
+		files: []planner.FileAction{file},
+		prune: []planner.PruneAction{prune},
+	})
+	pruneExecuted := false
+	operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+		return executor.FileResult{StateEffect: file.OnFailure}, executor.ErrPreconditionMismatch
+	}
+	operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+		pruneExecuted = true
+		return executor.PruneResult{StateEffect: prune.OnSuccess}, nil
+	}
+
+	result, err := runWithOperations(Options{}, operations)
+	if err != nil {
+		t.Fatalf("runWithOperations() error = %v, want downgraded conflict", err)
+	}
+	if pruneExecuted || result.UnresolvedConflicts != 1 || !result.PruneDeferred || result.StateCommitted ||
+		fixture.loaded.commitCalls != 0 {
+		t.Fatalf("run result = %#v pruneExecuted=%t commitCalls=%d", result, pruneExecuted, fixture.loaded.commitCalls)
+	}
+	if got := result.FileOutcomes; len(got) != 1 || got[0].Status != ActionConflict || got[0].Target != file.Target {
+		t.Fatalf("file outcomes = %#v, want exact conflict", got)
+	}
+	if got := result.PruneOutcomes; len(got) != 1 || got[0].Status != ActionDeferred || got[0].Target != prune.Target {
+		t.Fatalf("prune outcomes = %#v, want exact deferred", got)
+	}
+}
+
 func TestRun_PruneOutcomesMarkUnattemptedSuffixDeferred(t *testing.T) {
 	fixture := newRunSeamFixture(t)
 	fixture.loadBaseline(t, `{

@@ -359,6 +359,9 @@ func TestExecuteLink_PreconditionFailuresPreserveTarget(t *testing.T) {
 
 		result, err := executeFile(fixture.control, action, operations)
 		assertPreconditionFailure(t, result, action, err)
+		if !IsPurePreconditionMismatch(err) || errors.Is(err, fs.ErrExist) {
+			t.Fatalf("executeFile() error = %v, want pure mismatch without fs.ErrExist child", err)
+		}
 		content, readErr := os.ReadFile(target)
 		if readErr != nil || string(content) != "raced user data" {
 			t.Fatalf("target after commit race = (%q, %v), want raced user data", content, readErr)

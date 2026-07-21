@@ -396,6 +396,55 @@ func TestApply_RuntimeFileOutcomeProjectsExactConflict(t *testing.T) {
 	})
 }
 
+func TestApply_RuntimeFileConflictDefersPruneWithoutMutation(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+	orphan := filepath.Join(fixture.home, "old")
+	if err := os.Symlink("owned-destination", orphan); err != nil {
+		t.Fatalf("os.Symlink(orphan) error = %v", err)
+	}
+	writePlanState(t, fixture.home, planStateDocument{
+		Version: 1,
+		Entries: map[string]planStateEntry{
+			"~/old": {
+				Module:    "old",
+				Kind:      "symlink",
+				Source:    "modules/old/file",
+				LinkDest:  "owned-destination",
+				AppliedAt: "2026-07-21T00:00:00Z",
+			},
+		},
+		RunOnce: map[string]planRunOnce{},
+	})
+	plan := planMutationFixture(t, fixture)
+	files := plan.FileActions()
+	prune := plan.Prune().Actions()
+	if len(files) != 1 || len(prune) != 1 {
+		t.Fatalf("fixture actions = files %#v prune %#v", files, prune)
+	}
+	result := applyrunner.Result{
+		Plan:                plan,
+		ActionOutcomesReady: true,
+		FileOutcomes: []applyrunner.FileOutcome{{
+			Index: 0, Target: files[0].Target, Status: applyrunner.ActionConflict,
+		}},
+		PruneOutcomes: []applyrunner.PruneOutcome{{
+			Index: 0, Target: prune[0].Target, Status: applyrunner.ActionDeferred,
+		}},
+		PruneDeferred:       true,
+		UnresolvedConflicts: 1,
+	}
+	before := snapshotCLITree(t, fixture.root)
+	stdout, stderr, code := runInjectedApply(t, fixture, result, nil)
+	if code != exitConflict || !strings.Contains(stdout, "CONFLICT  ~/alpha/file  (target-missing)") ||
+		!strings.Contains(stdout, "prune (deferred)  ~/old  (owned-orphan)") ||
+		!strings.Contains(stderr, "prune was deferred") {
+		t.Fatalf("runtime file conflict = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("runtime conflict projection changed target/state\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
 func TestApply_InvalidRunnerPlanPreservesErrorOrFailsProtocol(t *testing.T) {
 	fixture := newMutationCLIFixture(t)
 

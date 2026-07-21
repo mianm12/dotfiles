@@ -306,7 +306,7 @@ func createMissingLink(
 	}
 	if err := operations.symlink(action.Desired.SourcePath, action.Precondition.TargetPath); err != nil {
 		if errors.Is(err, fs.ErrExist) {
-			return failure, fmt.Errorf("%w: target appeared before link create: %w", ErrPrecondition, err)
+			return failure, fmt.Errorf("%w: target appeared before link create", ErrPreconditionMismatch)
 		}
 		return failure, fmt.Errorf("create target symlink: %w", err)
 	}
