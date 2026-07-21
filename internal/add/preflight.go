@@ -53,7 +53,7 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 	control := context.Control().Paths()
 	home := control.EffectiveHome()
 	repositoryPath := control.Repository()
-	resolved, err := inputs.Manifest().Resolve(context.Profile(), goruntime.GOOS)
+	resolved, err := resolveAddProfile(inputs.Manifest(), context.Profile(), goruntime.GOOS, request.Module)
 	if err != nil {
 		return BatchPlan{}, err
 	}
@@ -171,6 +171,32 @@ func preflight(inputs dotruntime.LoadedInputs, request Request, operations opera
 	return plan, nil
 }
 
+func resolveAddProfile(
+	repository manifest.Repository,
+	profile, goos, explicitModule string,
+) (manifest.ResolvedProfile, error) {
+	resolved, err := repository.Resolve(profile, goos)
+	if err == nil || explicitModule == "" {
+		return resolved, err
+	}
+	var targetErr *manifest.ModuleTargetMappingError
+	if !errors.As(err, &targetErr) || targetErr.Module() != explicitModule || targetErr.GOOS() != goos {
+		return manifest.ResolvedProfile{}, err
+	}
+	activation, guidanceErr := repository.ModuleActivationGuidance(profile, explicitModule, goos)
+	if guidanceErr != nil || !activation.InProfile || !activation.OSReady || activation.TargetReady {
+		return manifest.ResolvedProfile{}, err
+	}
+	return manifest.ResolvedProfile{}, moduleActivationError(
+		repository,
+		profile,
+		goos,
+		explicitModule,
+		activation,
+		true,
+	)
+}
+
 type inputSnapshot struct {
 	target     string
 	targetPath string
@@ -249,48 +275,61 @@ func validateExplicitModule(
 		if err != nil {
 			return fmt.Errorf("resolve add module activation guidance: %w", err)
 		}
-		message := fmt.Sprintf("add module %q is not in the effective profile %q", module, profile)
-		if activation.InProfile {
-			message = fmt.Sprintf(
-				"add module %q is declared in profile %q but inactive on %s",
-				module,
-				profile,
-				goos,
-			)
-		}
-		steps := make([]string, 0, 3)
-		if !activation.InProfile {
-			profileLine, lineErr := repository.ProfileLineWithModule(profile, module)
-			if lineErr != nil {
-				return fmt.Errorf("format add profile guidance: %w", lineErr)
-			}
-			steps = append(steps, "next: "+profileLine)
-		}
-		if !activation.OSReady {
-			steps = append(steps, fmt.Sprintf(
-				"next: in %s set %s",
-				activation.ManifestPath,
-				activation.OSLine,
-			))
-		}
-		if !activation.TargetReady {
-			targetContext := ""
-			if len(activation.TargetLines) > 0 {
-				targetContext = "; preserve " + strings.Join(activation.TargetLines, ", ")
-			}
-			steps = append(steps, fmt.Sprintf(
-				"next: in %s update [target]%s and add target.%s using the intended canonical ~/ path",
-				activation.ManifestPath,
-				targetContext,
-				goos,
-			))
-		}
-		if len(steps) > 1 {
-			steps = append(steps, "next: complete every listed edit before retrying dot add")
-		}
-		return errors.New(message + "\n" + strings.Join(steps, "\n"))
+		return moduleActivationError(repository, profile, goos, module, activation, false)
 	}
 	return nil
+}
+
+func moduleActivationError(
+	repository manifest.Repository,
+	profile, goos, module string,
+	activation manifest.ModuleActivation,
+	conflict bool,
+) error {
+	message := fmt.Sprintf("add module %q is not in the effective profile %q", module, profile)
+	if activation.InProfile {
+		message = fmt.Sprintf(
+			"add module %q is declared in profile %q but inactive on %s",
+			module,
+			profile,
+			goos,
+		)
+	}
+	steps := make([]string, 0, 3)
+	if !activation.InProfile {
+		profileLine, err := repository.ProfileLineWithModule(profile, module)
+		if err != nil {
+			return fmt.Errorf("format add profile guidance: %w", err)
+		}
+		steps = append(steps, "next: "+profileLine)
+	}
+	if !activation.OSReady {
+		steps = append(steps, fmt.Sprintf(
+			"next: in %s set %s",
+			activation.ManifestPath,
+			activation.OSLine,
+		))
+	}
+	if !activation.TargetReady {
+		targetContext := ""
+		if len(activation.TargetLines) > 0 {
+			targetContext = "; preserve " + strings.Join(activation.TargetLines, ", ")
+		}
+		steps = append(steps, fmt.Sprintf(
+			"next: in %s update [target]%s and add target.%s using the intended canonical ~/ path",
+			activation.ManifestPath,
+			targetContext,
+			goos,
+		))
+	}
+	if len(steps) > 1 {
+		steps = append(steps, "next: complete every listed edit before retrying dot add")
+	}
+	message += "\n" + strings.Join(steps, "\n")
+	if conflict {
+		return fmt.Errorf("%w: %s", ErrModuleActivation, message)
+	}
+	return errors.New(message)
 }
 
 func normalizeInput(raw, home, cwd string) (string, error) {

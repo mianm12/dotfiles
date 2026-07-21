@@ -349,6 +349,55 @@ func TestPreflight_ExplicitModuleGuidanceReportsEveryMissingActivationDimension(
 	}
 }
 
+func TestResolveAddProfile_ProjectsOnlyExactRequestedTargetMapping(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			otherGOOS := "linux"
+			if goos == "linux" {
+				otherGOOS = "darwin"
+			}
+			fixture := newAddFixture(t, map[string]string{
+				"app": "[target]\n" + otherGOOS + " = \"~/app\"",
+			})
+			repository, err := manifest.Load(fixture.repo)
+			if err != nil {
+				t.Fatalf("manifest.Load() error = %v", err)
+			}
+
+			_, err = resolveAddProfile(repository, "base", goos, "app")
+			if !errors.Is(err, ErrModuleActivation) || !strings.Contains(err.Error(), "target."+goos) {
+				t.Fatalf("resolveAddProfile(exact) error = %v, want activation target guidance", err)
+			}
+			_, err = resolveAddProfile(repository, "base", goos, "")
+			var targetErr *manifest.ModuleTargetMappingError
+			if !errors.As(err, &targetErr) || errors.Is(err, ErrModuleActivation) {
+				t.Fatalf("resolveAddProfile(infer) error = %v, want original target mapping error", err)
+			}
+		})
+	}
+
+	t.Run("another module remains strict", func(t *testing.T) {
+		otherGOOS := "linux"
+		if runtime.GOOS == "linux" {
+			otherGOOS = "darwin"
+		}
+		fixture := newAddFixture(t, map[string]string{
+			"alpha": "[target]\n" + otherGOOS + " = \"~/alpha\"",
+			"zeta":  `target = "~"`,
+		})
+		repository, err := manifest.Load(fixture.repo)
+		if err != nil {
+			t.Fatalf("manifest.Load() error = %v", err)
+		}
+
+		_, err = resolveAddProfile(repository, "base", runtime.GOOS, "zeta")
+		var targetErr *manifest.ModuleTargetMappingError
+		if !errors.As(err, &targetErr) || targetErr.Module() != "alpha" || errors.Is(err, ErrModuleActivation) {
+			t.Fatalf("resolveAddProfile(other module) error = %v, want original alpha target error", err)
+		}
+	})
+}
+
 func TestPreflight_RejectsManifestIgnoreAndDuplicateInputs(t *testing.T) {
 	t.Run("manifest ignore", func(t *testing.T) {
 		fixture := newAddFixture(t, map[string]string{"app": `target = "~"

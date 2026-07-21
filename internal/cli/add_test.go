@@ -309,6 +309,56 @@ func TestAdd_ExplicitModuleGuidanceCombinesProfileAndGOOSWithoutWrites(t *testin
 	}
 }
 
+func TestAdd_MissingCurrentGOOSTargetProjectsOnlyExactExplicitModule(t *testing.T) {
+	otherGOOS := "linux"
+	if runtime.GOOS == "linux" {
+		otherGOOS = "darwin"
+	}
+
+	t.Run("exact explicit module", func(t *testing.T) {
+		fixture := newAddCLIFixture(t, []string{"app"})
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "app", "dot.toml"),
+			"[target]\n"+otherGOOS+" = \"~/app\"\n")
+		target := fixture.writeTarget(t, "guided", "content\n")
+		before := snapshotCLITree(t, fixture.root)
+
+		_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "app", target)
+		if code != exitConflict || !strings.Contains(stderr, "target."+runtime.GOOS) ||
+			!strings.Contains(stderr, "modules/app/dot.toml") {
+			t.Fatalf("exact target guidance = stderr %q, exit %d", stderr, code)
+		}
+		if strings.Contains(stderr, fixture.repository) || strings.Contains(stderr, fixture.home) {
+			t.Fatalf("exact target guidance leaked control-plane absolute path: %q", stderr)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("exact target guidance dry-run changed tree\nbefore=%v\nafter=%v", before, after)
+		}
+
+		_, stderr, code = fixture.run(t, "add", "--dry-run", target)
+		if code != exitError || !strings.Contains(stderr, "target table has no "+runtime.GOOS+" entry") ||
+			strings.Contains(stderr, "next:") {
+			t.Fatalf("inferred target error = stderr %q, exit %d", stderr, code)
+		}
+	})
+
+	t.Run("another module", func(t *testing.T) {
+		fixture := newAddCLIFixture(t, []string{"alpha", "zeta"})
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"),
+			"[target]\n"+otherGOOS+" = \"~/alpha\"\n")
+		target := fixture.writeTarget(t, "guided", "content\n")
+		before := snapshotCLITree(t, fixture.root)
+
+		_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "zeta", target)
+		if code != exitError || !strings.Contains(stderr, `module "alpha" is active on `+runtime.GOOS) ||
+			strings.Contains(stderr, "modules/zeta/dot.toml") || strings.Contains(stderr, "next:") {
+			t.Fatalf("other module target error = stderr %q, exit %d", stderr, code)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("other module error dry-run changed tree\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+}
+
 func TestAdd_LinkThenApplyIsImmediatelyConverged(t *testing.T) {
 	fixture := newAddCLIFixture(t, []string{"alpha"})
 	target := fixture.writeTarget(t, ".config/app/config", "user config\n")

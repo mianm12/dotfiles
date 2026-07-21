@@ -12,6 +12,8 @@ import (
 var (
 	// ErrModuleAmbiguous 表示零个或多个候选使 module/source 无法保守唯一确定。
 	ErrModuleAmbiguous = errors.New("add module selection is ambiguous")
+	// ErrModuleActivation 表示显式 module 需要手工修复 manifest 后才能参与当前运行。
+	ErrModuleActivation = errors.New("add module activation required")
 	// ErrTemplateUnsupported 表示 M1 明确拒绝 managed/template add。
 	ErrTemplateUnsupported = errors.New("add --template requires M2")
 )

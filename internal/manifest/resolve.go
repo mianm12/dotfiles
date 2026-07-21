@@ -17,6 +17,23 @@ type ResolvedProfile struct {
 	dataKeys []string
 }
 
+// ModuleTargetMappingError 表示 active module 的 effective target table 缺当前 GOOS 映射。
+// 私有字段只由严格 Resolve 构造，调用方通过 accessor 精确匹配恢复诊断。
+type ModuleTargetMappingError struct {
+	module string
+	goos   string
+}
+
+func (e *ModuleTargetMappingError) Error() string {
+	return fmt.Sprintf("module %q is active on %s but target table has no %s entry", e.module, e.goos, e.goos)
+}
+
+// Module 返回缺 target mapping 的 active module。
+func (e *ModuleTargetMappingError) Module() string { return e.module }
+
+// GOOS 返回缺 target mapping 的当前 GOOS。
+func (e *ModuleTargetMappingError) GOOS() string { return e.goos }
+
 // ModuleNames 返回当前 GOOS 下按字节序排列的 effective module 名。
 func (p ResolvedProfile) ModuleNames() []string {
 	names := make([]string, len(p.modules))
@@ -95,7 +112,7 @@ func (r Repository) resolveModule(name string, loaded loadedModule, goos string)
 	target := r.moduleTarget(loaded)
 	targetRoot, exists := target.forOS(goos)
 	if !exists {
-		return ResolvedModule{}, false, fmt.Errorf("module %q is active on %s but target table has no %s entry", name, goos, goos)
+		return ResolvedModule{}, false, &ModuleTargetMappingError{module: name, goos: goos}
 	}
 
 	fileRules, err := resolveFileRules(name, loaded.manifest.files, targetRoot)
