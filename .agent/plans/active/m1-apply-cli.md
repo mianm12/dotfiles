@@ -64,6 +64,11 @@
   succeeded/conflict/deferred，并为 failed 建立 fail-closed 一致性门禁，窄测通过。
 - [x] 2026-07-20：Round 2 修复后窄测、重复、race、Darwin/Linux 交叉编译、branch diff check
   与隔离 cache `make check` 全部通过；保持 active 等待 Round 3 完整复审。
+- [x] 2026-07-21：freshness 后完整 review 确认 P2：runner 若违反协议返回 invalid Plan + nil error，
+  CLI 会静默退出 0；`b7c12bf` 复用 `apply.ErrExecutionProtocol` fail closed，并保留 invalid Plan +
+  existing error 的原始根因。
+- [x] 2026-07-21：修复后 CLI/apply 窄测、count=5、race、branch diff check 与隔离 cache
+  `make check` 全部通过；保持 active 等待完整复审。
 
 ## Milestones
 
@@ -140,6 +145,11 @@ Round 2 修复后第三次运行相同门禁：CLI/apply 窄测与 count=5、rac
 `make check BINARY=/private/tmp/dot-m1-cp5-cli-round2-check/dot` 通过（0 lint issues、全仓 race、
 build、manifest gate）。
 
+freshness 后 invalid Plan 修复再次运行：`go test ./internal/cli ./internal/apply`、count=5、race、
+`git diff e0d22431...HEAD --check` 均通过；隔离 cache
+`make check BINARY=/private/tmp/dot-m1-cp5-cli-invalid-plan-check/dot` 通过（0 lint issues、全仓 race、
+build、manifest gate）。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 内创建 active plan、修改、stage、commit 与验证。所有 mutation 测试
@@ -158,6 +168,9 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
 - Observation: “本轮仍有 deferred prune”不等于每个未成功 prune 都是 deferred；最终 Precondition
   mismatch 是需要用户消解的具体 conflict，而 IO/protocol failure 必须由 runtime error 取得退出码 1。
   Evidence: Round 2 reviewer 指出原逐项映射仍把 conflict/failed 合并进 deferred presentation。
+- Observation: `Result.Plan.Valid()==false` 不足以说明 runner 已报告错误；原 CLI 直接返回 nil
+  `runErr`，会把违反 runner 协议的 zero Result 当作成功。
+  Evidence: 注入 `Result{} + nil` 的回归在修复前得到空输出和 exit 0。
 
 ## Decision Log
 
@@ -175,6 +188,10 @@ fix commit 处理，不 amend/rebase/reset；不切换或合并 main，不操作
   conflict=`CONFLICT`、deferred=`prune (deferred)`；failed 只有同时存在 runner error 才合法。
   Rationale: conflict 必须列出具体 target/reason，failed 必须保持 1 > 3 > 2 > 0 的 error 优先级，
   不能伪装成 exit 2 的 deferred work。
+- Decision: invalid Plan 有 existing runner error 时原样返回；只有 error 缺失时才包装统一的
+  `apply.ErrExecutionProtocol`，且在判定前不产生 projection。
+  Rationale: 运行根因优先于派生 protocol 诊断；无错误的 invalid Plan 则必须 fail closed，不能静默
+  exit 0。
 
 ## Outcomes and Handoff
 
