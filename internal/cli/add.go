@@ -154,7 +154,7 @@ func addExecutionIncomplete(stateCommitted bool, outcomes []addrunner.ItemOutcom
 }
 
 func classifyAddError(command *cobra.Command, err error) error {
-	if !errors.Is(err, addrunner.ErrModuleAmbiguous) && !errors.Is(err, addrunner.ErrModuleActivation) {
+	if !errors.Is(err, addrunner.ErrModuleAmbiguous) {
 		return err
 	}
 	command.PrintErrf("conflict: %v\n", err)

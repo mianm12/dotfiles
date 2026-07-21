@@ -180,6 +180,26 @@ func TestAdd_DryRunIsReadOnlyAndAmbiguityExitsThree(t *testing.T) {
 			t.Fatalf("ambiguous add changed isolated tree\nbefore=%v\nafter=%v", before, after)
 		}
 	})
+
+	t.Run("zero inferred candidates", func(t *testing.T) {
+		fixture := newAddCLIFixture(t, []string{"alpha"})
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"),
+			`target = "~/.config/app"`)
+		target := fixture.writeTarget(t, "outside", "unmapped\n")
+		before := snapshotCLITree(t, fixture.root)
+
+		stdout, stderr, code := fixture.run(t, "add", "--dry-run", target)
+		if code != exitConflict || stdout != "" || !strings.Contains(stderr, "candidate modules: (none)") ||
+			!strings.Contains(stderr, "specify -m") {
+			t.Fatalf("zero-candidate add = stdout %q, stderr %q, exit %d; want conflict", stdout, stderr, code)
+		}
+		if strings.Contains(stderr, fixture.repository) || strings.Contains(stderr, fixture.home) {
+			t.Fatalf("zero-candidate add leaked control-plane absolute path: %q", stderr)
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("zero-candidate add changed isolated tree\nbefore=%v\nafter=%v", before, after)
+		}
+	})
 }
 
 func TestAdd_DevelopmentNoticeDoesNotChangeExitCode(t *testing.T) {
@@ -215,7 +235,15 @@ all = ["alpha", "@shared"]
 	target := fixture.writeTarget(t, "guided", "content\n")
 	beforeMissing := snapshotCLITree(t, fixture.root)
 
-	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "new-module", target)
+	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "../invalid", target)
+	if code != exitError || !strings.Contains(stderr, `invalid add module name "../invalid"`) {
+		t.Fatalf("invalid module error = stderr %q, exit %d", stderr, code)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, beforeMissing) {
+		t.Fatalf("invalid module dry-run changed isolated tree\nbefore=%v\nafter=%v", beforeMissing, after)
+	}
+
+	_, stderr, code = fixture.run(t, "add", "--dry-run", "-m", "new-module", target)
 	if code != exitError || !strings.Contains(stderr, "mkdir -p modules/new-module") ||
 		!strings.Contains(stderr, `all = ["alpha", "@shared", "new-module"]`) {
 		t.Fatalf("missing module guidance = stderr %q, exit %d", stderr, code)
@@ -227,7 +255,7 @@ all = ["alpha", "@shared"]
 	makeDirectory(t, filepath.Join(fixture.repository, "modules", "beta"))
 	beforeInactive := snapshotCLITree(t, fixture.root)
 	_, stderr, code = fixture.run(t, "add", "--dry-run", "-m", "beta", target)
-	if code != exitConflict || !strings.Contains(stderr, `module "beta" is not in the effective profile "all"`) ||
+	if code != exitError || !strings.Contains(stderr, `module "beta" is not in the effective profile "all"`) ||
 		!strings.Contains(stderr, `all = ["alpha", "@shared", "beta"]`) {
 		t.Fatalf("inactive module guidance = stderr %q, exit %d", stderr, code)
 	}
@@ -268,7 +296,7 @@ func TestAdd_ExplicitInactiveModuleGuidanceUsesCurrentGOOS(t *testing.T) {
 	before := snapshotCLITree(t, fixture.root)
 
 	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "alpha", target)
-	if code != exitConflict || !strings.Contains(stderr, `module "alpha" is declared in profile "all" but inactive on `+runtime.GOOS) ||
+	if code != exitError || !strings.Contains(stderr, `module "alpha" is declared in profile "all" but inactive on `+runtime.GOOS) ||
 		!strings.Contains(stderr, "next: in modules/alpha/dot.toml set os =") || strings.Contains(stderr, "[profiles]") {
 		t.Fatalf("inactive module guidance = stderr %q, exit %d", stderr, code)
 	}
@@ -293,7 +321,7 @@ func TestAdd_ExplicitModuleGuidanceCombinesProfileAndGOOSWithoutWrites(t *testin
 	profileStep := `next: all = ["@shared", "app"]`
 	osStep := "next: in modules/app/dot.toml set os ="
 	targetStep := "target." + runtime.GOOS
-	if code != exitConflict || !strings.Contains(stderr, profileStep) || !strings.Contains(stderr, osStep) ||
+	if code != exitError || !strings.Contains(stderr, profileStep) || !strings.Contains(stderr, osStep) ||
 		!strings.Contains(stderr, targetStep) || !strings.Contains(stderr, "complete every listed edit before retrying") {
 		t.Fatalf("combined CLI guidance = stderr %q, exit %d", stderr, code)
 	}
