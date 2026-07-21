@@ -16,7 +16,7 @@ import (
 // ErrExecutionProtocol 表示 runner 依赖返回了无法安全解释的 plan 或执行结果。
 var ErrExecutionProtocol = errors.New("add execution protocol violation")
 
-// RunOptions 保存内部 add link runner 的严格 runtime 与原始请求。
+// RunOptions 保存内部 add runner 的严格 runtime 与原始请求。
 type RunOptions struct {
 	Runtime    dotruntime.Overrides
 	CLIVersion string
@@ -29,7 +29,7 @@ type OutcomeStatus string
 const (
 	// OutcomeSucceeded 表示 item 已越过其提交点；link 为 target 替换，scaffold 为 state 提交。
 	OutcomeSucceeded OutcomeStatus = "succeeded"
-	// OutcomeFailed 表示 item 在 target 提交点前失败。
+	// OutcomeFailed 表示 item 未越过其提交点。
 	OutcomeFailed OutcomeStatus = "failed"
 	// OutcomeDeferred 表示前项失败后未执行。
 	OutcomeDeferred OutcomeStatus = "deferred"
