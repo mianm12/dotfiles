@@ -87,12 +87,17 @@ state Store。真实缺口在 backup 持久化、force/prune executor、mixed tr
 - [x] 2026-07-21：运行环境清理了 `/private/tmp` 目录但保留 stale worktree metadata；主 agent
   验证 main/branch heads 与三个 checkout 均无代码损失，prune 精确 stale 记录后从原 branch refs
   重建 coordinator 与 apply-cli worktree。main 仍为 `e0d2243`，未 fetch/pull 或改写历史。
-- [ ] 2026-07-21：用户授权后的 apply-cli 新完整复核 round 1 发现新的 P2：runner 返回 invalid/
+- [x] 2026-07-21：用户授权后的 apply-cli 新完整复核 round 1 发现新的 P2：runner 返回 invalid/
   zero `Result.Plan` 且 `nil` error 时 CLI 会静默 exit 0。该 finding 已验证有效；worker 正在原
   apply-cli active ExecPlan 内以测试先行修复，之后执行本 review 单元的完整 round 2。
+- [x] 2026-07-21：上述 invalid Plan P2 由 `b7c12bf` 测试先行修复，`c2005ea` 记录证据；新
+  review 单元 round 2 对 `e0d2243...c2005ea` 完整分支复审 GO，无 P0–P3。closure `e6d6189`
+  通过 freshness 后 FF-only 合入 main；相关窄测与隔离 cache `make check` 通过，worker
+  worktree 确认 clean/已合入后无 force 移除。
 - [x] Wave 2：force-replace 独立计划、实现、复核、closure 和 main 集成。
-- [ ] Wave 3：apply-cli 独立计划、实现、复核、closure 和 main 集成。
-- [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成。
+- [x] Wave 3：apply-cli 独立计划、实现、串行 outcome fix、新 review 单元、closure 和 main 集成。
+- [ ] 三路完整 Checkpoint Acceptance、必要 fix、coordinator closure 与 main FF-only 集成；
+  main 当前 clean `e6d6189`，即将从 checkpoint base 审查完整 Checkpoint。
 
 ## Milestone DAG and Scheduling
 
