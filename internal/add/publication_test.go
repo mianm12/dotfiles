@@ -247,6 +247,47 @@ func TestPublishSource_CleanupRefusesReplacedTemporaryPath(t *testing.T) {
 	}
 }
 
+func TestCleanupOwnedRegularTemporary_RefusesInPlaceContentOrModeChanges(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(string) error
+	}{
+		{name: "bytes", mutate: func(path string) error {
+			return os.WriteFile(path, []byte("changed"), 0o600)
+		}},
+		{name: "mode", mutate: func(path string) error {
+			return os.Chmod(path, 0o640)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "temporary.swp")
+			if err := os.WriteFile(path, []byte("owned"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			operations := defaultPublicationOperations()
+			ownedInfo, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence, err := captureRegularFileEvidence(path, ownedInfo, operations)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.mutate(path); err != nil {
+				t.Fatal(err)
+			}
+
+			err = cleanupOwnedRegularTemporary(path, evidence, operations)
+			if err == nil {
+				t.Fatal("cleanupOwnedRegularTemporary() error = nil")
+			}
+			if _, statErr := os.Lstat(path); statErr != nil {
+				t.Fatalf("changed temporary was removed: %v", statErr)
+			}
+		})
+	}
+}
+
 type publicationFileFailure struct {
 	publicationFile
 	writeErr   error

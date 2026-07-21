@@ -38,6 +38,12 @@ type createdSourceDirectory struct {
 	info fs.FileInfo
 }
 
+type regularFileEvidence struct {
+	info    fs.FileInfo
+	content []byte
+	mode    fs.FileMode
+}
+
 type sourcePublication struct {
 	source      string
 	content     []byte
@@ -113,8 +119,8 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 	if err != nil {
 		return sourcePublication{}, err
 	}
-	failBeforePublish := func(primary error, temporary string, temporaryInfo fs.FileInfo) (sourcePublication, error) {
-		cleanupErr := cleanupTemporaryAndDirectories(temporary, temporaryInfo, createdDirectories, operations)
+	failBeforePublish := func(primary error, temporary string, evidence *regularFileEvidence) (sourcePublication, error) {
+		cleanupErr := cleanupTemporaryAndDirectories(temporary, evidence, createdDirectories, operations)
 		return sourcePublication{}, errors.Join(primary, cleanupErr)
 	}
 
@@ -147,7 +153,11 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 			}
 			closed = true
 		}
-		return failBeforePublish(primary, temporary, ownedTemporaryInfo)
+		evidence, evidenceErr := captureRegularFileEvidence(temporary, ownedTemporaryInfo, operations)
+		if evidenceErr != nil {
+			primary = errors.Join(primary, fmt.Errorf("capture failed add source temporary evidence: %w", evidenceErr))
+		}
+		return failBeforePublish(primary, temporary, evidence)
 	}
 	written, err := file.Write(content)
 	if err != nil {
@@ -164,14 +174,27 @@ func publishSource(item ItemPlan, operations publicationOperations) (sourcePubli
 	}
 	closed = true
 	if err := file.Close(); err != nil {
-		return failBeforePublish(fmt.Errorf("close add source temporary file: %w", err), temporary, ownedTemporaryInfo)
+		primary := fmt.Errorf("close add source temporary file: %w", err)
+		evidence, evidenceErr := captureRegularFileEvidence(temporary, ownedTemporaryInfo, operations)
+		if evidenceErr != nil {
+			primary = errors.Join(primary, fmt.Errorf("capture failed add source temporary evidence: %w", evidenceErr))
+		}
+		return failBeforePublish(primary, temporary, evidence)
 	}
 	temporaryInfo, err := validateRegularFile(temporary, nil, content, mode, operations)
 	if err != nil {
-		return failBeforePublish(fmt.Errorf("validate prepared add source: %w", err), temporary, ownedTemporaryInfo)
+		primary := fmt.Errorf("validate prepared add source: %w", err)
+		evidence, evidenceErr := captureRegularFileEvidence(temporary, ownedTemporaryInfo, operations)
+		if evidenceErr != nil {
+			primary = errors.Join(primary, fmt.Errorf("capture failed add source temporary evidence: %w", evidenceErr))
+		}
+		return failBeforePublish(primary, temporary, evidence)
+	}
+	preparedEvidence := &regularFileEvidence{
+		info: temporaryInfo, content: append([]byte(nil), content...), mode: mode,
 	}
 	if err := operations.publish(temporary, item.sourcePath); err != nil {
-		return failBeforePublish(fmt.Errorf("publish add source without clobber: %w", err), temporary, temporaryInfo)
+		return failBeforePublish(fmt.Errorf("publish add source without clobber: %w", err), temporary, preparedEvidence)
 	}
 
 	publication := sourcePublication{
@@ -350,36 +373,63 @@ func cleanupSourcePublication(publication sourcePublication, operations publicat
 
 func cleanupTemporaryAndDirectories(
 	temporary string,
-	temporaryInfo fs.FileInfo,
+	evidence *regularFileEvidence,
 	directories []createdSourceDirectory,
 	operations publicationOperations,
 ) error {
 	var cleanupErr error
 	if temporary != "" {
-		cleanupErr = cleanupOwnedRegularTemporary(temporary, temporaryInfo, operations)
+		cleanupErr = cleanupOwnedRegularTemporary(temporary, evidence, operations)
 	}
 	return errors.Join(cleanupErr, cleanupCreatedDirectories(directories, operations))
 }
 
 func cleanupOwnedRegularTemporary(
 	temporary string,
-	expected fs.FileInfo,
+	evidence *regularFileEvidence,
 	operations publicationOperations,
 ) error {
-	info, err := operations.lstat(temporary)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect incomplete add source temporary file %q: %w", temporary, err)
-	}
-	if expected == nil || !info.Mode().IsRegular() || !os.SameFile(expected, info) {
+	if evidence == nil {
 		return fmt.Errorf("refuse to clean changed add source temporary file %q", temporary)
+	}
+	if _, err := validateRegularFile(temporary, evidence.info, evidence.content, evidence.mode, operations); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("refuse to clean changed add source temporary file %q: %w", temporary, err)
 	}
 	if err := operations.remove(temporary); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove incomplete add source temporary file: %w", err)
 	}
 	return nil
+}
+
+func captureRegularFileEvidence(
+	path string,
+	ownedInfo fs.FileInfo,
+	operations publicationOperations,
+) (*regularFileEvidence, error) {
+	before, err := operations.lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if ownedInfo == nil || !before.Mode().IsRegular() || !os.SameFile(ownedInfo, before) {
+		return nil, fmt.Errorf("temporary path is no longer the owned regular file")
+	}
+	content, err := operations.readFile(path)
+	if err != nil {
+		return nil, err
+	}
+	after, err := operations.lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !after.Mode().IsRegular() || !os.SameFile(before, after) || before.Mode().Perm() != after.Mode().Perm() {
+		return nil, fmt.Errorf("temporary file changed while capturing cleanup evidence")
+	}
+	return &regularFileEvidence{
+		info: after, content: append([]byte(nil), content...), mode: after.Mode().Perm(),
+	}, nil
 }
 
 func cleanupCreatedDirectories(directories []createdSourceDirectory, operations publicationOperations) error {
