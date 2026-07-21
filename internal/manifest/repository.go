@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/mianm12/dotfiles/internal/paths"
 )
@@ -85,6 +87,27 @@ func (r Repository) ModuleNames() []string {
 // ProfileNames 返回按字节序排列的全部 profile 名。
 func (r Repository) ProfileNames() []string {
 	return append([]string(nil), r.profileNames...)
+}
+
+// ProfileLineWithModule 返回可直接放入 [profiles] 的确切声明行。
+// 它保留严格解码后的直接成员顺序和 @profile 引用，只在缺少时追加 module。
+func (r Repository) ProfileLineWithModule(profile, module string) (string, error) {
+	members, exists := r.manifest.declaredProfiles[profile]
+	if !exists {
+		return "", fmt.Errorf("unknown profile %q", profile)
+	}
+	if !ValidModuleName(module) {
+		return "", fmt.Errorf("invalid module name %q", module)
+	}
+	result := append([]string(nil), members...)
+	if !slices.Contains(result, module) {
+		result = append(result, module)
+	}
+	quoted := make([]string, len(result))
+	for index, member := range result {
+		quoted[index] = strconv.Quote(member)
+	}
+	return fmt.Sprintf("%s = [%s]", profile, strings.Join(quoted, ", ")), nil
 }
 
 // DataKeys 返回根 manifest 声明的用户 data key，结果按字节序排列。

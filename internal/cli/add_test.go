@@ -169,8 +169,12 @@ func TestAdd_DryRunIsReadOnlyAndAmbiguityExitsThree(t *testing.T) {
 		before := snapshotCLITree(t, fixture.root)
 
 		stdout, stderr, code := fixture.run(t, "add", "--dry-run", target)
-		if code != exitConflict || stdout != "" || !strings.Contains(stderr, "specify -m") {
+		if code != exitConflict || stdout != "" || !strings.Contains(stderr, "specify -m") ||
+			!strings.Contains(stderr, "candidate modules: alpha, beta") {
 			t.Fatalf("ambiguous add = stdout %q, stderr %q, exit %d; want conflict", stdout, stderr, code)
+		}
+		if strings.Contains(stderr, fixture.repository) || strings.Contains(stderr, fixture.home) {
+			t.Fatalf("ambiguous add leaked control-plane absolute path: %q", stderr)
 		}
 		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
 			t.Fatalf("ambiguous add changed isolated tree\nbefore=%v\nafter=%v", before, after)
@@ -202,20 +206,33 @@ func TestAdd_DevelopmentNoticeDoesNotChangeExitCode(t *testing.T) {
 }
 
 func TestAdd_ExplicitModuleErrorsProvideManualManifestGuidance(t *testing.T) {
-	fixture := newAddCLIFixture(t, []string{"alpha"})
+	fixture := newAddCLIFixture(t, []string{"alpha", "core"})
+	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), `requires = ">=0.0.0"
+[profiles]
+shared = ["core"]
+all = ["alpha", "@shared"]
+	`)
 	target := fixture.writeTarget(t, "guided", "content\n")
+	beforeMissing := snapshotCLITree(t, fixture.root)
 
 	_, stderr, code := fixture.run(t, "add", "--dry-run", "-m", "new-module", target)
 	if code != exitError || !strings.Contains(stderr, "mkdir -p modules/new-module") ||
-		!strings.Contains(stderr, `add "new-module" to [profiles].all`) {
+		!strings.Contains(stderr, `all = ["alpha", "@shared", "new-module"]`) {
 		t.Fatalf("missing module guidance = stderr %q, exit %d", stderr, code)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, beforeMissing) {
+		t.Fatalf("missing module dry-run changed isolated tree\nbefore=%v\nafter=%v", beforeMissing, after)
 	}
 
 	makeDirectory(t, filepath.Join(fixture.repository, "modules", "beta"))
+	beforeInactive := snapshotCLITree(t, fixture.root)
 	_, stderr, code = fixture.run(t, "add", "--dry-run", "-m", "beta", target)
 	if code != exitError || !strings.Contains(stderr, `module "beta" is not in the effective profile "all"`) ||
-		!strings.Contains(stderr, `add "beta" to [profiles].all`) {
+		!strings.Contains(stderr, `all = ["alpha", "@shared", "beta"]`) {
 		t.Fatalf("inactive module guidance = stderr %q, exit %d", stderr, code)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, beforeInactive) {
+		t.Fatalf("inactive module dry-run changed isolated tree\nbefore=%v\nafter=%v", beforeInactive, after)
 	}
 }
 

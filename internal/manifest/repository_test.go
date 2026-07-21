@@ -61,6 +61,40 @@ base = []
 	}
 }
 
+func TestRepositoryProfileLineWithModule_PreservesDirectDeclaration(t *testing.T) {
+	repo := writeRepositoryManifest(t, `
+requires = ">=0.3.0"
+[profiles]
+shared = ["core"]
+all = ["alpha", "@shared"]
+`)
+	for _, module := range []string{"alpha", "beta", "core"} {
+		writeModule(t, repo, module, "")
+	}
+	loaded, err := Load(repo)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	line, err := loaded.ProfileLineWithModule("all", "beta")
+	if err != nil {
+		t.Fatalf("ProfileLineWithModule() error = %v, want nil", err)
+	}
+	if want := `all = ["alpha", "@shared", "beta"]`; line != want {
+		t.Fatalf("ProfileLineWithModule() = %q, want %q", line, want)
+	}
+	if again, err := loaded.ProfileLineWithModule("all", "beta"); err != nil || again != line {
+		t.Fatalf("repeated ProfileLineWithModule() = %q, %v; want %q", again, err, line)
+	}
+
+	if _, err := loaded.ProfileLineWithModule("missing", "beta"); err == nil || !strings.Contains(err.Error(), "unknown profile") {
+		t.Fatalf("unknown profile error = %v", err)
+	}
+	if _, err := loaded.ProfileLineWithModule("all", "../beta"); err == nil || !strings.Contains(err.Error(), "invalid module") {
+		t.Fatalf("invalid module error = %v", err)
+	}
+}
+
 func TestRepositoryValidateModuleRules_CoversUnassignedModules(t *testing.T) {
 	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
 	writeModule(t, repo, "unassigned", `target = { darwin = "~/.config/app" }`)

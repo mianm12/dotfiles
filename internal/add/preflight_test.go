@@ -124,6 +124,35 @@ func TestPreflight_ModuleInferenceUsesUniqueCandidateOrStateEvidence(t *testing.
 		if !errors.Is(err, ErrModuleAmbiguous) {
 			t.Fatalf("Preflight() error = %v, want ErrModuleAmbiguous", err)
 		}
+		message := err.Error()
+		for _, want := range []string{`candidate modules: app, other`, `specify -m <module>`} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("Preflight() error = %q, want %q", message, want)
+			}
+		}
+		if strings.Contains(message, fixture.home) || strings.Contains(message, fixture.repo) {
+			t.Fatalf("Preflight() error leaked control-plane absolute path: %q", message)
+		}
+	})
+
+	t.Run("one module with multiple sources", func(t *testing.T) {
+		fixture := newAddFixture(t, map[string]string{"app": `target = "~"
+[files.alt]
+target = "~/config"`})
+		target := fixture.writeTarget(t, "config", "x", 0o644)
+		_, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeLink})
+		if !errors.Is(err, ErrModuleAmbiguous) {
+			t.Fatalf("Preflight() error = %v, want ErrModuleAmbiguous", err)
+		}
+		message := err.Error()
+		for _, want := range []string{`candidate modules: app`, `candidate sources for module "app": alt, config`} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("Preflight() error = %q, want %q", message, want)
+			}
+		}
+		if strings.Contains(message, fixture.home) || strings.Contains(message, fixture.repo) {
+			t.Fatalf("Preflight() error leaked control-plane absolute path: %q", message)
+		}
 	})
 }
 
@@ -150,6 +179,32 @@ base = ["app"]
 				t.Fatalf("Preflight() error = %v, want containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestPreflight_ExplicitModuleGuidanceUsesExactProfileLine(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{
+		"app":   `target = "~"`,
+		"core":  `target = "~/.core"`,
+		"other": `target = "~"`,
+	})
+	writeAddFile(t, filepath.Join(fixture.repo, "dot.toml"), `requires = ">=0.3.0"
+[profiles]
+shared = ["core"]
+base = ["app", "@shared"]
+`, 0o644)
+	target := fixture.writeTarget(t, "config", "x", 0o644)
+	inputs := fixture.load(t)
+
+	_, err := Preflight(inputs, Request{Paths: []string{target}, Module: "other", Mode: ModeLink})
+	if err == nil || !strings.Contains(err.Error(), `next: base = ["app", "@shared", "other"]`) {
+		t.Fatalf("outside-profile guidance = %v, want exact profile line", err)
+	}
+
+	_, err = Preflight(inputs, Request{Paths: []string{target}, Module: "new-module", Mode: ModeLink})
+	if err == nil || !strings.Contains(err.Error(), "next: mkdir -p modules/new-module") ||
+		!strings.Contains(err.Error(), `next: base = ["app", "@shared", "new-module"]`) {
+		t.Fatalf("missing-module guidance = %v, want two exact steps", err)
 	}
 }
 

@@ -231,21 +231,27 @@ func validateExplicitModule(
 		return fmt.Errorf("invalid add module name %q", module)
 	}
 	if !slices.Contains(repository.ModuleNames(), module) {
+		profileLine, err := repository.ProfileLineWithModule(profile, module)
+		if err != nil {
+			return fmt.Errorf("format add profile guidance: %w", err)
+		}
 		return fmt.Errorf(
-			"add module %q does not exist\nnext: mkdir -p modules/%s\nnext: add %q to [profiles].%s",
+			"add module %q does not exist\nnext: mkdir -p modules/%s\nnext: %s",
 			module,
 			module,
-			module,
-			profile,
+			profileLine,
 		)
 	}
 	if !slices.Contains(resolved.ModuleNames(), module) {
+		profileLine, err := repository.ProfileLineWithModule(profile, module)
+		if err != nil {
+			return fmt.Errorf("format add profile guidance: %w", err)
+		}
 		return fmt.Errorf(
-			"add module %q is not in the effective profile %q\nnext: add %q to [profiles].%s",
+			"add module %q is not in the effective profile %q\nnext: %s",
 			module,
 			profile,
-			module,
-			profile,
+			profileLine,
 		)
 	}
 	return nil
@@ -349,13 +355,7 @@ func selectCandidate(
 	if explicitModule != "" {
 		selected := filterCandidates(candidates, explicitModule)
 		if len(selected) != 1 {
-			return manifest.ProspectiveCandidate{}, fmt.Errorf(
-				"%w: module %q maps target %q to %d sources",
-				ErrModuleAmbiguous,
-				explicitModule,
-				target,
-				len(selected),
-			)
+			return manifest.ProspectiveCandidate{}, candidateSelectionError(home, target, selected, explicitModule)
 		}
 		return selected[0], nil
 	}
@@ -369,12 +369,46 @@ func selectCandidate(
 			return selected[0], nil
 		}
 	}
-	return manifest.ProspectiveCandidate{}, fmt.Errorf(
-		"%w: target %q has %d prospective sources; specify -m",
-		ErrModuleAmbiguous,
-		target,
-		len(candidates),
-	)
+	return manifest.ProspectiveCandidate{}, candidateSelectionError(home, target, candidates, "")
+}
+
+func candidateSelectionError(
+	home, target string,
+	candidates []manifest.ProspectiveCandidate,
+	explicitModule string,
+) error {
+	modules := make([]string, 0, len(candidates))
+	sources := make(map[string][]string)
+	for _, candidate := range candidates {
+		if !slices.Contains(modules, candidate.Module) {
+			modules = append(modules, candidate.Module)
+		}
+		sources[candidate.Module] = append(sources[candidate.Module], candidate.Source)
+	}
+	moduleList := "(none)"
+	if len(modules) > 0 {
+		moduleList = strings.Join(modules, ", ")
+	}
+	lines := []string{
+		fmt.Sprintf("target %q cannot be mapped to one source", displayTarget(home, target)),
+		"candidate modules: " + moduleList,
+	}
+	if explicitModule != "" {
+		lines = append(lines, fmt.Sprintf("requested module: %s", explicitModule))
+	}
+	for _, module := range modules {
+		if len(sources[module]) > 1 {
+			lines = append(lines, fmt.Sprintf(
+				"candidate sources for module %q: %s",
+				module,
+				strings.Join(sources[module], ", "),
+			))
+		}
+	}
+	if explicitModule == "" {
+		lines = append(lines, "next: specify -m <module>")
+	}
+	return fmt.Errorf("%w: %s", ErrModuleAmbiguous, strings.Join(lines, "\n"))
 }
 
 func filterCandidates(candidates []manifest.ProspectiveCandidate, module string) []manifest.ProspectiveCandidate {
