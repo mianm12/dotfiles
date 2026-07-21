@@ -8,7 +8,9 @@ import (
 	"os"
 	"runtime"
 
+	addrunner "github.com/mianm12/dotfiles/internal/add"
 	"github.com/mianm12/dotfiles/internal/buildinfo"
+	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +44,9 @@ type environment struct {
 	userHomeDir  func() (string, error)
 	openTerminal func() (io.ReadCloser, error)
 	applyRun     applyRun
+	addRun       addRun
+	addLoad      addLoad
+	addPreflight addPreflight
 	build        buildinfo.Info
 	goos         string
 }
@@ -110,6 +115,7 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 	}
 
 	root.AddCommand(
+		newAddCommand(env, &options),
 		newApplyCommand(env, &options),
 		newDiffCommand(env, &options),
 		newDoctorCommand(env, &options),
@@ -118,3 +124,9 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 	)
 	return root, nil
 }
+
+type addRun func(addrunner.RunOptions) (addrunner.Result, error)
+
+type addLoad func(dotruntime.Overrides, string) (dotruntime.LoadedInputs, error)
+
+type addPreflight func(dotruntime.LoadedInputs, addrunner.Request) (addrunner.BatchPlan, error)
