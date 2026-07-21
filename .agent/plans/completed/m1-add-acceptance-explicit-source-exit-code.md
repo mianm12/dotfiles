@@ -47,7 +47,10 @@
   ambiguity；CLI classifier 无改动。
 - [x] 2026-07-22：窄测试、三包普通测试、count 5、三包 race、两级 diff check、隔离
   `make check` 与 Darwin/Linux amd64 add/CLI test binary 交叉编译通过。
-- [ ] 保持计划 active、worktree clean，等待未参与实现的 spec/safety 完整复核。
+- [x] 2026-07-22：未参与实现的 spec 与 safety 两路完整复核均为 GO，无 blocking finding；
+  freshness 确认 main 仍为有效 base，worker clean。
+- [x] 2026-07-22：主线程重新运行最终三包测试、两级 diff check 与隔离 `make check`，全部通过；
+  完成本计划并迁移至 completed。
 
 ## Milestones
 
@@ -88,6 +91,9 @@ active，等待独立 spec/safety review。
 manifest check。Darwin/Linux amd64 add/CLI test binary 交叉编译通过；真实 Linux 主机与远端
 macOS/Linux CI 未运行，远端待验收。
 
+未参与实现的 spec 与 safety 两路完整复核均为 GO，无 blocking finding。主线程在 closure 前确认
+main 仍为有效 base，并重新运行最终三包测试、两级 diff check 与隔离 `make check`，全部通过。
+
 ## Safety, Authorization, and Recovery
 
 用户已授权本 branch/worktree 的新 active plan、范围内修改、stage、commit 与验证。失败使用新
@@ -123,5 +129,6 @@ commit，不 amend/rebase/reset/cherry-pick/squash；不操作 main/其他 workt
 - 显式 zero/multiple 保留稳定 module/source 诊断，不含 `specify -m` 或 control-plane 绝对路径；
   CLI dry-run 回归确认零写入。未显式 zero/multiple inference 保持 sentinel/exit 3。
 - 所有要求的本地验证和双平台交叉编译通过；真实 Linux 主机与远端 macOS/Linux CI 待验收。
-- 计划保持 active。交回主线程安排未参与实现的 spec/safety 完整复核；finding 由主线程验证后以新
-  fix commit 处理，不重写历史。
+- spec 与 safety 两路完整复核均为 GO，无 blocking finding；freshness 与主线程最终门禁通过。
+- 本计划已迁移至 completed。交回主线程确认 closure commit 与 clean worktree 后按 Checkpoint
+  Acceptance 流程集成本 branch；真实 Linux 主机与远端 macOS/Linux CI 待验收。
