@@ -497,6 +497,38 @@ func TestRun_ScaffoldExecutorProtocolViolationsFailClosed(t *testing.T) {
 	}
 }
 
+func TestRun_ScaffoldStateReadyWithExecutorErrorFailsClosedWithoutCleanup(t *testing.T) {
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o644)
+	plan, err := Preflight(fixture.load(t), Request{Paths: []string{target}, Module: "app", Mode: ModeScaffold})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := plan.Items()[0]
+	seam := newRunSeam(t, fixture, []ItemPlan{item})
+	seam.operations.revalidateScaffold = func(paths.ControlPlanePaths, ItemPlan, linkItemResult) error { return nil }
+	seam.operations.cleanupScaffold = func(linkItemResult) error {
+		t.Fatal("protocol-violating scaffold result must not be cleaned by runner")
+		return nil
+	}
+	injected := errors.New("executor reported post-publication error")
+	seam.operations.execute = func(control paths.ControlPlanePaths, planned ItemPlan) (linkItemResult, error) {
+		result, executeErr := executeScaffoldItem(control, planned, defaultPublicationOperations())
+		if executeErr != nil {
+			return result, executeErr
+		}
+		return result, injected
+	}
+
+	result, err := runWithOperations(RunOptions{Request: Request{Mode: ModeScaffold}}, seam.operations)
+	if !errors.Is(err, ErrExecutionProtocol) || !errors.Is(err, injected) || result.Valid() ||
+		result.Plan().Valid() || result.Outcomes() != nil || seam.loaded.commitCalls != 0 {
+		t.Fatalf("runWithOperations() = (%#v, %v), commits=%d", result, err, seam.loaded.commitCalls)
+	}
+	assertRegularFile(t, item.SourcePath(), "content", 0o644)
+	assertRegularFile(t, target, "content", 0o644)
+}
+
 type runSeam struct {
 	operations addRunOperations
 	loaded     *runSeamLoaded

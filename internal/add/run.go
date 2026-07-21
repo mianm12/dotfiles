@@ -216,7 +216,7 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 		if protocolErr != nil {
 			protocolViolation = true
 			resultErr = fmt.Errorf(
-				"execute add link item %d for %q: %w",
+				"execute add item %d for %q: %w",
 				index,
 				item.Target(),
 				errors.Join(executeErr, protocolErr),
@@ -250,7 +250,7 @@ func runWithOperations(options RunOptions, operations addRunOperations) (result 
 			result.outcomes[index].Status = OutcomeFailed
 		}
 		if executeErr != nil {
-			resultErr = fmt.Errorf("execute add link item %d for %q: %w", index, item.Target(), executeErr)
+			resultErr = fmt.Errorf("execute add item %d for %q: %w", index, item.Target(), executeErr)
 			break
 		}
 	}
@@ -333,6 +333,9 @@ func validateItemExecutionResult(
 	case manifest.FileKindScaffold:
 		if result.targetCommitted {
 			return false, fmt.Errorf("%w: scaffold executor reported a target commit", ErrExecutionProtocol)
+		}
+		if executeErr != nil && result.stateReady {
+			return false, fmt.Errorf("%w: scaffold executor returned an error with a state-ready effect", ErrExecutionProtocol)
 		}
 	default:
 		return false, fmt.Errorf("%w: unsupported executable item kind %q", ErrExecutionProtocol, expected.Kind())
