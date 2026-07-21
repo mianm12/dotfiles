@@ -64,6 +64,10 @@ symlink模式可作为实现参照。
 - [x] 2026-07-22：add/apply/paths 普通、5 次重复、race 与定向 lint 通过；完整 base diff check、
   独立 cache/BINARY `make check` 和 Darwin/Linux amd64 add test binary 交叉编译通过。保持 active
   等待独立复核。
+- [x] 2026-07-22：Round 1 reviewer 的两个 P2 经主 agent 验证有效；`97ce057` 绑定 temp cleanup
+  的实际 content/mode/inode 证据，`65c3da2` 让 invalid/mismatched/contradictory executor result
+  返回不可投影的无效 Result，并补 post-commit cleanup 成功前缀回归。修复后完整本地门禁重新通过，
+  等待 Round 2 完整复审。
 
 ## Milestones
 
@@ -188,6 +192,19 @@ no-clobber/cleanup 机制，不理解 manifest/ownership；runner 只消费 lock
   Impact: `b90dfcd` 为 source temp、target temp symlink/directory 与新建 source directories 记录
   inode/mode/link text 证据并在删除前重验；不匹配时保留并报告。
 
+- Observation: temp inode identity 仍不足以证明 cleanup 安全；同一 inode 的 bytes 或 mode 可以在
+  故障点后原地改变。
+  Evidence: Round 1 P2 与 content/mode in-place mutation regressions；旧 cleanup 只检查 regular 与
+  `SameFile`。
+  Impact: 每个失败阶段先快照当时实际可证明的 temp bytes/mode/inode，再在 remove 前完整重验；
+  partial/short write 或 chmod error 不假设未成功的最终状态，无法取得稳定证据时保留并报错。
+
+- Observation: runner 把 executor protocol violation 标成普通 `OutcomeFailed` 后，`Result.Valid`
+  仍可成立，未来 CLI 会把未经证明的“未提交”事实当作可信投影。
+  Evidence: Round 1 P2 的 zero/mismatched/target-without-source/invalid-seal cases。
+  Impact: protocol violation 不生成 outcome 或计数，必要的既有成功前缀仍尝试落账，但最终只返回
+  无效 Result 与 `ErrExecutionProtocol`；正常 sealed pre-commit error 仍返回 valid failed outcome。
+
 ## Decision Log
 
 - Decision: 保持 `add-preflight → add-link → add-scaffold` 严格串行，并在本分支先固定
@@ -203,14 +220,17 @@ no-clobber/cleanup 机制，不理解 manifest/ownership；runner 只消费 lock
 
 ## Outcomes and Handoff
 
-实现已完成，计划保持 active 等待独立复核。`e35dd07` 建立 source 独立 inode、no-clobber、
+实现已完成，计划保持 active 等待 Round 2 独立复核。`e35dd07` 建立 source 独立 inode、no-clobber、
 文件/目录 sync 与等价 reuse；`8d9ed9a` 建立 target/source/ancestor/control 最终 Precond 和同父
 目录 symlink 原子替换；`ca22590` 建立锁内 exact-input runner、可验证结果、成功前缀单次 state
 提交、Store failure L2 收养与等价续跑；`b90dfcd` 以独立 fix commit 收紧全部临时产物 cleanup
-ownership。
+ownership。Round 1 后，`97ce057` 进一步把 source temp 的实际 bytes/mode 纳入 cleanup 证据，
+`65c3da2` 关闭 invalid executor result 的可信投影路径，并证明 target post-commit cleanup error
+仍产生 succeeded outcome、唯一一次 state commit 且保留 source/link。
 
 本机已通过 add/apply/paths 普通测试、5 次重复、race、定向 lint、完整
-`669ea06c...HEAD` diff check，以及独立 `GOCACHE`/`GOLANGCI_LINT_CACHE`/BINARY 的 `make check`；
+`669ea06c...HEAD` diff check，以及 Round 1 修复后独立 `GOCACHE`/`GOLANGCI_LINT_CACHE`/BINARY
+的 `make check`；
 Darwin/Linux amd64 add test binary 交叉编译通过。真实 Linux 主机和远端 macOS/Linux CI 未运行，
 远端待验收。尚缺未参与实现的完整 branch review，因此当前不迁移计划、不创建 closure commit，
 也不声称 review-ready。
