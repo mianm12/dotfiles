@@ -29,13 +29,14 @@ func TestInitSession_ConfigMissingLoadsManifestAfterLockAndSkipsState(t *testing
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
-	if !result.Context().ConfigMissing() {
+	inputs := result.Inputs()
+	if !inputs.Context().ConfigMissing() {
 		t.Fatal("ConfigMissing() = false, want true")
 	}
-	if got := result.Compatibility().Requirement().String(); got != ">=1.0.0" {
+	if got := inputs.Compatibility().Requirement().String(); got != ">=1.0.0" {
 		t.Fatalf("Requirement = %q", got)
 	}
-	want := []string{"init-preflight", "acquire", "requires", "satisfies", "manifest", "satisfies"}
+	want := []string{"init-preflight", "acquire", "init-preflight", "requires", "satisfies", "manifest", "satisfies"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}

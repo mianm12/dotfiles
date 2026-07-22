@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/mianm12/dotfiles/internal/config"
@@ -65,6 +66,20 @@ type InitSelection struct {
 	Data    map[string]Override
 }
 
+// InitCandidate 是由一份 immutable preparation inputs 形成并绑定 control context 的候选。
+type InitCandidate struct {
+	valid          bool
+	config         config.Candidate
+	configPath     string
+	repositoryPath string
+}
+
+// Machine 返回候选 machine config 的独立副本。
+func (candidate InitCandidate) Machine() config.Machine { return candidate.config.Machine() }
+
+// Bytes 返回候选的确定性 TOML 字节副本。
+func (candidate InitCandidate) Bytes() []byte { return candidate.config.Bytes() }
+
 // Context 返回 init 的严格 preflight 结果。
 func (inputs InitInputs) Context() InitContext { return inputs.context }
 
@@ -75,7 +90,7 @@ func (inputs InitInputs) Compatibility() Compatibility { return inputs.compatibi
 func (inputs InitInputs) Manifest() manifest.Repository { return inputs.repository }
 
 // BuildCandidate 从 immutable preparation inputs 纯函数地合并完整 machine config candidate。
-func (inputs InitInputs) BuildCandidate(selection InitSelection) (config.Candidate, error) {
+func (inputs InitInputs) BuildCandidate(selection InitSelection) (InitCandidate, error) {
 	context := inputs.context
 	snapshot := context.ConfigSnapshot()
 	existing, exists := context.ExistingMachine()
@@ -92,19 +107,25 @@ func (inputs InitInputs) BuildCandidate(selection InitSelection) (config.Candida
 		}
 	}
 	if profile == "" {
-		return config.Candidate{}, fmt.Errorf("init profile is required")
+		return InitCandidate{}, fmt.Errorf("init profile is required")
 	}
 	if !slices.Contains(inputs.repository.ProfileNames(), profile) {
-		return config.Candidate{}, fmt.Errorf("unknown init profile %q", profile)
+		return InitCandidate{}, fmt.Errorf("unknown init profile %q", profile)
 	}
 
-	declared := make(map[string]manifest.DataDeclaration)
-	for _, declaration := range inputs.repository.DataDeclarations() {
-		declared[declaration.Key()] = declaration
+	declarations := inputs.repository.DataDeclarations()
+	declared := make(map[string]struct{}, len(declarations))
+	for _, declaration := range declarations {
+		declared[declaration.Key()] = struct{}{}
 	}
+	selectedKeys := make([]string, 0, len(selection.Data))
 	for key := range selection.Data {
+		selectedKeys = append(selectedKeys, key)
+	}
+	sort.Strings(selectedKeys)
+	for _, key := range selectedKeys {
 		if _, ok := declared[key]; !ok {
-			return config.Candidate{}, fmt.Errorf("unknown init data key %q", key)
+			return InitCandidate{}, fmt.Errorf("unknown init data key %q", key)
 		}
 	}
 
@@ -112,7 +133,8 @@ func (inputs InitInputs) BuildCandidate(selection InitSelection) (config.Candida
 	if exists {
 		data = existing.Data()
 	}
-	for key, declaration := range declared {
+	for _, declaration := range declarations {
+		key := declaration.Key()
 		if selected, ok := selection.Data[key]; ok && selected.Set {
 			data[key] = selected.Value
 			continue
@@ -124,7 +146,7 @@ func (inputs InitInputs) BuildCandidate(selection InitSelection) (config.Candida
 			data[key] = defaultValue
 			continue
 		}
-		return config.Candidate{}, fmt.Errorf("init data %q is required", key)
+		return InitCandidate{}, fmt.Errorf("init data %q is required", key)
 	}
 
 	machine := config.Machine{Profile: profile, Data: data}
@@ -138,7 +160,17 @@ func (inputs InitInputs) BuildCandidate(selection InitSelection) (config.Candida
 		repository := context.Control().RepositoryPath()
 		machine.Repo = &repository
 	}
-	return config.NewCandidate(snapshot, machine)
+	candidate, err := config.NewCandidate(snapshot, machine)
+	if err != nil {
+		return InitCandidate{}, err
+	}
+	control := context.Control()
+	return InitCandidate{
+		valid:          true,
+		config:         candidate,
+		configPath:     control.ConfigPath(),
+		repositoryPath: control.RepositoryPath(),
+	}, nil
 }
 
 // LoadReadOnly 加载与完整 mutation 相同的只读输入，但从不获取或创建 lock。
@@ -301,6 +333,7 @@ type loadingOperations struct {
 	loadManifest              func(string) (manifest.Repository, error)
 	loadState                 func(string) (state.Loaded, error)
 	storeState                func(string, string, state.Snapshot) error
+	publishConfig             func(string, config.Candidate) (bool, error)
 	validateLexicalBoundaries func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 	validatePathBoundaries    func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 }
@@ -317,6 +350,7 @@ func defaultLoadingOperations() loadingOperations {
 		loadManifest:              manifest.Load,
 		loadState:                 state.Load,
 		storeState:                state.Store,
+		publishConfig:             config.Publish,
 		validateLexicalBoundaries: paths.ValidateLexicalTargetControlBoundaries,
 		validatePathBoundaries: func(control paths.ControlPlanePaths, targets []paths.LabeledTarget) error {
 			_, err := paths.ValidatePathBoundaries(control, targets)
