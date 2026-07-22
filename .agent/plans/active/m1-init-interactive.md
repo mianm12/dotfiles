@@ -70,8 +70,9 @@ Precond publisher、`LoadedInit.CommitConfig` 和 commit 后 `InitSession.BeginM
 - [x] 2026-07-22：Milestone 3 注册公开 `dot init`，完成 config-only/repo persistence、nested apply、
   hook stdio、corrupt state、prune/`--yes`、conflict 非 force 与第二次收敛测试，更新 README；
   `go test -race ./internal/cli ./internal/apply ./internal/runtime ./internal/config` 与 package lint 通过。
-- [ ] 完成 Darwin/Linux compile-only、base diff、isolated exact-HEAD `make check`，记录 handoff 并保持
-  active 等待独立复核。
+- [x] 2026-07-22：Darwin/Linux arm64 `go test -exec=true ./...` compile-only、base...HEAD diff check
+  与 implementation HEAD `041b5f3` 的 isolated `make check` 全部通过；计划更新后将再跑最终 clean
+  HEAD freshness gate。当前保持 active，等待未参与实现者完整复核与父任务协调 closure。
 
 ## Milestones
 
@@ -167,8 +168,8 @@ Commit 边界：
 | 配置 0600、repo/profile/data 持久化且失败不回滚 | CLI/runtime/config tests | 已通过 |
 | init/apply 使用同一 ownership 与一次 state commit | apply seam/runtime/CLI tests | 已通过 |
 | hook/prune/`--yes`/corrupt state/第二次运行符合契约 | CLI filesystem integration tests | 已通过 |
-| Darwin/Linux compile-only | `GOOS=... go test ... -run '^$'` | 待验证 |
-| Go、依赖、lint、race、build、manifest 门禁 | isolated exact-HEAD `make check` | 待验证 |
+| Darwin/Linux compile-only | `CGO_ENABLED=0 GOOS=... GOARCH=arm64 go test -exec=true ./...` | 已通过 |
+| Go、依赖、lint、race、build、manifest 门禁 | isolated `make check` | 已通过 |
 
 最终从 repo root 运行：
 
@@ -242,7 +243,18 @@ checkpoint，用后续 fix commit 修正，不重写历史。配置已 committed
 
 ## Outcomes and Handoff
 
-当前为 active 实施计划，尚无实现结果。目标收口时记录语义 commits、窄范围 race tests、双平台
-compile-only、exact-HEAD isolated `make check`、完整 base diff 和独立复核状态。按父任务边界，本
-worker 即使完成全部本地实现与门禁也保持计划在 `active/`，交给未参与实现者复核和父任务协调
-closure；不得声称 completed 或 review-ready。
+实现已在 `feat/init-interactive` 形成以下 checkpoints：
+
+    75b1ddb plan(init): 冻结交互初始化范围
+    0b305ac feat(init): 建立零写入交互决策
+    cdcb2c1 feat(apply): 支持消费既有 mutation session
+    041b5f3 feat(init): 复用锁所有权完成初始化
+
+结果覆盖 `dot init`、TTY/无 TTY、`--set` presence/重复、`--yes`、0600 config/repo persistence、同
+ownership child apply、hook stdio、whole-module prune、corrupt state 后保留 config、conflict 非
+force 和第二次收敛。targeted race tests、package lint、Darwin/Linux arm64 compile-only、完整 base
+diff check 和 isolated `make check` 已通过；远端 CI、真实 Linux、真实私人配置均未运行。
+
+状态：active，等待未参与实现者对 base...HEAD 的完整只读复核。按父任务边界，本 worker 不迁移
+`completed/`、不创建 closure commit，也不声称 review-ready；父任务负责处理复核 finding、freshness
+gate 与最终集成协调。
