@@ -148,6 +148,40 @@ func TestPublish_PreconditionChangesPreserveCurrentConfigAndCleanTemporary(t *te
 	}
 }
 
+func TestPublish_MissingPreconditionDoesNotReplaceConcurrentConfig(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.toml")
+	snapshot, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	candidate, err := NewCandidate(snapshot, Machine{Profile: "mac"})
+	if err != nil {
+		t.Fatalf("NewCandidate() error = %v", err)
+	}
+	competitor := []byte("profile = \"linux\"\n")
+	operations := defaultPublishOperations()
+	realLink := operations.link
+	operations.link = func(prepared, destination string) error {
+		writeConfigAt(t, destination, string(competitor), 0o640)
+		return realLink(prepared, destination)
+	}
+
+	changed, err := publish(path, candidate, operations)
+	if changed || !errors.Is(err, ErrPreconditionChanged) {
+		t.Fatalf("publish() = (%t, %v), want ErrPreconditionChanged", changed, err)
+	}
+	current, readErr := os.ReadFile(path)
+	if readErr != nil || !bytes.Equal(current, competitor) {
+		t.Fatalf("concurrent config = %q, %v; want preserved %q", current, readErr, competitor)
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("concurrent config mode = %v, %v; want 0640", info.Mode().Perm(), statErr)
+	}
+	assertNoConfigTemporary(t, root)
+}
+
 func TestPublish_RenameFailurePreservesOldConfigAndCleansTemporary(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "config.toml")
@@ -162,9 +196,11 @@ func TestPublish_RenameFailurePreservesOldConfigAndCleansTemporary(t *testing.T)
 		t.Fatalf("NewCandidate() error = %v", err)
 	}
 	renameErr := errors.New("rename failed")
-	changed, err := publish(path, candidate, publishOperations{rename: func(string, string) error {
+	operations := defaultPublishOperations()
+	operations.rename = func(string, string) error {
 		return renameErr
-	}})
+	}
+	changed, err := publish(path, candidate, operations)
 	if changed || !errors.Is(err, renameErr) {
 		t.Fatalf("publish() = (%t, %v), want rename failure", changed, err)
 	}
@@ -185,6 +221,19 @@ func writeConfigAt(t *testing.T, path, content string, mode fs.FileMode) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func assertNoConfigTemporary(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%q) error = %v", root, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".config.toml-") {
+			t.Fatalf("machine config temporary remains: %q", entry.Name())
+		}
 	}
 }
 

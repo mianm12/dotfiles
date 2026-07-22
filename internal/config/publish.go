@@ -19,11 +19,35 @@ var ErrPreconditionChanged = errors.New("machine config precondition changed")
 // Publish 在最终 rename 前复核 candidate 绑定的 Precondition，并以 0600 原子发布。
 // changed 为 false 表示当前 bytes 与 0600 mode 已等价，不发生临时文件或 rename。
 func Publish(path string, candidate Candidate) (changed bool, err error) {
-	return publish(path, candidate, publishOperations{rename: os.Rename})
+	return publish(path, candidate, defaultPublishOperations())
+}
+
+type publishFile interface {
+	Name() string
+	Chmod(fs.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
 }
 
 type publishOperations struct {
-	rename func(string, string) error
+	mkdirAll   func(string, fs.FileMode) error
+	createTemp func(string, string) (publishFile, error)
+	rename     func(string, string) error
+	link       func(string, string) error
+	remove     func(string) error
+}
+
+func defaultPublishOperations() publishOperations {
+	return publishOperations{
+		mkdirAll: os.MkdirAll,
+		createTemp: func(directory, pattern string) (publishFile, error) {
+			return os.CreateTemp(directory, pattern)
+		},
+		rename: os.Rename,
+		link:   os.Link,
+		remove: os.Remove,
+	}
 }
 
 func publish(path string, candidate Candidate, operations publishOperations) (changed bool, err error) {
@@ -46,10 +70,16 @@ func publish(path string, candidate Candidate, operations publishOperations) (ch
 	}
 
 	directory := filepath.Dir(cleanPath)
-	if err := os.MkdirAll(directory, storage.PrivateDirectoryMode); err != nil {
+	if operations.mkdirAll == nil {
+		return false, fmt.Errorf("machine config directory creator is nil")
+	}
+	if err := operations.mkdirAll(directory, storage.PrivateDirectoryMode); err != nil {
 		return false, fmt.Errorf("prepare machine config directory %q: %w", directory, err)
 	}
-	file, err := os.CreateTemp(directory, "."+filepath.Base(cleanPath)+"-")
+	if operations.createTemp == nil {
+		return false, fmt.Errorf("machine config temporary creator is nil")
+	}
+	file, err := operations.createTemp(directory, "."+filepath.Base(cleanPath)+"-")
 	if err != nil {
 		return false, fmt.Errorf("create machine config temporary file for %q: %w", cleanPath, err)
 	}
@@ -62,7 +92,9 @@ func publish(path string, candidate Candidate, operations publishOperations) (ch
 			}
 			closed = true
 		}
-		if removeErr := os.Remove(file.Name()); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+		if operations.remove == nil {
+			errs = append(errs, fmt.Errorf("machine config temporary remover is nil"))
+		} else if removeErr := operations.remove(file.Name()); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("remove failed machine config temporary file: %w", removeErr))
 		}
 		return false, errors.Join(errs...)
@@ -93,11 +125,29 @@ func publish(path string, candidate Candidate, operations publishOperations) (ch
 	if !samePrecondition(current, candidate.precondition) {
 		return fail(ErrPreconditionChanged)
 	}
-	if operations.rename == nil {
-		return fail(fmt.Errorf("machine config publisher is nil"))
+	if candidate.precondition.exists {
+		if operations.rename == nil {
+			return fail(fmt.Errorf("machine config replacement publisher is nil"))
+		}
+		if err := operations.rename(file.Name(), cleanPath); err != nil {
+			return fail(fmt.Errorf("replace machine config %q: %w", cleanPath, err))
+		}
+		return true, nil
 	}
-	if err := operations.rename(file.Name(), cleanPath); err != nil {
-		return fail(fmt.Errorf("publish machine config %q: %w", cleanPath, err))
+	if operations.link == nil {
+		return fail(fmt.Errorf("machine config no-replace publisher is nil"))
+	}
+	if err := operations.link(file.Name(), cleanPath); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fail(fmt.Errorf("%w: machine config %q appeared before publish", ErrPreconditionChanged, cleanPath))
+		}
+		return fail(fmt.Errorf("publish new machine config %q: %w", cleanPath, err))
+	}
+	if operations.remove == nil {
+		return true, fmt.Errorf("machine config %q was published but temporary remover is nil", cleanPath)
+	}
+	if err := operations.remove(file.Name()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return true, fmt.Errorf("machine config %q was published but remove temporary file %q failed: %w", cleanPath, file.Name(), err)
 	}
 	return true, nil
 }
