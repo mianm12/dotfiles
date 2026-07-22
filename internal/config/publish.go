@@ -115,7 +115,7 @@ func currentPrecondition(path string, expected Precondition) (Precondition, erro
 	}
 	snapshot, err := LoadSnapshot(path)
 	if err != nil {
-		return Precondition{}, fmt.Errorf("%w: reread current machine config %q: %v", ErrPreconditionChanged, path, err)
+		return Precondition{}, fmt.Errorf("%w: reread current machine config %q: %w", ErrPreconditionChanged, path, err)
 	}
 	return snapshot.precondition, nil
 }

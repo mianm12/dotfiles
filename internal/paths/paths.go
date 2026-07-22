@@ -18,10 +18,14 @@ const (
 type RepositorySource string
 
 const (
-	RepositorySourceFlag        RepositorySource = "flag"
+	// RepositorySourceFlag 表示显式 --repo。
+	RepositorySourceFlag RepositorySource = "flag"
+	// RepositorySourceEnvironment 表示 DOT_REPO。
 	RepositorySourceEnvironment RepositorySource = "environment"
-	RepositorySourceConfig      RepositorySource = "config"
-	RepositorySourceDefault     RepositorySource = "default"
+	// RepositorySourceConfig 表示已有机器配置的 repo。
+	RepositorySourceConfig RepositorySource = "config"
+	// RepositorySourceDefault 表示内置 repo 路径。
+	RepositorySourceDefault RepositorySource = "default"
 )
 
 // RepositoryResolution 保存已解析的绝对 repo 路径及其来源。
@@ -116,7 +120,7 @@ func ResolveRepository(
 ) (RepositoryResolution, error) {
 	value := ""
 	errorSource := ""
-	selectedSource := RepositorySourceDefault
+	var selectedSource RepositorySource
 
 	switch {
 	case flagSet:
