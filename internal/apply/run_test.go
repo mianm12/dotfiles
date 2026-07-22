@@ -21,6 +21,56 @@ import (
 	"github.com/mianm12/dotfiles/internal/state"
 )
 
+func TestRun_RejectsInvalidCanonicalPlanBeforeMutation(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	operations := fixture.operations(executionPlan{}).runOperations
+	operations.begin = func(dotruntime.Overrides) (mutationSession, error) {
+		return fixture.session, nil
+	}
+	operations.plan = func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (planner.ApplyPlan, error) {
+		return planner.ApplyPlan{}, nil
+	}
+	executed := false
+	operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+		executed = true
+		return executor.FileResult{}, nil
+	}
+	backupStarted := false
+	operations.backup = func(string) (*backup.Batch, error) {
+		backupStarted = true
+		return nil, nil
+	}
+	pruneExecuted := false
+	operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+		pruneExecuted = true
+		return executor.PruneResult{}, nil
+	}
+	confirmed := false
+
+	result, err := runWithOperations(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
+		confirmed = true
+		return true, nil
+	}}, operations)
+	if !errors.Is(err, ErrExecutionProtocol) {
+		t.Fatalf("runWithOperations() error = %v, want ErrExecutionProtocol", err)
+	}
+	if result.Valid(true) || executed || backupStarted || pruneExecuted || confirmed ||
+		fixture.loaded.commitCalls != 0 {
+		t.Fatalf(
+			"invalid plan escaped gate: result=%#v execute=%t backup=%t prune=%t confirm=%t commit=%d",
+			result,
+			executed,
+			backupStarted,
+			pruneExecuted,
+			confirmed,
+			fixture.loaded.commitCalls,
+		)
+	}
+	if !fixture.session.closed {
+		t.Fatal("session was not closed after invalid plan rejection")
+	}
+}
+
 func TestRun_PersistsPostCommitCleanupResultBeforeReturningError(t *testing.T) {
 	fixture := newRunSeamFixture(t)
 	cleanupErr := errors.New("cleanup failed")
@@ -35,11 +85,11 @@ func TestRun_PersistsPostCommitCleanupResultBeforeReturningError(t *testing.T) {
 		return executor.FileResult{StateEffect: action.OnSuccess, TargetMutated: true}, cleanupErr
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	if !errors.Is(err, cleanupErr) {
 		t.Fatalf("runWithOperations() error = %v, want cleanup error", err)
 	}
-	if secondStarted || result.FileAttempts != 1 || result.TargetCommits != 1 || !result.StateCommitted {
+	if secondStarted || result.FileAttempts() != 1 || result.TargetCommits() != 1 || !result.StateCommitted() {
 		t.Fatalf("run result = %#v, secondStarted=%t", result, secondStarted)
 	}
 	if fixture.loaded.commitCalls != 1 {
@@ -71,13 +121,13 @@ func TestRun_PartialSuccessCommitsOnceAndJoinsExecutionCommitCloseErrors(t *test
 		return executor.FileResult{StateEffect: action.OnFailure}, executionErr
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	for _, want := range []error{executionErr, commitErr, closeErr} {
 		if !errors.Is(err, want) {
 			t.Fatalf("runWithOperations() error = %v, want joined %v", err, want)
 		}
 	}
-	if result.FileAttempts != 2 || result.TargetCommits != 1 || result.StateCommitted {
+	if result.FileAttempts() != 2 || result.TargetCommits() != 1 || result.StateCommitted() {
 		t.Fatalf("run result = %#v", result)
 	}
 	if fixture.loaded.commitCalls != 1 {
@@ -108,12 +158,12 @@ func TestRun_ReportsRetainedBackupAfterReplaceFailure(t *testing.T) {
 		return executor.FileResult{StateEffect: action.OnFailure, BackupPath: wantPath}, replaceErr
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	if !errors.Is(err, replaceErr) {
 		t.Fatalf("runWithOperations() error = %v, want replace failure", err)
 	}
-	if result.FileAttempts != 1 || len(result.BackupPaths) != 1 || result.BackupPaths[0] != wantPath ||
-		result.StateCommitted || fixture.loaded.commitCalls != 0 {
+	if result.FileAttempts() != 1 || len(result.BackupPaths()) != 1 || result.BackupPaths()[0] != wantPath ||
+		result.StateCommitted() || fixture.loaded.commitCalls != 0 {
 		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 	}
 }
@@ -142,9 +192,9 @@ func TestRun_ReportsRetainedBackupAfterPostCommitCleanupFailure(t *testing.T) {
 		}, cleanupErr
 	}
 
-	result, err := runWithOperations(Options{}, operations)
-	if !errors.Is(err, cleanupErr) || result.FileAttempts != 1 || result.TargetCommits != 1 ||
-		len(result.BackupPaths) != 1 || result.BackupPaths[0] != wantPath || !result.StateCommitted {
+	result, err := operations.run(Options{})
+	if !errors.Is(err, cleanupErr) || result.FileAttempts() != 1 || result.TargetCommits() != 1 ||
+		len(result.BackupPaths()) != 1 || result.BackupPaths()[0] != wantPath || !result.StateCommitted() {
 		t.Fatalf("run result/error = (%#v, %v)", result, err)
 	}
 	if _, err := os.Lstat(wantPath); err != nil {
@@ -170,11 +220,11 @@ func TestRun_RejectsUnsupportedScopeBeforeExecutor(t *testing.T) {
 		return executor.FileResult{}, nil
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	if !errors.Is(err, ErrUnsupportedPlan) {
 		t.Fatalf("runWithOperations() error = %v, want ErrUnsupportedPlan", err)
 	}
-	if executed || result.FileAttempts != 0 || fixture.loaded.commitCalls != 0 {
+	if executed || result.FileAttempts() != 0 || fixture.loaded.commitCalls != 0 {
 		t.Fatalf("precheck executed=%t result=%#v commitCalls=%d", executed, result, fixture.loaded.commitCalls)
 	}
 	if !fixture.session.closed {
@@ -193,11 +243,11 @@ func TestRun_RejectsMalformedLinkUpsertBeforeExecutor(t *testing.T) {
 		return executor.FileResult{}, nil
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	if !errors.Is(err, ErrUnsupportedPlan) {
 		t.Fatalf("runWithOperations() error = %v, want ErrUnsupportedPlan", err)
 	}
-	if executed || result.FileAttempts != 0 || fixture.loaded.commitCalls != 0 {
+	if executed || result.FileAttempts() != 0 || fixture.loaded.commitCalls != 0 {
 		t.Fatalf("preflight executed=%t result=%#v commitCalls=%d", executed, result, fixture.loaded.commitCalls)
 	}
 }
@@ -222,15 +272,15 @@ func TestRun_RejectsAnyScopedHookBeforeAllMutation(t *testing.T) {
 				return executor.PruneResult{}, nil
 			}
 
-			result, err := runWithOperations(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
+			result, err := operations.run(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
 				confirmed = true
 				return true, nil
-			}}, operations)
+			}})
 			if !errors.Is(err, ErrUnsupportedPlan) {
 				t.Fatalf("runWithOperations() error = %v, want ErrUnsupportedPlan", err)
 			}
-			if fileExecuted || pruneExecuted || confirmed || result.FileAttempts != 0 ||
-				result.PruneAttempts != 0 || fixture.loaded.commitCalls != 0 {
+			if fileExecuted || pruneExecuted || confirmed || result.FileAttempts() != 0 ||
+				result.PruneAttempts() != 0 || fixture.loaded.commitCalls != 0 {
 				t.Fatalf("mutation before hook gate: result=%#v file=%t prune=%t confirm=%t commit=%d", result, fileExecuted, pruneExecuted, confirmed, fixture.loaded.commitCalls)
 			}
 		})
@@ -261,18 +311,18 @@ func TestRun_OrdersFilesConfirmationPruneAndStoresMixedEffectsOnce(t *testing.T)
 		return executor.PruneResult{StateEffect: prune.OnSuccess}, nil
 	}
 
-	result, err := runWithOperations(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
+	result, err := operations.run(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
 		order = append(order, "confirm")
 		return true, nil
-	}}, operations)
+	}})
 	if err != nil {
 		t.Fatalf("runWithOperations() error = %v", err)
 	}
 	if got := strings.Join(order, ","); got != "file,confirm,prune" {
 		t.Fatalf("execution order = %q", got)
 	}
-	if result.FileAttempts != 1 || result.PruneAttempts != 1 || result.PruneEffects != 1 ||
-		!result.ConfirmRequested || !result.ConfirmAccepted || !result.StateCommitted || fixture.loaded.commitCalls != 1 {
+	if result.FileAttempts() != 1 || result.PruneAttempts() != 1 || result.PruneEffects() != 1 ||
+		!result.ConfirmRequested() || !result.ConfirmAccepted() || !result.StateCommitted() || fixture.loaded.commitCalls != 1 {
 		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 	}
 	if _, exists := fixture.loaded.committed.Entry("~/.orphan"); exists {
@@ -304,14 +354,14 @@ func TestRun_ConfirmationRefusalDefersAllPruneButStoresFileSuccess(t *testing.T)
 		return executor.PruneResult{}, nil
 	}
 
-	result, err := runWithOperations(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
+	result, err := operations.run(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
 		return false, nil
-	}}, operations)
+	}})
 	if err != nil {
 		t.Fatalf("runWithOperations() error = %v", err)
 	}
-	if pruneExecuted || !result.PruneDeferred || !result.ConfirmRequested || result.ConfirmAccepted ||
-		result.PruneAttempts != 0 || !result.StateCommitted || fixture.loaded.commitCalls != 1 {
+	if pruneExecuted || !result.PruneDeferred() || !result.ConfirmRequested() || result.ConfirmAccepted() ||
+		result.PruneAttempts() != 0 || !result.StateCommitted() || fixture.loaded.commitCalls != 1 {
 		t.Fatalf("run result = %#v pruneExecuted=%t commitCalls=%d", result, pruneExecuted, fixture.loaded.commitCalls)
 	}
 	if _, exists := fixture.loaded.committed.Entry("~/.orphan"); !exists {
@@ -332,12 +382,12 @@ func TestRun_MissingConfirmationDefersWholeModulePrune(t *testing.T) {
 		return executor.PruneResult{}, nil
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	if err != nil {
 		t.Fatalf("runWithOperations() error = %v", err)
 	}
-	if pruneExecuted || !result.PruneDeferred || !result.ConfirmRequested || result.ConfirmAccepted ||
-		result.PruneAttempts != 0 || result.StateCommitted || fixture.loaded.commitCalls != 0 {
+	if pruneExecuted || !result.PruneDeferred() || !result.ConfirmRequested() || result.ConfirmAccepted() ||
+		result.PruneAttempts() != 0 || result.StateCommitted() || fixture.loaded.commitCalls != 0 {
 		t.Fatalf("run result = %#v pruneExecuted=%t commitCalls=%d", result, pruneExecuted, fixture.loaded.commitCalls)
 	}
 }
@@ -362,20 +412,20 @@ func TestRun_PrunePreconditionBecomesConflictAndCommitsPriorPrune(t *testing.T) 
 		return executor.PruneResult{StateEffect: action.OnFailure}, executor.ErrPreconditionMismatch
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	if err != nil {
 		t.Fatalf("runWithOperations() error = %v, want downgraded conflict", err)
 	}
-	if result.PruneAttempts != 2 || result.PruneEffects != 1 || result.UnresolvedConflicts != 1 ||
-		!result.PruneDeferred || !result.StateCommitted || fixture.loaded.commitCalls != 1 {
+	if result.PruneAttempts() != 2 || result.PruneEffects() != 1 || result.UnresolvedConflicts() != 1 ||
+		!result.PruneDeferred() || !result.StateCommitted() || fixture.loaded.commitCalls != 1 {
 		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 	}
 	wantOutcomes := []PruneOutcome{
 		{Index: 0, Target: first.Target, Status: ActionSucceeded},
 		{Index: 1, Target: second.Target, Status: ActionConflict},
 	}
-	if !reflect.DeepEqual(result.PruneOutcomes, wantOutcomes) {
-		t.Fatalf("prune outcomes = %#v, want %#v", result.PruneOutcomes, wantOutcomes)
+	if !reflect.DeepEqual(result.PruneOutcomes(), wantOutcomes) {
+		t.Fatalf("prune outcomes = %#v, want %#v", result.PruneOutcomes(), wantOutcomes)
 	}
 	if _, exists := fixture.loaded.committed.Entry(first.Target); exists {
 		t.Fatal("successful first prune was not persisted")
@@ -406,7 +456,7 @@ func TestRun_PreconditionClassificationRequiresPureMismatch(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newRunSeamFixture(t)
-			var operations runOperations
+			var operations seamOperations
 			if test.prune {
 				action := seamPruneAction(t, fixture.loaded.controlPaths, "~/.orphan", planner.PruneReasonScaffold)
 				operations = fixture.operations(executionPlan{prune: []planner.PruneAction{action}})
@@ -421,7 +471,7 @@ func TestRun_PreconditionClassificationRequiresPureMismatch(t *testing.T) {
 				}
 			}
 
-			result, err := runWithOperations(Options{}, operations)
+			result, err := operations.run(Options{})
 			if test.wantRuntimeErr == nil {
 				if err != nil {
 					t.Fatalf("runWithOperations() error = %v, want downgraded conflict", err)
@@ -429,7 +479,7 @@ func TestRun_PreconditionClassificationRequiresPureMismatch(t *testing.T) {
 			} else if !errors.Is(err, test.wantRuntimeErr) {
 				t.Fatalf("runWithOperations() error = %v, want runtime error %v", err, test.wantRuntimeErr)
 			}
-			if result.UnresolvedConflicts != test.wantConflict || result.StateCommitted || fixture.loaded.commitCalls != 0 {
+			if result.UnresolvedConflicts() != test.wantConflict || result.StateCommitted() || fixture.loaded.commitCalls != 0 {
 				t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 			}
 			if test.prune {
@@ -437,7 +487,7 @@ func TestRun_PreconditionClassificationRequiresPureMismatch(t *testing.T) {
 				if test.wantConflict == 1 {
 					wantStatus = ActionConflict
 				}
-				if got := result.PruneOutcomes; len(got) != 1 || got[0].Status != wantStatus || got[0].Index != 0 || got[0].Target != "~/.orphan" {
+				if got := result.PruneOutcomes(); len(got) != 1 || got[0].Status != wantStatus || got[0].Index != 0 || got[0].Target != "~/.orphan" {
 					t.Fatalf("prune outcomes = %#v, want %q for index 0", got, wantStatus)
 				}
 			} else {
@@ -445,7 +495,7 @@ func TestRun_PreconditionClassificationRequiresPureMismatch(t *testing.T) {
 				if test.wantConflict == 1 {
 					wantStatus = ActionConflict
 				}
-				if got := result.FileOutcomes; len(got) != 1 || got[0].Status != wantStatus || got[0].Index != 0 || got[0].Target != "~/.file" {
+				if got := result.FileOutcomes(); len(got) != 1 || got[0].Status != wantStatus || got[0].Index != 0 || got[0].Target != "~/.file" {
 					t.Fatalf("file outcomes = %#v, want %q for index 0", got, wantStatus)
 				}
 			}
@@ -470,18 +520,18 @@ func TestRun_FilePreconditionMismatchDefersAllPrune(t *testing.T) {
 		return executor.PruneResult{StateEffect: prune.OnSuccess}, nil
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	if err != nil {
 		t.Fatalf("runWithOperations() error = %v, want downgraded conflict", err)
 	}
-	if pruneExecuted || result.UnresolvedConflicts != 1 || !result.PruneDeferred || result.StateCommitted ||
+	if pruneExecuted || result.UnresolvedConflicts() != 1 || !result.PruneDeferred() || result.StateCommitted() ||
 		fixture.loaded.commitCalls != 0 {
 		t.Fatalf("run result = %#v pruneExecuted=%t commitCalls=%d", result, pruneExecuted, fixture.loaded.commitCalls)
 	}
-	if got := result.FileOutcomes; len(got) != 1 || got[0].Status != ActionConflict || got[0].Target != file.Target {
+	if got := result.FileOutcomes(); len(got) != 1 || got[0].Status != ActionConflict || got[0].Target != file.Target {
 		t.Fatalf("file outcomes = %#v, want exact conflict", got)
 	}
-	if got := result.PruneOutcomes; len(got) != 1 || got[0].Status != ActionDeferred || got[0].Target != prune.Target {
+	if got := result.PruneOutcomes(); len(got) != 1 || got[0].Status != ActionDeferred || got[0].Target != prune.Target {
 		t.Fatalf("prune outcomes = %#v, want exact deferred", got)
 	}
 }
@@ -508,7 +558,7 @@ func TestRun_PruneOutcomesMarkUnattemptedSuffixDeferred(t *testing.T) {
 		return executor.PruneResult{StateEffect: action.OnFailure}, executor.ErrPreconditionMismatch
 	}
 
-	result, err := runWithOperations(Options{}, operations)
+	result, err := operations.run(Options{})
 	if err != nil {
 		t.Fatalf("runWithOperations() error = %v", err)
 	}
@@ -517,8 +567,8 @@ func TestRun_PruneOutcomesMarkUnattemptedSuffixDeferred(t *testing.T) {
 		{Index: 1, Target: second.Target, Status: ActionConflict},
 		{Index: 2, Target: third.Target, Status: ActionDeferred},
 	}
-	if !result.ActionOutcomesReady || !reflect.DeepEqual(result.PruneOutcomes, want) {
-		t.Fatalf("prune outcomes ready=%t got=%#v want=%#v", result.ActionOutcomesReady, result.PruneOutcomes, want)
+	if !result.ActionOutcomesReady() || !reflect.DeepEqual(result.PruneOutcomes(), want) {
+		t.Fatalf("prune outcomes ready=%t got=%#v want=%#v", result.ActionOutcomesReady(), result.PruneOutcomes(), want)
 	}
 }
 
@@ -595,7 +645,7 @@ func TestRun_RejectsExecutionResultsThatContradictActionClass(t *testing.T) {
 				}, test.executeErr
 			}
 
-			result, err := runWithOperations(Options{}, operations)
+			result, err := operations.run(Options{})
 			if !errors.Is(err, ErrExecutionProtocol) {
 				t.Fatalf("runWithOperations() error = %v, want ErrExecutionProtocol", err)
 			}
@@ -603,8 +653,8 @@ func TestRun_RejectsExecutionResultsThatContradictActionClass(t *testing.T) {
 			if test.targetMutated {
 				wantTargetCommits = 1
 			}
-			if result.FileAttempts != 1 || result.TargetCommits != wantTargetCommits ||
-				result.AdoptionEffects != 0 || result.StateCommitted || fixture.loaded.commitCalls != 0 {
+			if result.FileAttempts() != 1 || result.TargetCommits() != wantTargetCommits ||
+				result.AdoptionEffects() != 0 || result.StateCommitted() || fixture.loaded.commitCalls != 0 {
 				t.Fatalf("inconsistent result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 			}
 		})
@@ -664,7 +714,7 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 		!strings.Contains(err.Error(), "commit runtime state") {
 		t.Fatalf("first run error = %v, want identifiable Store publish failure", err)
 	}
-	if first.FileAttempts != 2 || first.TargetCommits != 2 || first.StateCommitted ||
+	if first.FileAttempts() != 2 || first.TargetCommits() != 2 || first.StateCommitted() ||
 		storeCalls != 1 || publishCalls != 1 {
 		t.Fatalf(
 			"first run = %#v, storeCalls=%d publishCalls=%d; want two targets and one failed Store publish",
@@ -691,7 +741,7 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recovery Run() error = %v", err)
 	}
-	if second.FileAttempts != 2 || second.AdoptionEffects != 2 || second.TargetCommits != 0 || !second.StateCommitted {
+	if second.FileAttempts() != 2 || second.AdoptionEffects() != 2 || second.TargetCommits() != 0 || !second.StateCommitted() {
 		t.Fatalf("recovery result = %#v, want two state-only adopts", second)
 	}
 	stateBefore, err := os.ReadFile(fixture.stateFile)
@@ -711,7 +761,7 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("converged Run() error = %v", err)
 	}
-	if third.FileAttempts != 0 || third.AdoptionEffects != 0 || third.TargetCommits != 0 || third.StateCommitted {
+	if third.FileAttempts() != 0 || third.AdoptionEffects() != 0 || third.TargetCommits() != 0 || third.StateCommitted() {
 		t.Fatalf("converged result = %#v, want zero mutation/adopt/Store", third)
 	}
 	stateAfter, err := os.ReadFile(fixture.stateFile)
@@ -741,15 +791,15 @@ func TestRun_ForceBacksUpRegularAndConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(force) error = %v", err)
 	}
-	if first.FileAttempts != 2 || first.TargetCommits != 2 || len(first.BackupPaths) != 1 ||
-		!first.StateCommitted {
+	if first.FileAttempts() != 2 || first.TargetCommits() != 2 || len(first.BackupPaths()) != 1 ||
+		!first.StateCommitted() {
 		t.Fatalf("force result = %#v", first)
 	}
-	backupContent, err := os.ReadFile(first.BackupPaths[0])
+	backupContent, err := os.ReadFile(first.BackupPaths()[0])
 	if err != nil || string(backupContent) != string(original) {
 		t.Fatalf("backup content = (%q, %v), want %q", backupContent, err, original)
 	}
-	backupInfo, err := os.Stat(first.BackupPaths[0])
+	backupInfo, err := os.Stat(first.BackupPaths()[0])
 	if err != nil || backupInfo.Mode().Perm() != 0o640 {
 		t.Fatalf("backup mode = (%v, %v), want 0640", backupInfo, err)
 	}
@@ -759,11 +809,11 @@ func TestRun_ForceBacksUpRegularAndConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(converged force) error = %v", err)
 	}
-	if second.FileAttempts != 0 || second.TargetCommits != 0 || len(second.BackupPaths) != 0 ||
-		second.StateCommitted {
+	if second.FileAttempts() != 0 || second.TargetCommits() != 0 || len(second.BackupPaths()) != 0 ||
+		second.StateCommitted() {
 		t.Fatalf("converged force result = %#v", second)
 	}
-	if _, err := os.Lstat(first.BackupPaths[0]); err != nil {
+	if _, err := os.Lstat(first.BackupPaths()[0]); err != nil {
 		t.Fatalf("successful backup was not retained: %v", err)
 	}
 }
@@ -790,11 +840,11 @@ func TestRun_ForceStateStoreFailureRetainsAndReportsBackup(t *testing.T) {
 	options.Force = true
 
 	result, err := runWithOperations(options, operations)
-	if !errors.Is(err, storeErr) || result.FileAttempts != 2 || result.TargetCommits != 2 ||
-		len(result.BackupPaths) != 1 || result.StateCommitted {
+	if !errors.Is(err, storeErr) || result.FileAttempts() != 2 || result.TargetCommits() != 2 ||
+		len(result.BackupPaths()) != 1 || result.StateCommitted() {
 		t.Fatalf("force Store failure result/error = (%#v, %v)", result, err)
 	}
-	backupContent, readErr := os.ReadFile(result.BackupPaths[0])
+	backupContent, readErr := os.ReadFile(result.BackupPaths()[0])
 	if readErr != nil || string(backupContent) != string(original) {
 		t.Fatalf("reported backup = (%q, %v), want %q", backupContent, readErr, original)
 	}
@@ -819,8 +869,8 @@ func TestRun_ForceRebuildsDeletedScaffoldWithoutBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(force rebuild) error = %v", err)
 	}
-	if result.FileAttempts != 1 || result.TargetCommits != 1 || len(result.BackupPaths) != 0 ||
-		!result.StateCommitted {
+	if result.FileAttempts() != 1 || result.TargetCommits() != 1 || len(result.BackupPaths()) != 0 ||
+		!result.StateCommitted() {
 		t.Fatalf("force rebuild result = %#v", result)
 	}
 	assertRunTargets(t, fixture)
@@ -854,8 +904,8 @@ func TestRun_RejectsSelfTraversingEffectiveTargetBeforeExecutor(t *testing.T) {
 					!strings.Contains(err.Error(), "traverses its own leaf") {
 					t.Fatalf("Run() attempt %d error = %v, want full-profile self-traversal rejection", attempt, err)
 				}
-				if result.FileAttempts != 0 || result.TargetCommits != 0 ||
-					result.AdoptionEffects != 0 || result.StateCommitted {
+				if result.FileAttempts() != 0 || result.TargetCommits() != 0 ||
+					result.AdoptionEffects() != 0 || result.StateCommitted() {
 					t.Fatalf("Run() attempt %d result = %#v, want zero mutation", attempt, result)
 				}
 				if destination, readErr := os.Readlink(fixture.bridge); readErr != nil || destination != "real" {
@@ -902,8 +952,8 @@ func TestRun_RejectsUnsafeCandidateStateTopologyBeforeExecutor(t *testing.T) {
 			!strings.Contains(runErr.Error(), "persisted state target") {
 			t.Fatalf("Run() attempt %d error = %v, want planner target overlap", attempt, runErr)
 		}
-		if result.FileAttempts != 0 || result.TargetCommits != 0 ||
-			result.AdoptionEffects != 0 || result.StateCommitted {
+		if result.FileAttempts() != 0 || result.TargetCommits() != 0 ||
+			result.AdoptionEffects() != 0 || result.StateCommitted() {
 			t.Fatalf("Run() attempt %d result = %#v, want zero mutation", attempt, result)
 		}
 		if _, statErr := os.Lstat(target); !errors.Is(statErr, fs.ErrNotExist) {
@@ -965,8 +1015,8 @@ func TestRun_RejectsMatchedAliasCandidateStateTopologyBeforeExecutor(t *testing.
 			!strings.Contains(runErr.Error(), "~/alias/child") {
 			t.Fatalf("Run() attempt %d error = %v, want matched-history target overlap", attempt, runErr)
 		}
-		if result.FileAttempts != 0 || result.TargetCommits != 0 ||
-			result.AdoptionEffects != 0 || result.StateCommitted {
+		if result.FileAttempts() != 0 || result.TargetCommits() != 0 ||
+			result.AdoptionEffects() != 0 || result.StateCommitted() {
 			t.Fatalf("Run() attempt %d result = %#v, want zero mutation", attempt, result)
 		}
 		if _, statErr := os.Lstat(firstTarget); !errors.Is(statErr, fs.ErrNotExist) {
@@ -1046,8 +1096,8 @@ func TestRun_RejectsSelfTraversingPersistedStateBeforePlanning(t *testing.T) {
 		!strings.Contains(runErr.Error(), "traverses its own leaf") {
 		t.Fatalf("runWithOperations() error = %v, want strict state self-traversal rejection", runErr)
 	}
-	if result.FileAttempts != 0 || result.TargetCommits != 0 ||
-		result.AdoptionEffects != 0 || result.StateCommitted || storeCalls != 0 {
+	if result.FileAttempts() != 0 || result.TargetCommits() != 0 ||
+		result.AdoptionEffects() != 0 || result.StateCommitted() || storeCalls != 0 {
 		t.Fatalf("run result = %#v storeCalls=%d, want zero mutation/Store", result, storeCalls)
 	}
 	if destination, readErr := os.Readlink(bridge); readErr != nil || destination != "real" {
@@ -1071,7 +1121,7 @@ func TestRun_RejectsSelfTraversingPersistedStateBeforePlanning(t *testing.T) {
 	if !errors.Is(repeatedErr, state.ErrPathValidation) || !errors.Is(repeatedErr, paths.ErrTargetOverlap) {
 		t.Fatalf("repeated Run() error = %v, want same strict state target overlap", repeatedErr)
 	}
-	if repeated.FileAttempts != 0 || repeated.TargetCommits != 0 || repeated.StateCommitted {
+	if repeated.FileAttempts() != 0 || repeated.TargetCommits() != 0 || repeated.StateCommitted() {
 		t.Fatalf("repeated Run() result = %#v, want zero mutation", repeated)
 	}
 }
@@ -1113,8 +1163,8 @@ func TestRun_RealPreconditionFailureCommitsPriorSuccessAndPreservesOldEntry(t *t
 	if err != nil {
 		t.Fatalf("runWithOperations() error = %v, want downgraded conflict", err)
 	}
-	if result.FileAttempts != 2 || result.TargetCommits != 1 || result.UnresolvedConflicts != 1 ||
-		!result.StateCommitted {
+	if result.FileAttempts() != 2 || result.TargetCommits() != 1 || result.UnresolvedConflicts() != 1 ||
+		!result.StateCommitted() {
 		t.Fatalf("partial result = %#v", result)
 	}
 	content, readErr := os.ReadFile(fixture.linkTarget)
@@ -1170,7 +1220,7 @@ func TestRun_HoldsMutationLockThroughExecutionAndClose(t *testing.T) {
 	}
 	close(release)
 	got := <-done
-	if got.err != nil || !got.result.StateCommitted {
+	if got.err != nil || !got.result.StateCommitted() {
 		t.Fatalf("runWithOperations() = (%#v, %v)", got.result, got.err)
 	}
 	owner, err = lock.Acquire(fixture.stateRoot, filepath.Join(fixture.stateRoot, "lock"))
@@ -1185,6 +1235,38 @@ func TestRun_HoldsMutationLockThroughExecutionAndClose(t *testing.T) {
 type runSeamFixture struct {
 	session *fakeMutationSession
 	loaded  *fakeLoadedMutation
+}
+
+type executionPlan struct {
+	files  []planner.FileAction
+	prune  []planner.PruneAction
+	groups []planner.PruneConfirmationGroup
+	hooks  []planner.HookAction
+}
+
+type seamOperations struct {
+	runOperations
+	fixture runSeamFixture
+	plan    executionPlan
+}
+
+func (operations seamOperations) run(options Options) (Result, error) {
+	result := Result{}
+	if err := validateExecutionScope(operations.plan.files, operations.plan.prune, operations.plan.hooks); err != nil {
+		return result, errors.Join(err, operations.fixture.session.close())
+	}
+	err := runExecution(
+		options,
+		operations.fixture.loaded,
+		executionScope{
+			files:  operations.plan.files,
+			prune:  operations.plan.prune,
+			groups: operations.plan.groups,
+		},
+		operations.runOperations,
+		&result,
+	)
+	return result, errors.Join(err, operations.fixture.session.close())
 }
 
 func newRunSeamFixture(t *testing.T) runSeamFixture {
@@ -1213,25 +1295,27 @@ func newRunSeamFixture(t *testing.T) runSeamFixture {
 	}
 }
 
-func (fixture runSeamFixture) operations(plan executionPlan) runOperations {
-	return runOperations{
-		begin: func(dotruntime.Overrides) (mutationSession, error) { return fixture.session, nil },
-		plan:  func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (executionPlan, error) { return plan, nil },
-		execute: func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
-			return executor.FileResult{}, nil
+func (fixture runSeamFixture) operations(plan executionPlan) seamOperations {
+	return seamOperations{
+		fixture: fixture,
+		plan:    plan,
+		runOperations: runOperations{
+			execute: func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+				return executor.FileResult{}, nil
+			},
+			backup: backup.NewBatch,
+			executeBackup: func(
+				paths.ControlPlanePaths,
+				planner.FileAction,
+				*backup.Batch,
+			) (executor.FileResult, error) {
+				return executor.FileResult{}, nil
+			},
+			pruneExecute: func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
+				return executor.PruneResult{}, nil
+			},
+			now: func() time.Time { return time.Date(2026, 7, 20, 1, 2, 3, 0, time.UTC) },
 		},
-		backup: backup.NewBatch,
-		executeBackup: func(
-			paths.ControlPlanePaths,
-			planner.FileAction,
-			*backup.Batch,
-		) (executor.FileResult, error) {
-			return executor.FileResult{}, nil
-		},
-		pruneExecute: func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
-			return executor.PruneResult{}, nil
-		},
-		now: func() time.Time { return time.Date(2026, 7, 20, 1, 2, 3, 0, time.UTC) },
 	}
 }
 

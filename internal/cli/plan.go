@@ -185,11 +185,11 @@ func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes b
 		NoPrune:    options.noPrune || !options.prune,
 		Confirm:    confirm,
 	})
-	if result.Plan.Valid() {
+	if result.Valid(runErr != nil) {
 		var projection planProjection
 		var projectionErr error
-		if !result.ActionOutcomesReady && runErr != nil {
-			projection, projectionErr = projectApplyPlan(result.Plan, options.verbose)
+		if !result.ActionOutcomesReady() && runErr != nil {
+			projection, projectionErr = projectApplyPlan(result.Plan(), options.verbose)
 		} else {
 			projection, projectionErr = projectApplyResult(result, options.verbose, runErr != nil)
 		}
@@ -197,7 +197,7 @@ func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes b
 			return errors.Join(runErr, projectionErr)
 		}
 		printPlanProjection(command, projection)
-		for _, backupPath := range result.BackupPaths {
+		for _, backupPath := range result.BackupPaths() {
 			command.Println("backup  " + backupPath)
 		}
 		if runErr == nil {
@@ -270,25 +270,35 @@ func confirmationCallback(
 }
 
 func projectApplyResult(result applyrunner.Result, verbose, hasRuntimeError bool) (planProjection, error) {
-	fileOutcomes, pruneOutcomes, err := validateApplyOutcomes(result, hasRuntimeError)
-	if err != nil {
-		return planProjection{}, err
+	if !result.Valid(hasRuntimeError) || !result.ActionOutcomesReady() {
+		return planProjection{}, errors.New("apply runner returned an invalid execution result")
 	}
-	projection, err := projectApplyPlanWithOutcomes(result.Plan, verbose, fileOutcomes, pruneOutcomes)
+	fileResults := result.FileOutcomes()
+	pruneResults := result.PruneOutcomes()
+	fileOutcomes := make(map[int]applyrunner.ActionOutcomeStatus, len(fileResults))
+	for _, outcome := range fileResults {
+		fileOutcomes[outcome.Index] = outcome.Status
+	}
+	pruneOutcomes := make(map[int]applyrunner.ActionOutcomeStatus, len(pruneResults))
+	for _, outcome := range pruneResults {
+		pruneOutcomes[outcome.Index] = outcome.Status
+	}
+	plan := result.Plan()
+	projection, err := projectApplyPlanWithOutcomes(plan, verbose, fileOutcomes, pruneOutcomes)
 	if err != nil {
 		return planProjection{}, err
 	}
 	conflict := false
-	for _, action := range result.Plan.FileActions() {
+	for _, action := range plan.FileActions() {
 		conflict = conflict || action.Verb == planner.FileConflict
 	}
 	unfinished := false
 	pruneIncomplete := false
-	for _, outcome := range result.FileOutcomes {
+	for _, outcome := range fileResults {
 		conflict = conflict || outcome.Status == applyrunner.ActionConflict
 		unfinished = unfinished || outcome.Status == applyrunner.ActionDeferred || outcome.Status == applyrunner.ActionFailed
 	}
-	for _, outcome := range result.PruneOutcomes {
+	for _, outcome := range pruneResults {
 		conflict = conflict || outcome.Status == applyrunner.ActionConflict
 		pruneIncomplete = pruneIncomplete || outcome.Status != applyrunner.ActionSucceeded
 	}
@@ -305,90 +315,6 @@ func projectApplyResult(result applyrunner.Result, verbose, hasRuntimeError bool
 		projection.exitCode = exitOK
 	}
 	return projection, nil
-}
-
-func validateApplyOutcomes(result applyrunner.Result, hasRuntimeError bool) (
-	map[int]applyrunner.ActionOutcomeStatus,
-	map[int]applyrunner.ActionOutcomeStatus,
-	error,
-) {
-	if !result.ActionOutcomesReady {
-		return nil, nil, errors.New("apply runner did not provide action outcomes")
-	}
-	files := result.Plan.FileActions()
-	fileOutcomes := make(map[int]applyrunner.ActionOutcomeStatus, len(result.FileOutcomes))
-	conflicts := 0
-	failed := false
-	for _, outcome := range result.FileOutcomes {
-		if outcome.Index < 0 || outcome.Index >= len(files) || files[outcome.Index].Target != outcome.Target ||
-			files[outcome.Index].Verb.ExecutionClass() == planner.FilePlanOnly || !validActionOutcome(outcome.Status) {
-			return nil, nil, fmt.Errorf("invalid file outcome for index %d target %q", outcome.Index, outcome.Target)
-		}
-		if _, exists := fileOutcomes[outcome.Index]; exists {
-			return nil, nil, fmt.Errorf("duplicate file outcome for index %d", outcome.Index)
-		}
-		fileOutcomes[outcome.Index] = outcome.Status
-		if outcome.Status == applyrunner.ActionConflict {
-			conflicts++
-		}
-		failed = failed || outcome.Status == applyrunner.ActionFailed
-	}
-	for index, action := range files {
-		_, exists := fileOutcomes[index]
-		if (action.Verb.ExecutionClass() != planner.FilePlanOnly) != exists {
-			return nil, nil, fmt.Errorf("file outcome coverage mismatch for index %d target %q", index, action.Target)
-		}
-	}
-
-	prune := result.Plan.Prune().Actions()
-	if len(result.PruneOutcomes) != len(prune) {
-		return nil, nil, fmt.Errorf("prune outcome count is %d, want %d", len(result.PruneOutcomes), len(prune))
-	}
-	pruneOutcomes := make(map[int]applyrunner.ActionOutcomeStatus, len(result.PruneOutcomes))
-	deferred := false
-	for _, outcome := range result.PruneOutcomes {
-		if outcome.Index < 0 || outcome.Index >= len(prune) || prune[outcome.Index].Target != outcome.Target ||
-			!validActionOutcome(outcome.Status) {
-			return nil, nil, fmt.Errorf("invalid prune outcome for index %d target %q", outcome.Index, outcome.Target)
-		}
-		if prune[outcome.Index].Deferred && outcome.Status != applyrunner.ActionDeferred {
-			return nil, nil, fmt.Errorf(
-				"static deferred prune outcome for index %d target %q is %q, want %q",
-				outcome.Index,
-				outcome.Target,
-				outcome.Status,
-				applyrunner.ActionDeferred,
-			)
-		}
-		if _, exists := pruneOutcomes[outcome.Index]; exists {
-			return nil, nil, fmt.Errorf("duplicate prune outcome for index %d", outcome.Index)
-		}
-		pruneOutcomes[outcome.Index] = outcome.Status
-		deferred = deferred || outcome.Status != applyrunner.ActionSucceeded
-		if outcome.Status == applyrunner.ActionConflict {
-			conflicts++
-		}
-		failed = failed || outcome.Status == applyrunner.ActionFailed
-	}
-	if failed && !hasRuntimeError {
-		return nil, nil, errors.New("failed action outcome requires a runtime error")
-	}
-	if conflicts != result.UnresolvedConflicts {
-		return nil, nil, fmt.Errorf("runtime conflict count is %d, want %d", conflicts, result.UnresolvedConflicts)
-	}
-	if deferred != result.PruneDeferred {
-		return nil, nil, fmt.Errorf("prune deferred summary is %t, want %t from outcomes", result.PruneDeferred, deferred)
-	}
-	return fileOutcomes, pruneOutcomes, nil
-}
-
-func validActionOutcome(status applyrunner.ActionOutcomeStatus) bool {
-	switch status {
-	case applyrunner.ActionSucceeded, applyrunner.ActionConflict, applyrunner.ActionDeferred, applyrunner.ActionFailed:
-		return true
-	default:
-		return false
-	}
 }
 
 type planProjection struct {

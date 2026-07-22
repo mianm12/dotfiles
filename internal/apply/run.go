@@ -30,58 +30,6 @@ type Options struct {
 // 确认 IO 失败。调用方不得在 callback 中执行 target/state mutation。
 type ConfirmPrune func([]planner.PruneConfirmationGroup) (accepted bool, err error)
 
-// ActionOutcomeStatus 描述 runner 对一个可执行计划动作的实际处置，不让调用方从聚合计数猜测。
-type ActionOutcomeStatus string
-
-const (
-	// ActionSucceeded 表示动作已成功提交其计划效果。
-	ActionSucceeded ActionOutcomeStatus = "succeeded"
-	// ActionConflict 表示最终 Precondition 失配，动作未提交且需要用户消解。
-	ActionConflict ActionOutcomeStatus = "conflict"
-	// ActionDeferred 表示动作因前置收敛或确认门禁未被尝试。
-	ActionDeferred ActionOutcomeStatus = "deferred"
-	// ActionFailed 表示动作遭遇非 conflict 运行或协议错误。
-	ActionFailed ActionOutcomeStatus = "failed"
-)
-
-// FileOutcome 以原 file plan 的 index 和 target 标识一次可执行 file 动作的结果。
-// 未尝试的可执行后缀保持 deferred；plan-only skip/conflict 不重复记录。
-type FileOutcome struct {
-	Index  int
-	Target string
-	Status ActionOutcomeStatus
-}
-
-// PruneOutcome 以原 prune plan 的 index 和 target 标识每个 prune 动作的结果。
-type PruneOutcome struct {
-	Index  int
-	Target string
-	Status ActionOutcomeStatus
-}
-
-// Result 保存内部 runner 的可验证摘要，不定义 CLI 输出或退出码。FileAttempts 统计 executor
-// 调用，TargetCommits 统计 executor 报告已越过的 target 提交点，AdoptionEffects 统计已接受的
-// adopt OnSuccess effect；这些事实即使最终 state Store 失败也保留。StateCommitted 只表示候选
-// state 已成功原子发布。
-type Result struct {
-	Plan                planner.ApplyPlan
-	ActionOutcomesReady bool
-	FileOutcomes        []FileOutcome
-	PruneOutcomes       []PruneOutcome
-	FileAttempts        int
-	AdoptionEffects     int
-	TargetCommits       int
-	PruneAttempts       int
-	PruneEffects        int
-	PruneCommits        int
-	PruneDeferred       bool
-	UnresolvedConflicts int
-	ConfirmRequested    bool
-	ConfirmAccepted     bool
-	StateCommitted      bool
-	BackupPaths         []string
-}
-
 type mutationSession interface {
 	load(string) (loadedMutation, error)
 	close() error
@@ -94,17 +42,9 @@ type loadedMutation interface {
 	commit(state.Snapshot) error
 }
 
-type executionPlan struct {
-	value  planner.ApplyPlan
-	files  []planner.FileAction
-	prune  []planner.PruneAction
-	groups []planner.PruneConfirmationGroup
-	hooks  []planner.HookAction
-}
-
 type runOperations struct {
 	begin         func(dotruntime.Overrides) (mutationSession, error)
-	plan          func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (executionPlan, error)
+	plan          func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (planner.ApplyPlan, error)
 	execute       func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error)
 	backup        func(string) (*backup.Batch, error)
 	executeBackup func(paths.ControlPlanePaths, planner.FileAction, *backup.Batch) (executor.FileResult, error)
@@ -112,7 +52,13 @@ type runOperations struct {
 	now           func() time.Time
 }
 
-// Run 在一个 mutation lock 周期内完成 strict load、exact-input plan、CP5 scope gate、file、
+type executionScope struct {
+	files  []planner.FileAction
+	prune  []planner.PruneAction
+	groups []planner.PruneConfirmationGroup
+}
+
+// Run 在一个 mutation lock 周期内完成 strict load、exact-input plan、scope gate、file、
 // force backup、confirmation、prune execution 和一次 state commit。它不连接 CLI，也不执行 hooks。
 func Run(options Options) (Result, error) {
 	return runWithOperations(options, defaultRunOperations())
@@ -133,6 +79,9 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	}
 	defer func() {
 		resultErr = errors.Join(resultErr, session.close())
+		if result.seal == successfulResultSeal && !result.Valid(resultErr != nil) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("%w: runner returned inconsistent result", ErrExecutionProtocol))
+		}
 	}()
 
 	mutation, err := session.load(options.CLIVersion)
@@ -142,7 +91,7 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	if mutation == nil {
 		return Result{}, fmt.Errorf("%w: load returned nil mutation capability", ErrExecutionProtocol)
 	}
-	planned, err := operations.plan(mutation.inputs(), planner.ApplyScopeOptions{
+	plan, err := operations.plan(mutation.inputs(), planner.ApplyScopeOptions{
 		Modules: options.Modules,
 		Force:   options.Force,
 		NoPrune: options.NoPrune,
@@ -150,184 +99,24 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	if err != nil {
 		return Result{}, fmt.Errorf("plan locked apply inputs: %w", err)
 	}
-	result.Plan = planned.value
-	if err := validateExecutionScope(planned.files, planned.prune, planned.hooks); err != nil {
+	if !plan.Valid() {
+		return Result{}, fmt.Errorf("%w: planner returned an invalid canonical plan", ErrExecutionProtocol)
+	}
+	result = newPlannedResult(plan)
+	files := plan.FileActions()
+	prune := plan.Prune().Actions()
+	groups := plan.Prune().ConfirmationGroups()
+	hooks := plan.Hooks().Actions()
+	if err := validateExecutionScope(files, prune, hooks); err != nil {
 		return result, err
 	}
-	result.ActionOutcomesReady = true
-	fileOutcomePositions := make(map[int]int)
-	for index, action := range planned.files {
-		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
-			continue
-		}
-		fileOutcomePositions[index] = len(result.FileOutcomes)
-		result.FileOutcomes = append(result.FileOutcomes, FileOutcome{
-			Index: index, Target: action.Target, Status: ActionDeferred,
-		})
-	}
-	result.PruneOutcomes = make([]PruneOutcome, len(planned.prune))
-	for index, action := range planned.prune {
-		result.PruneOutcomes[index] = PruneOutcome{
-			Index: index, Target: action.Target, Status: ActionDeferred,
-		}
-	}
-
-	updates := make([]state.EntryUpdate, 0, len(planned.files))
-	deletes := make([]string, 0, len(planned.prune))
-	filesConverged := true
-	var backupBatch *backup.Batch
-	for index, action := range planned.files {
-		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
-			continue
-		}
-		if action.Verb == planner.FileBackupReplace && backupBatch == nil {
-			backupBatch, err = operations.backup(mutation.control().BackupRoot())
-			if err != nil {
-				result.FileOutcomes[fileOutcomePositions[index]].Status = ActionFailed
-				resultErr = fmt.Errorf("begin force backup batch: %w", err)
-				filesConverged = false
-				break
-			}
-		}
-		result.FileAttempts++
-		var fileResult executor.FileResult
-		var executeErr error
-		if action.Verb == planner.FileBackupReplace {
-			fileResult, executeErr = operations.executeBackup(mutation.control(), action, backupBatch)
-		} else {
-			fileResult, executeErr = operations.execute(mutation.control(), action)
-		}
-		if fileResult.BackupPath != "" {
-			result.BackupPaths = append(result.BackupPaths, fileResult.BackupPath)
-		}
-		if fileResult.TargetMutated {
-			result.TargetCommits++
-		}
-
-		success, failure, protocolErr := validateFileResult(action, fileResult, executeErr)
-		if protocolErr != nil {
-			executeErr = errors.Join(executeErr, protocolErr)
-		}
-		switch {
-		case protocolErr != nil:
-			// 矛盾结果不能形成 state update；已报告的物理提交留给既定收养路径恢复。
-		case success:
-			update, updateErr := entryUpdate(action.OnSuccess, operations.now())
-			if updateErr != nil {
-				executeErr = errors.Join(executeErr, updateErr)
-			} else {
-				updates = append(updates, update)
-				if action.Verb == planner.FileAdopt {
-					result.AdoptionEffects++
-				}
-			}
-		case failure:
-			if executeErr == nil {
-				executeErr = fmt.Errorf(
-					"%w: file action %d for %q returned failure effect without error",
-					ErrExecutionProtocol,
-					index,
-					action.Target,
-				)
-			}
-		}
-		if executeErr != nil {
-			if protocolErr == nil && executor.IsPurePreconditionMismatch(executeErr) {
-				result.UnresolvedConflicts++
-				result.FileOutcomes[fileOutcomePositions[index]].Status = ActionConflict
-			} else {
-				result.FileOutcomes[fileOutcomePositions[index]].Status = ActionFailed
-				resultErr = fmt.Errorf("execute file action %d for %q: %w", index, action.Target, executeErr)
-			}
-			filesConverged = false
-			break
-		}
-		result.FileOutcomes[fileOutcomePositions[index]].Status = ActionSucceeded
-	}
-
-	activePrune := false
-	for _, action := range planned.prune {
-		if !action.Deferred {
-			activePrune = true
-			break
-		}
-	}
-	if !filesConverged || !activePrune {
-		result.PruneDeferred = len(planned.prune) > 0
-	} else {
-		confirmed := true
-		if len(planned.groups) > 0 {
-			result.ConfirmRequested = true
-			if options.Confirm == nil {
-				confirmed = false
-			} else {
-				accepted, confirmErr := options.Confirm(cloneConfirmationGroups(planned.groups))
-				if confirmErr != nil {
-					resultErr = errors.Join(resultErr, fmt.Errorf("confirm whole-module prune: %w", confirmErr))
-					confirmed = false
-				} else {
-					confirmed = accepted
-					result.ConfirmAccepted = accepted
-				}
-			}
-		}
-		if !confirmed {
-			result.PruneDeferred = true
-		} else {
-			for index, action := range planned.prune {
-				if action.Deferred {
-					result.PruneDeferred = true
-					continue
-				}
-				result.PruneAttempts++
-				pruneResult, pruneErr := operations.pruneExecute(mutation.control(), action)
-				if pruneResult.TargetMutated {
-					result.PruneCommits++
-				}
-				success, failure, protocolErr := validatePruneResult(action, pruneResult, pruneErr)
-				if protocolErr != nil {
-					pruneErr = errors.Join(pruneErr, protocolErr)
-				}
-				switch {
-				case protocolErr != nil:
-				case success:
-					deletes = append(deletes, action.OnSuccess.Key)
-					result.PruneEffects++
-				case failure:
-					if pruneErr == nil {
-						pruneErr = fmt.Errorf("%w: prune action %d for %q returned failure effect without error", ErrExecutionProtocol, index, action.Target)
-					}
-				}
-				if pruneErr != nil {
-					if protocolErr == nil && executor.IsPurePreconditionMismatch(pruneErr) {
-						result.UnresolvedConflicts++
-						result.PruneOutcomes[index].Status = ActionConflict
-					} else {
-						result.PruneOutcomes[index].Status = ActionFailed
-						resultErr = errors.Join(resultErr, fmt.Errorf("execute prune action %d for %q: %w", index, action.Target, pruneErr))
-					}
-					result.PruneDeferred = true
-					break
-				}
-				result.PruneOutcomes[index].Status = ActionSucceeded
-			}
-		}
-	}
-
-	if len(updates) == 0 && len(deletes) == 0 {
-		return result, resultErr
-	}
-	candidate, changed, transitionErr := state.TransitionEntries(mutation.baseline(), updates, deletes...)
-	if transitionErr != nil {
-		return result, errors.Join(resultErr, transitionErr)
-	}
-	if !changed {
-		return result, resultErr
-	}
-	if commitErr := mutation.commit(candidate); commitErr != nil {
-		return result, errors.Join(resultErr, fmt.Errorf("commit apply state: %w", commitErr))
-	}
-	result.StateCommitted = true
+	resultErr = runExecution(
+		options,
+		mutation,
+		executionScope{files: files, prune: prune, groups: groups},
+		operations,
+		&result,
+	)
 	return result, resultErr
 }
 
@@ -493,22 +282,7 @@ func defaultRunOperations() runOperations {
 			}
 			return runtimeMutationSession{session: session}, nil
 		},
-		plan: func(
-			inputs dotruntime.LoadedInputs,
-			options planner.ApplyScopeOptions,
-		) (executionPlan, error) {
-			plan, err := planner.PlanLoadedApply(inputs, options)
-			if err != nil {
-				return executionPlan{}, err
-			}
-			return executionPlan{
-				value:  plan,
-				files:  plan.FileActions(),
-				prune:  plan.Prune().Actions(),
-				groups: plan.Prune().ConfirmationGroups(),
-				hooks:  plan.Hooks().Actions(),
-			}, nil
-		},
+		plan:          planner.PlanLoadedApply,
 		execute:       executor.ExecuteFile,
 		backup:        backup.NewBatch,
 		executeBackup: executor.ExecuteFileWithBackup,

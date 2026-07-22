@@ -9,7 +9,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/planner"
 )
 
-// ErrUnsupportedPlan 表示 canonical plan 含有当前 CP4 尚未交付的可执行能力。
+// ErrUnsupportedPlan 表示 canonical plan 含有当前 checkpoint 尚未交付的可执行能力。
 var ErrUnsupportedPlan = errors.New("apply plan contains unsupported executable action")
 
 func validateExecutionScope(
