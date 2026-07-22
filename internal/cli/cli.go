@@ -49,6 +49,7 @@ type environment struct {
 	applyNested  applyNestedRun
 	prepareInit  prepareInit
 	beginInit    beginInit
+	closeInit    closeInit
 	addRun       addRun
 	addLoad      addLoad
 	addPreflight addPreflight

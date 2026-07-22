@@ -20,6 +20,8 @@ type prepareInit func(dotruntime.Overrides, string) (dotruntime.InitInputs, erro
 
 type beginInit func(dotruntime.Overrides) (*dotruntime.InitSession, error)
 
+type closeInit func(*dotruntime.InitSession) error
+
 type initDecisions struct {
 	selection dotruntime.InitSelection
 	apply     bool
@@ -95,8 +97,12 @@ func runInit(
 	if session == nil {
 		return errors.New("begin init returned nil session")
 	}
+	closeSession := env.closeInit
+	if closeSession == nil {
+		closeSession = func(session *dotruntime.InitSession) error { return session.Close() }
+	}
 	defer func() {
-		resultErr = errors.Join(resultErr, session.Close())
+		resultErr = finishInitClose(resultErr, closeSession(session))
 	}()
 	loaded, err := session.Load(env.build.Version)
 	if err != nil {
@@ -144,6 +150,19 @@ func runInit(
 		Stderr:     command.ErrOrStderr(),
 	}, child)
 	return finishMutationApply(command, result, runErr, global.verbose)
+}
+
+// finishInitClose 让 unlock/close 失败高于纯 action/conflict 退出码，同时保留普通错误的聚合语义。
+func finishInitClose(resultErr, closeErr error) error {
+	if closeErr == nil {
+		return resultErr
+	}
+	// 这里只提升 package 内直接返回的 sealed command exit；wrapped error 必须走 Join 保留全部 cause。
+	requested, ok := resultErr.(commandExitError) //nolint:errorlint // 精确类型判定是本 helper 的契约边界。
+	if ok {
+		return fmt.Errorf("close init session after command exit %d: %w", requested.code, closeErr)
+	}
+	return errors.Join(resultErr, closeErr)
 }
 
 // parseInitSetValues 保留每次 --set 的 presence，并保守拒绝同一 key 的重复赋值。

@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -467,6 +469,92 @@ func TestInit_YesDoesNotForceConflicts(t *testing.T) {
 	}
 }
 
+func TestFinishInitClose_PreservesExitCodesAndAggregatesErrors(t *testing.T) {
+	closeErr := errors.New("unlock failed")
+	runErr := errors.New("apply failed")
+	for _, code := range []int{exitActionable, exitConflict} {
+		result := finishInitClose(commandExit(code), nil)
+		var requested commandExitError
+		if !errors.As(result, &requested) || requested.code != code {
+			t.Fatalf("finishInitClose(exit %d, nil) = %v, want same command exit", code, result)
+		}
+		result = finishInitClose(commandExit(code), closeErr)
+		if errors.As(result, &requested) || !errors.Is(result, closeErr) ||
+			!strings.Contains(result.Error(), "command exit "+strconv.Itoa(code)) {
+			t.Fatalf("finishInitClose(exit %d, close) = %v, want close error without commandExitError", code, result)
+		}
+	}
+
+	result := finishInitClose(runErr, closeErr)
+	if !errors.Is(result, runErr) || !errors.Is(result, closeErr) {
+		t.Fatalf("finishInitClose(run error, close error) = %v, want both causes", result)
+	}
+
+	wrappedExit := fmt.Errorf("wrapped action result: %w", commandExit(exitActionable))
+	result = finishInitClose(wrappedExit, closeErr)
+	var requested commandExitError
+	if !errors.Is(result, wrappedExit) || !errors.Is(result, closeErr) ||
+		!errors.As(result, &requested) || requested.code != exitActionable {
+		t.Fatalf("finishInitClose(wrapped exit, close error) = %v, want both wrapped causes", result)
+	}
+}
+
+func TestInit_CloseFailureOverridesActionableAndConflictExit(t *testing.T) {
+	closeErr := errors.New("injected init unlock failure")
+	for _, test := range []struct {
+		name      string
+		fixture   func(*testing.T) mutationCLIFixture
+		initTTY   func() (io.ReadWriteCloser, error)
+		pruneTTY  func() (io.ReadCloser, error)
+		prepare   func(*testing.T, mutationCLIFixture)
+		args      []string
+		wantPrior int
+	}{
+		{
+			name:    "actionable prune refusal",
+			fixture: newWholeModulePruneCLIFixture,
+			initTTY: func() (io.ReadWriteCloser, error) { return newInitTestTerminal("\n"), nil },
+			pruneTTY: func() (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("n\n")), nil
+			},
+			args:      []string{"init", "--profile", "all"},
+			wantPrior: exitActionable,
+		},
+		{
+			name:    "conflict",
+			fixture: newMutationCLIFixture,
+			prepare: func(t *testing.T, fixture mutationCLIFixture) {
+				writeCLIFile(t, filepath.Join(fixture.home, "alpha", "file"), "user-owned\n")
+			},
+			args:      []string{"init", "--profile", "all", "--yes"},
+			wantPrior: exitConflict,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := test.fixture(t)
+			if test.prepare != nil {
+				test.prepare(t, fixture)
+			}
+			stdout, stderr, code := runMutationInitWithClose(
+				t,
+				fixture,
+				"",
+				test.initTTY,
+				test.pruneTTY,
+				func(session *dotruntime.InitSession) error {
+					return errors.Join(session.Close(), closeErr)
+				},
+				test.args...,
+			)
+			if code != exitError || !strings.Contains(stderr, closeErr.Error()) ||
+				!strings.Contains(stderr, "command exit "+strconv.Itoa(test.wantPrior)) {
+				t.Fatalf("init close failure = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+			}
+			assertInitLockReleased(t, fixture)
+		})
+	}
+}
+
 type initDecisionFixture struct {
 	root     string
 	home     string
@@ -589,6 +677,18 @@ func runMutationInit(
 	openPruneTTY func() (io.ReadCloser, error),
 	args ...string,
 ) (string, string, int) {
+	return runMutationInitWithClose(t, fixture, stdin, openInitTTY, openPruneTTY, nil, args...)
+}
+
+func runMutationInitWithClose(
+	t *testing.T,
+	fixture mutationCLIFixture,
+	stdin string,
+	openInitTTY func() (io.ReadWriteCloser, error),
+	openPruneTTY func() (io.ReadCloser, error),
+	closeSession closeInit,
+	args ...string,
+) (string, string, int) {
 	t.Helper()
 	fixture.setEnvironment(t)
 	commandArgs := append([]string(nil), args...)
@@ -603,8 +703,23 @@ func runMutationInit(
 		userHomeDir:  os.UserHomeDir,
 		openInitTTY:  openInitTTY,
 		openTerminal: openPruneTTY,
+		closeInit:    closeSession,
 		build:        buildinfo.Info{Version: "v0.0.0", Commit: "test", BuildTime: "test"},
 		goos:         runtime.GOOS,
 	})
 	return stdout.String(), stderr.String(), code
+}
+
+func assertInitLockReleased(t *testing.T, fixture mutationCLIFixture) {
+	t.Helper()
+	session, err := dotruntime.BeginMutation(dotruntime.Overrides{
+		Home:       dotruntime.Override{Value: fixture.home, Set: true},
+		Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+	})
+	if err != nil {
+		t.Fatalf("BeginMutation() after init close error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("MutationSession.Close() after init close error = %v", err)
+	}
 }
