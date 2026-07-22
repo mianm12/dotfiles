@@ -53,9 +53,9 @@ func TestPublish_PrePublishFaultMatrixPreservesDestinationAndCleansTemporary(t *
 			}
 			operations := faultPublishOperations(tt.stage, faultErr)
 
-			changed, err := publish(path, candidate, operations)
-			if changed || !errors.Is(err, tt.wantErr) {
-				t.Fatalf("publish() = (%t, %v), want %v", changed, err, tt.wantErr)
+			result, err := publish(path, candidate, operations)
+			if result.Changed() || result.Committed() || !errors.Is(err, tt.wantErr) {
+				t.Fatalf("publish() = (%#v, %v), want uncommitted %v", result, err, tt.wantErr)
 			}
 			if tt.missing {
 				if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
@@ -95,9 +95,9 @@ func TestPublish_CleanupFailureJoinsPrimaryAndPreservesDestination(t *testing.T)
 			operations := faultPublishOperations("chmod", primaryErr)
 			operations.remove = func(string) error { return removeErr }
 
-			changed, err := publish(path, candidate, operations)
-			if changed || !errors.Is(err, primaryErr) || !errors.Is(err, removeErr) {
-				t.Fatalf("publish() = (%t, %v), want joined primary/remove errors", changed, err)
+			result, err := publish(path, candidate, operations)
+			if result.Changed() || result.Committed() || !errors.Is(err, primaryErr) || !errors.Is(err, removeErr) {
+				t.Fatalf("publish() = (%#v, %v), want joined uncommitted primary/remove errors", result, err)
 			}
 			if missing {
 				if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
@@ -118,6 +118,39 @@ func TestPublish_CleanupFailureJoinsPrimaryAndPreservesDestination(t *testing.T)
 				t.Fatal("cleanup failure did not retain the temporary file named in the error path")
 			}
 		})
+	}
+}
+
+func TestPublish_PostLinkCleanupFailureReportsCommittedConfig(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.toml")
+	snapshot, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	candidate, err := NewCandidate(snapshot, Machine{Profile: "mac"})
+	if err != nil {
+		t.Fatalf("NewCandidate() error = %v", err)
+	}
+	removeErr := errors.New("post-link remove failed")
+	operations := defaultPublishOperations()
+	operations.remove = func(string) error { return removeErr }
+
+	result, err := publish(path, candidate, operations)
+	if !result.Changed() || !result.Committed() || !errors.Is(err, removeErr) {
+		t.Fatalf("publish() = (%#v, %v), want changed+committed with cleanup error", result, err)
+	}
+	assertRegularConfigState(t, path, candidate.Bytes(), 0o600)
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil {
+		t.Fatalf("os.ReadDir() error = %v", readErr)
+	}
+	foundTemporary := false
+	for _, entry := range entries {
+		foundTemporary = foundTemporary || strings.HasPrefix(entry.Name(), ".config.toml-")
+	}
+	if !foundTemporary {
+		t.Fatal("post-link cleanup failure did not leave the reported temporary path")
 	}
 }
 

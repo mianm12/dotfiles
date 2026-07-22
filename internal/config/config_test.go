@@ -62,9 +62,9 @@ func TestPublish_CreatesPrivateConfigAndEquivalentCandidateDoesNotRewrite(t *tes
 	if err != nil {
 		t.Fatalf("NewCandidate() error = %v", err)
 	}
-	changed, err := Publish(path, candidate)
-	if err != nil || !changed {
-		t.Fatalf("Publish() = (%t, %v), want changed", changed, err)
+	result, err := Publish(path, candidate)
+	if err != nil || !result.Changed() || !result.Committed() {
+		t.Fatalf("Publish() = (%#v, %v), want changed+committed", result, err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -87,9 +87,9 @@ func TestPublish_CreatesPrivateConfigAndEquivalentCandidateDoesNotRewrite(t *tes
 		t.Fatalf("NewCandidate(equivalent) error = %v", err)
 	}
 	before := info.ModTime()
-	changed, err = Publish(path, equivalent)
-	if err != nil || changed {
-		t.Fatalf("Publish(equivalent) = (%t, %v), want no-op", changed, err)
+	result, err = Publish(path, equivalent)
+	if err != nil || result.Changed() || !result.Committed() {
+		t.Fatalf("Publish(equivalent) = (%#v, %v), want committed no-op", result, err)
 	}
 	after, err := os.Stat(path)
 	if err != nil || !after.ModTime().Equal(before) {
@@ -167,9 +167,9 @@ func TestPublish_MissingPreconditionDoesNotReplaceConcurrentConfig(t *testing.T)
 		return realLink(prepared, destination)
 	}
 
-	changed, err := publish(path, candidate, operations)
-	if changed || !errors.Is(err, ErrPreconditionChanged) {
-		t.Fatalf("publish() = (%t, %v), want ErrPreconditionChanged", changed, err)
+	result, err := publish(path, candidate, operations)
+	if result.Committed() || result.Changed() || !errors.Is(err, ErrPreconditionChanged) {
+		t.Fatalf("publish() = (%#v, %v), want uncommitted ErrPreconditionChanged", result, err)
 	}
 	current, readErr := os.ReadFile(path)
 	if readErr != nil || !bytes.Equal(current, competitor) {
@@ -200,9 +200,9 @@ func TestPublish_RenameFailurePreservesOldConfigAndCleansTemporary(t *testing.T)
 	operations.rename = func(string, string) error {
 		return renameErr
 	}
-	changed, err := publish(path, candidate, operations)
-	if changed || !errors.Is(err, renameErr) {
-		t.Fatalf("publish() = (%t, %v), want rename failure", changed, err)
+	result, err := publish(path, candidate, operations)
+	if result.Committed() || result.Changed() || !errors.Is(err, renameErr) {
+		t.Fatalf("publish() = (%#v, %v), want uncommitted rename failure", result, err)
 	}
 	current, readErr := os.ReadFile(path)
 	if readErr != nil || !bytes.Equal(current, old) {

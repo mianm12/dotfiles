@@ -330,7 +330,7 @@ type loadingOperations struct {
 	loadManifest              func(string) (manifest.Repository, error)
 	loadState                 func(string) (state.Loaded, error)
 	storeState                func(string, string, state.Snapshot) error
-	publishConfig             func(string, config.Candidate) (bool, error)
+	publishConfig             func(string, config.Candidate) (config.PublishResult, error)
 	validateLexicalBoundaries func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 	validatePathBoundaries    func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 }

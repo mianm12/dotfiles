@@ -347,33 +347,38 @@ func (session *InitSession) Load(cliVersion string) (*LoadedInit, error) {
 }
 
 // CommitConfig 校验 candidate 属于本次 preparation 和持锁 strict inputs 后原子发布。
-// 发布失败可重试；成功或等价 no-op 后同一 capability 不得再次提交。
-func (loaded *LoadedInit) CommitConfig(candidate InitCandidate) (bool, error) {
+// 未越过发布点的失败可重试；一旦 committed（含等价 no-op），即使 cleanup 报错也同步关闭额度。
+func (loaded *LoadedInit) CommitConfig(candidate InitCandidate) (config.PublishResult, error) {
 	if loaded == nil || loaded.capability == nil || loaded.capability.session == nil {
-		return false, fmt.Errorf("%w: init inputs were not loaded", ErrSessionOrder)
+		return config.PublishResult{}, fmt.Errorf("%w: init inputs were not loaded", ErrSessionOrder)
 	}
 	capability := loaded.capability
 	core := capability.session
 	unlock, err := core.lease.lockActive()
 	if err != nil {
-		return false, err
+		return config.PublishResult{}, err
 	}
 	defer unlock()
 	if core.loaded != capability {
-		return false, fmt.Errorf("%w: config commit capability does not belong to this init", ErrSessionOrder)
+		return config.PublishResult{}, fmt.Errorf("%w: config commit capability does not belong to this init", ErrSessionOrder)
 	}
 	if core.configCommitted {
-		return false, fmt.Errorf("%w: init config already committed", ErrSessionOrder)
+		return config.PublishResult{}, fmt.Errorf("%w: init config already committed", ErrSessionOrder)
 	}
 	if err := validateInitCandidate(capability.inputs, candidate); err != nil {
-		return false, err
+		return config.PublishResult{}, err
 	}
-	changed, err := core.operations.publishConfig(candidate.configPath, candidate.config)
+	publication, err := core.operations.publishConfig(candidate.configPath, candidate.config)
+	if publication.Committed() {
+		core.configCommitted = true
+	}
 	if err != nil {
-		return false, fmt.Errorf("commit init config: %w", err)
+		return publication, fmt.Errorf("commit init config: %w", err)
 	}
-	core.configCommitted = true
-	return changed, nil
+	if !publication.Committed() {
+		return config.PublishResult{}, fmt.Errorf("%w: config publisher returned success without a committed result", ErrSessionOrder)
+	}
+	return publication, nil
 }
 
 func validateInitCandidate(inputs InitInputs, candidate InitCandidate) error {
