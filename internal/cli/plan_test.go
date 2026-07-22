@@ -157,6 +157,40 @@ func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 			}
 		})
 	}
+
+	fullPlan, err := planner.PlanApply(planner.ApplyOptions{
+		Runtime: dotruntime.Overrides{
+			Home:       dotruntime.Override{Value: fixture.home, Set: true},
+			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+		},
+		CLIVersion: "v0.0.0",
+		Force:      true,
+	})
+	if err != nil {
+		t.Fatalf("planner.PlanApply(full) error = %v", err)
+	}
+	projection, err = projectApplyPlanWithAllOutcomes(
+		fullPlan,
+		false,
+		nil,
+		nil,
+		map[int]applyrunner.ActionOutcomeStatus{
+			0: applyrunner.ActionFailed,
+			1: applyrunner.ActionDeferred,
+		},
+	)
+	if err != nil {
+		t.Fatalf("projectApplyPlanWithAllOutcomes() error = %v", err)
+	}
+	joined = strings.Join(projection.actionLines, "\n")
+	for _, want := range []string{
+		"run-hook (failed)  alpha/hooks/setup.sh  (execution-failed)",
+		"run-hook (deferred)  beta/hooks/setup.sh  (earlier-hook-failed)",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("hook runtime projection = %q, want %q", joined, want)
+		}
+	}
 }
 
 func TestDiff_NoOpAndPlannerError(t *testing.T) {
@@ -701,6 +735,7 @@ func (fixture planCLIFixture) run(t *testing.T, commandArgs ...string) (string, 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := run(args, environment{
+		stdin:       strings.NewReader(""),
 		stdout:      &stdout,
 		stderr:      &stderr,
 		lookupEnv:   os.LookupEnv,
