@@ -76,7 +76,8 @@ Precond publisher、`LoadedInit.CommitConfig` 和 commit 后 `InitSession.BeginM
 - [x] 2026-07-22：Round 1 独立复核给出唯一 P2：纯 exit 2/3 与 outer init close error 聚合后，root
   仍因 `errors.As(commandExitError)` 返回 2/3并隐藏 close failure。新增 init-local close precedence helper
   与 session-local seam；exit2/3 + close failure 现升级 exit1并打印 close error，close success 保留2/3，
-  普通 error 与 close error 继续聚合。`go test -race ./internal/cli` 与 CLI lint 通过；等待 final gate。
+  普通 error 与 close error 继续聚合。修复 commit `9de7a15` 的 targeted race、package lint、branch
+  diff check 与 isolated exact-HEAD `make check` 全部通过；等待 Round 2 完整独立复核。
 
 ## Milestones
 
@@ -265,13 +266,15 @@ checkpoint，用后续 fix commit 修正，不重写历史。配置已 committed
     0b305ac feat(init): 建立零写入交互决策
     cdcb2c1 feat(apply): 支持消费既有 mutation session
     041b5f3 feat(init): 复用锁所有权完成初始化
+    9de7a15 fix(init): 提升关闭失败退出优先级
 
 结果覆盖 `dot init`、TTY/无 TTY、`--set` presence/重复、`--yes`、0600 config/repo persistence、同
 ownership child apply、hook stdio、whole-module prune、corrupt state 后保留 config、conflict 非
 force 和第二次收敛。targeted race tests、package lint、Darwin/Linux arm64 compile-only、完整 base
 diff check 和 isolated `make check` 已通过；远端 CI、真实 Linux、真实私人配置均未运行。
 
-Round 1 的唯一 P2 已在后续 semantic fix 中处理；production 仍关闭真实 `InitSession`，测试 seam
+Round 1 的唯一 P2 已在 `9de7a15` 处理并通过 exact-HEAD full gate；production 仍关闭真实
+`InitSession`，测试 seam
 先真实关闭再注入错误并重新取锁证明无泄漏。状态：active，等待 Round 2 未参与实现者对
 base...HEAD 的完整只读复核。按父任务边界，本 worker 不迁移
 `completed/`、不创建 closure commit，也不声称 review-ready；父任务负责处理复核 finding、freshness
