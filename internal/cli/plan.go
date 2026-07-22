@@ -190,7 +190,7 @@ func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes b
 		Stdout:     command.OutOrStdout(),
 		Stderr:     command.ErrOrStderr(),
 	})
-	return finishMutationApply(command, result, runErr, options.verbose)
+	return finishMutationApply(command, result, runErr, options.verbose, true)
 }
 
 func finishMutationApply(
@@ -198,6 +198,7 @@ func finishMutationApply(
 	result applyrunner.Result,
 	runErr error,
 	verbose bool,
+	includeContext bool,
 ) error {
 	if result.Valid(runErr != nil) {
 		var projection planProjection
@@ -210,7 +211,7 @@ func finishMutationApply(
 		if projectionErr != nil {
 			return errors.Join(runErr, projectionErr)
 		}
-		printPlanProjection(command, projection)
+		printPlanProjectionWithContext(command, projection, includeContext)
 		for _, backupPath := range result.BackupPaths() {
 			command.Println("backup  " + backupPath)
 		}
@@ -499,7 +500,13 @@ func planActionLine(verb, target, reason string) string {
 }
 
 func printPlanProjection(command *cobra.Command, projection planProjection) {
-	command.Println(projection.contextLine)
+	printPlanProjectionWithContext(command, projection, true)
+}
+
+func printPlanProjectionWithContext(command *cobra.Command, projection planProjection, includeContext bool) {
+	if includeContext {
+		command.Println(projection.contextLine)
+	}
 	for _, line := range projection.actionLines {
 		command.Println(line)
 	}

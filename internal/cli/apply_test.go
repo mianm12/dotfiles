@@ -27,7 +27,8 @@ func TestApply_MutatesAndConvergesWithoutRepeatWrites(t *testing.T) {
 		t.Fatalf("first apply = stdout %q, stderr %q, exit %d; want success", stdout, stderr, code)
 	}
 	wantContext := "repo=" + fixture.repository + " profile=all os=" + runtime.GOOS + "\n"
-	if !strings.HasPrefix(stdout, wantContext) || !strings.Contains(stdout, "link  ~/alpha/file  (target-missing)\n") {
+	if !strings.HasPrefix(stdout, wantContext) || strings.Count(stdout, wantContext) != 1 ||
+		!strings.Contains(stdout, "link  ~/alpha/file  (target-missing)\n") {
 		t.Fatalf("first apply stdout = %q, want context and link action", stdout)
 	}
 	target := filepath.Join(fixture.home, "alpha", "file")

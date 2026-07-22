@@ -112,6 +112,16 @@ func runInit(
 	if err != nil {
 		return err
 	}
+	lockedInputs := loaded.Inputs()
+	contextLine := fmt.Sprintf(
+		"repo=%s profile=%s os=%s",
+		lockedInputs.Context().Control().RepositoryPath(),
+		candidate.Machine().Profile,
+		env.goos,
+	)
+	if _, err := fmt.Fprintln(command.OutOrStdout(), contextLine); err != nil {
+		return fmt.Errorf("write init context: %w", err)
+	}
 	status := "unchanged"
 	if publication.Changed() {
 		status = "updated"
@@ -149,7 +159,7 @@ func runInit(
 		Stdout:     command.OutOrStdout(),
 		Stderr:     command.ErrOrStderr(),
 	}, child)
-	return finishMutationApply(command, result, runErr, global.verbose)
+	return finishMutationApply(command, result, runErr, global.verbose, false)
 }
 
 // finishInitClose 让 unlock/close 失败高于纯 action/conflict 退出码，同时保留普通错误的聚合语义。

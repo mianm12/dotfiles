@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	applyrunner "github.com/mianm12/dotfiles/internal/apply"
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/mianm12/dotfiles/internal/config"
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
@@ -251,6 +252,7 @@ default = "fallback"
 	if code != exitOK || stderr != "" || !strings.Contains(stdout, "config  "+fixture.config+"  (updated)") {
 		t.Fatalf("config-only init = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 	}
+	assertInitContextOrder(t, stdout, fixture.repo, "mac", "config  "+fixture.config)
 	snapshot, err := config.LoadSnapshot(fixture.config)
 	if err != nil {
 		t.Fatalf("LoadSnapshot(config) error = %v", err)
@@ -328,6 +330,7 @@ func TestInit_YesRunsNestedApplyHooksAndSecondRunConverges(t *testing.T) {
 		!strings.Contains(stderr, "hook-err:from-init-stdin") {
 		t.Fatalf("first init apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 	}
+	assertInitContextOrder(t, stdout, fixture.repository, "all", "config  ", "link  ", "run-hook  ")
 	logPath := filepath.Join(fixture.home, "hook-log")
 	if content, err := os.ReadFile(logPath); err != nil || string(content) != "from-init-stdin\n" {
 		t.Fatalf("hook log = %q, %v", content, err)
@@ -346,6 +349,7 @@ func TestInit_YesRunsNestedApplyHooksAndSecondRunConverges(t *testing.T) {
 		!strings.HasSuffix(stdout, "Already up to date.\n") || strings.Contains(stdout, "hook-out:") {
 		t.Fatalf("second init apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 	}
+	assertInitContextOrder(t, stdout, fixture.repository, "all", "config  ", "Already up to date.")
 	if afterSecond := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(afterSecond, afterFirst) {
 		t.Fatalf("second init changed synthetic tree\nfirst=%v\nsecond=%v", afterFirst, afterSecond)
 	}
@@ -555,6 +559,50 @@ func TestInit_CloseFailureOverridesActionableAndConflictExit(t *testing.T) {
 	}
 }
 
+func TestInit_ContextWriteFailureStopsBeforeConfigOutputAndNestedApply(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+	fixture.setEnvironment(t)
+	writeErr := errors.New("injected init context write failure")
+	stdout := &failOnSubstringWriter{needle: "repo=", err: writeErr}
+	var stderr bytes.Buffer
+	applyCalled := false
+	code := run(
+		[]string{"init", "--profile", "all", "--yes", "--home", fixture.home, "--repo", fixture.repository},
+		environment{
+			stdin:       strings.NewReader(""),
+			stdout:      stdout,
+			stderr:      &stderr,
+			lookupEnv:   os.LookupEnv,
+			userHomeDir: os.UserHomeDir,
+			build:       buildinfo.Info{Version: "v0.0.0", Commit: "test", BuildTime: "test"},
+			goos:        runtime.GOOS,
+			applyNested: func(applyrunner.Options, *dotruntime.MutationSession) (applyrunner.Result, error) {
+				applyCalled = true
+				return applyrunner.Result{}, errors.New("must not run nested apply")
+			},
+		},
+	)
+	if code != exitError || !strings.Contains(stderr.String(), "write init context") ||
+		!strings.Contains(stderr.String(), writeErr.Error()) {
+		t.Fatalf("context write failure = stdout %q, stderr %q, exit %d", stdout.buffer.String(), stderr.String(), code)
+	}
+	if stdout.buffer.Len() != 0 || applyCalled {
+		t.Fatalf("context write failure emitted stdout %q or called apply=%t", stdout.buffer.String(), applyCalled)
+	}
+	snapshot, err := config.LoadSnapshot(filepath.Join(fixture.home, ".config", "dot", "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadSnapshot(config) error = %v", err)
+	}
+	machine := snapshot.Machine()
+	if machine.Profile != "all" || machine.Repo == nil || *machine.Repo != fixture.repository {
+		t.Fatalf("config after context failure = %#v, want committed profile/repo", machine)
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.home, "alpha", "file")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("context failure target error = %v, want missing", err)
+	}
+	assertInitLockReleased(t, fixture)
+}
+
 type initDecisionFixture struct {
 	root     string
 	home     string
@@ -721,5 +769,20 @@ func assertInitLockReleased(t *testing.T, fixture mutationCLIFixture) {
 	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("MutationSession.Close() after init close error = %v", err)
+	}
+}
+
+func assertInitContextOrder(t *testing.T, stdout, repository, profile string, later ...string) {
+	t.Helper()
+	contextLine := fmt.Sprintf("repo=%s profile=%s os=%s\n", repository, profile, runtime.GOOS)
+	if strings.Count(stdout, contextLine) != 1 {
+		t.Fatalf("init stdout context count = %d in %q, want exactly one %q", strings.Count(stdout, contextLine), stdout, contextLine)
+	}
+	contextIndex := strings.Index(stdout, contextLine)
+	for _, marker := range later {
+		markerIndex := strings.Index(stdout, marker)
+		if markerIndex < 0 || contextIndex >= markerIndex {
+			t.Fatalf("init stdout = %q, want context before %q", stdout, marker)
+		}
 	}
 }
