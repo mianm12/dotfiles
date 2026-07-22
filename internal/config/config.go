@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/mianm12/dotfiles/internal/datakey"
 	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -132,16 +131,8 @@ func LoadSnapshot(path string) (Snapshot, error) {
 	if err := decoder.Decode(&machine); err != nil {
 		return Snapshot{}, fmt.Errorf("decode machine config %q: %w", path, err)
 	}
-	if machine.Profile == "" {
-		return Snapshot{}, fmt.Errorf("machine config %q: profile must be a non-empty string", path)
-	}
-	if machine.Repo != nil && *machine.Repo == "" {
-		return Snapshot{}, fmt.Errorf("machine config %q: repo must be a non-empty string", path)
-	}
-	for key := range machine.Data {
-		if !datakey.Valid(key) {
-			return Snapshot{}, fmt.Errorf("machine config %q: invalid data key %q", path, key)
-		}
+	if err := validateMachine(machine); err != nil {
+		return Snapshot{}, fmt.Errorf("machine config %q: %w", path, err)
 	}
 
 	snapshot := Snapshot{

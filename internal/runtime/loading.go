@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/mianm12/dotfiles/internal/config"
 	"github.com/mianm12/dotfiles/internal/lock"
 	"github.com/mianm12/dotfiles/internal/manifest"
 	"github.com/mianm12/dotfiles/internal/paths"
@@ -56,6 +58,13 @@ type InitInputs struct {
 	repository    manifest.Repository
 }
 
+// InitSelection 保存 interaction/非交互层明确选择的 profile 与 data。
+// Override.Set 区分省略和显式空字符串。
+type InitSelection struct {
+	Profile Override
+	Data    map[string]Override
+}
+
 // Context 返回 init 的严格 preflight 结果。
 func (inputs InitInputs) Context() InitContext { return inputs.context }
 
@@ -64,6 +73,73 @@ func (inputs InitInputs) Compatibility() Compatibility { return inputs.compatibi
 
 // Manifest 返回严格加载的仓库 manifest。
 func (inputs InitInputs) Manifest() manifest.Repository { return inputs.repository }
+
+// BuildCandidate 从 immutable preparation inputs 纯函数地合并完整 machine config candidate。
+func (inputs InitInputs) BuildCandidate(selection InitSelection) (config.Candidate, error) {
+	context := inputs.context
+	snapshot := context.ConfigSnapshot()
+	existing, exists := context.ExistingMachine()
+
+	profile := ""
+	switch {
+	case selection.Profile.Set:
+		profile = selection.Profile.Value
+	default:
+		if override, ok := context.ProfileOverride(); ok {
+			profile = override
+		} else if exists {
+			profile = existing.Profile()
+		}
+	}
+	if profile == "" {
+		return config.Candidate{}, fmt.Errorf("init profile is required")
+	}
+	if !slices.Contains(inputs.repository.ProfileNames(), profile) {
+		return config.Candidate{}, fmt.Errorf("unknown init profile %q", profile)
+	}
+
+	declared := make(map[string]manifest.DataDeclaration)
+	for _, declaration := range inputs.repository.DataDeclarations() {
+		declared[declaration.Key()] = declaration
+	}
+	for key := range selection.Data {
+		if _, ok := declared[key]; !ok {
+			return config.Candidate{}, fmt.Errorf("unknown init data key %q", key)
+		}
+	}
+
+	data := map[string]string{}
+	if exists {
+		data = existing.Data()
+	}
+	for key, declaration := range declared {
+		if selected, ok := selection.Data[key]; ok && selected.Set {
+			data[key] = selected.Value
+			continue
+		}
+		if _, ok := data[key]; ok {
+			continue
+		}
+		if defaultValue, ok := declaration.Default(); ok {
+			data[key] = defaultValue
+			continue
+		}
+		return config.Candidate{}, fmt.Errorf("init data %q is required", key)
+	}
+
+	machine := config.Machine{Profile: profile, Data: data}
+	if exists {
+		if repo, ok := existing.Repo(); ok {
+			machine.Repo = &repo
+		}
+	}
+	switch context.RepositorySource() {
+	case paths.RepositorySourceFlag, paths.RepositorySourceEnvironment:
+		repository := context.Control().RepositoryPath()
+		machine.Repo = &repository
+	}
+	return config.NewCandidate(snapshot, machine)
+}
 
 // LoadReadOnly 加载与完整 mutation 相同的只读输入，但从不获取或创建 lock。
 func LoadReadOnly(overrides Overrides, cliVersion string) (LoadedInputs, error) {
