@@ -4,7 +4,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/planner"
 )
 
-// ActionOutcomeStatus 描述 runner 对一个可执行计划动作的实际处置，不让调用方从聚合计数猜测。
+// ActionOutcomeStatus 描述 runner 对一个计划动作的实际处置，不让调用方从聚合计数猜测。
 type ActionOutcomeStatus string
 
 const (
@@ -16,6 +16,8 @@ const (
 	ActionDeferred ActionOutcomeStatus = "deferred"
 	// ActionFailed 表示动作遭遇非 conflict 运行或协议错误。
 	ActionFailed ActionOutcomeStatus = "failed"
+	// ActionSkipped 表示 canonical HookSkip 未启动子进程且不形成新 state effect。
+	ActionSkipped ActionOutcomeStatus = "skipped"
 )
 
 // FileOutcome 以 canonical plan index 与 target 标识一个可执行 file 动作的结果。
@@ -42,6 +44,16 @@ type PruneOutcome struct {
 	stateEffectReady bool
 }
 
+// HookOutcome 以 canonical plan index 与 run_once state key 标识一个 hook 动作的结果。
+type HookOutcome struct {
+	Index    int
+	StateKey string
+	Status   ActionOutcomeStatus
+
+	attempted        bool
+	stateEffectReady bool
+}
+
 type resultStage uint8
 
 const (
@@ -59,6 +71,7 @@ type Result struct {
 	stage            resultStage
 	fileOutcomes     []FileOutcome
 	pruneOutcomes    []PruneOutcome
+	hookOutcomes     []HookOutcome
 	confirmRequested bool
 	confirmAccepted  bool
 	stateCommitted   bool
@@ -69,7 +82,11 @@ func newPlannedResult(plan planner.ApplyPlan) Result {
 	return Result{plan: plan, stage: resultPlanned, seal: successfulResultSeal}
 }
 
-func (result *Result) beginExecution(files []planner.FileAction, prune []planner.PruneAction) map[int]int {
+func (result *Result) beginExecution(
+	files []planner.FileAction,
+	prune []planner.PruneAction,
+	hooks []planner.HookAction,
+) map[int]int {
 	result.stage = resultExecuted
 	positions := make(map[int]int)
 	for index, action := range files {
@@ -87,6 +104,14 @@ func (result *Result) beginExecution(files []planner.FileAction, prune []planner
 			Index: index, Target: action.Target, Status: ActionDeferred,
 		}
 	}
+	result.hookOutcomes = make([]HookOutcome, len(hooks))
+	for index, action := range hooks {
+		status := ActionDeferred
+		if action.Verb == planner.HookSkip {
+			status = ActionSkipped
+		}
+		result.hookOutcomes[index] = HookOutcome{Index: index, StateKey: action.StateKey, Status: status}
+	}
 	return positions
 }
 
@@ -97,10 +122,12 @@ func (result Result) Valid(hasRuntimeError bool) bool {
 	}
 	if result.stage == resultPlanned {
 		return hasRuntimeError && len(result.fileOutcomes) == 0 && len(result.pruneOutcomes) == 0 &&
+			len(result.hookOutcomes) == 0 &&
 			!result.confirmRequested && !result.confirmAccepted && !result.stateCommitted
 	}
 	if result.stage != resultExecuted || !result.validFileOutcomes(hasRuntimeError) ||
-		!result.validPruneOutcomes(hasRuntimeError) || !result.validExecutionGates() ||
+		!result.validPruneOutcomes(hasRuntimeError) || !result.validHookOutcomes(hasRuntimeError) ||
+		!result.validExecutionGates() ||
 		result.confirmAccepted && !result.confirmRequested {
 		return false
 	}
@@ -269,6 +296,47 @@ func validPruneOutcome(action planner.PruneAction, outcome PruneOutcome, hasRunt
 	}
 }
 
+func (result Result) validHookOutcomes(hasRuntimeError bool) bool {
+	hooks := result.plan.Hooks().Actions()
+	if len(result.hookOutcomes) != len(hooks) {
+		return false
+	}
+	stopped := false
+	for index, action := range hooks {
+		outcome := result.hookOutcomes[index]
+		if outcome.Index != index || outcome.StateKey != action.StateKey {
+			return false
+		}
+		if action.Verb == planner.HookSkip {
+			if outcome.Status != ActionSkipped || outcome.attempted || outcome.stateEffectReady {
+				return false
+			}
+			continue
+		}
+		if stopped && outcome.Status != ActionDeferred {
+			return false
+		}
+		switch outcome.Status {
+		case ActionSucceeded:
+			if !outcome.attempted || !outcome.stateEffectReady {
+				return false
+			}
+		case ActionFailed:
+			if !hasRuntimeError || !outcome.attempted || outcome.stateEffectReady {
+				return false
+			}
+			stopped = true
+		case ActionDeferred:
+			if !stopped || outcome.attempted || outcome.stateEffectReady {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (result Result) stateEffectCount() int {
 	count := 0
 	for _, outcome := range result.fileOutcomes {
@@ -277,6 +345,11 @@ func (result Result) stateEffectCount() int {
 		}
 	}
 	for _, outcome := range result.pruneOutcomes {
+		if outcome.stateEffectReady {
+			count++
+		}
+	}
+	for _, outcome := range result.hookOutcomes {
 		if outcome.stateEffectReady {
 			count++
 		}
@@ -309,6 +382,15 @@ func (result Result) PruneOutcomes() []PruneOutcome {
 	outcomes := make([]PruneOutcome, len(result.pruneOutcomes))
 	for index, outcome := range result.pruneOutcomes {
 		outcomes[index] = PruneOutcome{Index: outcome.Index, Target: outcome.Target, Status: outcome.Status}
+	}
+	return outcomes
+}
+
+// HookOutcomes 返回不共享 backing array 的逐 hook 结果。
+func (result Result) HookOutcomes() []HookOutcome {
+	outcomes := make([]HookOutcome, len(result.hookOutcomes))
+	for index, outcome := range result.hookOutcomes {
+		outcomes[index] = HookOutcome{Index: outcome.Index, StateKey: outcome.StateKey, Status: outcome.Status}
 	}
 	return outcomes
 }
@@ -356,6 +438,28 @@ func (result Result) PruneAttempts() int {
 	count := 0
 	for _, outcome := range result.pruneOutcomes {
 		if outcome.attempted {
+			count++
+		}
+	}
+	return count
+}
+
+// HookAttempts 返回实际调用 hook executor 的次数；HookSkip 与失败后的后缀不计入。
+func (result Result) HookAttempts() int {
+	count := 0
+	for _, outcome := range result.hookOutcomes {
+		if outcome.attempted {
+			count++
+		}
+	}
+	return count
+}
+
+// HookEffects 返回已接受、将进入同一 ChangeSet 的 run_once upsert 数量。
+func (result Result) HookEffects() int {
+	count := 0
+	for _, outcome := range result.hookOutcomes {
+		if outcome.stateEffectReady {
 			count++
 		}
 	}

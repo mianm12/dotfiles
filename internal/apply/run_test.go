@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -252,38 +253,108 @@ func TestRun_RejectsMalformedLinkUpsertBeforeExecutor(t *testing.T) {
 	}
 }
 
-func TestRun_RejectsAnyScopedHookBeforeAllMutation(t *testing.T) {
-	for _, verb := range []planner.HookVerb{planner.HookRun, planner.HookSkip} {
-		t.Run(string(verb), func(t *testing.T) {
+func TestRun_HooksIgnoreFileAndPruneConvergenceGates(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(*testing.T, runSeamFixture, *executionPlan, *seamOperations, *Options)
+	}{
+		{
+			name: "file conflict",
+			prepare: func(_ *testing.T, _ runSeamFixture, plan *executionPlan, operations *seamOperations, _ *Options) {
+				file := seamLinkAction("~/.conflict")
+				plan.files = []planner.FileAction{file}
+				operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
+					return executor.FileResult{StateEffect: file.OnFailure}, executor.ErrPreconditionMismatch
+				}
+			},
+		},
+		{
+			name: "prune deferred",
+			prepare: func(_ *testing.T, _ runSeamFixture, plan *executionPlan, _ *seamOperations, _ *Options) {
+				plan.prune = []planner.PruneAction{{Deferred: true}}
+			},
+		},
+		{
+			name: "confirmation refused",
+			prepare: func(t *testing.T, fixture runSeamFixture, plan *executionPlan, _ *seamOperations, options *Options) {
+				plan.prune = []planner.PruneAction{seamPruneAction(t, fixture.loaded.controlPaths, "~/.orphan", planner.PruneReasonScaffold)}
+				plan.groups = []planner.PruneConfirmationGroup{{Module: "old"}}
+				options.Confirm = func([]planner.PruneConfirmationGroup) (bool, error) { return false, nil }
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			fixture := newRunSeamFixture(t)
-			fileExecuted := false
-			pruneExecuted := false
-			confirmed := false
-			operations := fixture.operations(executionPlan{
-				files: []planner.FileAction{seamLinkAction("~/.file")},
-				hooks: []planner.HookAction{{Verb: verb, StateKey: "app/hooks/setup"}},
-			})
-			operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
-				fileExecuted = true
-				return executor.FileResult{}, nil
-			}
-			operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
-				pruneExecuted = true
-				return executor.PruneResult{}, nil
+			hook := seamHookAction(fixture, "app/hooks/setup.sh", planner.HookRun)
+			plan := executionPlan{hooks: []planner.HookAction{hook}}
+			operations := fixture.operations(plan)
+			options := Options{}
+			test.prepare(t, fixture, &plan, &operations, &options)
+			operations.plan = plan
+			hookCalls := 0
+			operations.executeHook = func(action planner.HookAction, _ executor.HookStreams) (executor.HookResult, error) {
+				hookCalls++
+				return executor.HookResult{StateEffect: action.OnSuccess}, nil
 			}
 
-			result, err := operations.run(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
-				confirmed = true
-				return true, nil
-			}})
-			if !errors.Is(err, ErrUnsupportedPlan) {
-				t.Fatalf("runWithOperations() error = %v, want ErrUnsupportedPlan", err)
+			result, err := operations.run(options)
+			if err != nil {
+				t.Fatalf("runExecution() error = %v", err)
 			}
-			if fileExecuted || pruneExecuted || confirmed || result.FileAttempts() != 0 ||
-				result.PruneAttempts() != 0 || fixture.loaded.commitCalls != 0 {
-				t.Fatalf("mutation before hook gate: result=%#v file=%t prune=%t confirm=%t commit=%d", result, fileExecuted, pruneExecuted, confirmed, fixture.loaded.commitCalls)
+			if hookCalls != 1 || result.HookAttempts() != 1 || result.HookEffects() != 1 ||
+				!result.StateCommitted() || fixture.loaded.commitCalls != 1 {
+				t.Fatalf("hook gate result = %#v, calls=%d commit=%d", result, hookCalls, fixture.loaded.commitCalls)
+			}
+			if _, exists := fixture.loaded.committed.RunOnce(hook.StateKey); !exists {
+				t.Fatal("successful hook effect was not committed")
 			}
 		})
+	}
+}
+
+func TestRun_HookFailureStopsSuffixAndCommitsSuccessfulPrefix(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	fixture.loadBaseline(t, `{"version":1,"entries":{},"run_once":{"app/hooks/second.sh":{"hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executed_at":"2026-07-19T00:00:00Z"}}}`)
+	first := seamHookAction(fixture, "app/hooks/first.sh", planner.HookRun)
+	second := seamHookAction(fixture, "app/hooks/second.sh", planner.HookRun)
+	third := seamHookAction(fixture, "app/hooks/third.sh", planner.HookRun)
+	failure := errors.New("hook exited 23")
+	operations := fixture.operations(executionPlan{hooks: []planner.HookAction{first, second, third}})
+	var executed []string
+	operations.executeHook = func(action planner.HookAction, _ executor.HookStreams) (executor.HookResult, error) {
+		executed = append(executed, action.StateKey)
+		if action.StateKey == second.StateKey {
+			return executor.HookResult{StateEffect: action.OnFailure}, failure
+		}
+		return executor.HookResult{StateEffect: action.OnSuccess}, nil
+	}
+
+	result, err := operations.run(Options{})
+	if !errors.Is(err, failure) {
+		t.Fatalf("runExecution() error = %v, want hook failure", err)
+	}
+	if !reflect.DeepEqual(executed, []string{first.StateKey, second.StateKey}) {
+		t.Fatalf("executed hooks = %#v, want successful prefix plus failure", executed)
+	}
+	wantOutcomes := []HookOutcome{
+		{Index: 0, StateKey: first.StateKey, Status: ActionSucceeded},
+		{Index: 1, StateKey: second.StateKey, Status: ActionFailed},
+		{Index: 2, StateKey: third.StateKey, Status: ActionDeferred},
+	}
+	if !reflect.DeepEqual(result.HookOutcomes(), wantOutcomes) || result.HookAttempts() != 2 ||
+		result.HookEffects() != 1 || !result.StateCommitted() || fixture.loaded.commitCalls != 1 {
+		t.Fatalf("hook failure result = %#v commit=%d", result, fixture.loaded.commitCalls)
+	}
+	firstRecord, firstExists := fixture.loaded.committed.RunOnce(first.StateKey)
+	secondRecord, secondExists := fixture.loaded.committed.RunOnce(second.StateKey)
+	if !firstExists || firstRecord.Hash() != first.Fingerprint {
+		t.Fatalf("first hook record = (%#v, %t)", firstRecord, firstExists)
+	}
+	if !secondExists || secondRecord.Hash() != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("failed hook old record = (%#v, %t)", secondRecord, secondExists)
+	}
+	if _, exists := fixture.loaded.committed.RunOnce(third.StateKey); exists {
+		t.Fatal("unattempted suffix received a run_once record")
 	}
 }
 
@@ -296,11 +367,14 @@ func TestRun_OrdersFilesConfirmationPruneAndStoresMixedEffectsOnce(t *testing.T)
 }`)
 	file := seamLinkAction("~/.created")
 	prune := seamPruneAction(t, fixture.loaded.controlPaths, "~/.orphan", planner.PruneReasonScaffold)
-	order := make([]string, 0, 3)
+	hook := seamHookAction(fixture, "app/hooks/setup.sh", planner.HookRun)
+	skip := seamHookAction(fixture, "app/hooks/done.sh", planner.HookSkip)
+	order := make([]string, 0, 4)
 	operations := fixture.operations(executionPlan{
 		files:  []planner.FileAction{file},
 		prune:  []planner.PruneAction{prune},
 		groups: []planner.PruneConfirmationGroup{{Module: "old"}},
+		hooks:  []planner.HookAction{hook, skip},
 	})
 	operations.execute = func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
 		order = append(order, "file")
@@ -310,6 +384,10 @@ func TestRun_OrdersFilesConfirmationPruneAndStoresMixedEffectsOnce(t *testing.T)
 		order = append(order, "prune")
 		return executor.PruneResult{StateEffect: prune.OnSuccess}, nil
 	}
+	operations.executeHook = func(action planner.HookAction, _ executor.HookStreams) (executor.HookResult, error) {
+		order = append(order, "hook")
+		return executor.HookResult{StateEffect: action.OnSuccess}, nil
+	}
 
 	result, err := operations.run(Options{Confirm: func([]planner.PruneConfirmationGroup) (bool, error) {
 		order = append(order, "confirm")
@@ -318,10 +396,11 @@ func TestRun_OrdersFilesConfirmationPruneAndStoresMixedEffectsOnce(t *testing.T)
 	if err != nil {
 		t.Fatalf("runWithOperations() error = %v", err)
 	}
-	if got := strings.Join(order, ","); got != "file,confirm,prune" {
+	if got := strings.Join(order, ","); got != "file,confirm,prune,hook" {
 		t.Fatalf("execution order = %q", got)
 	}
 	if result.FileAttempts() != 1 || result.PruneAttempts() != 1 || result.PruneEffects() != 1 ||
+		result.HookAttempts() != 1 || result.HookEffects() != 1 ||
 		!result.ConfirmRequested() || !result.ConfirmAccepted() || !result.StateCommitted() || fixture.loaded.commitCalls != 1 {
 		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
 	}
@@ -333,6 +412,105 @@ func TestRun_OrdersFilesConfirmationPruneAndStoresMixedEffectsOnce(t *testing.T)
 	}
 	if _, exists := fixture.loaded.committed.RunOnce("keep/hooks/done"); !exists {
 		t.Fatal("unrelated run_once was not preserved")
+	}
+	if record, exists := fixture.loaded.committed.RunOnce(hook.StateKey); !exists || record.Hash() != hook.Fingerprint {
+		t.Fatalf("successful hook record = (%#v, %t)", record, exists)
+	}
+	wantHookOutcomes := []HookOutcome{
+		{Index: 0, StateKey: hook.StateKey, Status: ActionSucceeded},
+		{Index: 1, StateKey: skip.StateKey, Status: ActionSkipped},
+	}
+	if !reflect.DeepEqual(result.HookOutcomes(), wantHookOutcomes) {
+		t.Fatalf("hook outcomes = %#v, want %#v", result.HookOutcomes(), wantHookOutcomes)
+	}
+}
+
+func TestRun_HookStoreFailureRetriesAtLeastOnce(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	hook := seamHookAction(fixture, "app/hooks/setup.sh", planner.HookRun)
+	storeErr := errors.New("store failed")
+	fixture.loaded.commitErr = storeErr
+	operations := fixture.operations(executionPlan{hooks: []planner.HookAction{hook}})
+	hookCalls := 0
+	operations.executeHook = func(action planner.HookAction, _ executor.HookStreams) (executor.HookResult, error) {
+		hookCalls++
+		return executor.HookResult{StateEffect: action.OnSuccess}, nil
+	}
+
+	first, err := operations.run(Options{})
+	if !errors.Is(err, storeErr) || hookCalls != 1 || first.HookEffects() != 1 ||
+		first.StateCommitted() || fixture.loaded.commitCalls != 1 {
+		t.Fatalf("first run = (%#v, %v), hookCalls=%d commitCalls=%d", first, err, hookCalls, fixture.loaded.commitCalls)
+	}
+	fixture.loaded.commitErr = nil
+	second, err := operations.run(Options{})
+	if err != nil || hookCalls != 2 || second.HookEffects() != 1 ||
+		!second.StateCommitted() || fixture.loaded.commitCalls != 2 {
+		t.Fatalf("retry = (%#v, %v), hookCalls=%d commitCalls=%d", second, err, hookCalls, fixture.loaded.commitCalls)
+	}
+	if record, exists := fixture.loaded.committed.RunOnce(hook.StateKey); !exists || record.Hash() != hook.Fingerprint {
+		t.Fatalf("retried hook record = (%#v, %t)", record, exists)
+	}
+}
+
+func TestRun_HookSkipDoesNotExecuteOrCommit(t *testing.T) {
+	fixture := newRunSeamFixture(t)
+	skip := seamHookAction(fixture, "app/hooks/setup.sh", planner.HookSkip)
+	operations := fixture.operations(executionPlan{hooks: []planner.HookAction{skip}})
+	hookCalls := 0
+	operations.executeHook = func(planner.HookAction, executor.HookStreams) (executor.HookResult, error) {
+		hookCalls++
+		return executor.HookResult{}, nil
+	}
+
+	result, err := operations.run(Options{})
+	want := []HookOutcome{{Index: 0, StateKey: skip.StateKey, Status: ActionSkipped}}
+	if err != nil || hookCalls != 0 || result.HookAttempts() != 0 || result.HookEffects() != 0 ||
+		result.StateCommitted() || fixture.loaded.commitCalls != 0 || !reflect.DeepEqual(result.HookOutcomes(), want) {
+		t.Fatalf("skip result = (%#v, %v), calls=%d commit=%d", result, err, hookCalls, fixture.loaded.commitCalls)
+	}
+}
+
+func TestRun_RejectsHookResultsThatContradictAction(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		effect     func(planner.HookAction) planner.HookStateEffect
+		executeErr error
+	}{
+		{
+			name:       "success with error",
+			effect:     func(action planner.HookAction) planner.HookStateEffect { return action.OnSuccess },
+			executeErr: errors.New("post-success error"),
+		},
+		{
+			name:   "failure without error",
+			effect: func(action planner.HookAction) planner.HookStateEffect { return action.OnFailure },
+		},
+		{
+			name: "unknown effect",
+			effect: func(planner.HookAction) planner.HookStateEffect {
+				return planner.HookStateEffect{Kind: planner.HookStateEffectKind("future")}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRunSeamFixture(t)
+			hook := seamHookAction(fixture, "app/hooks/setup.sh", planner.HookRun)
+			operations := fixture.operations(executionPlan{hooks: []planner.HookAction{hook}})
+			operations.executeHook = func(action planner.HookAction, _ executor.HookStreams) (executor.HookResult, error) {
+				return executor.HookResult{StateEffect: test.effect(action)}, test.executeErr
+			}
+
+			result, err := operations.run(Options{})
+			if !errors.Is(err, ErrExecutionProtocol) || result.HookAttempts() != 1 || result.HookEffects() != 0 ||
+				result.StateCommitted() || fixture.loaded.commitCalls != 0 {
+				t.Fatalf("contradictory hook result = (%#v, %v), commit=%d", result, err, fixture.loaded.commitCalls)
+			}
+			want := []HookOutcome{{Index: 0, StateKey: hook.StateKey, Status: ActionFailed}}
+			if !reflect.DeepEqual(result.HookOutcomes(), want) {
+				t.Fatalf("hook outcomes = %#v, want %#v", result.HookOutcomes(), want)
+			}
+		})
 	}
 }
 
@@ -1262,6 +1440,7 @@ func (operations seamOperations) run(options Options) (Result, error) {
 			files:  operations.plan.files,
 			prune:  operations.plan.prune,
 			groups: operations.plan.groups,
+			hooks:  operations.plan.hooks,
 		},
 		operations.runOperations,
 		&result,
@@ -1313,6 +1492,9 @@ func (fixture runSeamFixture) operations(plan executionPlan) seamOperations {
 			},
 			pruneExecute: func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
 				return executor.PruneResult{}, nil
+			},
+			executeHook: func(planner.HookAction, executor.HookStreams) (executor.HookResult, error) {
+				return executor.HookResult{}, nil
 			},
 			now: func() time.Time { return time.Date(2026, 7, 20, 1, 2, 3, 0, time.UTC) },
 		},
@@ -1429,6 +1611,55 @@ func seamBackupReplaceAction(target string) planner.FileAction {
 		Kind:        planner.LeafExactRegular,
 		Hash:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		Permissions: 0o600,
+	}
+	return action
+}
+
+func seamHookAction(fixture runSeamFixture, key string, verb planner.HookVerb) planner.HookAction {
+	module, script, found := strings.Cut(key, "/")
+	if !found {
+		panic("seam hook key must contain a module")
+	}
+	home := fixture.loaded.controlPaths.EffectiveHome()
+	repository := fixture.loaded.controlPaths.Repository()
+	modulePath := filepath.Join(repository, "modules", module)
+	scriptPath := filepath.Join(modulePath, filepath.FromSlash(script))
+	content := []byte("printf seam-hook\n")
+	fingerprint := planner.HookFingerprint(planner.HookExecutionShell, content)
+	action := planner.HookAction{
+		Verb:           verb,
+		StateKey:       key,
+		Module:         module,
+		Script:         script,
+		ScriptPath:     scriptPath,
+		WorkingDir:     modulePath,
+		TargetRoot:     "~",
+		TargetRootPath: home,
+		Profile:        "all",
+		GOOS:           runtime.GOOS,
+		Repository:     repository,
+		Invocation: planner.HookInvocation{
+			Mode: planner.HookExecutionShell, Program: "sh", Arguments: []string{scriptPath},
+		},
+		Environment: planner.HookEnvironment{
+			Home:          home,
+			XDGConfigHome: filepath.Join(home, ".config"),
+			XDGStateHome:  filepath.Join(home, ".local", "state"),
+			XDGDataHome:   filepath.Join(home, ".local", "share"),
+			DotModule:     module,
+			DotOS:         runtime.GOOS,
+			DotProfile:    "all",
+			DotRepo:       repository,
+			DotTarget:     home,
+		},
+		Fingerprint: fingerprint,
+		OnSuccess: planner.HookStateEffect{
+			Kind: planner.HookStateUpsert, Key: key, Fingerprint: fingerprint,
+		},
+		OnFailure: planner.HookStateEffect{Kind: planner.HookStatePreserve},
+	}
+	if verb == planner.HookSkip {
+		action.OnSuccess = planner.HookStateEffect{Kind: planner.HookStatePreserve}
 	}
 	return action
 }

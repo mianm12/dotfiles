@@ -39,6 +39,9 @@ func ExecuteHook(action planner.HookAction, streams HookStreams) (HookResult, er
 	if err := ValidateHookAction(action); err != nil {
 		return failure, err
 	}
+	if action.Verb != planner.HookRun {
+		return failure, fmt.Errorf("%w: verb %q is not executable", ErrUnsupportedHookAction, action.Verb)
+	}
 	if streams.Stdin == nil || streams.Stdout == nil || streams.Stderr == nil {
 		return failure, fmt.Errorf("%w: hook streams must all be present", ErrUnsupportedHookAction)
 	}
@@ -58,10 +61,11 @@ func ExecuteHook(action planner.HookAction, streams HookStreams) (HookResult, er
 	return HookResult{StateEffect: action.OnSuccess}, nil
 }
 
-// ValidateHookAction 不读取文件系统，检查 action 是否是内部一致且可执行的 HookRun。
+// ValidateHookAction 不读取文件系统，检查 HookRun 或 HookSkip 是否内部一致；执行函数另行拒绝
+// 不需要启动子进程的 HookSkip。
 func ValidateHookAction(action planner.HookAction) error {
-	if action.Verb != planner.HookRun {
-		return fmt.Errorf("%w: verb %q is not executable", ErrUnsupportedHookAction, action.Verb)
+	if action.Verb != planner.HookRun && action.Verb != planner.HookSkip {
+		return fmt.Errorf("%w: verb %q is unsupported", ErrUnsupportedHookAction, action.Verb)
 	}
 	if action.Module == "" || action.Script == "" || action.TargetRoot == "" ||
 		action.Profile == "" || (action.GOOS != "darwin" && action.GOOS != "linux") {
@@ -114,11 +118,20 @@ func ValidateHookAction(action planner.HookAction) error {
 	if !strings.HasPrefix(action.Fingerprint, "sha256:") || len(action.Fingerprint) != len("sha256:")+64 {
 		return fmt.Errorf("%w: hook fingerprint is unsupported", ErrUnsupportedHookAction)
 	}
-	if action.OnSuccess.Kind != planner.HookStateUpsert ||
-		action.OnSuccess.Key != action.StateKey ||
-		action.OnSuccess.Fingerprint != action.Fingerprint ||
-		action.OnFailure != (planner.HookStateEffect{Kind: planner.HookStatePreserve}) {
+	if action.OnFailure != (planner.HookStateEffect{Kind: planner.HookStatePreserve}) {
 		return fmt.Errorf("%w: hook state effects are inconsistent", ErrUnsupportedHookAction)
+	}
+	switch action.Verb {
+	case planner.HookRun:
+		if action.OnSuccess.Kind != planner.HookStateUpsert ||
+			action.OnSuccess.Key != action.StateKey ||
+			action.OnSuccess.Fingerprint != action.Fingerprint {
+			return fmt.Errorf("%w: run hook success effect is inconsistent", ErrUnsupportedHookAction)
+		}
+	case planner.HookSkip:
+		if action.OnSuccess != (planner.HookStateEffect{Kind: planner.HookStatePreserve}) {
+			return fmt.Errorf("%w: skipped hook effect is inconsistent", ErrUnsupportedHookAction)
+		}
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package apply
 import (
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/mianm12/dotfiles/internal/backup"
@@ -24,6 +25,9 @@ type Options struct {
 	Force      bool
 	NoPrune    bool
 	Confirm    ConfirmPrune
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
 }
 
 // ConfirmPrune 请求一次 whole-module prune 汇总确认。accepted=false 表示用户拒绝；error 表示
@@ -49,6 +53,7 @@ type runOperations struct {
 	backup        func(string) (*backup.Batch, error)
 	executeBackup func(paths.ControlPlanePaths, planner.FileAction, *backup.Batch) (executor.FileResult, error)
 	pruneExecute  func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error)
+	executeHook   func(planner.HookAction, executor.HookStreams) (executor.HookResult, error)
 	now           func() time.Time
 }
 
@@ -56,10 +61,11 @@ type executionScope struct {
 	files  []planner.FileAction
 	prune  []planner.PruneAction
 	groups []planner.PruneConfirmationGroup
+	hooks  []planner.HookAction
 }
 
 // Run 在一个 mutation lock 周期内完成 strict load、exact-input plan、scope gate、file、
-// force backup、confirmation、prune execution 和一次 state commit。它不连接 CLI，也不执行 hooks。
+// force backup、confirmation、prune、hook execution 和一次 state commit。它不连接 CLI。
 func Run(options Options) (Result, error) {
 	return runWithOperations(options, defaultRunOperations())
 }
@@ -67,7 +73,7 @@ func Run(options Options) (Result, error) {
 func runWithOperations(options Options, operations runOperations) (result Result, resultErr error) {
 	if operations.begin == nil || operations.plan == nil || operations.execute == nil ||
 		operations.backup == nil || operations.executeBackup == nil ||
-		operations.pruneExecute == nil || operations.now == nil {
+		operations.pruneExecute == nil || operations.executeHook == nil || operations.now == nil {
 		return Result{}, fmt.Errorf("%w: apply runner operations are incomplete", ErrExecutionProtocol)
 	}
 	session, err := operations.begin(options.Runtime)
@@ -110,14 +116,30 @@ func runWithOperations(options Options, operations runOperations) (result Result
 	if err := validateExecutionScope(files, prune, hooks); err != nil {
 		return result, err
 	}
+	if err := validateHookStreams(options, hooks); err != nil {
+		return result, err
+	}
 	resultErr = runExecution(
 		options,
 		mutation,
-		executionScope{files: files, prune: prune, groups: groups},
+		executionScope{files: files, prune: prune, groups: groups, hooks: hooks},
 		operations,
 		&result,
 	)
 	return result, resultErr
+}
+
+func validateHookStreams(options Options, hooks []planner.HookAction) error {
+	for _, action := range hooks {
+		if action.Verb != planner.HookRun {
+			continue
+		}
+		if options.Stdin == nil || options.Stdout == nil || options.Stderr == nil {
+			return fmt.Errorf("%w: hook stdio is incomplete", ErrExecutionProtocol)
+		}
+		return nil
+	}
+	return nil
 }
 
 func validatePruneResult(
@@ -135,6 +157,30 @@ func validatePruneResult(
 	}
 	if success && executeErr != nil {
 		return false, false, fmt.Errorf("%w: prune action %q returned success with an error", ErrExecutionProtocol, action.Target)
+	}
+	return success, failure, nil
+}
+
+func validateHookResult(
+	action planner.HookAction,
+	result executor.HookResult,
+	executeErr error,
+) (success, failure bool, err error) {
+	success = result.StateEffect == action.OnSuccess
+	failure = result.StateEffect == action.OnFailure
+	if !success && !failure {
+		return false, false, fmt.Errorf(
+			"%w: hook action %q returned an unknown state effect",
+			ErrExecutionProtocol,
+			action.StateKey,
+		)
+	}
+	if success && executeErr != nil {
+		return false, false, fmt.Errorf(
+			"%w: hook action %q returned success with an error",
+			ErrExecutionProtocol,
+			action.StateKey,
+		)
 	}
 	return success, failure, nil
 }
@@ -239,6 +285,18 @@ func entryUpdate(effect planner.StateEffect, appliedAt time.Time) (state.EntryUp
 	}, nil
 }
 
+func runOnceUpdate(effect planner.HookStateEffect, executedAt time.Time) (state.RunOnceUpdate, error) {
+	if effect.Kind != planner.HookStateUpsert || effect.Key == "" || effect.Fingerprint == "" {
+		return state.RunOnceUpdate{}, fmt.Errorf(
+			"%w: successful hook effect is not a complete upsert",
+			ErrExecutionProtocol,
+		)
+	}
+	return state.RunOnceUpdate{
+		Key: effect.Key, Hash: effect.Fingerprint, ExecutedAt: executedAt.UTC().Format(time.RFC3339Nano),
+	}, nil
+}
+
 type runtimeMutationSession struct {
 	session *dotruntime.MutationSession
 }
@@ -287,6 +345,7 @@ func defaultRunOperations() runOperations {
 		backup:        backup.NewBatch,
 		executeBackup: executor.ExecuteFileWithBackup,
 		pruneExecute:  executor.ExecutePrune,
+		executeHook:   executor.ExecuteHook,
 		now:           time.Now,
 	}
 }

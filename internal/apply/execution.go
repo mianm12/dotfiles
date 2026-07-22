@@ -17,7 +17,7 @@ func runExecution(
 	operations runOperations,
 	result *Result,
 ) error {
-	fileOutcomePositions := result.beginExecution(scope.files, scope.prune)
+	fileOutcomePositions := result.beginExecution(scope.files, scope.prune, scope.hooks)
 	updates, filesConverged, fileErr := executeFilePhase(
 		mutation,
 		scope.files,
@@ -26,7 +26,62 @@ func runExecution(
 		result,
 	)
 	deletes, pruneErr := executePrunePhase(options, mutation, scope, filesConverged, operations, result)
-	return commitExecutionEffects(mutation, updates, deletes, errors.Join(fileErr, pruneErr), result)
+	runOnceUpdates, hookErr := executeHookPhase(options, scope.hooks, operations, result)
+	return commitExecutionEffects(
+		mutation,
+		state.ChangeSet{EntryUpdates: updates, EntryDeletes: deletes, RunOnceUpdates: runOnceUpdates},
+		errors.Join(fileErr, pruneErr, hookErr),
+		result,
+	)
+}
+
+func executeHookPhase(
+	options Options,
+	hooks []planner.HookAction,
+	operations runOperations,
+	result *Result,
+) ([]state.RunOnceUpdate, error) {
+	updates := make([]state.RunOnceUpdate, 0, len(hooks))
+	for index, action := range hooks {
+		outcome := &result.hookOutcomes[index]
+		if action.Verb == planner.HookSkip {
+			continue
+		}
+		outcome.attempted = true
+		hookResult, executeErr := operations.executeHook(action, executor.HookStreams{
+			Stdin: options.Stdin, Stdout: options.Stdout, Stderr: options.Stderr,
+		})
+		success, failure, protocolErr := validateHookResult(action, hookResult, executeErr)
+		if protocolErr != nil {
+			executeErr = errors.Join(executeErr, protocolErr)
+		}
+		switch {
+		case protocolErr != nil:
+		case success:
+			update, updateErr := runOnceUpdate(action.OnSuccess, operations.now())
+			if updateErr != nil {
+				executeErr = errors.Join(executeErr, updateErr)
+			} else {
+				updates = append(updates, update)
+				outcome.stateEffectReady = true
+			}
+		case failure:
+			if executeErr == nil {
+				executeErr = fmt.Errorf(
+					"%w: hook action %d for %q returned failure effect without error",
+					ErrExecutionProtocol,
+					index,
+					action.StateKey,
+				)
+			}
+		}
+		if executeErr != nil {
+			outcome.Status = ActionFailed
+			return updates, fmt.Errorf("execute hook action %d for %q: %w", index, action.StateKey, executeErr)
+		}
+		outcome.Status = ActionSucceeded
+	}
+	return updates, nil
 }
 
 func executeFilePhase(
@@ -191,15 +246,14 @@ func confirmPrunePhase(confirm ConfirmPrune, groups []planner.PruneConfirmationG
 
 func commitExecutionEffects(
 	mutation loadedMutation,
-	updates []state.EntryUpdate,
-	deletes []string,
+	changes state.ChangeSet,
 	executionErr error,
 	result *Result,
 ) error {
-	if len(updates) == 0 && len(deletes) == 0 {
+	if len(changes.EntryUpdates) == 0 && len(changes.EntryDeletes) == 0 && len(changes.RunOnceUpdates) == 0 {
 		return executionErr
 	}
-	candidate, changed, transitionErr := state.TransitionEntries(mutation.baseline(), updates, deletes...)
+	candidate, changed, transitionErr := state.Transition(mutation.baseline(), changes)
 	if transitionErr != nil {
 		return errors.Join(executionErr, transitionErr)
 	}
