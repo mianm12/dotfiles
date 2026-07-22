@@ -177,6 +177,49 @@ func (r Repository) DataKeys() []string {
 	return sortedKeys(r.manifest.data)
 }
 
+// DataDeclaration 是 init 消费的单个 M1 data 声明快照。
+// prompt/default 的 presence 与值分别保存，因此显式空字符串不会退化为缺失。
+type DataDeclaration struct {
+	key          string
+	prompt       string
+	promptSet    bool
+	defaultValue string
+	defaultSet   bool
+}
+
+// Key 返回声明的 data key。
+func (declaration DataDeclaration) Key() string { return declaration.key }
+
+// Prompt 返回显式 prompt；未声明时 ok 为 false。
+func (declaration DataDeclaration) Prompt() (value string, ok bool) {
+	return declaration.prompt, declaration.promptSet
+}
+
+// Default 返回显式 default；未声明时 ok 为 false。
+func (declaration DataDeclaration) Default() (value string, ok bool) {
+	return declaration.defaultValue, declaration.defaultSet
+}
+
+// DataDeclarations 返回按 key 字节序排列的不可变 M1 data 声明副本。
+func (r Repository) DataDeclarations() []DataDeclaration {
+	keys := r.DataKeys()
+	declarations := make([]DataDeclaration, 0, len(keys))
+	for _, key := range keys {
+		spec := r.manifest.data[key]
+		declaration := DataDeclaration{key: key}
+		if spec.prompt != nil {
+			declaration.prompt = *spec.prompt
+			declaration.promptSet = true
+		}
+		if spec.defaultValue != nil {
+			declaration.defaultValue = *spec.defaultValue
+			declaration.defaultSet = true
+		}
+		declarations = append(declarations, declaration)
+	}
+	return declarations
+}
+
 // ValidateTemplates 静态检查仓库中每个有效 scaffold 的语法、函数与变量引用。
 // 检查不受 profile 或 OS 过滤影响，因此也覆盖 unassigned 与当前 OS 不活跃的模块；
 // 它不需要运行 data，不渲染模板，也不读取 target。

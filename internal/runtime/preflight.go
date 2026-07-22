@@ -56,14 +56,19 @@ func (context ControlContext) ConfigPath() string { return context.paths.Config(
 // RepositoryPath 返回本次运行的仓库路径。
 func (context ControlContext) RepositoryPath() string { return context.paths.Repository() }
 
-// MachineContext 是严格机器配置形成的不可变 profile/data 快照。
+// MachineContext 是严格机器配置形成的不可变 profile/repo/data 快照。
 type MachineContext struct {
 	profile string
+	repo    string
+	repoSet bool
 	data    map[string]string
 }
 
 // Profile 返回该机器上下文的 profile。
 func (context MachineContext) Profile() string { return context.profile }
+
+// Repo 返回机器配置中持久化的 repo；字段缺失时 ok 为 false。
+func (context MachineContext) Repo() (value string, ok bool) { return context.repo, context.repoSet }
 
 // Data 返回机器 data 的独立副本。
 func (context MachineContext) Data() map[string]string { return cloneData(context.data) }
@@ -86,11 +91,13 @@ func (context RunContext) Data() map[string]string { return context.machine.Data
 // InitContext 保存 init 配置选择所需的控制面、已有机器配置和显式 profile 覆盖。
 // 配置缺失时不会向调用方暴露伪造的普通 RunContext。
 type InitContext struct {
-	control         ControlContext
-	existing        MachineContext
-	valid           bool
-	configExists    bool
-	profileOverride Override
+	control          ControlContext
+	existing         MachineContext
+	valid            bool
+	configExists     bool
+	profileOverride  Override
+	repositorySource paths.RepositorySource
+	configSnapshot   config.Snapshot
 }
 
 // Control 返回 init 已校验的控制面上下文。
@@ -114,6 +121,17 @@ func (context InitContext) ProfileOverride() (profile string, ok bool) {
 	}
 	return context.profileOverride.Value, context.profileOverride.Set
 }
+
+// RepositorySource 返回 effective repo 的决策来源。
+func (context InitContext) RepositorySource() paths.RepositorySource {
+	if !context.valid {
+		return ""
+	}
+	return context.repositorySource
+}
+
+// ConfigSnapshot 返回初次 strict config 读取的不可变快照。
+func (context InitContext) ConfigSnapshot() config.Snapshot { return context.configSnapshot }
 
 // Preflight 使用 production 系统来源完成严格、完整的机器运行前置。
 func Preflight(overrides Overrides) (RunContext, error) {
@@ -155,11 +173,13 @@ func (resolver Resolver) PreflightInit(overrides Overrides) (InitContext, error)
 		return InitContext{}, err
 	}
 	return InitContext{
-		control:         loaded.control,
-		existing:        machineContext(loaded.machine),
-		valid:           true,
-		configExists:    loaded.configExists,
-		profileOverride: overrides.Profile,
+		control:          loaded.control,
+		existing:         machineContext(loaded.machine),
+		valid:            true,
+		configExists:     loaded.configExists,
+		profileOverride:  overrides.Profile,
+		repositorySource: loaded.repositorySource,
+		configSnapshot:   loaded.configSnapshot,
 	}, nil
 }
 
@@ -174,9 +194,11 @@ func (resolver Resolver) PreflightRepository(overrides Overrides) (ControlContex
 }
 
 type loadedContext struct {
-	control      ControlContext
-	machine      config.Machine
-	configExists bool
+	control          ControlContext
+	machine          config.Machine
+	configExists     bool
+	repositorySource paths.RepositorySource
+	configSnapshot   config.Snapshot
 }
 
 func (resolver Resolver) load(overrides Overrides) (loadedContext, error) {
@@ -195,17 +217,19 @@ func (resolver Resolver) load(overrides Overrides) (loadedContext, error) {
 	if err != nil {
 		return loadedContext{}, err
 	}
-	machine, exists, err := config.Load(configPath)
+	configSnapshot, err := config.LoadSnapshot(configPath)
 	if err != nil {
 		return loadedContext{}, err
 	}
+	machine := configSnapshot.Machine()
+	exists := configSnapshot.Exists()
 	// 覆盖只决定本次 effective repo，不能掩盖已经持久化的非法配置。
 	if exists && machine.Repo != nil {
 		if _, err := paths.ResolveControlPath(*machine.Repo, home); err != nil {
 			return loadedContext{}, fmt.Errorf("machine config repo: %w", err)
 		}
 	}
-	repository, err := paths.Repository(
+	repository, err := paths.ResolveRepository(
 		home,
 		overrides.Repository.Value,
 		overrides.Repository.Set,
@@ -215,7 +239,7 @@ func (resolver Resolver) load(overrides Overrides) (loadedContext, error) {
 	if err != nil {
 		return loadedContext{}, err
 	}
-	controlPaths, err := paths.ResolveControlPlanePaths(home, repository, configPath)
+	controlPaths, err := paths.ResolveControlPlanePaths(home, repository.Path(), configPath)
 	if err != nil {
 		return loadedContext{}, err
 	}
@@ -223,9 +247,11 @@ func (resolver Resolver) load(overrides Overrides) (loadedContext, error) {
 		return loadedContext{}, err
 	}
 	return loadedContext{
-		control:      ControlContext{paths: controlPaths},
-		machine:      machine,
-		configExists: exists,
+		control:          ControlContext{paths: controlPaths},
+		machine:          machine,
+		configExists:     exists,
+		repositorySource: repository.Source(),
+		configSnapshot:   configSnapshot,
 	}, nil
 }
 
@@ -252,7 +278,12 @@ func runContextFromLoaded(loaded loadedContext, overrides Overrides) RunContext 
 }
 
 func machineContext(machine config.Machine) MachineContext {
-	return MachineContext{profile: machine.Profile, data: cloneData(machine.Data)}
+	context := MachineContext{profile: machine.Profile, data: cloneData(machine.Data)}
+	if machine.Repo != nil {
+		context.repo = *machine.Repo
+		context.repoSet = true
+	}
+	return context
 }
 
 func cloneData(data map[string]string) map[string]string {

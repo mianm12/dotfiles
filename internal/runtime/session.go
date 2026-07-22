@@ -3,9 +3,12 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
+	"github.com/mianm12/dotfiles/internal/config"
 	"github.com/mianm12/dotfiles/internal/lock"
+	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/state"
 )
 
@@ -236,8 +239,29 @@ type InitSession struct {
 type initSessionCore struct {
 	lease      *sessionLease
 	context    InitContext
+	overrides  Overrides
 	operations loadingOperations
-	loaded     bool
+	loaded     *loadedInitCapability
+
+	configCommitted bool
+}
+
+// LoadedInit 是持锁 strict refresh 与 manifest load 后获得的一次 config commit capability。
+type LoadedInit struct {
+	capability *loadedInitCapability
+}
+
+type loadedInitCapability struct {
+	session *initSessionCore
+	inputs  InitInputs
+}
+
+// Inputs 返回本次持锁 strict refresh 后的 immutable init inputs。
+func (loaded *LoadedInit) Inputs() InitInputs {
+	if loaded == nil || loaded.capability == nil {
+		return InitInputs{}
+	}
+	return loaded.capability.inputs
 }
 
 // BeginInit 在 init preflight 后取得锁，但不读取 manifest 或 state。
@@ -263,6 +287,7 @@ func beginInit(overrides Overrides, operations loadingOperations) (*InitSession,
 	return newInitSession(
 		newSessionLease(owner, owner),
 		context,
+		overrides,
 		operations,
 	), nil
 }
@@ -270,43 +295,135 @@ func beginInit(overrides Overrides, operations loadingOperations) (*InitSession,
 func newInitSession(
 	lease *sessionLease,
 	context InitContext,
+	overrides Overrides,
 	operations loadingOperations,
 ) *InitSession {
 	return &InitSession{core: &initSessionCore{
 		lease:      lease,
 		context:    context,
+		overrides:  overrides,
 		operations: operations,
 	}}
 }
 
 // Load 在 init session 已持锁时加载 requires 与 strict manifest，但不读取 state。
-func (session *InitSession) Load(cliVersion string) (InitInputs, error) {
+func (session *InitSession) Load(cliVersion string) (*LoadedInit, error) {
 	if session == nil || session.core == nil {
-		return InitInputs{}, ErrSessionClosed
+		return nil, ErrSessionClosed
 	}
 	core := session.core
 	unlock, err := core.lease.lockActive()
 	if err != nil {
-		return InitInputs{}, err
+		return nil, err
 	}
 	defer unlock()
-	if core.loaded {
-		return InitInputs{}, fmt.Errorf("%w: init inputs already loaded", ErrSessionOrder)
+	if core.loaded != nil {
+		return nil, fmt.Errorf("%w: init inputs already loaded", ErrSessionOrder)
+	}
+	refreshed, err := core.operations.preflightInit(core.overrides)
+	if err != nil {
+		return nil, err
+	}
+	if refreshed.Control().Paths() != core.context.Control().Paths() {
+		return nil, fmt.Errorf("%w: init control context changed after lock acquisition", config.ErrPreconditionChanged)
 	}
 	compatibility, repository, err := loadRepository(
-		core.context.Control().RepositoryPath(),
+		refreshed.Control().RepositoryPath(),
 		cliVersion,
 		core.operations,
 	)
 	if err != nil {
-		return InitInputs{}, err
+		return nil, err
 	}
-	core.loaded = true
-	return InitInputs{
-		context:       core.context,
+	inputs := InitInputs{
+		context:       refreshed,
 		compatibility: compatibility,
 		repository:    repository,
-	}, nil
+	}
+	capability := &loadedInitCapability{session: core, inputs: inputs}
+	core.context = refreshed
+	core.loaded = capability
+	return &LoadedInit{capability: capability}, nil
+}
+
+// CommitConfig 校验 candidate 属于本次 preparation 和持锁 strict inputs 后原子发布。
+// 未越过发布点的失败可重试；一旦 committed（含等价 no-op），即使 cleanup 报错也同步关闭额度。
+func (loaded *LoadedInit) CommitConfig(candidate InitCandidate) (config.PublishResult, error) {
+	if loaded == nil || loaded.capability == nil || loaded.capability.session == nil {
+		return config.PublishResult{}, fmt.Errorf("%w: init inputs were not loaded", ErrSessionOrder)
+	}
+	capability := loaded.capability
+	core := capability.session
+	unlock, err := core.lease.lockActive()
+	if err != nil {
+		return config.PublishResult{}, err
+	}
+	defer unlock()
+	if core.loaded != capability {
+		return config.PublishResult{}, fmt.Errorf("%w: config commit capability does not belong to this init", ErrSessionOrder)
+	}
+	if core.configCommitted {
+		return config.PublishResult{}, fmt.Errorf("%w: init config already committed", ErrSessionOrder)
+	}
+	if err := validateInitCandidate(capability.inputs, candidate); err != nil {
+		return config.PublishResult{}, err
+	}
+	publication, err := core.operations.publishConfig(candidate.configPath, candidate.config)
+	if publication.Committed() {
+		core.configCommitted = true
+	}
+	if err != nil {
+		return publication, fmt.Errorf("commit init config: %w", err)
+	}
+	if !publication.Committed() {
+		return config.PublishResult{}, fmt.Errorf("%w: config publisher returned success without a committed result", ErrSessionOrder)
+	}
+	return publication, nil
+}
+
+func validateInitCandidate(inputs InitInputs, candidate InitCandidate) error {
+	if !candidate.valid {
+		return fmt.Errorf("init config candidate is invalid")
+	}
+	context := inputs.Context()
+	control := context.Control()
+	if candidate.configPath != control.ConfigPath() || candidate.repositoryPath != control.RepositoryPath() {
+		return fmt.Errorf("init config candidate belongs to a different control context")
+	}
+	machine := candidate.Machine()
+	if override, ok := context.ProfileOverride(); ok && machine.Profile != override {
+		return fmt.Errorf("init config candidate profile %q does not match locked profile override %q", machine.Profile, override)
+	}
+	if !slices.Contains(inputs.Manifest().ProfileNames(), machine.Profile) {
+		return fmt.Errorf("unknown init profile %q after locked refresh", machine.Profile)
+	}
+	for _, declaration := range inputs.Manifest().DataDeclarations() {
+		if _, ok := machine.Data[declaration.Key()]; !ok {
+			return fmt.Errorf("init data %q is missing after locked refresh", declaration.Key())
+		}
+	}
+	switch context.RepositorySource() {
+	case paths.RepositorySourceFlag, paths.RepositorySourceEnvironment:
+		if machine.Repo == nil || *machine.Repo != control.RepositoryPath() {
+			return fmt.Errorf("init config candidate does not persist effective repo override")
+		}
+	case paths.RepositorySourceConfig:
+		existing, ok := context.ExistingMachine()
+		if !ok {
+			return fmt.Errorf("init config source claims missing machine config")
+		}
+		repo, ok := existing.Repo()
+		if !ok || machine.Repo == nil || *machine.Repo != repo {
+			return fmt.Errorf("init config candidate changed omitted repo selection")
+		}
+	case paths.RepositorySourceDefault:
+		if machine.Repo != nil {
+			return fmt.Errorf("init config candidate added repo without an explicit source")
+		}
+	default:
+		return fmt.Errorf("init repository source is invalid")
+	}
+	return nil
 }
 
 // BeginMutation 在 init 配置成功提交后，以同一 ownership 和更新后的严格 preflight
@@ -321,8 +438,8 @@ func (session *InitSession) BeginMutation(overrides Overrides) (*MutationSession
 		return nil, err
 	}
 	defer unlock()
-	if !core.loaded {
-		return nil, fmt.Errorf("%w: init inputs must load before nested mutation", ErrSessionOrder)
+	if !core.configCommitted {
+		return nil, fmt.Errorf("%w: init config must commit before nested mutation", ErrSessionOrder)
 	}
 	return beginNestedMutationLocked(overrides, core.lease, core.operations)
 }

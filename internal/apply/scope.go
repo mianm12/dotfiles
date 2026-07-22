@@ -34,13 +34,9 @@ func validateExecutionScope(
 		}
 	}
 	for index, action := range hooks {
-		return fmt.Errorf(
-			"%w: hook action %d for %q uses %q before hook execution is available",
-			ErrUnsupportedPlan,
-			index,
-			action.StateKey,
-			action.Verb,
-		)
+		if err := executor.ValidateHookAction(action); err != nil {
+			return fmt.Errorf("%w: hook action %d for %q: %w", ErrUnsupportedPlan, index, action.StateKey, err)
+		}
 	}
 	return nil
 }

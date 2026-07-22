@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/config"
 	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/state"
 )
@@ -396,6 +397,14 @@ func TestInitSession_CopiesShareLoadPhase(t *testing.T) {
 
 func TestInitSession_NestedMutationUsesUpdatedConfigAndSameOwnership(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
+	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit() error = %v", err)
+	}
+	candidate, err := prepared.BuildCandidate(InitSelection{Profile: Override{Value: "mac", Set: true}})
+	if err != nil {
+		t.Fatalf("BuildCandidate() error = %v", err)
+	}
 	outer, err := BeginInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("BeginInit() error = %v", err)
@@ -404,17 +413,23 @@ func TestInitSession_NestedMutationUsesUpdatedConfigAndSameOwnership(t *testing.
 	if nested, err := outer.BeginMutation(fixture.overrides); nested != nil || !errors.Is(err, ErrSessionOrder) {
 		t.Fatalf("BeginMutation() before init Load = (%#v, %v), want ErrSessionOrder", nested, err)
 	}
-	inputs, err := outer.Load("v1.0.0")
+	loaded, err := outer.Load("v1.0.0")
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
 	if _, err := outer.Load("v1.0.0"); !errors.Is(err, ErrSessionOrder) {
 		t.Fatalf("second InitSession.Load() error = %v, want ErrSessionOrder", err)
 	}
-	if !inputs.Context().ConfigMissing() {
+	if !loaded.Inputs().Context().ConfigMissing() {
 		t.Fatal("ConfigMissing() = false, want true")
 	}
-	writeFile(t, fixture.config, []byte("profile = \"mac\"\n"), 0o600)
+	if nested, err := outer.BeginMutation(fixture.overrides); nested != nil || !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("BeginMutation() before config commit = (%#v, %v), want ErrSessionOrder", nested, err)
+	}
+	publication, err := loaded.CommitConfig(candidate)
+	if err != nil || !publication.Changed() || !publication.Committed() {
+		t.Fatalf("CommitConfig() = (%#v, %v), want changed+committed", publication, err)
+	}
 	writeState(t, fixture, "{")
 
 	nested, err := outer.BeginMutation(fixture.overrides)
@@ -426,12 +441,220 @@ func TestInitSession_NestedMutationUsesUpdatedConfigAndSameOwnership(t *testing.
 	if mutation, err := nested.Load("v1.0.0"); mutation != nil || !errors.Is(err, state.ErrCorrupt) {
 		t.Fatalf("nested MutationSession.Load() = (%#v, %v), want ErrCorrupt", mutation, err)
 	}
-	configBytes, err := os.ReadFile(fixture.config)
-	if err != nil || string(configBytes) != "profile = \"mac\"\n" {
-		t.Fatalf("updated config = (%q, %v), want preserved", configBytes, err)
+	configSnapshot, err := config.LoadSnapshot(fixture.config)
+	if err != nil || configSnapshot.Profile() != "mac" {
+		t.Fatalf("updated config = (%#v, %v), want preserved mac", configSnapshot, err)
 	}
 	closeMutationSession(t, nested)
 	assertLockAvailable(t, fixture)
+}
+
+func TestLoadedInit_ConfigCommitIsSingleUseAndEquivalentNoOpOpensGate(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	initial, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit(initial) error = %v", err)
+	}
+	initialCandidate, err := initial.BuildCandidate(InitSelection{Profile: Override{Value: "mac", Set: true}})
+	if err != nil {
+		t.Fatalf("BuildCandidate(initial) error = %v", err)
+	}
+	writeFile(t, fixture.config, initialCandidate.Bytes(), 0o600)
+
+	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit(existing) error = %v", err)
+	}
+	candidate, err := prepared.BuildCandidate(InitSelection{})
+	if err != nil {
+		t.Fatalf("BuildCandidate(existing) error = %v", err)
+	}
+	session, err := BeginInit(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginInit() error = %v", err)
+	}
+	t.Cleanup(func() { closeInitSession(t, session) })
+	loaded, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("InitSession.Load() error = %v", err)
+	}
+	publication, err := loaded.CommitConfig(candidate)
+	if err != nil || publication.Changed() || !publication.Committed() {
+		t.Fatalf("CommitConfig(equivalent) = (%#v, %v), want committed no-op", publication, err)
+	}
+	if _, err := loaded.CommitConfig(candidate); !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("second CommitConfig() error = %v, want ErrSessionOrder", err)
+	}
+	child, err := session.BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginMutation() after no-op commit error = %v", err)
+	}
+	closeMutationSession(t, child)
+}
+
+func TestLoadedInit_PreconditionFailureKeepsConfigGateClosed(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit() error = %v", err)
+	}
+	candidate, err := prepared.BuildCandidate(InitSelection{Profile: Override{Value: "mac", Set: true}})
+	if err != nil {
+		t.Fatalf("BuildCandidate() error = %v", err)
+	}
+	session, err := BeginInit(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginInit() error = %v", err)
+	}
+	t.Cleanup(func() { closeInitSession(t, session) })
+	loaded, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("InitSession.Load() error = %v", err)
+	}
+	writeFile(t, fixture.config, []byte("profile = \"linux\"\n"), 0o600)
+	if _, err := loaded.CommitConfig(candidate); !errors.Is(err, config.ErrPreconditionChanged) {
+		t.Fatalf("CommitConfig() error = %v, want ErrPreconditionChanged", err)
+	}
+	if nested, err := session.BeginMutation(fixture.overrides); nested != nil || !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("BeginMutation() after failed commit = (%#v, %v), want ErrSessionOrder", nested, err)
+	}
+}
+
+func TestLoadedInit_LockedProfileOverrideRejectsCandidateFromDifferentPreparation(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	writeFile(t, filepath.Join(fixture.repo, "dot.toml"), []byte("requires = \">=1.0.0\"\n[profiles]\nlinux = []\nmac = []\n"), 0o600)
+	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit() error = %v", err)
+	}
+	candidate, err := prepared.BuildCandidate(InitSelection{Profile: Override{Value: "linux", Set: true}})
+	if err != nil {
+		t.Fatalf("BuildCandidate() error = %v", err)
+	}
+	lockedOverrides := fixture.overrides
+	lockedOverrides.Profile = Override{Value: "mac", Set: true}
+	session, err := BeginInit(lockedOverrides)
+	if err != nil {
+		t.Fatalf("BeginInit() error = %v", err)
+	}
+	t.Cleanup(func() { closeInitSession(t, session) })
+	loaded, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("InitSession.Load() error = %v", err)
+	}
+	if publication, err := loaded.CommitConfig(candidate); publication.Committed() || err == nil || !strings.Contains(err.Error(), "profile override") {
+		t.Fatalf("CommitConfig() = (%#v, %v), want locked profile override rejection", publication, err)
+	}
+	if nested, err := session.BeginMutation(lockedOverrides); nested != nil || !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("BeginMutation() after candidate rejection = (%#v, %v), want ErrSessionOrder", nested, err)
+	}
+	assertMissing(t, fixture.config)
+}
+
+func TestInitSession_LoadRerunsStrictConfigInsideLock(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	session, err := BeginInit(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginInit() error = %v", err)
+	}
+	t.Cleanup(func() { closeInitSession(t, session) })
+	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
+	if loaded, err := session.Load("v1.0.0"); loaded != nil || err == nil {
+		t.Fatalf("InitSession.Load() = (%#v, %v), want locked strict config error", loaded, err)
+	}
+	assertLockBusy(t, fixture)
+}
+
+func TestLoadedInit_PublisherFailureIsRetryableAndKeepsGateClosed(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit() error = %v", err)
+	}
+	candidate, err := prepared.BuildCandidate(InitSelection{Profile: Override{Value: "mac", Set: true}})
+	if err != nil {
+		t.Fatalf("BuildCandidate() error = %v", err)
+	}
+	publishErr := errors.New("publish failed")
+	operations := defaultLoadingOperations()
+	realPublish := operations.publishConfig
+	operations.publishConfig = func(string, config.Candidate) (config.PublishResult, error) {
+		return config.PublishResult{}, publishErr
+	}
+	session, err := beginInit(fixture.overrides, operations)
+	if err != nil {
+		t.Fatalf("beginInit() error = %v", err)
+	}
+	t.Cleanup(func() { closeInitSession(t, session) })
+	loaded, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("InitSession.Load() error = %v", err)
+	}
+	if _, err := loaded.CommitConfig(candidate); !errors.Is(err, publishErr) {
+		t.Fatalf("CommitConfig() error = %v, want publisher failure", err)
+	}
+	if nested, err := session.BeginMutation(fixture.overrides); nested != nil || !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("BeginMutation() after publisher failure = (%#v, %v), want ErrSessionOrder", nested, err)
+	}
+	operations.publishConfig = realPublish
+	session.core.operations.publishConfig = realPublish
+	if publication, err := loaded.CommitConfig(candidate); err != nil || !publication.Changed() || !publication.Committed() {
+		t.Fatalf("CommitConfig() retry = (%#v, %v), want changed+committed", publication, err)
+	}
+}
+
+func TestLoadedInit_PostPublishCleanupFailureRecordsCommittedGate(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit() error = %v", err)
+	}
+	candidate, err := prepared.BuildCandidate(InitSelection{Profile: Override{Value: "mac", Set: true}})
+	if err != nil {
+		t.Fatalf("BuildCandidate() error = %v", err)
+	}
+	removeErr := errors.New("post-link remove failed")
+	operations := defaultLoadingOperations()
+	operations.publishConfig = func(path string, candidate config.Candidate) (config.PublishResult, error) {
+		return config.PublishWithRemover(path, candidate, func(string) error { return removeErr })
+	}
+	session, err := beginInit(fixture.overrides, operations)
+	if err != nil {
+		t.Fatalf("beginInit() error = %v", err)
+	}
+	t.Cleanup(func() { closeInitSession(t, session) })
+	loaded, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("InitSession.Load() error = %v", err)
+	}
+
+	result, err := loaded.CommitConfig(candidate)
+	if !result.Changed() || !result.Committed() || !errors.Is(err, removeErr) {
+		t.Fatalf("CommitConfig() = (%#v, %v), want committed cleanup error", result, err)
+	}
+	configSnapshot, loadErr := config.LoadSnapshot(fixture.config)
+	if loadErr != nil || configSnapshot.Profile() != "mac" || configSnapshot.Precondition().Mode() != 0o600 {
+		t.Fatalf("committed config = (%#v, %v), want mac/0600", configSnapshot, loadErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Dir(fixture.config))
+	if readErr != nil {
+		t.Fatalf("os.ReadDir(config parent) error = %v", readErr)
+	}
+	foundTemporary := false
+	for _, entry := range entries {
+		foundTemporary = foundTemporary || strings.HasPrefix(entry.Name(), ".config.toml-")
+	}
+	if !foundTemporary {
+		t.Fatal("post-link cleanup failure did not retain reported temporary file")
+	}
+	child, err := session.BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginMutation() after committed cleanup error = %v", err)
+	}
+	closeMutationSession(t, child)
+	if second, err := loaded.CommitConfig(candidate); second.Committed() || !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("second CommitConfig() = (%#v, %v), want already committed", second, err)
+	}
 }
 
 func TestNestedMutationGateAllowsOnlyOneActiveChild(t *testing.T) {

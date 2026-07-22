@@ -1,4 +1,4 @@
-// Package executor 执行 planner 已决定且通过校验的文件动作。
+// Package executor 执行 planner 已决定且通过校验的文件与 hook 动作。
 package executor
 
 import (

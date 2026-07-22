@@ -210,7 +210,7 @@ func planHook(
 		mode = HookExecutionDirect
 		invocation = HookInvocation{Mode: HookExecutionDirect, Program: descriptor.ScriptPath}
 	}
-	fingerprint := hookFingerprint(mode, content)
+	fingerprint := HookFingerprint(mode, content)
 	key := descriptor.Module + "/" + descriptor.Script
 	action := HookAction{
 		Verb:           HookRun,
@@ -300,7 +300,9 @@ func validateHookRuntime(runtime hookRuntime) error {
 	return nil
 }
 
-func hookFingerprint(mode HookExecutionMode, script []byte) string {
+// HookFingerprint 计算 M1 run_once 指纹。executor 在启动脚本前复用同一算法重新观测，
+// 防止执行与 canonical plan 不一致的 bytes 或 execution class。
+func HookFingerprint(mode HookExecutionMode, script []byte) string {
 	digest := sha256.New()
 	writeFingerprintField(digest, "format", []byte("dot-run-once-v1"))
 	writeFingerprintField(digest, "execution", []byte(mode))

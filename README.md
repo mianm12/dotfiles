@@ -4,12 +4,17 @@
 它的数据保护目标是避免工具自身的 bug 误删或误覆盖用户数据，不把恶意仓库、恶意 hook、
 被攻陷的本机或主动并发篡改当作需要对抗的环境。
 
-项目正在实现 M1。目前已提供 `dot version`、`dot doctor --manifest-only`、`dot diff`、
-`dot apply`、`dot status` 和 `dot add`。diff、apply dry-run 与 status 通过同一个严格 planner 分别展示
+项目正在实现 M1。目前已提供 `dot version`、`dot doctor --manifest-only`、`dot init`、`dot diff`、
+`dot apply`、`dot status` 和 `dot add`。init 会先在无锁、零写入阶段从用户终端完成 profile、data
+与立即 apply 决策，也支持 `--profile`、可重复 `--set key=value` 和 `--yes` 无人值守；配置以 0600
+安全提交后，可在同一锁所有权内复用完整 apply pipeline。`--yes` 只授权立即 apply 与整模块 prune
+确认，不隐含 force 或 adopt；后续 state/apply 失败不会回滚已提交配置。
+diff、apply dry-run 与 status 通过同一个严格 planner 分别展示
 动作计划和当前 profile 的健康巡检；这些只读入口不取锁，也不写 target、state 或 backup。
-非 dry-run apply 已接入 link/scaffold、force backup replacement 与 P1/P2/P3 prune 执行，支持
-full/partial scope、整模块 orphan 确认和部分成功后的安全重跑；在 hook 执行能力交付前，作用域
-内含 run_once 的 apply 会在 file、backup、prune 或 state mutation 前明确拒绝。
+非 dry-run apply 已接入 link/scaffold、force backup replacement、P1/P2/P3 prune 与 M1
+string-form `run_once`，支持 full/partial scope、整模块 orphan 确认和部分成功后的安全重跑；
+hook 在 file/prune 后按模块与声明顺序串行执行，实时继承调用方 stdio，成功指纹与 file/prune
+效果通过同一次 state commit 发布。
 add 支持把 HOME 中的普通文件收编为默认 link 或 `--scaffold`，可用 `-m` 显式选择当前 profile
 中的既有 module；它先对整个输入批次完成同源 manifest、路径与系统 Git 可跟踪性预检，再按
 source-first 协议提交，且不会创建 module、修改 manifest 或执行 `git add`/`git commit`。

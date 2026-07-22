@@ -1,10 +1,241 @@
 package config
 
 import (
+	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestLoadSnapshot_PreservesMachineAndObjectEvidence(t *testing.T) {
+	path := writeConfig(t, "profile = \"mac\"\nrepo = \"~/repo\"\n[data]\nold = \"value\"\n")
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatalf("os.Chmod() error = %v", err)
+	}
+
+	snapshot, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	if !snapshot.Exists() || snapshot.Profile() != "mac" {
+		t.Fatalf("snapshot = %#v, want existing mac config", snapshot)
+	}
+	if repo, ok := snapshot.Repo(); !ok || repo != "~/repo" {
+		t.Fatalf("Repo() = (%q, %t), want (~/repo, true)", repo, ok)
+	}
+	data := snapshot.Data()
+	data["old"] = "changed"
+	if got := snapshot.Data()["old"]; got != "value" {
+		t.Fatalf("mutating Data() changed snapshot: got %q", got)
+	}
+	precondition := snapshot.Precondition()
+	if !precondition.Exists() || precondition.Kind() != fs.FileMode(0) || precondition.Mode() != 0o640 {
+		t.Fatalf("Precondition() = %#v, want regular 0640", precondition)
+	}
+	bytes := precondition.Bytes()
+	bytes[0] = 'X'
+	if got := string(snapshot.Precondition().Bytes()); got[0] == 'X' {
+		t.Fatal("mutating Precondition.Bytes() changed snapshot")
+	}
+}
+
+func TestLoadSnapshot_MissingHasSealedMissingPrecondition(t *testing.T) {
+	snapshot, err := LoadSnapshot(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	if snapshot.Exists() || snapshot.Precondition().Exists() {
+		t.Fatalf("missing snapshot = %#v, want missing", snapshot)
+	}
+}
+
+func TestPublish_CreatesPrivateConfigAndEquivalentCandidateDoesNotRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "config.toml")
+	snapshot, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	candidate, err := NewCandidate(snapshot, Machine{Profile: "mac", Data: map[string]string{"email": "me@example.com"}})
+	if err != nil {
+		t.Fatalf("NewCandidate() error = %v", err)
+	}
+	result, err := Publish(path, candidate)
+	if err != nil || !result.Changed() || !result.Committed() {
+		t.Fatalf("Publish() = (%#v, %v), want changed+committed", result, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat() error = %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode = %04o, want 0600", info.Mode().Perm())
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(stored, candidate.Bytes()) {
+		t.Fatalf("stored config = %q, %v; want candidate bytes", stored, err)
+	}
+
+	current, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot(current) error = %v", err)
+	}
+	equivalent, err := NewCandidate(current, current.Machine())
+	if err != nil {
+		t.Fatalf("NewCandidate(equivalent) error = %v", err)
+	}
+	before := info.ModTime()
+	result, err = Publish(path, equivalent)
+	if err != nil || result.Changed() || !result.Committed() {
+		t.Fatalf("Publish(equivalent) = (%#v, %v), want committed no-op", result, err)
+	}
+	after, err := os.Stat(path)
+	if err != nil || !after.ModTime().Equal(before) {
+		t.Fatalf("equivalent publish rewrote config: before %v after %v err %v", before, after.ModTime(), err)
+	}
+}
+
+func TestPublish_PreconditionChangesPreserveCurrentConfigAndCleanTemporary(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(t *testing.T, path string)
+	}{
+		{name: "bytes", change: func(t *testing.T, path string) { writeConfigAt(t, path, "profile = \"linux\"\n", 0o600) }},
+		{name: "mode", change: func(t *testing.T, path string) {
+			if err := os.Chmod(path, 0o640); err != nil {
+				t.Fatalf("os.Chmod() error = %v", err)
+			}
+		}},
+		{name: "kind", change: func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("os.Remove() error = %v", err)
+			}
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatalf("os.Mkdir() error = %v", err)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "config.toml")
+			writeConfigAt(t, path, "profile = \"mac\"\n", 0o600)
+			snapshot, err := LoadSnapshot(path)
+			if err != nil {
+				t.Fatalf("LoadSnapshot() error = %v", err)
+			}
+			candidate, err := NewCandidate(snapshot, Machine{Profile: "linux"})
+			if err != nil {
+				t.Fatalf("NewCandidate() error = %v", err)
+			}
+			tt.change(t, path)
+			_, err = Publish(path, candidate)
+			if !errors.Is(err, ErrPreconditionChanged) {
+				t.Fatalf("Publish() error = %v, want ErrPreconditionChanged", err)
+			}
+			entries, readErr := os.ReadDir(root)
+			if readErr != nil {
+				t.Fatalf("os.ReadDir() error = %v", readErr)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), ".config.toml-") {
+					t.Fatalf("temporary file remained after failed publish: %q", entry.Name())
+				}
+			}
+		})
+	}
+}
+
+func TestPublish_MissingPreconditionDoesNotReplaceConcurrentConfig(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.toml")
+	snapshot, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	candidate, err := NewCandidate(snapshot, Machine{Profile: "mac"})
+	if err != nil {
+		t.Fatalf("NewCandidate() error = %v", err)
+	}
+	competitor := []byte("profile = \"linux\"\n")
+	operations := defaultPublishOperations()
+	realLink := operations.link
+	operations.link = func(prepared, destination string) error {
+		writeConfigAt(t, destination, string(competitor), 0o640)
+		return realLink(prepared, destination)
+	}
+
+	result, err := publish(path, candidate, operations)
+	if result.Committed() || result.Changed() || !errors.Is(err, ErrPreconditionChanged) {
+		t.Fatalf("publish() = (%#v, %v), want uncommitted ErrPreconditionChanged", result, err)
+	}
+	current, readErr := os.ReadFile(path)
+	if readErr != nil || !bytes.Equal(current, competitor) {
+		t.Fatalf("concurrent config = %q, %v; want preserved %q", current, readErr, competitor)
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("concurrent config mode = %v, %v; want 0640", info.Mode().Perm(), statErr)
+	}
+	assertNoConfigTemporary(t, root)
+}
+
+func TestPublish_RenameFailurePreservesOldConfigAndCleansTemporary(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.toml")
+	old := []byte("profile = \"mac\"\n")
+	writeConfigAt(t, path, string(old), 0o600)
+	snapshot, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	candidate, err := NewCandidate(snapshot, Machine{Profile: "linux"})
+	if err != nil {
+		t.Fatalf("NewCandidate() error = %v", err)
+	}
+	renameErr := errors.New("rename failed")
+	operations := defaultPublishOperations()
+	operations.rename = func(string, string) error {
+		return renameErr
+	}
+	result, err := publish(path, candidate, operations)
+	if result.Committed() || result.Changed() || !errors.Is(err, renameErr) {
+		t.Fatalf("publish() = (%#v, %v), want uncommitted rename failure", result, err)
+	}
+	current, readErr := os.ReadFile(path)
+	if readErr != nil || !bytes.Equal(current, old) {
+		t.Fatalf("old config after failure = %q, %v; want %q", current, readErr, old)
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil {
+		t.Fatalf("os.ReadDir() error = %v", readErr)
+	}
+	if len(entries) != 1 || entries[0].Name() != "config.toml" {
+		t.Fatalf("directory after failure = %#v, want only config.toml", entries)
+	}
+}
+
+func writeConfigAt(t *testing.T, path, content string, mode fs.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func assertNoConfigTemporary(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%q) error = %v", root, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".config.toml-") {
+			t.Fatalf("machine config temporary remains: %q", entry.Name())
+		}
+	}
+}
 
 func TestLoad_MissingConfig(t *testing.T) {
 	got, exists, err := Load(filepath.Join(t.TempDir(), "missing.toml"))

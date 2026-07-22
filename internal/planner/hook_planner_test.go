@@ -146,17 +146,17 @@ func TestHookFingerprint_VersionedGoldenAndInputs(t *testing.T) {
 	t.Parallel()
 
 	script := []byte("#!/bin/sh\necho hello\n")
-	shell := hookFingerprint(HookExecutionShell, script)
+	shell := HookFingerprint(HookExecutionShell, script)
 	if want := "sha256:47af394c22dca5efb8c3b5b9971d8442a1363640516202d27523780e00512195"; shell != want {
 		t.Fatalf("shell fingerprint = %q, want golden %q", shell, want)
 	}
-	if direct := hookFingerprint(HookExecutionDirect, script); direct == shell {
+	if direct := HookFingerprint(HookExecutionDirect, script); direct == shell {
 		t.Fatal("execution classification did not change fingerprint")
 	}
-	if changed := hookFingerprint(HookExecutionShell, append(script, '#')); changed == shell {
+	if changed := HookFingerprint(HookExecutionShell, append(script, '#')); changed == shell {
 		t.Fatal("script bytes did not change fingerprint")
 	}
-	if repeated := hookFingerprint(HookExecutionShell, append([]byte(nil), script...)); repeated != shell {
+	if repeated := HookFingerprint(HookExecutionShell, append([]byte(nil), script...)); repeated != shell {
 		t.Fatalf("same inputs produced %q, want %q", repeated, shell)
 	}
 }

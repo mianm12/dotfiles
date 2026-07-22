@@ -122,6 +122,40 @@ func TestRepository_SelectionPriority(t *testing.T) {
 	}
 }
 
+func TestResolveRepository_PreservesSelectedSource(t *testing.T) {
+	home := "/home/example"
+	configured := "~/configured"
+	tests := []struct {
+		name       string
+		flagValue  string
+		flagSet    bool
+		envValue   string
+		envSet     bool
+		config     *string
+		wantPath   string
+		wantSource RepositorySource
+	}{
+		{name: "flag", flagValue: "~/same", flagSet: true, envValue: "~/same", envSet: true, config: &configured, wantPath: "/home/example/same", wantSource: RepositorySourceFlag},
+		{name: "environment", envValue: "~/same", envSet: true, config: &configured, wantPath: "/home/example/same", wantSource: RepositorySourceEnvironment},
+		{name: "config", config: &configured, wantPath: "/home/example/configured", wantSource: RepositorySourceConfig},
+		{name: "default", wantPath: "/home/example/.local/share/dot/repo", wantSource: RepositorySourceDefault},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolveRepository(home, tt.flagValue, tt.flagSet, func(string) (string, bool) {
+				return tt.envValue, tt.envSet
+			}, tt.config)
+			if err != nil {
+				t.Fatalf("ResolveRepository() error = %v", err)
+			}
+			if got.Path() != tt.wantPath || got.Source() != tt.wantSource {
+				t.Fatalf("ResolveRepository() = (%q, %q), want (%q, %q)", got.Path(), got.Source(), tt.wantPath, tt.wantSource)
+			}
+		})
+	}
+}
+
 func TestRepository_RejectsInvalidSelectedPath(t *testing.T) {
 	home := "/home/example"
 	validConfigured := "~/configured"

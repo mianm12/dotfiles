@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
+	"github.com/mianm12/dotfiles/internal/config"
 	"github.com/mianm12/dotfiles/internal/lock"
 	"github.com/mianm12/dotfiles/internal/manifest"
 	"github.com/mianm12/dotfiles/internal/paths"
@@ -56,6 +59,27 @@ type InitInputs struct {
 	repository    manifest.Repository
 }
 
+// InitSelection 保存 interaction/非交互层明确选择的 profile 与 data。
+// Override.Set 区分省略和显式空字符串。
+type InitSelection struct {
+	Profile Override
+	Data    map[string]Override
+}
+
+// InitCandidate 是由一份 immutable preparation inputs 形成并绑定 control context 的候选。
+type InitCandidate struct {
+	valid          bool
+	config         config.Candidate
+	configPath     string
+	repositoryPath string
+}
+
+// Machine 返回候选 machine config 的独立副本。
+func (candidate InitCandidate) Machine() config.Machine { return candidate.config.Machine() }
+
+// Bytes 返回候选的确定性 TOML 字节副本。
+func (candidate InitCandidate) Bytes() []byte { return candidate.config.Bytes() }
+
 // Context 返回 init 的严格 preflight 结果。
 func (inputs InitInputs) Context() InitContext { return inputs.context }
 
@@ -64,6 +88,87 @@ func (inputs InitInputs) Compatibility() Compatibility { return inputs.compatibi
 
 // Manifest 返回严格加载的仓库 manifest。
 func (inputs InitInputs) Manifest() manifest.Repository { return inputs.repository }
+
+// BuildCandidate 从 immutable preparation inputs 纯函数地合并完整 machine config candidate。
+func (inputs InitInputs) BuildCandidate(selection InitSelection) (InitCandidate, error) {
+	context := inputs.context
+	snapshot := context.ConfigSnapshot()
+	existing, exists := context.ExistingMachine()
+
+	profile := ""
+	if override, ok := context.ProfileOverride(); ok {
+		profile = override
+	} else if selection.Profile.Set {
+		profile = selection.Profile.Value
+	} else if exists {
+		profile = existing.Profile()
+	}
+	if profile == "" {
+		return InitCandidate{}, fmt.Errorf("init profile is required")
+	}
+	if !slices.Contains(inputs.repository.ProfileNames(), profile) {
+		return InitCandidate{}, fmt.Errorf("unknown init profile %q", profile)
+	}
+
+	declarations := inputs.repository.DataDeclarations()
+	declared := make(map[string]struct{}, len(declarations))
+	for _, declaration := range declarations {
+		declared[declaration.Key()] = struct{}{}
+	}
+	selectedKeys := make([]string, 0, len(selection.Data))
+	for key := range selection.Data {
+		selectedKeys = append(selectedKeys, key)
+	}
+	sort.Strings(selectedKeys)
+	for _, key := range selectedKeys {
+		if _, ok := declared[key]; !ok {
+			return InitCandidate{}, fmt.Errorf("unknown init data key %q", key)
+		}
+	}
+
+	data := map[string]string{}
+	if exists {
+		data = existing.Data()
+	}
+	for _, declaration := range declarations {
+		key := declaration.Key()
+		if selected, ok := selection.Data[key]; ok && selected.Set {
+			data[key] = selected.Value
+			continue
+		}
+		if _, ok := data[key]; ok {
+			continue
+		}
+		if defaultValue, ok := declaration.Default(); ok {
+			data[key] = defaultValue
+			continue
+		}
+		return InitCandidate{}, fmt.Errorf("init data %q is required", key)
+	}
+
+	machine := config.Machine{Profile: profile, Data: data}
+	if exists {
+		if repo, ok := existing.Repo(); ok {
+			machine.Repo = &repo
+		}
+	}
+	switch context.RepositorySource() {
+	case paths.RepositorySourceFlag, paths.RepositorySourceEnvironment:
+		repository := context.Control().RepositoryPath()
+		machine.Repo = &repository
+	}
+	candidate, err := config.NewCandidate(snapshot, machine)
+	if err != nil {
+		return InitCandidate{}, err
+	}
+	control := context.Control()
+	return InitCandidate{
+		valid:          true,
+		config:         candidate,
+		configPath:     control.ConfigPath(),
+		repositoryPath: control.RepositoryPath(),
+	}, nil
+}
 
 // LoadReadOnly 加载与完整 mutation 相同的只读输入，但从不获取或创建 lock。
 func LoadReadOnly(overrides Overrides, cliVersion string) (LoadedInputs, error) {
@@ -78,6 +183,25 @@ func (resolver Resolver) LoadReadOnly(overrides Overrides, cliVersion string) (L
 		return LoadedInputs{}, err
 	}
 	return loadFull(context, cliVersion, operations)
+}
+
+// PrepareInit 在不获取 lock、不读取 state 的前提下严格加载 init config 与 manifest。
+func PrepareInit(overrides Overrides, cliVersion string) (InitInputs, error) {
+	return systemResolver().PrepareInit(overrides, cliVersion)
+}
+
+// PrepareInit 使用 resolver 的明确系统来源执行只读 init preparation。
+func (resolver Resolver) PrepareInit(overrides Overrides, cliVersion string) (InitInputs, error) {
+	operations := loadingOperationsWithResolver(resolver)
+	context, err := operations.preflightInit(overrides)
+	if err != nil {
+		return InitInputs{}, err
+	}
+	compatibility, repository, err := loadRepository(context.Control().RepositoryPath(), cliVersion, operations)
+	if err != nil {
+		return InitInputs{}, err
+	}
+	return InitInputs{context: context, compatibility: compatibility, repository: repository}, nil
 }
 
 // LoadControlRecovery 为 self-update 等 control-only 恢复流程建立只读控制面上下文。
@@ -206,6 +330,7 @@ type loadingOperations struct {
 	loadManifest              func(string) (manifest.Repository, error)
 	loadState                 func(string) (state.Loaded, error)
 	storeState                func(string, string, state.Snapshot) error
+	publishConfig             func(string, config.Candidate) (config.PublishResult, error)
 	validateLexicalBoundaries func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 	validatePathBoundaries    func(paths.ControlPlanePaths, []paths.LabeledTarget) error
 }
@@ -222,6 +347,7 @@ func defaultLoadingOperations() loadingOperations {
 		loadManifest:              manifest.Load,
 		loadState:                 state.Load,
 		storeState:                state.Store,
+		publishConfig:             config.Publish,
 		validateLexicalBoundaries: paths.ValidateLexicalTargetControlBoundaries,
 		validatePathBoundaries: func(control paths.ControlPlanePaths, targets []paths.LabeledTarget) error {
 			_, err := paths.ValidatePathBoundaries(control, targets)

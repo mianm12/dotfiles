@@ -41,6 +41,8 @@ type readOnlyPlanOptions struct {
 
 type applyRun func(applyrunner.Options) (applyrunner.Result, error)
 
+type applyNestedRun func(applyrunner.Options, *dotruntime.MutationSession) (applyrunner.Result, error)
+
 func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 	var dryRun bool
 	var force bool
@@ -184,19 +186,32 @@ func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes b
 		Force:      options.force,
 		NoPrune:    options.noPrune || !options.prune,
 		Confirm:    confirm,
+		Stdin:      command.InOrStdin(),
+		Stdout:     command.OutOrStdout(),
+		Stderr:     command.ErrOrStderr(),
 	})
+	return finishMutationApply(command, result, runErr, options.verbose, true)
+}
+
+func finishMutationApply(
+	command *cobra.Command,
+	result applyrunner.Result,
+	runErr error,
+	verbose bool,
+	includeContext bool,
+) error {
 	if result.Valid(runErr != nil) {
 		var projection planProjection
 		var projectionErr error
 		if !result.ActionOutcomesReady() && runErr != nil {
-			projection, projectionErr = projectApplyPlan(result.Plan(), options.verbose)
+			projection, projectionErr = projectApplyPlan(result.Plan(), verbose)
 		} else {
-			projection, projectionErr = projectApplyResult(result, options.verbose, runErr != nil)
+			projection, projectionErr = projectApplyResult(result, verbose, runErr != nil)
 		}
 		if projectionErr != nil {
 			return errors.Join(runErr, projectionErr)
 		}
-		printPlanProjection(command, projection)
+		printPlanProjectionWithContext(command, projection, includeContext)
 		for _, backupPath := range result.BackupPaths() {
 			command.Println("backup  " + backupPath)
 		}
@@ -275,6 +290,7 @@ func projectApplyResult(result applyrunner.Result, verbose, hasRuntimeError bool
 	}
 	fileResults := result.FileOutcomes()
 	pruneResults := result.PruneOutcomes()
+	hookResults := result.HookOutcomes()
 	fileOutcomes := make(map[int]applyrunner.ActionOutcomeStatus, len(fileResults))
 	for _, outcome := range fileResults {
 		fileOutcomes[outcome.Index] = outcome.Status
@@ -283,8 +299,12 @@ func projectApplyResult(result applyrunner.Result, verbose, hasRuntimeError bool
 	for _, outcome := range pruneResults {
 		pruneOutcomes[outcome.Index] = outcome.Status
 	}
+	hookOutcomes := make(map[int]applyrunner.ActionOutcomeStatus, len(hookResults))
+	for _, outcome := range hookResults {
+		hookOutcomes[outcome.Index] = outcome.Status
+	}
 	plan := result.Plan()
-	projection, err := projectApplyPlanWithOutcomes(plan, verbose, fileOutcomes, pruneOutcomes)
+	projection, err := projectApplyPlanWithAllOutcomes(plan, verbose, fileOutcomes, pruneOutcomes, hookOutcomes)
 	if err != nil {
 		return planProjection{}, err
 	}
@@ -301,6 +321,9 @@ func projectApplyResult(result applyrunner.Result, verbose, hasRuntimeError bool
 	for _, outcome := range pruneResults {
 		conflict = conflict || outcome.Status == applyrunner.ActionConflict
 		pruneIncomplete = pruneIncomplete || outcome.Status != applyrunner.ActionSucceeded
+	}
+	for _, outcome := range hookResults {
+		unfinished = unfinished || outcome.Status == applyrunner.ActionDeferred || outcome.Status == applyrunner.ActionFailed
 	}
 	unfinished = unfinished || pruneIncomplete
 	if pruneIncomplete {
@@ -335,6 +358,16 @@ func projectApplyPlanWithOutcomes(
 	verbose bool,
 	fileOutcomes map[int]applyrunner.ActionOutcomeStatus,
 	pruneOutcomes map[int]applyrunner.ActionOutcomeStatus,
+) (planProjection, error) {
+	return projectApplyPlanWithAllOutcomes(plan, verbose, fileOutcomes, pruneOutcomes, nil)
+}
+
+func projectApplyPlanWithAllOutcomes(
+	plan planner.ApplyPlan,
+	verbose bool,
+	fileOutcomes map[int]applyrunner.ActionOutcomeStatus,
+	pruneOutcomes map[int]applyrunner.ActionOutcomeStatus,
+	hookOutcomes map[int]applyrunner.ActionOutcomeStatus,
 ) (planProjection, error) {
 	if !plan.Valid() {
 		return planProjection{}, errors.New("cannot present an invalid apply plan")
@@ -398,15 +431,28 @@ func projectApplyPlanWithOutcomes(
 			)
 		}
 	}
-	for _, action := range plan.Hooks().Actions() {
+	for index, action := range plan.Hooks().Actions() {
+		outcome := hookOutcomes[index]
 		switch action.Verb {
 		case planner.HookRun:
+			reason := "pending-run-once"
+			switch outcome {
+			case applyrunner.ActionSucceeded:
+				reason = "succeeded"
+			case applyrunner.ActionFailed:
+				reason = "execution-failed"
+			case applyrunner.ActionDeferred:
+				reason = "earlier-hook-failed"
+			}
 			projection.actionLines = append(
 				projection.actionLines,
-				planActionLine("run-hook", action.StateKey, "pending-run-once"),
+				planActionLine("run-hook", action.StateKey, reason),
 			)
 			actionable = true
 		case planner.HookSkip:
+			if outcome != "" && outcome != applyrunner.ActionSkipped {
+				return planProjection{}, fmt.Errorf("skipped hook %q has inconsistent outcome %q", action.StateKey, outcome)
+			}
 			if verbose {
 				projection.actionLines = append(
 					projection.actionLines,
@@ -454,7 +500,13 @@ func planActionLine(verb, target, reason string) string {
 }
 
 func printPlanProjection(command *cobra.Command, projection planProjection) {
-	command.Println(projection.contextLine)
+	printPlanProjectionWithContext(command, projection, true)
+}
+
+func printPlanProjectionWithContext(command *cobra.Command, projection planProjection, includeContext bool) {
+	if includeContext {
+		command.Println(projection.contextLine)
+	}
 	for _, line := range projection.actionLines {
 		command.Println(line)
 	}
