@@ -228,11 +228,11 @@ func TestRun_StateStoreFailurePreservesSourceAndLinkForApplyRecovery(t *testing.
 	if err != nil {
 		t.Fatalf("apply.Run(recovery) error = %v", err)
 	}
-	if recovered.AdoptionEffects != 1 || recovered.TargetCommits != 0 || !recovered.StateCommitted {
+	if recovered.AdoptionEffects() != 1 || recovered.TargetCommits() != 0 || !recovered.StateCommitted() {
 		t.Fatalf("apply recovery result = %#v, want one L2 state-only adoption", recovered)
 	}
 	converged, err := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
-	if err != nil || converged.AdoptionEffects != 0 || converged.TargetCommits != 0 || converged.StateCommitted {
+	if err != nil || converged.AdoptionEffects() != 0 || converged.TargetCommits() != 0 || converged.StateCommitted() {
 		t.Fatalf("second apply result/error = (%#v, %v), want no mutation/adopt", converged, err)
 	}
 }
@@ -324,7 +324,7 @@ func TestRun_ScaffoldCommitsStateWithoutTargetMutationAndApplyStaysConverged(t *
 	}
 	for run := 0; run < 2; run++ {
 		converged, applyErr := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
-		if applyErr != nil || converged.TargetCommits != 0 || converged.AdoptionEffects != 0 || converged.StateCommitted {
+		if applyErr != nil || converged.TargetCommits() != 0 || converged.AdoptionEffects() != 0 || converged.StateCommitted() {
 			t.Fatalf("apply run %d = (%#v, %v), want no mutation/adopt", run+1, converged, applyErr)
 		}
 	}
@@ -332,7 +332,7 @@ func TestRun_ScaffoldCommitsStateWithoutTargetMutationAndApplyStaysConverged(t *
 		t.Fatal(err)
 	}
 	deleted, err := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
-	if err != nil || deleted.TargetCommits != 0 || deleted.AdoptionEffects != 0 {
+	if err != nil || deleted.TargetCommits() != 0 || deleted.AdoptionEffects() != 0 {
 		t.Fatalf("apply(deleted scaffold) = (%#v, %v)", deleted, err)
 	}
 	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
@@ -366,11 +366,11 @@ func TestRun_ScaffoldStateStoreFailurePreservesSourceForS1bRecovery(t *testing.T
 	assertRegularFile(t, target, "content", 0o644)
 	assertRegularFile(t, item.SourcePath(), "content", 0o644)
 	recovered, err := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
-	if err != nil || recovered.AdoptionEffects != 1 || recovered.TargetCommits != 0 || !recovered.StateCommitted {
+	if err != nil || recovered.AdoptionEffects() != 1 || recovered.TargetCommits() != 0 || !recovered.StateCommitted() {
 		t.Fatalf("apply S1b recovery = (%#v, %v)", recovered, err)
 	}
 	converged, err := apply.Run(apply.Options{Runtime: options.Runtime, CLIVersion: "dev", NoPrune: true})
-	if err != nil || converged.AdoptionEffects != 0 || converged.TargetCommits != 0 || converged.StateCommitted {
+	if err != nil || converged.AdoptionEffects() != 0 || converged.TargetCommits() != 0 || converged.StateCommitted() {
 		t.Fatalf("second apply = (%#v, %v)", converged, err)
 	}
 }
