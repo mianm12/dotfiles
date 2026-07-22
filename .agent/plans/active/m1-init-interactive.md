@@ -61,46 +61,66 @@ Precond publisher、`LoadedInit.CommitConfig` 和 commit 后 `InitSession.BeginM
   指定产品规范、completed init-config/hooks 计划及相关 CLI/runtime/config/manifest/apply 代码测试。
 - [x] 2026-07-22：创建 active ExecPlan，冻结交互配置与同 ownership apply 两个串行 milestone；
   下一步先提交独立计划 checkpoint。
-- [ ] Milestone 1：实现终端选择、`--set`/`--yes` 与安全配置提交，完成 CLI/runtime 窄测试并提交。
-- [ ] Milestone 2：让 apply 消费既有 child session，完成 init→apply/hook/prune/state/idempotence 集成、
-  README 与全部门禁；计划保持 active 等待独立复核。
+- [x] 2026-07-22：Milestone 1 完成未注册的 init 决策层，覆盖 `--set` presence/重复/未知键、TTY
+  profile/data/apply、`--yes` 无歧义免 TTY、无 TTY 零写入和 real HOME sentinel；
+  `go test -race ./internal/cli` 通过。
+- [ ] Milestone 2：让 apply runner 消费既有 child session，保持普通 apply 行为并提交窄 seam。
+- [ ] Milestone 3：注册公开 `dot init`，完成安全配置提交、init→apply/hook/prune/state/idempotence
+  集成、README 与全部门禁；计划保持 active 等待独立复核。
 
 ## Milestones
 
 ### Milestone 1：所有交互决策在锁和写入之前闭合
 
 先用 CLI 级 synthetic fixture 固定 `--set` 解析、profile/data 默认、显式空、用户终端读取和立即
-apply 拒绝路径，再新增最小 init 编排。命令先构造既有 `runtime.Overrides` 并调用
-`runtime.PrepareInit`，只在 unresolved profile/data 或未由 `--yes` 明确的 apply 决策需要时打开
-读写 `/dev/tty`；所有选择形成 `InitSelection` 和 candidate 后才调用 `BeginInit`、锁内 `Load` 与
-`CommitConfig`。终端不可用、EOF、重复/非法 `--set`、未声明键或必填值未解析均不得创建 config、
-lock、state 或 config temp。配置提交结果和 Close 错误原样参与最终失败，不把已提交配置回滚。
+apply 拒绝路径，再新增只消费既有 `runtime.InitInputs` 的决策层。它只在 unresolved profile/data
+或未由 `--yes` 明确的 apply 决策需要时打开读写 `/dev/tty`，形成 `InitSelection` 与 apply bool，
+不注册公开命令、不取 lock、不写 config/state/temp。终端不可用、EOF、重复/非法 `--set`、未声明
+键或必填值未解析均在调用方可能进入 mutation 前失败。
 
-预计修改 `internal/cli/cli.go`、新增 init 专用 CLI 文件与测试；只有确有只读事实缺口时才最小扩展
-manifest/runtime accessor，不复制候选合并规则。
+预计修改 `internal/cli/cli.go`、新增 init 专用 CLI 文件与测试；不复制候选合并规则。
 
 Concrete steps：
 
-    在 repo root 运行：go test -race ./internal/cli ./internal/runtime ./internal/config
-    预期：init 解析、终端/无终端、零写入、repo/profile/data 提交和既有配置内核测试全部通过。
+    在 repo root 运行：go test -race ./internal/cli
+    预期：init 解析、终端/无终端、零写入与既有 CLI 测试全部通过。
 
 验收：
 
 - 无 TTY 且缺少 profile/data/apply 任一决策时退出 1，synthetic config/state/lock/temp 全部缺失，
   real HOME sentinel 未变化。
 - `--set key=` 保留显式空；重复 key、非法语法、未声明 key 在配置写入前拒绝。
-- 用户终端而非 command stdin 提供选择；选择不立即 apply 时只原子提交 0600 配置。
-- 显式 repo/DOT_REPO 在配置提交后持久化，移除覆盖后的下一次 preparation 仍解析同一仓库。
+- 用户终端而非 command stdin 提供选择，回车接受旧值/default；选择层不发生 mutation。
 
 Commit 边界：
 
-    feat(init): 接入零写入交互配置流程
+    feat(init): 建立零写入交互决策
 
-### Milestone 2：嵌套 apply 复用 init 的同一锁所有权
+### Milestone 2：apply runner 接受既有 mutation session
 
-先在 `internal/apply` 增加测试，证明新窄入口消费调用方提供的 `*runtime.MutationSession`、仍只执行
+在 `internal/apply` 增加测试，证明新窄入口消费调用方提供的 `*runtime.MutationSession`、仍只执行
 一次 strict Load/plan/execute/state commit 并负责关闭 child，不调用第二次 `BeginMutation`；普通
-`apply.Run` 行为保持不变。随后 init 在 config committed 且选择 apply 后调用
+`apply.Run` 行为保持不变。该 seam 不注册 CLI，也不暴露 planner/state capability。
+
+Concrete steps：
+
+    在 repo root 运行：go test -race ./internal/apply ./internal/runtime
+    预期：普通/既有 session apply 与 runtime ownership lifecycle 测试全部通过。
+
+验收：
+
+- caller-provided session 从 Load 到 Close 只消费一次；nil/已消费 session 准确失败。
+- 新入口不 acquire 第二个 lock，普通 `apply.Run` 仍自行创建并关闭 session。
+
+Commit 边界：
+
+    feat(apply): 支持消费既有 mutation session
+
+### Milestone 3：公开 init 复用同一锁所有权完成配置与 apply
+
+注册 Cobra command；init 在 `runtime.PrepareInit` 与 Milestone 1 的选择阶段之后才调用
+`BeginInit`、锁内 `Load` 与 `CommitConfig`。配置提交结果和 Close 错误原样参与最终失败，不把已提交
+配置回滚。config committed 且选择 apply 后调用
 `InitSession.BeginMutation`，把 child 交给同一 apply runner，并复用 CLI 的结果投影、backup 输出、
 exit code 与 prune confirmation。`--yes` 只把 prune callback 固定为接受，Options 中 Force 保持
 false；非 `--yes` 的 whole-module prune 继续走既有独立终端确认。最后用真实 synthetic hook 与
@@ -193,6 +213,11 @@ checkpoint，用后续 fix commit 修正，不重写历史。配置已 committed
 - Decision: `--yes` 作为无人值守入口时不为已有/manifest default 的 data 打开终端；只有尚未明确的
   profile/required data 才交互。未带 `--yes` 时按声明询问未显式 `--set` 的 data，并询问立即 apply。
   Rationale: 既满足逐项交互与回车接受默认，也满足规范允许“全部值无歧义且 --yes”在无终端继续。
+  Date: 2026-07-22
+
+- Decision: 为让每个 checkpoint 都可独立解释且不注册半成品命令，把原两个 milestone 细分成
+  “lock-free 决策层”“既有 session apply seam”“公开 init 集成”三个串行切片；Scope 与验收不变。
+  Rationale: 决策层和 seam 均能用独立测试证明安全性质，公开命令只在完整配置/apply 语义闭合后注册。
   Date: 2026-07-22
 
 - Decision: init 的 apply 使用现有 runner 的同一 Options/Result 协议，由新窄入口消费并关闭 child

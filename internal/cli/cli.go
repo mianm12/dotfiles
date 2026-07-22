@@ -44,6 +44,7 @@ type environment struct {
 	lookupEnv    func(string) (string, bool)
 	userHomeDir  func() (string, error)
 	openTerminal func() (io.ReadCloser, error)
+	openInitTTY  func() (io.ReadWriteCloser, error)
 	applyRun     applyRun
 	addRun       addRun
 	addLoad      addLoad
@@ -63,6 +64,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		userHomeDir: os.UserHomeDir,
 		openTerminal: func() (io.ReadCloser, error) {
 			return os.Open("/dev/tty")
+		},
+		openInitTTY: func() (io.ReadWriteCloser, error) {
+			return os.OpenFile("/dev/tty", os.O_RDWR, 0)
 		},
 		build: buildinfo.Current(),
 		goos:  runtime.GOOS,
