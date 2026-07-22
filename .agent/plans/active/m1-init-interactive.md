@@ -64,7 +64,9 @@ Precond publisher、`LoadedInit.CommitConfig` 和 commit 后 `InitSession.BeginM
 - [x] 2026-07-22：Milestone 1 完成未注册的 init 决策层，覆盖 `--set` presence/重复/未知键、TTY
   profile/data/apply、`--yes` 无歧义免 TTY、无 TTY 零写入和 real HOME sentinel；
   `go test -race ./internal/cli` 通过。
-- [ ] Milestone 2：让 apply runner 消费既有 child session，保持普通 apply 行为并提交窄 seam。
+- [x] 2026-07-22：Milestone 2 新增 `RunWithMutationSession`，消费并关闭既有 session，普通 `Run`
+  继续自行 begin；持锁集成测试证明无第二次取锁，nil/already-loaded 准确失败；
+  `go test -race ./internal/apply ./internal/runtime` 与 package lint 通过。
 - [ ] Milestone 3：注册公开 `dot init`，完成安全配置提交、init→apply/hook/prune/state/idempotence
   集成、README 与全部门禁；计划保持 active 等待独立复核。
 
@@ -207,6 +209,11 @@ checkpoint，用后续 fix commit 修正，不重写历史。配置已 committed
   provenance；`InitSession` 已阻止 config commit 前创建 child，并将 child close 绑定 outer ownership。
   Evidence: `internal/runtime/loading.go` 与 `internal/runtime/session.go` 及 lifecycle tests。
   Impact: 交互层只产生明确 selection，不能重复实现合并或持久化规则。
+
+- Observation: 把普通 runner 的 begin 阶段与共享的 session consumption 拆开后，既有 seam tests 仍能
+  注入 begin，而 init 可以直接传 child；共享路径继续统一负责 Load、result sealing 与 Close。
+  Evidence: `internal/apply/run.go` 的 `runWithOperations`/`runWithSession` 及持锁 integration test。
+  Impact: 新入口无需暴露 planner/state capability，且通过再次 `BeginMutation` 后可用证明 child 已释放。
 
 ## Decision Log
 

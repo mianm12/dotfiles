@@ -70,15 +70,45 @@ func Run(options Options) (Result, error) {
 	return runWithOperations(options, defaultRunOperations())
 }
 
-func runWithOperations(options Options, operations runOperations) (result Result, resultErr error) {
-	if operations.begin == nil || operations.plan == nil || operations.execute == nil ||
-		operations.backup == nil || operations.executeBackup == nil ||
-		operations.pruneExecute == nil || operations.executeHook == nil || operations.now == nil {
-		return Result{}, fmt.Errorf("%w: apply runner operations are incomplete", ErrExecutionProtocol)
+// RunWithMutationSession 消费调用方已经取得 ownership 的 mutation session。
+// runner 负责 Load、执行、CommitState 与 Close，但不会再次 BeginMutation。
+func RunWithMutationSession(options Options, session *dotruntime.MutationSession) (Result, error) {
+	if session == nil {
+		return Result{}, fmt.Errorf("%w: existing mutation session is nil", ErrExecutionProtocol)
+	}
+	return runWithSession(options, runtimeMutationSession{session: session}, defaultRunOperations())
+}
+
+func runWithOperations(options Options, operations runOperations) (Result, error) {
+	if operations.begin == nil {
+		return Result{}, fmt.Errorf("%w: apply runner begin operation is missing", ErrExecutionProtocol)
+	}
+	if err := validateRunOperations(operations); err != nil {
+		return Result{}, err
 	}
 	session, err := operations.begin(options.Runtime)
 	if err != nil {
 		return Result{}, fmt.Errorf("begin apply mutation: %w", err)
+	}
+	return runWithSession(options, session, operations)
+}
+
+func validateRunOperations(operations runOperations) error {
+	if operations.plan == nil || operations.execute == nil ||
+		operations.backup == nil || operations.executeBackup == nil ||
+		operations.pruneExecute == nil || operations.executeHook == nil || operations.now == nil {
+		return fmt.Errorf("%w: apply runner operations are incomplete", ErrExecutionProtocol)
+	}
+	return nil
+}
+
+func runWithSession(
+	options Options,
+	session mutationSession,
+	operations runOperations,
+) (result Result, resultErr error) {
+	if err := validateRunOperations(operations); err != nil {
+		return Result{}, err
 	}
 	if session == nil {
 		return Result{}, fmt.Errorf("%w: begin returned nil mutation session", ErrExecutionProtocol)

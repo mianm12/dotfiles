@@ -956,6 +956,57 @@ func TestRun_StoreFailureRecoversByAdoptThenConverges(t *testing.T) {
 	}
 }
 
+func TestRunWithMutationSession_ConsumesExistingOwnershipWithoutSecondLock(t *testing.T) {
+	fixture := newRunIntegrationFixture(t)
+	options := fixture.options()
+	session, err := dotruntime.BeginMutation(options.Runtime)
+	if err != nil {
+		t.Fatalf("BeginMutation() error = %v", err)
+	}
+
+	result, err := RunWithMutationSession(options, session)
+	if err != nil {
+		t.Fatalf("RunWithMutationSession() error = %v", err)
+	}
+	if result.FileAttempts() != 2 || result.TargetCommits() != 2 || !result.StateCommitted() {
+		t.Fatalf("RunWithMutationSession() result = %#v", result)
+	}
+	assertRunTargets(t, fixture)
+	if err := session.Close(); !errors.Is(err, dotruntime.ErrSessionClosed) {
+		t.Fatalf("consumed session Close() error = %v, want ErrSessionClosed", err)
+	}
+
+	second, err := dotruntime.BeginMutation(options.Runtime)
+	if err != nil {
+		t.Fatalf("BeginMutation() after consumed session error = %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("second session Close() error = %v", err)
+	}
+}
+
+func TestRunWithMutationSession_RejectsNilAndClosesAlreadyLoadedSession(t *testing.T) {
+	if _, err := RunWithMutationSession(Options{}, nil); !errors.Is(err, ErrExecutionProtocol) {
+		t.Fatalf("RunWithMutationSession(nil) error = %v, want ErrExecutionProtocol", err)
+	}
+
+	fixture := newRunIntegrationFixture(t)
+	options := fixture.options()
+	session, err := dotruntime.BeginMutation(options.Runtime)
+	if err != nil {
+		t.Fatalf("BeginMutation() error = %v", err)
+	}
+	if _, err := session.Load(options.CLIVersion); err != nil {
+		t.Fatalf("MutationSession.Load() error = %v", err)
+	}
+	if _, err := RunWithMutationSession(options, session); !errors.Is(err, dotruntime.ErrSessionOrder) {
+		t.Fatalf("RunWithMutationSession(already loaded) error = %v, want ErrSessionOrder", err)
+	}
+	if err := session.Close(); !errors.Is(err, dotruntime.ErrSessionClosed) {
+		t.Fatalf("already loaded session Close() error = %v, want ErrSessionClosed", err)
+	}
+}
+
 func TestRun_ForceBacksUpRegularAndConverges(t *testing.T) {
 	fixture := newRunIntegrationFixture(t)
 	original := []byte("user zshrc\n")
