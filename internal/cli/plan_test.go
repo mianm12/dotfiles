@@ -184,8 +184,8 @@ func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 	}
 	joined = strings.Join(projection.actionLines, "\n")
 	for _, want := range []string{
-		"run-hook (failed)  alpha/hooks/setup.sh  (execution-failed)",
-		"run-hook (deferred)  beta/hooks/setup.sh  (earlier-hook-failed)",
+		"run-hook  alpha/hooks/setup.sh  (execution-failed)",
+		"run-hook  beta/hooks/setup.sh  (earlier-hook-failed)",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("hook runtime projection = %q, want %q", joined, want)

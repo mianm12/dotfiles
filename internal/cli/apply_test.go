@@ -385,7 +385,7 @@ func TestApply_YesSkipsTerminalAndHookFailureHasRuntimePriority(t *testing.T) {
 			"printf launched > \"$HOME/beta-hook-launched\"\n")
 		stdout, stderr, code := fixture.run(t, "apply", "alpha", "--force")
 		if code != exitError || !strings.Contains(stdout, "alpha-hook-out") ||
-			!strings.Contains(stdout, "run-hook (failed)  alpha/hooks/setup.sh  (execution-failed)") ||
+			!strings.Contains(stdout, "run-hook  alpha/hooks/setup.sh  (execution-failed)") ||
 			!strings.Contains(stderr, "alpha-hook-err") || !strings.Contains(stderr, "exit status 23") {
 			t.Fatalf("failed partial hook apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 		}

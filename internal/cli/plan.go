@@ -423,21 +423,18 @@ func projectApplyPlanWithAllOutcomes(
 		outcome := hookOutcomes[index]
 		switch action.Verb {
 		case planner.HookRun:
-			verb := "run-hook"
 			reason := "pending-run-once"
 			switch outcome {
 			case applyrunner.ActionSucceeded:
 				reason = "succeeded"
 			case applyrunner.ActionFailed:
-				verb = "run-hook (failed)"
 				reason = "execution-failed"
 			case applyrunner.ActionDeferred:
-				verb = "run-hook (deferred)"
 				reason = "earlier-hook-failed"
 			}
 			projection.actionLines = append(
 				projection.actionLines,
-				planActionLine(verb, action.StateKey, reason),
+				planActionLine("run-hook", action.StateKey, reason),
 			)
 			actionable = true
 		case planner.HookSkip:
