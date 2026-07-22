@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// ErrTransition 表示 apply 成功 entry 不能无歧义地应用到严格 state 基线。
+// ErrTransition 表示成功 effect 不能无歧义地应用到严格 state 基线。
 var ErrTransition = errors.New("state entry transition failed")
 
 // EntryUpdate 描述一次成功 file action 对 state v1 entry 的完整 upsert。
@@ -20,36 +20,88 @@ type EntryUpdate struct {
 	AppliedAt   string
 }
 
-// TransitionEntries 在 missing 或 strict loaded 基线上原子应用成功 entry upsert 与 delete。
-// 返回值不共享基线 map；未涉及 entries 与全部 run_once 原样保留。changed=false 表示调用方
-// 不需要 Store，仍返回一个有效且等价的 Snapshot。
-func TransitionEntries(loaded Loaded, updates []EntryUpdate, deletes ...string) (Snapshot, bool, error) {
+// RunOnceUpdate 描述一次成功 hook 对 state v1 run_once 记录的完整 upsert。
+type RunOnceUpdate struct {
+	Key        string
+	Hash       string
+	ExecutedAt string
+}
+
+// ChangeSet 是一次 state commit 的完整内存变化集。entries 与 run_once 在全部校验通过后
+// 才一起应用；零值表示无变化。
+type ChangeSet struct {
+	EntryUpdates   []EntryUpdate
+	EntryDeletes   []string
+	RunOnceUpdates []RunOnceUpdate
+}
+
+// Transition 在 missing 或 strict loaded 基线上原子应用 entry 与 run_once 成功 effects。
+// 返回值不共享基线 map；未涉及记录原样保留。changed=false 表示调用方不需要 Store，
+// 仍返回一个有效且等价的 Snapshot。
+func Transition(loaded Loaded, changes ChangeSet) (Snapshot, bool, error) {
 	baseline, err := transitionBaseline(loaded)
 	if err != nil {
 		return Snapshot{}, false, err
 	}
-	validated, err := validateEntryUpdates(baseline, updates)
+	validatedEntries, err := validateEntryUpdates(baseline, changes.EntryUpdates)
 	if err != nil {
 		return Snapshot{}, false, err
 	}
-	if err := validateEntryDeletes(baseline, updates, deletes); err != nil {
+	if err := validateEntryDeletes(baseline, changes.EntryUpdates, changes.EntryDeletes); err != nil {
+		return Snapshot{}, false, err
+	}
+	validatedRunOnce, err := validateRunOnceUpdates(changes.RunOnceUpdates)
+	if err != nil {
 		return Snapshot{}, false, err
 	}
 
 	candidate := cloneSnapshot(baseline)
-	for index, update := range updates {
+	for index, update := range changes.EntryUpdates {
 		if update.PreviousKey != "" {
 			delete(candidate.entries, update.PreviousKey)
 		}
-		candidate.entries[update.Key] = validated[index]
+		candidate.entries[update.Key] = validatedEntries[index]
 	}
-	for _, key := range deletes {
+	for _, key := range changes.EntryDeletes {
 		delete(candidate.entries, key)
+	}
+	for index, update := range changes.RunOnceUpdates {
+		candidate.runOnce[update.Key] = validatedRunOnce[index]
 	}
 	if snapshotsEqual(baseline, candidate) {
 		return candidate, false, nil
 	}
 	return candidate, true, nil
+}
+
+// TransitionEntries 在 missing 或 strict loaded 基线上原子应用成功 entry upsert 与 delete。
+// 返回值不共享基线 map；未涉及 entries 与全部 run_once 原样保留。changed=false 表示调用方
+// 不需要 Store，仍返回一个有效且等价的 Snapshot。
+func TransitionEntries(loaded Loaded, updates []EntryUpdate, deletes ...string) (Snapshot, bool, error) {
+	return Transition(loaded, ChangeSet{EntryUpdates: updates, EntryDeletes: deletes})
+}
+
+func validateRunOnceUpdates(updates []RunOnceUpdate) ([]RunOnceRecord, error) {
+	records := make([]RunOnceRecord, len(updates))
+	seen := make(map[string]struct{}, len(updates))
+	for index, update := range updates {
+		if err := validateRunOnceKey(update.Key); err != nil {
+			return nil, fmt.Errorf("%w: run_once update %d key %q: %w", ErrTransition, index, update.Key, err)
+		}
+		if _, exists := seen[update.Key]; exists {
+			return nil, fmt.Errorf("%w: duplicate run_once update key %q", ErrTransition, update.Key)
+		}
+		seen[update.Key] = struct{}{}
+		record, err := validateRunOnceRecord(rawRunOnceRecord{
+			Hash:       &update.Hash,
+			ExecutedAt: &update.ExecutedAt,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%w: run_once update %d key %q: %w", ErrTransition, index, update.Key, err)
+		}
+		records[index] = record
+	}
+	return records, nil
 }
 
 func validateEntryDeletes(baseline Snapshot, updates []EntryUpdate, deletes []string) error {
