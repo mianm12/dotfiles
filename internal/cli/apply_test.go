@@ -52,6 +52,68 @@ func TestApply_MutatesAndConvergesWithoutRepeatWrites(t *testing.T) {
 	}
 }
 
+func TestApply_HookStdioStateHistoryAndIdempotence(t *testing.T) {
+	fixture := newHookMutationCLIFixture(t)
+	realHomeBefore := snapshotCLIPath(t, fixture.realHome)
+	stdout, stderr, code := fixture.runWithInput(t, "from-stdin\n", nil, "apply")
+	resolvedModule, err := filepath.EvalSymlinks(filepath.Join(fixture.repository, "modules", "alpha"))
+	if err != nil {
+		t.Fatalf("resolve hook module: %v", err)
+	}
+	for _, want := range []string{
+		"hook-cwd:" + resolvedModule,
+		"hook-home:" + fixture.home,
+		"hook-out:from-stdin",
+		"run-hook  alpha/hooks/setup.sh  (succeeded)",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("first apply stdout = %q, want %q", stdout, want)
+		}
+	}
+	if code != exitOK || !strings.Contains(stderr, "hook-err:from-stdin") ||
+		strings.Index(stdout, "hook-out:from-stdin") > strings.Index(stdout, "repo=") {
+		t.Fatalf("first hook apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	state := readPlanState(t, fixture.home)
+	record, exists := state.RunOnce["alpha/hooks/setup.sh"]
+	if !exists || !strings.HasPrefix(record.Hash, "sha256:") || record.ExecutedAt == "" {
+		t.Fatalf("run_once state = (%#v, %t)", record, exists)
+	}
+	logPath := filepath.Join(fixture.home, "hook-log")
+	if content, readErr := os.ReadFile(logPath); readErr != nil || string(content) != "from-stdin\n" {
+		t.Fatalf("hook log = %q, %v", content, readErr)
+	}
+
+	stdout, stderr, code = fixture.runWithInput(t, "must-not-be-read\n", nil, "apply")
+	if code != exitOK || stderr != "" || strings.Contains(stdout, "hook-out:") ||
+		!strings.HasSuffix(stdout, "Already up to date.\n") {
+		t.Fatalf("second hook apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if content, readErr := os.ReadFile(logPath); readErr != nil || string(content) != "from-stdin\n" {
+		t.Fatalf("idempotent hook log = %q, %v", content, readErr)
+	}
+
+	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "requires = \">=0.0.0\"\n[profiles]\nall = []\n")
+	stdout, stderr, code = fixture.runWithInput(t, "", nil, "apply", "--no-prune")
+	if code != exitOK || stderr != "" || !strings.HasSuffix(stdout, "Already up to date.\n") {
+		t.Fatalf("profile removal apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if _, exists := readPlanState(t, fixture.home).RunOnce["alpha/hooks/setup.sh"]; !exists {
+		t.Fatal("profile removal discarded run_once history")
+	}
+	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "requires = \">=0.0.0\"\n[profiles]\nall = [\"alpha\"]\n")
+	stdout, stderr, code = fixture.runWithInput(t, "must-not-be-read\n", nil, "apply", "--no-prune", "--verbose")
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "skip  alpha/hooks/setup.sh  (fingerprint-current)") {
+		t.Fatalf("profile restore apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if content, readErr := os.ReadFile(logPath); readErr != nil || string(content) != "from-stdin\n" {
+		t.Fatalf("profile restore reran hook: %q, %v", content, readErr)
+	}
+	if realHomeAfter := snapshotCLIPath(t, fixture.realHome); !reflect.DeepEqual(realHomeAfter, realHomeBefore) {
+		t.Fatalf("hook apply changed real HOME sentinel: before=%v after=%v", realHomeBefore, realHomeAfter)
+	}
+}
+
 func TestApply_ForceReportsExactBackupPath(t *testing.T) {
 	fixture := newMutationCLIFixture(t)
 	target := filepath.Join(fixture.home, "alpha", "file")
@@ -103,6 +165,12 @@ func TestApply_ConfirmationAcceptsYesAndRejectsEOF(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newWholeModulePruneCLIFixture(t)
+			writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"), `target = "~/alpha"
+[hooks]
+run_once = ["hooks/setup.sh"]
+`)
+			writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "hooks", "setup.sh"),
+				"printf confirmation-hook > \"$HOME/confirmation-hook\"\n")
 			stdout, stderr, code := fixture.run(t, test.open, "apply")
 			if code != test.wantCode || !strings.Contains(stderr, "Remove orphaned modules?") {
 				t.Fatalf("apply confirmation = stdout %q, stderr %q, exit %d", stdout, stderr, code)
@@ -121,6 +189,9 @@ func TestApply_ConfirmationAcceptsYesAndRejectsEOF(t *testing.T) {
 				if _, err := os.Lstat(filepath.Join(fixture.home, "old")); err != nil {
 					t.Fatalf("refused prune changed target: %v", err)
 				}
+			}
+			if content, err := os.ReadFile(filepath.Join(fixture.home, "confirmation-hook")); err != nil || string(content) != "confirmation-hook" {
+				t.Fatalf("confirmation path did not run hook: %q, %v", content, err)
 			}
 		})
 	}
@@ -293,7 +364,7 @@ func TestApply_M1UnsupportedInputsFailClosed(t *testing.T) {
 	}
 }
 
-func TestApply_YesSkipsTerminalAndHookGatePrecedesMutation(t *testing.T) {
+func TestApply_YesSkipsTerminalAndHookFailureHasRuntimePriority(t *testing.T) {
 	t.Run("yes skips terminal", func(t *testing.T) {
 		fixture := newWholeModulePruneCLIFixture(t)
 		opened := false
@@ -306,32 +377,35 @@ func TestApply_YesSkipsTerminalAndHookGatePrecedesMutation(t *testing.T) {
 		}
 	})
 
-	t.Run("scoped hook fails closed", func(t *testing.T) {
+	t.Run("partial hook failure stops after selected scope", func(t *testing.T) {
 		fixture := newPlanCLIFixture(t)
-		statePath := filepath.Join(fixture.home, ".local", "state", "dot", "state.json")
-		beforeState, err := os.ReadFile(statePath)
-		if err != nil {
-			t.Fatalf("read baseline state: %v", err)
-		}
-		beforeTargets := snapshotCLITree(t, filepath.Join(fixture.home, "alpha"))
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "hooks", "setup.sh"),
+			"printf 'alpha-hook-out\\n'\nprintf 'alpha-hook-err\\n' >&2\nexit 23\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "beta", "hooks", "setup.sh"),
+			"printf launched > \"$HOME/beta-hook-launched\"\n")
 		stdout, stderr, code := fixture.run(t, "apply", "alpha", "--force")
-		if code != exitError || !strings.Contains(stderr, "before hook execution is available") {
-			t.Fatalf("hook-gated apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		if code != exitError || !strings.Contains(stdout, "alpha-hook-out") ||
+			!strings.Contains(stdout, "run-hook  alpha/hooks/setup.sh  (execution-failed)") ||
+			!strings.Contains(stderr, "alpha-hook-err") || !strings.Contains(stderr, "exit status 23") {
+			t.Fatalf("failed partial hook apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 		}
-		if afterTargets := snapshotCLITree(t, filepath.Join(fixture.home, "alpha")); !reflect.DeepEqual(afterTargets, beforeTargets) {
-			t.Fatalf("hook-gated apply changed targets\nbefore=%v\nafter=%v", beforeTargets, afterTargets)
+		if _, statErr := os.Lstat(filepath.Join(fixture.home, "beta-hook-launched")); !os.IsNotExist(statErr) {
+			t.Fatalf("partial alpha apply launched beta hook: %v", statErr)
 		}
-		if afterState, readErr := os.ReadFile(statePath); readErr != nil || !bytes.Equal(afterState, beforeState) {
-			t.Fatalf("hook-gated apply changed state: after=%q error=%v", afterState, readErr)
-		}
-		if _, statErr := os.Stat(filepath.Join(fixture.home, ".local", "state", "dot", "backup")); !os.IsNotExist(statErr) {
-			t.Fatalf("hook-gated apply created backup root: %v", statErr)
+		if _, exists := readPlanState(t, fixture.home).RunOnce["alpha/hooks/setup.sh"]; exists {
+			t.Fatal("failed hook fingerprint was recorded")
 		}
 	})
 }
 
 func TestApply_NoPruneSkipsConfirmationAndPreservesOrphan(t *testing.T) {
 	fixture := newWholeModulePruneCLIFixture(t)
+	writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"), `target = "~/alpha"
+[hooks]
+run_once = ["hooks/setup.sh"]
+`)
+	writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "hooks", "setup.sh"),
+		"printf no-prune-hook > \"$HOME/no-prune-hook\"\n")
 	opened := false
 	stdout, stderr, code := fixture.run(t, func() (io.ReadCloser, error) {
 		opened = true
@@ -345,6 +419,9 @@ func TestApply_NoPruneSkipsConfirmationAndPreservesOrphan(t *testing.T) {
 	}
 	if _, exists := readPlanState(t, fixture.home).Entries["~/old"]; !exists {
 		t.Fatal("--no-prune removed orphan state")
+	}
+	if content, err := os.ReadFile(filepath.Join(fixture.home, "no-prune-hook")); err != nil || string(content) != "no-prune-hook" {
+		t.Fatalf("--no-prune did not run hook: %q, %v", content, err)
 	}
 }
 
@@ -465,8 +542,34 @@ func newWholeModulePruneCLIFixture(t *testing.T) mutationCLIFixture {
 	return fixture
 }
 
+func newHookMutationCLIFixture(t *testing.T) mutationCLIFixture {
+	t.Helper()
+	fixture := newMutationCLIFixture(t)
+	writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"), `target = "~/alpha"
+[hooks]
+run_once = ["hooks/setup.sh"]
+`)
+	writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "hooks", "setup.sh"), `printf 'hook-cwd:%s\n' "$PWD"
+printf 'hook-home:%s\n' "$HOME"
+IFS= read -r value
+printf 'hook-out:%s\n' "$value"
+printf 'hook-err:%s\n' "$value" >&2
+printf '%s\n' "$value" >> "$HOME/hook-log"
+`)
+	return fixture
+}
+
 func (fixture mutationCLIFixture) run(
 	t *testing.T,
+	openTerminal func() (io.ReadCloser, error),
+	commandArgs ...string,
+) (string, string, int) {
+	return fixture.runWithInput(t, "", openTerminal, commandArgs...)
+}
+
+func (fixture mutationCLIFixture) runWithInput(
+	t *testing.T,
+	input string,
 	openTerminal func() (io.ReadCloser, error),
 	commandArgs ...string,
 ) (string, string, int) {
@@ -477,6 +580,7 @@ func (fixture mutationCLIFixture) run(
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := run(args, environment{
+		stdin:        strings.NewReader(input),
 		stdout:       &stdout,
 		stderr:       &stderr,
 		lookupEnv:    os.LookupEnv,
@@ -510,6 +614,7 @@ func runInjectedApply(
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := run([]string{"apply", "--home", fixture.home, "--repo", fixture.repository}, environment{
+		stdin:       strings.NewReader(""),
 		stdout:      &stdout,
 		stderr:      &stderr,
 		lookupEnv:   os.LookupEnv,
