@@ -386,6 +386,10 @@ dot 为原子提交或准备动作创建的临时产物永远不能成为模块 
   `XDG_STATE_HOME`、`XDG_DATA_HOME`(`--home` 下指向假 home,生产与测试同路径),
   外加 `DOT_MODULE`、`DOT_OS`、`DOT_PROFILE`、`DOT_REPO`、`DOT_TARGET`;
   `DOT_TARGET` 表示该模块当前解析出的 target root。
+- **stdio = 继承调用命令并实时透传**:hook 直接使用调用方的 stdin、stdout 与 stderr,工具不
+  buffer、截断、解析或重排脚本输出。不同 stream 以及 dot 自身已输出的 context/action 行可按
+  实际写入时序交错；这部分外部输出不属于 dot 的确定性摘要契约。脚本需要无人值守时必须自行
+  提供非交互参数,不能假设 dot 会代答输入。
 - **执行指纹**只由 script 内容、决定“直接 exec 或交给 sh”的执行方式分类,以及每个
   watch 条目的相对路径和文件内容决定。watch 按规范化相对路径字节序进入指纹,所以只重排
   watch 数组不得触发重跑;仅切换脚本执行位导致执行方式变化时必须得到新指纹。输入编码
