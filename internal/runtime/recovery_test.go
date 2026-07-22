@@ -264,6 +264,24 @@ func TestInitInputs_BuildCandidateMergesSelectionsAndPreservesOldFields(t *testi
 	}
 }
 
+func TestInitInputs_BuildCandidateProfileOverrideBeatsInteractionSelection(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	writeFile(t, filepath.Join(fixture.repo, "dot.toml"), []byte("requires = \">=1.0.0\"\n[profiles]\nlinux = []\nmac = []\n"), 0o600)
+	overrides := fixture.overrides
+	overrides.Profile = Override{Value: "mac", Set: true}
+	prepared, err := PrepareInit(overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit() error = %v", err)
+	}
+	candidate, err := prepared.BuildCandidate(InitSelection{Profile: Override{Value: "linux", Set: true}})
+	if err != nil {
+		t.Fatalf("BuildCandidate() error = %v", err)
+	}
+	if got := candidate.Machine().Profile; got != "mac" {
+		t.Fatalf("candidate profile = %q, want explicit override mac", got)
+	}
+}
+
 func TestInitInputs_BuildCandidateDefaultsAndRejectsIncompleteOrUnknown(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")

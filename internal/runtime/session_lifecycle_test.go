@@ -520,6 +520,37 @@ func TestLoadedInit_PreconditionFailureKeepsConfigGateClosed(t *testing.T) {
 	}
 }
 
+func TestLoadedInit_LockedProfileOverrideRejectsCandidateFromDifferentPreparation(t *testing.T) {
+	fixture := newLoadingFixture(t, false)
+	writeFile(t, filepath.Join(fixture.repo, "dot.toml"), []byte("requires = \">=1.0.0\"\n[profiles]\nlinux = []\nmac = []\n"), 0o600)
+	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit() error = %v", err)
+	}
+	candidate, err := prepared.BuildCandidate(InitSelection{Profile: Override{Value: "linux", Set: true}})
+	if err != nil {
+		t.Fatalf("BuildCandidate() error = %v", err)
+	}
+	lockedOverrides := fixture.overrides
+	lockedOverrides.Profile = Override{Value: "mac", Set: true}
+	session, err := BeginInit(lockedOverrides)
+	if err != nil {
+		t.Fatalf("BeginInit() error = %v", err)
+	}
+	t.Cleanup(func() { closeInitSession(t, session) })
+	loaded, err := session.Load("v1.0.0")
+	if err != nil {
+		t.Fatalf("InitSession.Load() error = %v", err)
+	}
+	if changed, err := loaded.CommitConfig(candidate); changed || err == nil || !strings.Contains(err.Error(), "profile override") {
+		t.Fatalf("CommitConfig() = (%t, %v), want locked profile override rejection", changed, err)
+	}
+	if nested, err := session.BeginMutation(lockedOverrides); nested != nil || !errors.Is(err, ErrSessionOrder) {
+		t.Fatalf("BeginMutation() after candidate rejection = (%#v, %v), want ErrSessionOrder", nested, err)
+	}
+	assertMissing(t, fixture.config)
+}
+
 func TestInitSession_LoadRerunsStrictConfigInsideLock(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
 	session, err := BeginInit(fixture.overrides)

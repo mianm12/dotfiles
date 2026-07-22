@@ -96,15 +96,12 @@ func (inputs InitInputs) BuildCandidate(selection InitSelection) (InitCandidate,
 	existing, exists := context.ExistingMachine()
 
 	profile := ""
-	switch {
-	case selection.Profile.Set:
+	if override, ok := context.ProfileOverride(); ok {
+		profile = override
+	} else if selection.Profile.Set {
 		profile = selection.Profile.Value
-	default:
-		if override, ok := context.ProfileOverride(); ok {
-			profile = override
-		} else if exists {
-			profile = existing.Profile()
-		}
+	} else if exists {
+		profile = existing.Profile()
 	}
 	if profile == "" {
 		return InitCandidate{}, fmt.Errorf("init profile is required")

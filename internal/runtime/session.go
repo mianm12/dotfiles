@@ -386,6 +386,9 @@ func validateInitCandidate(inputs InitInputs, candidate InitCandidate) error {
 		return fmt.Errorf("init config candidate belongs to a different control context")
 	}
 	machine := candidate.Machine()
+	if override, ok := context.ProfileOverride(); ok && machine.Profile != override {
+		return fmt.Errorf("init config candidate profile %q does not match locked profile override %q", machine.Profile, override)
+	}
 	if !slices.Contains(inputs.Manifest().ProfileNames(), machine.Profile) {
 		return fmt.Errorf("unknown init profile %q after locked refresh", machine.Profile)
 	}
