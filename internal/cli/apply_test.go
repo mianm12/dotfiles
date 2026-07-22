@@ -14,6 +14,7 @@ import (
 
 	applyrunner "github.com/mianm12/dotfiles/internal/apply"
 	"github.com/mianm12/dotfiles/internal/buildinfo"
+	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 	"github.com/spf13/cobra"
 )
 
@@ -394,6 +395,28 @@ func TestApply_InvalidRunnerPlanPreservesErrorOrFailsProtocol(t *testing.T) {
 			t.Fatalf("invalid plan without error = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 		}
 	})
+}
+
+func TestApply_SealedExecutedResultPreservesRuntimeErrorPriority(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+	fixture.setEnvironment(t)
+	result, err := applyrunner.Run(applyrunner.Options{
+		Runtime: dotruntime.Overrides{
+			Home:       dotruntime.Override{Value: fixture.home, Set: true},
+			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+		},
+		CLIVersion: "v0.0.0",
+	})
+	if err != nil || !result.Valid(false) || !result.StateCommitted() {
+		t.Fatalf("applyrunner.Run() = (%#v, %v), want valid committed result", result, err)
+	}
+
+	runtimeErr := errors.New("injected post-execution failure")
+	stdout, stderr, code := runInjectedApply(t, fixture, result, runtimeErr)
+	if code != exitError || !strings.Contains(stderr, runtimeErr.Error()) ||
+		!strings.Contains(stdout, "link  ~/alpha/file  (target-missing)") {
+		t.Fatalf("sealed result with runtime error = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
 }
 
 type mutationCLIFixture struct {

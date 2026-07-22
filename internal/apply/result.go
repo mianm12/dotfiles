@@ -206,8 +206,9 @@ func validFileOutcome(action planner.FileAction, outcome FileOutcome, hasRuntime
 		if !hasRuntimeError || outcome.stateEffectReady && !outcome.attempted {
 			return false
 		}
-		if !outcome.attempted && action.Verb != planner.FileBackupReplace {
-			return false
+		if !outcome.attempted {
+			return action.Verb == planner.FileBackupReplace && !outcome.targetCommitted &&
+				outcome.backupPath == ""
 		}
 		if action.Verb.ExecutionClass() == planner.FileStateOnly && outcome.targetCommitted {
 			return false
@@ -241,7 +242,7 @@ func (result Result) validPruneOutcomes(hasRuntimeError bool) bool {
 			return false
 		}
 		switch outcome.Status {
-		case ActionConflict, ActionFailed:
+		case ActionConflict, ActionDeferred, ActionFailed:
 			stopped = true
 		}
 	}

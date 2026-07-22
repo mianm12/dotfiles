@@ -99,10 +99,22 @@ func TestResult_ValidRejectsCrossPhaseContradictions(t *testing.T) {
 	writeRunFile(t, fixture.stateFile, `{
   "version": 1,
   "entries": {
-    "~/orphan": {
+    "~/orphan-a": {
       "module": "legacy",
       "kind": "scaffold",
-      "source": "modules/legacy/orphan.template",
+      "source": "modules/legacy/orphan-a.template",
+      "applied_at": "2026-07-18T00:00:00Z"
+    },
+    "~/orphan-b": {
+      "module": "legacy",
+      "kind": "scaffold",
+      "source": "modules/legacy/orphan-b.template",
+      "applied_at": "2026-07-18T00:00:00Z"
+    },
+    "~/orphan-c": {
+      "module": "legacy",
+      "kind": "scaffold",
+      "source": "modules/legacy/orphan-c.template",
       "applied_at": "2026-07-18T00:00:00Z"
     }
   },
@@ -121,7 +133,7 @@ func TestResult_ValidRejectsCrossPhaseContradictions(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !valid.Valid(false) || !valid.confirmRequested || !valid.confirmAccepted ||
-		len(valid.pruneOutcomes) != 1 || valid.pruneOutcomes[0].Status != ActionSucceeded {
+		len(valid.pruneOutcomes) != 3 || valid.pruneOutcomes[0].Status != ActionSucceeded {
 		t.Fatalf("Run() result = %#v, want confirmed valid prune", valid)
 	}
 	clone := func() Result {
@@ -150,6 +162,13 @@ func TestResult_ValidRejectsCrossPhaseContradictions(t *testing.T) {
 			outcome.targetCommitted = false
 			outcome.stateEffectReady = false
 		}},
+		{name: "active prune resumed after deferred stop", mutate: func(result *Result) {
+			outcome := &result.pruneOutcomes[1]
+			outcome.Status = ActionDeferred
+			outcome.attempted = false
+			outcome.targetCommitted = false
+			outcome.stateEffectReady = false
+		}},
 		{name: "prune ran without requesting confirmation", mutate: func(result *Result) {
 			result.confirmRequested = false
 			result.confirmAccepted = false
@@ -161,6 +180,32 @@ func TestResult_ValidRejectsCrossPhaseContradictions(t *testing.T) {
 			test.mutate(&result)
 			if result.Valid(false) {
 				t.Fatalf("cross-phase contradiction unexpectedly valid: %#v", result)
+			}
+		})
+	}
+}
+
+func TestValidFileOutcome_BackupInitializationFailureHasNoPerActionCommit(t *testing.T) {
+	action := planner.FileAction{Verb: planner.FileBackupReplace}
+	base := FileOutcome{Status: ActionFailed}
+	if !validFileOutcome(action, base, true) {
+		t.Fatal("backup batch initialization failure is not representable")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*FileOutcome)
+	}{
+		{name: "target committed", mutate: func(outcome *FileOutcome) { outcome.targetCommitted = true }},
+		{name: "state effect ready", mutate: func(outcome *FileOutcome) { outcome.stateEffectReady = true }},
+		{name: "backup retained", mutate: func(outcome *FileOutcome) { outcome.backupPath = "/tmp/forged" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outcome := base
+			test.mutate(&outcome)
+			if validFileOutcome(action, outcome, true) {
+				t.Fatalf("unattempted backup action accepted contradictory facts: %#v", outcome)
 			}
 		})
 	}

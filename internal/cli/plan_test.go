@@ -10,8 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	applyrunner "github.com/mianm12/dotfiles/internal/apply"
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/mianm12/dotfiles/internal/lock"
+	"github.com/mianm12/dotfiles/internal/planner"
+	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 )
 
 func TestDiff_PrintsStablePlanAndExitPriority(t *testing.T) {
@@ -73,6 +76,86 @@ func TestDiff_ForceNoPruneAndFullScope(t *testing.T) {
 	betaHookIndex := strings.Index(full, "run-hook  beta/hooks/setup.sh")
 	if alphaIndex < 0 || betaIndex <= alphaIndex || alphaHookIndex <= betaIndex || betaHookIndex <= alphaHookIndex {
 		t.Fatalf("full diff output order is unstable: %q", full)
+	}
+}
+
+func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
+	fixture := newPlanCLIFixture(t)
+	fixture.redirectEnvironment(t)
+	plan, err := planner.PlanApply(planner.ApplyOptions{
+		Runtime: dotruntime.Overrides{
+			Home:       dotruntime.Override{Value: fixture.home, Set: true},
+			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
+		},
+		CLIVersion: "v0.0.0",
+		Modules:    []string{"alpha"},
+		Force:      true,
+	})
+	if err != nil {
+		t.Fatalf("planner.PlanApply() error = %v", err)
+	}
+	files := plan.FileActions()
+	prune := plan.Prune().Actions()
+	if len(prune) != 1 {
+		t.Fatalf("prune actions = %#v, want one", prune)
+	}
+	fileOutcomes := make(map[int]applyrunner.ActionOutcomeStatus)
+	for index, action := range files {
+		switch action.Target {
+		case "~/alpha/conflict":
+			fileOutcomes[index] = applyrunner.ActionFailed
+		case "~/alpha/create":
+			fileOutcomes[index] = applyrunner.ActionConflict
+		}
+	}
+
+	projection, err := projectApplyPlanWithOutcomes(
+		plan,
+		false,
+		fileOutcomes,
+		map[int]applyrunner.ActionOutcomeStatus{0: applyrunner.ActionDeferred},
+	)
+	if err != nil {
+		t.Fatalf("projectApplyPlanWithOutcomes() error = %v", err)
+	}
+	joined := strings.Join(projection.actionLines, "\n")
+	if projection.exitCode != exitConflict {
+		t.Errorf("runtime file conflict exit = %d, want %d", projection.exitCode, exitConflict)
+	}
+	for _, want := range []string{
+		"backup+replace  ~/alpha/conflict",
+		"CONFLICT  ~/alpha/create",
+		"prune (deferred)  ~/alpha/orphan",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("runtime projection = %q, want %q", joined, want)
+		}
+	}
+
+	fileOutcomes = nil
+	for _, test := range []struct {
+		name   string
+		status applyrunner.ActionOutcomeStatus
+		verb   string
+	}{
+		{name: "conflict", status: applyrunner.ActionConflict, verb: "CONFLICT"},
+		{name: "failed", status: applyrunner.ActionFailed, verb: "prune"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			projection, projectErr := projectApplyPlanWithOutcomes(
+				plan,
+				false,
+				fileOutcomes,
+				map[int]applyrunner.ActionOutcomeStatus{0: test.status},
+			)
+			if projectErr != nil {
+				t.Fatalf("projectApplyPlanWithOutcomes() error = %v", projectErr)
+			}
+			want := test.verb + "  ~/alpha/orphan"
+			if joined := strings.Join(projection.actionLines, "\n"); !strings.Contains(joined, want) {
+				t.Fatalf("runtime projection = %q, want %q", joined, want)
+			}
+		})
 	}
 }
 

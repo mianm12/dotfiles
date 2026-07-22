@@ -6,7 +6,7 @@ import (
 )
 
 // ErrTransition 表示成功 effect 不能无歧义地应用到严格 state 基线。
-var ErrTransition = errors.New("state entry transition failed")
+var ErrTransition = errors.New("state transition failed")
 
 // EntryUpdate 描述一次成功 file action 对 state v1 entry 的完整 upsert。
 // PreviousKey 非空时，旧 key 与新 entry 必须在同一个 Snapshot transition 中迁移。
