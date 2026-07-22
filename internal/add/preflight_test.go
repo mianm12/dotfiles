@@ -877,6 +877,40 @@ func TestPreflight_ValidatesWholeInputBoundaryBeforeGit(t *testing.T) {
 	}
 }
 
+func TestAddFixture_IsolatesInheritedDotAndGitEnvironment(t *testing.T) {
+	externalRoot := t.TempDir()
+	externalConfig := filepath.Join(externalRoot, "config.toml")
+	externalGitConfig := filepath.Join(externalRoot, "gitconfig")
+	externalExcludes := filepath.Join(externalRoot, "excludes")
+	writeAddFile(t, externalConfig, "unknown = true\n", 0o600)
+	writeAddFile(t, externalGitConfig, "[fixture]\n\tmarker = outside\n", 0o600)
+	writeAddFile(t, externalExcludes, "modules/app/config\n", 0o600)
+
+	t.Setenv("DOT_CONFIG", externalConfig)
+	t.Setenv("DOT_REPO", filepath.Join(externalRoot, "repo"))
+	t.Setenv("GIT_CONFIG_GLOBAL", externalGitConfig)
+	t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(externalRoot, "system-gitconfig"))
+	t.Setenv("GIT_DIR", filepath.Join(externalRoot, "redirected.git"))
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(externalRoot, "redirected.index"))
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.excludesFile")
+	t.Setenv("GIT_CONFIG_VALUE_0", externalExcludes)
+	before := snapshotAddTree(t, externalRoot)
+
+	fixture := newAddFixture(t, map[string]string{"app": `target = "~"`})
+	target := fixture.writeTarget(t, "config", "content", 0o600)
+	if _, err := Preflight(fixture.load(t), Request{
+		Paths: []string{target}, Module: "app", Mode: ModeLink,
+	}); err != nil {
+		t.Fatalf("Preflight() under hostile environment error = %v", err)
+	}
+	runGit(t, fixture, "config", "--global", "fixture.marker", "inside")
+
+	if after := snapshotAddTree(t, externalRoot); !reflect.DeepEqual(after, before) {
+		t.Fatalf("hostile environment redirected fixture outside its root\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
 type addFixture struct {
 	root    string
 	home    string
@@ -915,6 +949,8 @@ func newAddFixture(t *testing.T, modules map[string]string) *addFixture {
 	fixture := &addFixture{root: root, home: home, repo: repo}
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("DOT_CONFIG", config)
+	t.Setenv("DOT_REPO", repo)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	runGit(t, fixture, "init", "-q")
 	fixture.control = fixture.load(t).Context().Control().Paths()
@@ -962,7 +998,7 @@ func writeAddFile(t *testing.T, path, content string, mode fs.FileMode) {
 func runGit(t *testing.T, fixture *addFixture, args ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", fixture.repo}, args...)...)
-	command.Env = append(os.Environ(), "HOME="+fixture.home, "XDG_CONFIG_HOME="+filepath.Join(fixture.home, ".config"), "GIT_CONFIG_NOSYSTEM=1")
+	command.Env = gitEnvironment(os.Environ(), fixture.home)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v error = %v, output = %s", args, err, output)
 	}
