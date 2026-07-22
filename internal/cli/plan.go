@@ -41,6 +41,8 @@ type readOnlyPlanOptions struct {
 
 type applyRun func(applyrunner.Options) (applyrunner.Result, error)
 
+type applyNestedRun func(applyrunner.Options, *dotruntime.MutationSession) (applyrunner.Result, error)
+
 func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 	var dryRun bool
 	var force bool
@@ -188,13 +190,22 @@ func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes b
 		Stdout:     command.OutOrStdout(),
 		Stderr:     command.ErrOrStderr(),
 	})
+	return finishMutationApply(command, result, runErr, options.verbose)
+}
+
+func finishMutationApply(
+	command *cobra.Command,
+	result applyrunner.Result,
+	runErr error,
+	verbose bool,
+) error {
 	if result.Valid(runErr != nil) {
 		var projection planProjection
 		var projectionErr error
 		if !result.ActionOutcomesReady() && runErr != nil {
-			projection, projectionErr = projectApplyPlan(result.Plan(), options.verbose)
+			projection, projectionErr = projectApplyPlan(result.Plan(), verbose)
 		} else {
-			projection, projectionErr = projectApplyResult(result, options.verbose, runErr != nil)
+			projection, projectionErr = projectApplyResult(result, verbose, runErr != nil)
 		}
 		if projectionErr != nil {
 			return errors.Join(runErr, projectionErr)

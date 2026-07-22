@@ -46,6 +46,9 @@ type environment struct {
 	openTerminal func() (io.ReadCloser, error)
 	openInitTTY  func() (io.ReadWriteCloser, error)
 	applyRun     applyRun
+	applyNested  applyNestedRun
+	prepareInit  prepareInit
+	beginInit    beginInit
 	addRun       addRun
 	addLoad      addLoad
 	addPreflight addPreflight
@@ -126,6 +129,7 @@ func newRootCommand(env environment) (*cobra.Command, error) {
 		newApplyCommand(env, &options),
 		newDiffCommand(env, &options),
 		newDoctorCommand(env, &options),
+		newInitCommand(env, &options),
 		newStatusCommand(env, &options),
 		newVersionCommand(env, &options),
 	)

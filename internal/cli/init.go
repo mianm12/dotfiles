@@ -9,12 +9,141 @@ import (
 	"slices"
 	"strings"
 
+	applyrunner "github.com/mianm12/dotfiles/internal/apply"
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
+	"github.com/spf13/cobra"
 )
+
+const setFlagName = "set"
+
+type prepareInit func(dotruntime.Overrides, string) (dotruntime.InitInputs, error)
+
+type beginInit func(dotruntime.Overrides) (*dotruntime.InitSession, error)
 
 type initDecisions struct {
 	selection dotruntime.InitSelection
 	apply     bool
+}
+
+func newInitCommand(env environment, global *globalOptions) *cobra.Command {
+	var setValues []string
+	var yes bool
+	command := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize or update the machine configuration",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return runInit(command, global, setValues, yes, env)
+		},
+	}
+	flags := command.Flags()
+	flags.StringArrayVar(&setValues, setFlagName, nil, "set a declared data value (key=value)")
+	flags.BoolVarP(&yes, yesFlagName, "y", false, "apply immediately and confirm whole-module pruning")
+	return command
+}
+
+func runInit(
+	command *cobra.Command,
+	global *globalOptions,
+	setValues []string,
+	yes bool,
+	env environment,
+) (resultErr error) {
+	selectedData, err := parseInitSetValues(setValues)
+	if err != nil {
+		return err
+	}
+	overrides := dotruntime.Overrides{
+		Home: dotruntime.Override{
+			Value: global.home,
+			Set:   command.Flags().Changed(homeFlagName),
+		},
+		Repository: dotruntime.Override{
+			Value: global.repo,
+			Set:   command.Flags().Changed(repoFlagName),
+		},
+		Profile: dotruntime.Override{
+			Value: global.profile,
+			Set:   command.Flags().Changed(profileFlagName),
+		},
+	}
+	prepare := env.prepareInit
+	if prepare == nil {
+		prepare = dotruntime.PrepareInit
+	}
+	inputs, err := prepare(overrides, env.build.Version)
+	if err != nil {
+		return err
+	}
+	decisions, err := resolveInitDecisions(inputs, selectedData, yes, env.openInitTTY)
+	if err != nil {
+		return err
+	}
+	candidate, err := inputs.BuildCandidate(decisions.selection)
+	if err != nil {
+		return err
+	}
+
+	begin := env.beginInit
+	if begin == nil {
+		begin = dotruntime.BeginInit
+	}
+	session, err := begin(overrides)
+	if err != nil {
+		return err
+	}
+	if session == nil {
+		return errors.New("begin init returned nil session")
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, session.Close())
+	}()
+	loaded, err := session.Load(env.build.Version)
+	if err != nil {
+		return err
+	}
+	publication, err := loaded.CommitConfig(candidate)
+	if err != nil {
+		return err
+	}
+	status := "unchanged"
+	if publication.Changed() {
+		status = "updated"
+	}
+	if _, err := fmt.Fprintf(
+		command.OutOrStdout(),
+		"config  %s  (%s)\n",
+		inputs.Context().Control().ConfigPath(),
+		status,
+	); err != nil {
+		return fmt.Errorf("write init config result: %w", err)
+	}
+	if !decisions.apply {
+		if inputs.Compatibility().DevelopmentBuild() {
+			if _, err := fmt.Fprintln(command.ErrOrStderr(), "notice: development build skipped the requires version comparison"); err != nil {
+				return fmt.Errorf("write init compatibility notice: %w", err)
+			}
+		}
+		return nil
+	}
+
+	child, err := session.BeginMutation(overrides)
+	if err != nil {
+		return err
+	}
+	runner := env.applyNested
+	if runner == nil {
+		runner = applyrunner.RunWithMutationSession
+	}
+	result, runErr := runner(applyrunner.Options{
+		Runtime:    overrides,
+		CLIVersion: env.build.Version,
+		Confirm:    confirmationCallback(command, yes, env.openTerminal),
+		Stdin:      command.InOrStdin(),
+		Stdout:     command.OutOrStdout(),
+		Stderr:     command.ErrOrStderr(),
+	}, child)
+	return finishMutationApply(command, result, runErr, global.verbose)
 }
 
 // parseInitSetValues 保留每次 --set 的 presence，并保守拒绝同一 key 的重复赋值。

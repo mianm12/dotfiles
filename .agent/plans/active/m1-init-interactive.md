@@ -67,8 +67,11 @@ Precond publisher、`LoadedInit.CommitConfig` 和 commit 后 `InitSession.BeginM
 - [x] 2026-07-22：Milestone 2 新增 `RunWithMutationSession`，消费并关闭既有 session，普通 `Run`
   继续自行 begin；持锁集成测试证明无第二次取锁，nil/already-loaded 准确失败；
   `go test -race ./internal/apply ./internal/runtime` 与 package lint 通过。
-- [ ] Milestone 3：注册公开 `dot init`，完成安全配置提交、init→apply/hook/prune/state/idempotence
-  集成、README 与全部门禁；计划保持 active 等待独立复核。
+- [x] 2026-07-22：Milestone 3 注册公开 `dot init`，完成 config-only/repo persistence、nested apply、
+  hook stdio、corrupt state、prune/`--yes`、conflict 非 force 与第二次收敛测试，更新 README；
+  `go test -race ./internal/cli ./internal/apply ./internal/runtime ./internal/config` 与 package lint 通过。
+- [ ] 完成 Darwin/Linux compile-only、base diff、isolated exact-HEAD `make check`，记录 handoff 并保持
+  active 等待独立复核。
 
 ## Milestones
 
@@ -159,11 +162,11 @@ Commit 边界：
 
 | 必须成立的性质 | 验证证据 | 状态 |
 |---|---|---|
-| prepare/interaction 无锁、state-free、零写入 | CLI synthetic no-TTY/TTY tests | 待验证 |
-| `--set` presence、重复与声明校验正确 | CLI parser/integration tests | 待验证 |
-| 配置 0600、repo/profile/data 持久化且失败不回滚 | CLI/runtime/config tests | 待验证 |
-| init/apply 使用同一 ownership 与一次 state commit | apply seam/runtime/CLI tests | 待验证 |
-| hook/prune/`--yes`/corrupt state/第二次运行符合契约 | CLI filesystem integration tests | 待验证 |
+| prepare/interaction 无锁、state-free、零写入 | CLI synthetic no-TTY/TTY tests | 已通过 |
+| `--set` presence、重复与声明校验正确 | CLI parser/integration tests | 已通过 |
+| 配置 0600、repo/profile/data 持久化且失败不回滚 | CLI/runtime/config tests | 已通过 |
+| init/apply 使用同一 ownership 与一次 state commit | apply seam/runtime/CLI tests | 已通过 |
+| hook/prune/`--yes`/corrupt state/第二次运行符合契约 | CLI filesystem integration tests | 已通过 |
 | Darwin/Linux compile-only | `GOOS=... go test ... -run '^$'` | 待验证 |
 | Go、依赖、lint、race、build、manifest 门禁 | isolated exact-HEAD `make check` | 待验证 |
 
@@ -214,6 +217,11 @@ checkpoint，用后续 fix commit 修正，不重写历史。配置已 committed
   注入 begin，而 init 可以直接传 child；共享路径继续统一负责 Load、result sealing 与 Close。
   Evidence: `internal/apply/run.go` 的 `runWithOperations`/`runWithSession` 及持锁 integration test。
   Impact: 新入口无需暴露 planner/state capability，且通过再次 `BeginMutation` 后可用证明 child 已释放。
+
+- Observation: config commit 与 apply 投影之间需要明确保留提交事实；先输出 deterministic config
+  changed/unchanged 行，再进入 child apply，可让 corrupt state/conflict 的非零结果仍清楚显示配置已保留。
+  Evidence: CLI corrupt-state 与 conflict integration tests 均先观察 config 行，再得到 exit 1/3。
+  Impact: init 不伪装跨 config/state 的事务，也不需要更改 apply 的 Result/exit protocol。
 
 ## Decision Log
 

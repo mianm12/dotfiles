@@ -7,9 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/buildinfo"
+	"github.com/mianm12/dotfiles/internal/config"
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 )
 
@@ -177,6 +180,293 @@ mac = []
 	}
 }
 
+func TestInit_NoTerminalWithIncompleteInputsIsZeroWrite(t *testing.T) {
+	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
+[profiles]
+linux = []
+mac = []
+[data.email]
+`, "")
+	before := snapshotCLITree(t, fixture.root)
+	stdout, stderr, code := fixture.run(
+		t,
+		"command stdin must not be used\n",
+		func() (io.ReadWriteCloser, error) { return nil, os.ErrNotExist },
+		"init", "--yes",
+	)
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "open user terminal") {
+		t.Fatalf("init no TTY = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	fixture.assertUnchanged(t, before)
+	for _, path := range []string{fixture.config, fixture.state, fixture.lock, fixture.backup} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("mutation path %q exists or cannot be inspected: %v", path, err)
+		}
+	}
+}
+
+func TestInit_NoTerminalWithoutApplyDecisionIsZeroWrite(t *testing.T) {
+	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
+[profiles]
+mac = []
+[data.email]
+`, "")
+	before := snapshotCLITree(t, fixture.root)
+	stdout, stderr, code := fixture.run(
+		t,
+		"command stdin must not be used\n",
+		func() (io.ReadWriteCloser, error) { return nil, os.ErrNotExist },
+		"init", "--profile", "mac", "--set", "email=ready@example.com",
+	)
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "open user terminal") {
+		t.Fatalf("init without apply decision = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	fixture.assertUnchanged(t, before)
+	for _, path := range []string{fixture.config, fixture.state, fixture.lock, fixture.backup} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("mutation path %q exists or cannot be inspected: %v", path, err)
+		}
+	}
+}
+
+func TestInit_ConfigOnlyPersistsRepoAndExplicitEmpty(t *testing.T) {
+	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
+[profiles]
+mac = []
+[data.email]
+prompt = "Git email"
+default = "default@example.com"
+[data.empty]
+default = "fallback"
+`, "")
+	terminal := newInitTestTerminal("\nn\n")
+	stdout, stderr, code := fixture.run(
+		t,
+		"must not be read\n",
+		func() (io.ReadWriteCloser, error) { return terminal, nil },
+		"init", "--profile", "mac", "--set", "empty=",
+	)
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "config  "+fixture.config+"  (updated)") {
+		t.Fatalf("config-only init = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	snapshot, err := config.LoadSnapshot(fixture.config)
+	if err != nil {
+		t.Fatalf("LoadSnapshot(config) error = %v", err)
+	}
+	machine := snapshot.Machine()
+	if machine.Profile != "mac" || machine.Repo == nil || *machine.Repo != fixture.repo ||
+		machine.Data["email"] != "default@example.com" || machine.Data["empty"] != "" {
+		t.Fatalf("machine config = %#v", machine)
+	}
+	if snapshot.Precondition().Mode() != 0o600 {
+		t.Fatalf("config mode = %04o, want 0600", snapshot.Precondition().Mode())
+	}
+	if _, err := os.Lstat(fixture.state); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("config-only init state error = %v, want missing", err)
+	}
+	if !strings.Contains(terminal.written.String(), "Git email [default@example.com]: ") ||
+		!strings.Contains(terminal.written.String(), "Apply now? [Y/n] ") {
+		t.Fatalf("terminal output = %q", terminal.written.String())
+	}
+
+	if err := os.Unsetenv("DOT_REPO"); err != nil {
+		t.Fatalf("os.Unsetenv(DOT_REPO) error = %v", err)
+	}
+	prepared, err := dotruntime.PrepareInit(dotruntime.Overrides{
+		Home: dotruntime.Override{Value: fixture.home, Set: true},
+	}, "v0.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit(after removing repo override) error = %v", err)
+	}
+	if got := prepared.Context().Control().RepositoryPath(); got != fixture.repo {
+		t.Fatalf("persisted repository = %q, want %q", got, fixture.repo)
+	}
+}
+
+func TestInit_DuplicateSetFailsBeforePrepareOrTerminal(t *testing.T) {
+	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
+[profiles]
+mac = []
+[data.email]
+`, "")
+	before := snapshotCLITree(t, fixture.root)
+	opened := false
+	stdout, stderr, code := fixture.run(
+		t,
+		"",
+		func() (io.ReadWriteCloser, error) {
+			opened = true
+			return nil, errors.New("must not open")
+		},
+		"init", "--yes", "--profile", "mac", "--set", "email=first", "--set", "email=second",
+	)
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "duplicate --set key") {
+		t.Fatalf("duplicate --set = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if opened {
+		t.Fatal("duplicate --set opened terminal")
+	}
+	fixture.assertUnchanged(t, before)
+}
+
+func TestInit_YesRunsNestedApplyHooksAndSecondRunConverges(t *testing.T) {
+	fixture := newHookMutationCLIFixture(t)
+	realHomeBefore := snapshotCLIPath(t, fixture.realHome)
+	stdout, stderr, code := runMutationInit(
+		t,
+		fixture,
+		"from-init-stdin\n",
+		nil,
+		nil,
+		"init", "--profile", "all", "--yes",
+	)
+	if code != exitOK || !strings.Contains(stdout, "config  ") ||
+		!strings.Contains(stdout, "hook-out:from-init-stdin") ||
+		!strings.Contains(stdout, "run-hook  alpha/hooks/setup.sh  (succeeded)") ||
+		!strings.Contains(stderr, "hook-err:from-init-stdin") {
+		t.Fatalf("first init apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	logPath := filepath.Join(fixture.home, "hook-log")
+	if content, err := os.ReadFile(logPath); err != nil || string(content) != "from-init-stdin\n" {
+		t.Fatalf("hook log = %q, %v", content, err)
+	}
+	afterFirst := snapshotCLITree(t, fixture.root)
+
+	stdout, stderr, code = runMutationInit(
+		t,
+		fixture,
+		"must-not-be-read\n",
+		nil,
+		nil,
+		"init", "--profile", "all", "--yes",
+	)
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "(unchanged)") ||
+		!strings.HasSuffix(stdout, "Already up to date.\n") || strings.Contains(stdout, "hook-out:") {
+		t.Fatalf("second init apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if afterSecond := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(afterSecond, afterFirst) {
+		t.Fatalf("second init changed synthetic tree\nfirst=%v\nsecond=%v", afterFirst, afterSecond)
+	}
+	if content, err := os.ReadFile(logPath); err != nil || string(content) != "from-init-stdin\n" {
+		t.Fatalf("second init reran hook: %q, %v", content, err)
+	}
+	if realHomeAfter := snapshotCLIPath(t, fixture.realHome); !reflect.DeepEqual(realHomeAfter, realHomeBefore) {
+		t.Fatalf("init changed real HOME sentinel: before=%v after=%v", realHomeBefore, realHomeAfter)
+	}
+}
+
+func TestInit_ConfigCommitSurvivesCorruptStateApplyFailure(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+	statePath := filepath.Join(fixture.home, ".local", "state", "dot", "state.json")
+	writeCLIFile(t, statePath, "{")
+	stdout, stderr, code := runMutationInit(
+		t,
+		fixture,
+		"",
+		nil,
+		nil,
+		"init", "--profile", "all", "--yes",
+	)
+	if code != exitError || !strings.Contains(stdout, "config  ") ||
+		!strings.Contains(stderr, "load apply mutation inputs") {
+		t.Fatalf("corrupt-state init = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	snapshot, err := config.LoadSnapshot(filepath.Join(fixture.home, ".config", "dot", "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadSnapshot(config) error = %v", err)
+	}
+	machine := snapshot.Machine()
+	if machine.Repo == nil || *machine.Repo != fixture.repository || machine.Profile != "all" {
+		t.Fatalf("committed config after state failure = %#v", machine)
+	}
+	if content, err := os.ReadFile(statePath); err != nil || string(content) != "{" {
+		t.Fatalf("corrupt state after init = %q, %v", content, err)
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.home, "alpha", "file")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("target after corrupt state error = %v, want missing", err)
+	}
+}
+
+func TestInit_PruneConfirmationAndYesAuthorization(t *testing.T) {
+	t.Run("interactive refusal", func(t *testing.T) {
+		fixture := newWholeModulePruneCLIFixture(t)
+		initTTY := newInitTestTerminal("\n")
+		pruneTTY := func() (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("n\n")), nil
+		}
+		stdout, stderr, code := runMutationInit(
+			t,
+			fixture,
+			"command stdin must not answer init\n",
+			func() (io.ReadWriteCloser, error) { return initTTY, nil },
+			pruneTTY,
+			"init", "--profile", "all",
+		)
+		if code != exitActionable || !strings.Contains(stdout, "config  ") ||
+			!strings.Contains(stderr, "Remove orphaned modules? [y/N]") {
+			t.Fatalf("interactive prune refusal = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+		if _, err := os.Lstat(filepath.Join(fixture.home, "old")); err != nil {
+			t.Fatalf("refused prune removed orphan: %v", err)
+		}
+	})
+
+	t.Run("yes confirms prune without terminal", func(t *testing.T) {
+		fixture := newWholeModulePruneCLIFixture(t)
+		opened := false
+		failInitTTY := func() (io.ReadWriteCloser, error) {
+			opened = true
+			return nil, errors.New("must not open")
+		}
+		failPruneTTY := func() (io.ReadCloser, error) {
+			opened = true
+			return nil, errors.New("must not open")
+		}
+		stdout, stderr, code := runMutationInit(
+			t,
+			fixture,
+			"",
+			failInitTTY,
+			failPruneTTY,
+			"init", "--profile", "all", "--yes",
+		)
+		if code != exitOK || stderr != "" || !strings.Contains(stdout, "prune  ~/old") {
+			t.Fatalf("init --yes prune = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+		}
+		if opened {
+			t.Fatal("init --yes opened a terminal")
+		}
+		if _, err := os.Lstat(filepath.Join(fixture.home, "old")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("init --yes orphan error = %v, want missing", err)
+		}
+	})
+}
+
+func TestInit_YesDoesNotForceConflicts(t *testing.T) {
+	fixture := newMutationCLIFixture(t)
+	target := filepath.Join(fixture.home, "alpha", "file")
+	writeCLIFile(t, target, "user-owned\n")
+	stdout, stderr, code := runMutationInit(
+		t,
+		fixture,
+		"",
+		nil,
+		nil,
+		"init", "--profile", "all", "--yes",
+	)
+	if code != exitConflict || stderr != "" || !strings.Contains(stdout, "CONFLICT  ~/alpha/file") ||
+		strings.Contains(stdout, "backup  ") {
+		t.Fatalf("init --yes conflict = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if content, err := os.ReadFile(target); err != nil || string(content) != "user-owned\n" {
+		t.Fatalf("init --yes changed conflict target: %q, %v", content, err)
+	}
+	backupRoot := filepath.Join(fixture.home, ".local", "state", "dot", "backup")
+	if _, err := os.Lstat(backupRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("init --yes backup root error = %v, want missing", err)
+	}
+}
+
 type initDecisionFixture struct {
 	root     string
 	home     string
@@ -232,6 +522,31 @@ func (fixture initDecisionFixture) prepare(t *testing.T, profile dotruntime.Over
 	return inputs
 }
 
+func (fixture initDecisionFixture) run(
+	t *testing.T,
+	stdin string,
+	openInitTTY func() (io.ReadWriteCloser, error),
+	args ...string,
+) (string, string, int) {
+	t.Helper()
+	commandArgs := append([]string(nil), args...)
+	commandArgs = append(commandArgs, "--home", fixture.home, "--repo", fixture.repo)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run(commandArgs, environment{
+		stdin:        strings.NewReader(stdin),
+		stdout:       &stdout,
+		stderr:       &stderr,
+		lookupEnv:    os.LookupEnv,
+		userHomeDir:  os.UserHomeDir,
+		openInitTTY:  openInitTTY,
+		openTerminal: func() (io.ReadCloser, error) { return nil, os.ErrNotExist },
+		build:        buildinfo.Info{Version: "v0.0.0", Commit: "test", BuildTime: "test"},
+		goos:         runtime.GOOS,
+	})
+	return stdout.String(), stderr.String(), code
+}
+
 func (fixture initDecisionFixture) assertUnchanged(t *testing.T, before map[string]cliTreeEntry) {
 	t.Helper()
 	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
@@ -264,4 +579,32 @@ func (terminal *initTestTerminal) Write(buffer []byte) (int, error) {
 func (terminal *initTestTerminal) Close() error {
 	terminal.closed = true
 	return nil
+}
+
+func runMutationInit(
+	t *testing.T,
+	fixture mutationCLIFixture,
+	stdin string,
+	openInitTTY func() (io.ReadWriteCloser, error),
+	openPruneTTY func() (io.ReadCloser, error),
+	args ...string,
+) (string, string, int) {
+	t.Helper()
+	fixture.setEnvironment(t)
+	commandArgs := append([]string(nil), args...)
+	commandArgs = append(commandArgs, "--home", fixture.home, "--repo", fixture.repository)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run(commandArgs, environment{
+		stdin:        strings.NewReader(stdin),
+		stdout:       &stdout,
+		stderr:       &stderr,
+		lookupEnv:    os.LookupEnv,
+		userHomeDir:  os.UserHomeDir,
+		openInitTTY:  openInitTTY,
+		openTerminal: openPruneTTY,
+		build:        buildinfo.Info{Version: "v0.0.0", Commit: "test", BuildTime: "test"},
+		goos:         runtime.GOOS,
+	})
+	return stdout.String(), stderr.String(), code
 }
