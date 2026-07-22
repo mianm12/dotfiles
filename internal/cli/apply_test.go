@@ -14,8 +14,6 @@ import (
 
 	applyrunner "github.com/mianm12/dotfiles/internal/apply"
 	"github.com/mianm12/dotfiles/internal/buildinfo"
-	"github.com/mianm12/dotfiles/internal/planner"
-	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 	"github.com/spf13/cobra"
 )
 
@@ -476,22 +474,6 @@ func (fixture mutationCLIFixture) setEnvironment(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(fixture.home, ".cache"))
 	t.Setenv("DOT_CONFIG", filepath.Join(fixture.home, ".config", "dot", "config.toml"))
 	t.Setenv("DOT_REPO", fixture.repository)
-}
-
-func planMutationFixture(t *testing.T, fixture mutationCLIFixture) planner.ApplyPlan {
-	t.Helper()
-	fixture.setEnvironment(t)
-	plan, err := planner.PlanApply(planner.ApplyOptions{
-		Runtime: dotruntime.Overrides{
-			Home:       dotruntime.Override{Value: fixture.home, Set: true},
-			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
-		},
-		CLIVersion: "v0.0.0",
-	})
-	if err != nil {
-		t.Fatalf("planner.PlanApply() error = %v", err)
-	}
-	return plan
 }
 
 func runInjectedApply(

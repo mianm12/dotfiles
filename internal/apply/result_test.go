@@ -22,7 +22,6 @@ func TestResult_SealsExecutionFactsAndReturnsDetachedViews(t *testing.T) {
 	}
 	wantTarget := files[0].Target
 	files[0].Target = "~/forged"
-	files = append(files, FileOutcome{Index: 99, Target: "~/extra", Status: ActionSucceeded})
 	if got := result.FileOutcomes(); len(got) == 0 || got[0].Target != wantTarget {
 		t.Fatalf("FileOutcomes() leaked mutable storage: %#v", got)
 	}
