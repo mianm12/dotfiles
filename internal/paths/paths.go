@@ -14,6 +14,28 @@ const (
 	RepoEnvironment   = "DOT_REPO"
 )
 
+// RepositorySource 标识 effective repo 的最高优先级来源。
+type RepositorySource string
+
+const (
+	RepositorySourceFlag        RepositorySource = "flag"
+	RepositorySourceEnvironment RepositorySource = "environment"
+	RepositorySourceConfig      RepositorySource = "config"
+	RepositorySourceDefault     RepositorySource = "default"
+)
+
+// RepositoryResolution 保存已解析的绝对 repo 路径及其来源。
+type RepositoryResolution struct {
+	path   string
+	source RepositorySource
+}
+
+// Path 返回已解析的绝对 repo 路径。
+func (resolution RepositoryResolution) Path() string { return resolution.path }
+
+// Source 返回 repo 的决策来源。
+func (resolution RepositoryResolution) Source() RepositorySource { return resolution.source }
+
 // EffectiveHome 解析所有 dot 路径共同使用的 HOME；无论来源，结果都必须是非空绝对路径。
 func EffectiveHome(override string, overrideSet bool, userHomeDir func() (string, error)) (string, error) {
 	if overrideSet {
@@ -76,28 +98,51 @@ func Repository(
 	lookupEnv func(string) (string, bool),
 	configuredValue *string,
 ) (string, error) {
+	resolution, err := ResolveRepository(home, flagValue, flagSet, lookupEnv, configuredValue)
+	if err != nil {
+		return "", err
+	}
+	return resolution.Path(), nil
+}
+
+// ResolveRepository 按 --repo、DOT_REPO、机器配置、默认值的顺序解析 repo，
+// 并保留实际选中来源供 init 决定是否持久化 override。
+func ResolveRepository(
+	home string,
+	flagValue string,
+	flagSet bool,
+	lookupEnv func(string) (string, bool),
+	configuredValue *string,
+) (RepositoryResolution, error) {
 	value := ""
-	source := ""
+	errorSource := ""
+	selectedSource := RepositorySourceDefault
 
 	switch {
 	case flagSet:
 		value = flagValue
-		source = "--repo"
+		errorSource = "--repo"
+		selectedSource = RepositorySourceFlag
 	default:
 		if environmentValue, ok := lookupEnv(RepoEnvironment); ok {
 			value = environmentValue
-			source = RepoEnvironment
+			errorSource = RepoEnvironment
+			selectedSource = RepositorySourceEnvironment
 		} else if configuredValue != nil {
 			value = *configuredValue
-			source = "machine config repo"
+			errorSource = "machine config repo"
+			selectedSource = RepositorySourceConfig
 		} else {
-			return filepath.Join(home, ".local", "share", "dot", "repo"), nil
+			return RepositoryResolution{
+				path:   filepath.Join(home, ".local", "share", "dot", "repo"),
+				source: RepositorySourceDefault,
+			}, nil
 		}
 	}
 
 	path, err := ResolveControlPath(value, home)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", source, err)
+		return RepositoryResolution{}, fmt.Errorf("%s: %w", errorSource, err)
 	}
-	return path, nil
+	return RepositoryResolution{path: path, source: selectedSource}, nil
 }

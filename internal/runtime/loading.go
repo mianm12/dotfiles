@@ -80,6 +80,25 @@ func (resolver Resolver) LoadReadOnly(overrides Overrides, cliVersion string) (L
 	return loadFull(context, cliVersion, operations)
 }
 
+// PrepareInit 在不获取 lock、不读取 state 的前提下严格加载 init config 与 manifest。
+func PrepareInit(overrides Overrides, cliVersion string) (InitInputs, error) {
+	return systemResolver().PrepareInit(overrides, cliVersion)
+}
+
+// PrepareInit 使用 resolver 的明确系统来源执行只读 init preparation。
+func (resolver Resolver) PrepareInit(overrides Overrides, cliVersion string) (InitInputs, error) {
+	operations := loadingOperationsWithResolver(resolver)
+	context, err := operations.preflightInit(overrides)
+	if err != nil {
+		return InitInputs{}, err
+	}
+	compatibility, repository, err := loadRepository(context.Control().RepositoryPath(), cliVersion, operations)
+	if err != nil {
+		return InitInputs{}, err
+	}
+	return InitInputs{context: context, compatibility: compatibility, repository: repository}, nil
+}
+
 // LoadControlRecovery 为 self-update 等 control-only 恢复流程建立只读控制面上下文。
 // config missing 合法；已有 config 仍严格校验。本入口不获取锁，也不读取 manifest/state。
 func LoadControlRecovery(overrides Overrides) (ControlContext, error) {

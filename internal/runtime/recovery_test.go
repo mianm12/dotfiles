@@ -8,6 +8,7 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/lock"
 	"github.com/mianm12/dotfiles/internal/manifest"
+	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/state"
 )
 
@@ -190,6 +191,46 @@ func TestLoadControlRecovery_ExistingInvalidConfigFailsWithoutLock(t *testing.T)
 	_, err := LoadControlRecovery(fixture.overrides)
 	if err == nil {
 		t.Fatal("LoadControlRecovery() error = nil")
+	}
+	assertMissing(t, fixture.paths.StateRoot())
+}
+
+func TestPrepareInit_LoadsStrictConfigAndManifestWithoutLockOrState(t *testing.T) {
+	fixture := newLoadingFixture(t, true)
+	writeFile(t, fixture.config, []byte("profile = \"mac\"\nrepo = \""+fixture.repo+"\"\n[data]\nold = \"kept\"\n"), 0o640)
+	writeManifest(t, fixture.repo, ">=1.0.0", "[data.email]\ndefault = \"\"\n")
+	writeState(t, fixture, "{")
+	before := snapshotFixtureTree(t, fixture.root)
+
+	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	if err != nil {
+		t.Fatalf("PrepareInit() error = %v", err)
+	}
+	machine, ok := prepared.Context().ExistingMachine()
+	if !ok || machine.Profile() != "mac" || machine.Data()["old"] != "kept" {
+		t.Fatalf("ExistingMachine() = (%#v, %t), want complete old machine", machine, ok)
+	}
+	if repo, ok := machine.Repo(); !ok || repo != fixture.repo {
+		t.Fatalf("ExistingMachine().Repo() = (%q, %t), want existing repo", repo, ok)
+	}
+	if prepared.Context().RepositorySource() != paths.RepositorySourceFlag {
+		t.Fatalf("RepositorySource() = %q, want flag", prepared.Context().RepositorySource())
+	}
+	declarations := prepared.Manifest().DataDeclarations()
+	if len(declarations) != 1 || declarations[0].Key() != "email" {
+		t.Fatalf("manifest declarations = %#v, want only email", declarations)
+	}
+	if after := snapshotFixtureTree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("PrepareInit() changed fixture tree\nbefore: %#v\nafter: %#v", before, after)
+	}
+	assertMissing(t, fixture.paths.StateLock())
+}
+
+func TestPrepareInit_InvalidConfigDoesNotFallback(t *testing.T) {
+	fixture := newLoadingFixture(t, true)
+	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
+	if _, err := PrepareInit(fixture.overrides, "v1.0.0"); err == nil {
+		t.Fatal("PrepareInit() error = nil, want strict config error")
 	}
 	assertMissing(t, fixture.paths.StateRoot())
 }

@@ -1,10 +1,53 @@
 package config
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestLoadSnapshot_PreservesMachineAndObjectEvidence(t *testing.T) {
+	path := writeConfig(t, "profile = \"mac\"\nrepo = \"~/repo\"\n[data]\nold = \"value\"\n")
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatalf("os.Chmod() error = %v", err)
+	}
+
+	snapshot, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	if !snapshot.Exists() || snapshot.Profile() != "mac" {
+		t.Fatalf("snapshot = %#v, want existing mac config", snapshot)
+	}
+	if repo, ok := snapshot.Repo(); !ok || repo != "~/repo" {
+		t.Fatalf("Repo() = (%q, %t), want (~/repo, true)", repo, ok)
+	}
+	data := snapshot.Data()
+	data["old"] = "changed"
+	if got := snapshot.Data()["old"]; got != "value" {
+		t.Fatalf("mutating Data() changed snapshot: got %q", got)
+	}
+	precondition := snapshot.Precondition()
+	if !precondition.Exists() || precondition.Kind() != fs.FileMode(0) || precondition.Mode() != 0o640 {
+		t.Fatalf("Precondition() = %#v, want regular 0640", precondition)
+	}
+	bytes := precondition.Bytes()
+	bytes[0] = 'X'
+	if got := string(snapshot.Precondition().Bytes()); got[0] == 'X' {
+		t.Fatal("mutating Precondition.Bytes() changed snapshot")
+	}
+}
+
+func TestLoadSnapshot_MissingHasSealedMissingPrecondition(t *testing.T) {
+	snapshot, err := LoadSnapshot(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	if snapshot.Exists() || snapshot.Precondition().Exists() {
+		t.Fatalf("missing snapshot = %#v, want missing", snapshot)
+	}
+}
 
 func TestLoad_MissingConfig(t *testing.T) {
 	got, exists, err := Load(filepath.Join(t.TempDir(), "missing.toml"))

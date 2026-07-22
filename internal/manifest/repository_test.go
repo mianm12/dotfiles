@@ -61,6 +61,43 @@ base = []
 	}
 }
 
+func TestRepositoryDataDeclarations_PreservePresenceAndReturnCopy(t *testing.T) {
+	repo := writeRepositoryManifest(t, `
+requires = ">=0.3.0"
+[profiles]
+base = []
+[data.email]
+prompt = "Email"
+default = ""
+[data.machine]
+`)
+	loaded, err := Load(repo)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	declarations := loaded.DataDeclarations()
+	if len(declarations) != 2 || declarations[0].Key() != "email" || declarations[1].Key() != "machine" {
+		t.Fatalf("DataDeclarations() = %#v, want email then machine", declarations)
+	}
+	if prompt, ok := declarations[0].Prompt(); !ok || prompt != "Email" {
+		t.Fatalf("email Prompt() = (%q, %t), want (Email, true)", prompt, ok)
+	}
+	if value, ok := declarations[0].Default(); !ok || value != "" {
+		t.Fatalf("email Default() = (%q, %t), want explicit empty", value, ok)
+	}
+	if _, ok := declarations[1].Prompt(); ok {
+		t.Fatal("machine Prompt() exists, want omitted")
+	}
+	if _, ok := declarations[1].Default(); ok {
+		t.Fatal("machine Default() exists, want omitted")
+	}
+	declarations[0] = DataDeclaration{}
+	if got := loaded.DataDeclarations()[0].Key(); got != "email" {
+		t.Fatalf("mutating DataDeclarations result changed repository: first key = %q", got)
+	}
+}
+
 func TestRepositoryProfileLineWithModule_PreservesDirectDeclaration(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
 requires = ">=0.3.0"
