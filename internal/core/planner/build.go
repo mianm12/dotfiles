@@ -1,7 +1,9 @@
 package planner
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -57,7 +59,16 @@ func Build(request Request) (Plan, error) {
 		plan.Actions = append(plan.Actions, action)
 	}
 
-	cleanup, warnings := planStale(home, desired, request.State, usedState, scope)
+	cleanup, warnings, err := planStale(
+		home,
+		desired,
+		request.State,
+		usedState,
+		scope,
+	)
+	if err != nil {
+		return Plan{}, err
+	}
 	plan.Actions = append(plan.Actions, cleanup...)
 	plan.Warnings = append(plan.Warnings, warnings...)
 	return plan, nil
@@ -254,7 +265,7 @@ func planStale(
 	snapshot state.Snapshot,
 	used map[placementKey]bool,
 	scope moduleScope,
-) ([]Action, []string) {
+) ([]Action, []string, error) {
 	keys := stateKeys(snapshot)
 	actions := make([]Action, 0)
 	warnings := make([]string, 0)
@@ -263,13 +274,16 @@ func planStale(
 			continue
 		}
 		record, _ := statePlacement(snapshot, key)
-		action, warning := planOneStale(home, desired, key, record)
+		action, warning, err := planOneStale(home, desired, key, record)
+		if err != nil {
+			return nil, nil, err
+		}
 		actions = append(actions, action)
 		if warning != "" {
 			warnings = append(warnings, warning)
 		}
 	}
-	return actions, warnings
+	return actions, warnings, nil
 }
 
 func planOneStale(
@@ -277,7 +291,7 @@ func planOneStale(
 	desired []desiredPlacement,
 	key placementKey,
 	record state.Placement,
-) (Action, string) {
+) (Action, string, error) {
 	base := Action{
 		ModuleID:                key.moduleID,
 		PlacementID:             key.placementID,
@@ -295,48 +309,57 @@ func planOneStale(
 			"local %s left desired; keeping target and forgetting provenance",
 			placementLabel(key.moduleID, key.placementID),
 		)
-		return base, warning
+		return base, warning, nil
 	}
 
 	current, err := resolveStateTarget(home, record.Target)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return Action{}, "", fmt.Errorf(
+				"resolve stale link %s: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
 		base.Decision = DecisionForget
 		base.Reason = "stale target cannot be resolved safely"
-		return base, staleWarning(key, base.Reason)
+		return base, staleWarning(key, base.Reason), nil
 	}
 	base.ResolvedTarget = current.Resolved()
 
 	if targetUsedByDesired(current, desired) {
 		base.Decision = DecisionForget
 		base.Reason = "stale target is reused by desired configuration"
-		return base, staleWarning(key, base.Reason)
+		return base, staleWarning(key, base.Reason), nil
 	}
 	if current.Resolved() != record.ResolvedTarget {
 		base.Decision = DecisionForget
 		base.Reason = "stale resolved target changed"
-		return base, staleWarning(key, base.Reason)
+		return base, staleWarning(key, base.Reason), nil
 	}
 
 	actual, err := observe(current.Lexical())
 	if err != nil {
-		base.Decision = DecisionForget
-		base.Reason = "stale target cannot be inspected safely"
-		return base, staleWarning(key, base.Reason)
+		return Action{}, "", fmt.Errorf(
+			"inspect stale link %s: %w",
+			placementLabel(key.moduleID, key.placementID),
+			err,
+		)
 	}
 	if actual.kind == actualAbsent {
 		base.Decision = DecisionForget
-		return base, ""
+		return base, "", nil
 	}
 	if actual.kind == actualSymlink &&
 		actual.linkDestination == record.LinkDestination &&
 		current.Resolved() == record.ResolvedTarget {
 		base.Decision = DecisionPrune
-		return base, ""
+		return base, "", nil
 	}
 
 	base.Decision = DecisionForget
 	base.Reason = staleDriftReason(actual, current.Resolved(), record)
-	return base, staleWarning(key, base.Reason)
+	return base, staleWarning(key, base.Reason), nil
 }
 
 func staleDriftReason(

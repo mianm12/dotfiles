@@ -1,6 +1,8 @@
 package planner_test
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -370,4 +372,64 @@ func TestScopedPlanLeavesOtherModuleStateUntouched(t *testing.T) {
 		t.Fatalf("Build(scoped) error = %v", err)
 	}
 	assertDecisions(t, plan, planner.DecisionCreateLink)
+}
+
+func TestBuildPropagatesStaleFilesystemErrorWithoutPartialPlan(t *testing.T) {
+	fixture := newFixture(t)
+	blocked := fixture.target("blocked")
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(blocked) error = %v", err)
+	}
+	target := filepath.Join(blocked, "config")
+	resolved := fixture.resolved(t, target)
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"stale": linkRecord(target, resolved, fixture.path("repo/source")),
+	})
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatalf("os.Chmod(blocked) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(blocked, 0o700); err != nil {
+			t.Errorf("restore blocked directory mode: %v", err)
+		}
+	})
+
+	plan, err := planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		State:    snapshot,
+	})
+	if err == nil {
+		t.Skip("filesystem did not enforce directory search permission")
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("Build() error = %v, want permission error", err)
+	}
+	if plan.Actions != nil || plan.Warnings != nil {
+		t.Fatalf("Build() returned partial plan %#v", plan)
+	}
+}
+
+func TestStaleDanglingAncestorWarnsAndForgets(t *testing.T) {
+	fixture := newFixture(t)
+	oldParent := fixture.dir(t, "parents/old")
+	parentLink := fixture.target("alias")
+	fixture.symlink(t, oldParent, parentLink)
+	source := fixture.file(t, "repo/modules/app/config", "config")
+	target := parentLink + "/config"
+	fixture.symlink(t, source, filepath.Join(oldParent, "config"))
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"stale": linkRecord(target, fixture.resolved(t, target), source),
+	})
+	if err := os.Remove(parentLink); err != nil {
+		t.Fatalf("os.Remove(parent link) error = %v", err)
+	}
+	fixture.symlink(t, fixture.path("missing-parent"), parentLink)
+
+	plan := fixture.build(t, nil, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionForget)
+	if len(plan.Warnings) != 1 {
+		t.Fatalf("Build() warnings = %v, want dangling-ancestor warning", plan.Warnings)
+	}
 }
