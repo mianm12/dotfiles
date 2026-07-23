@@ -62,6 +62,8 @@ MVP 不包含：
   target 的原子性。
 - OS 或文件系统在计划后返回错误时，命令可以部分完成并失败；恢复方式是停止并重跑。
 - State 丢失后可以恢复当前 desired，但无法发现已经从 manifest 删除的历史 link，只做警告。
+- 仓库目录被移动或机器配置指向失效时，`dot` 不自动重新绑定；恢复方式是人工修正机器配置的
+  `repository`，或删除机器配置后重新 `init`。
 
 ## 4. 真相源与机器选择
 
@@ -132,10 +134,13 @@ work = ["work-git"]
 - `version` 必填，MVP 只支持 `1`。
 - Module ID 来自 `modules/<id>/`；module manifest 固定为 `module.toml`。
 - Module、profile、variant 和 placement ID 使用 `[a-z0-9][a-z0-9_-]*`。
+- 只有名字符合该规则且含 `module.toml` 的 `modules/<id>/` 目录才是 module；`modules/` 下其他文件、
+  非目录项或不合规目录一律忽略，不报错。
 - Profile 值是 module ID 数组，不得重复。
 - 多个 active profiles 只做集合并集，顺序不改变语义。
-- 空 profile 和空 active profile 列表合法。
-- Active profile 引用不存在的 module 时配置无效。
+- 空 profile 合法；active profile 列表可为空（例如仅选中空 profile），但 `init` 至少要求一个 `--profile`（见 §10.1）。
+- Active profile 引用不存在的 module 时配置无效；该失效只针对仓库 profile，extra_modules/state 中引用已删除
+  module 视为可清理（见 §10.3），因为 profile 由仓库权威维护、extra/state 由本机维护。
 - CLI 不修改仓库 profile。
 
 ## 6. Platform 与 Module
@@ -150,7 +155,11 @@ arch = ["x86_64", "aarch64"]
 
 - 不同字段之间是 AND，同一字段数组内是 OR。
 - 字段缺失表示不限制。
+- `os` 是封闭枚举 `{macos, linux}`，出现枚举外值为配置错误；`distro`、`arch` 是自由小写字符串，
+  逐字比较，不维护发行版/架构注册表。
 - `distro` 只允许与 `os = ["linux"]` 一起声明。
+- 运行时检测不到或未知的 os/distro/arch 不是错误：它只是无法匹配任何约束了该字段的 variant，
+  portable 模块仍适用。
 - 不支持否定、正则、优先级、fallback 或 capability 表达式。
 - Profile 选中的 module 无匹配 variant 时是 not-applicable，不报错。
 - Extra module 或显式 `apply <module>` 无匹配 variant 时失败。
@@ -228,7 +237,8 @@ target = "~/.config/example/config"
 ```
 
 - Source 相对于 portable root 或 selected variant root。
-- Source 顶层对象只能是普通文件或目录，不得是 symlink 或 special。
+- Source 必须存在，其顶层对象只能是普通文件或目录，不得是 symlink 或 special；否则为配置错误、
+  零 mutation（此约束针对 desired source，与 §9.1 对 dangling *actual* 链的处理正交）。
 - Source 目录内部不递归检查，内部 symlink 由用户负责。
 - 文件与目录都作为一个完整 symlink placement，不递归生成单文件 links。
 - Target 必须以 `~/` 开头，不支持绝对路径、环境变量、glob 或命令替换。
@@ -244,7 +254,7 @@ example = "config.local.example"
 target = "~/.config/example/config.local"
 ```
 
-- Example 必须是普通文件，只做字节复制。
+- Example 必须存在且为普通文件，只做字节复制；缺失或类型不符为配置错误、零 mutation。
 - Target absent 时以 `0600`、完整且不可覆盖的方式发布。
 - 任意目录项已经存在时一律 keep：不读取、不比较、不分类、不覆盖。
 - Example 更新不触发 local 更新；local 被用户删除后下一次 apply 重新创建。
@@ -267,6 +277,8 @@ target = "~/.config/example/config.local"
 
 重设计使用 state version `2`，用于明确区别当前旧实现已经使用但结构不兼容的 state v1。
 MVP 不自动迁移旧 state；遇到 v1 时拒绝 mutation，并提示用户在 cutover 时人工归档旧 state。
+`dot.toml`、machine config 与 state 使用相互独立的 version，当前分别为 `1`、`1`、`2`；三者互不关联，
+state 取 `2` 仅为与旧不兼容 state 区分，不代表配置版本升级。
 
 逻辑结构：
 
@@ -302,25 +314,32 @@ MVP 不自动迁移旧 state；遇到 v1 时拒绝 mutation，并提示用户在
 - Local state 只用于退出 desired 时提示，不提供修改或删除权限。
 - State 成功后的内容必须反映本轮已验证结果；内部使用重建或局部更新不属于契约。
 - State 只在选定 scope 成功后原子提交。
-- Unknown field、缺失安全字段、损坏结构或过新版本拒绝 mutation。
+- Unknown field、缺失安全字段、损坏结构或过新版本拒绝 mutation。安全字段指顶层 `version`、`home`，
+  以及每个 placement 的 `kind`、`target`，link 另需 `resolved_target` 与 `link_destination`；其余为
+  可选诊断字段。
 - State missing 按空 state 继续，但警告无法发现已从 manifest 删除的历史 link。
 
 ## 9. 决策规则
 
+选定 scope 内任一 placement 在规划阶段落到 conflict 时，整条命令在 mutation 前失败、零写入；
+status 仍逐 placement 展示各自状态。（执行阶段 update/prune 前的 resolved/raw 复核失败见 §11，
+属于 mutation 中途的安全停止。）
+
 ### 9.1 Link
 
-| State / Actual | 行为 |
-|---|---|
-| 无 / absent | create 并登记 |
-| 有 / absent | 按当前 desired create |
-| 无 / 正确 symlink | adopt，只写 state |
-| 有 / 与 state、desired 一致 | keep |
-| 有 / actual 仍等于旧 destination，desired 已改变 | update |
-| 有 / actual 已等于新 desired，state 落后 | repair state |
-| 无 / 错误 symlink | conflict |
-| 有 / actual 已偏离 state | conflict |
-| 任意 / regular、directory、special | conflict |
-| 其他 module 已记录同一 target | conflict |
+按以下顺序判定，命中即停：能用 desired 或 state 解释的 actual 才有动作，其余一律 conflict。
+
+1. 其他 module 的 state 已 owns 同一 target → conflict。
+2. actual 是 regular file、directory 或 special → conflict。
+3. actual absent → 无 state 时 create 并登记；有 state 时按当前 desired create。
+4. actual 是 symlink 且 raw destination == desired：
+   - 无 state → adopt，只写 state。
+   - 有 state 且 state destination == desired → keep（记录的 resolved target 已变则一并修正）。
+   - 有 state 且 state destination != desired（state 落后）→ repair state。
+5. actual 是 symlink 且 raw destination != desired：
+   - 有 state、raw destination == state destination 且 resolved target 未变（仅 desired 改变）→ update。
+   - 有 state、raw destination == state destination 但 resolved target 已变 → 拒绝并按 conflict 处理（见 §7.3）。
+   - 其余（无 state 的未知 symlink，或已偏离 state）→ conflict。
 
 Stale link 只有在当前 target 仍是 symlink、resolved target 未改变且 raw destination 等于 state
 记录时才允许 prune。Dangling symlink 仍按 raw destination 应用同样规则。
@@ -349,6 +368,7 @@ dot help
 
 - Repository 省略时使用当前目录，并且必须存在有效 `dot.toml`。
 - Init 写入 repository 与 active profiles，然后执行首次全量收敛。
+- `--profile` 至少提供一个；要初始化为空机器时显式选中一个空 profile，而不是省略 `--profile`。
 - Preflight 失败时不写机器配置或 artifacts。
 - 机器配置提交后 apply 失败时保留 selection，用户通过 `dot apply` 重试。
 - 已初始化时 MVP 拒绝再次 init，不提供 reconfigure/rebind。
@@ -365,6 +385,7 @@ dot help
 ### 10.3 Remove
 
 - Active profile 仍选择 module 时拒绝，不修改 selection 或文件系统。
+- 要移除 profile 选中的 module，先在仓库 profile 删除引用，再 `dot apply` 收敛 prune。
 - Extra module 先从 prospective selection 移除，通过 preflight 后写回配置。
 - 删除 state 证明、resolved target 未改变且 raw destination 未漂移的 module links。
 - 保留所有 local，并在 state 可用时提示。
@@ -380,12 +401,14 @@ dot help
   parent directory、lock 或 temporary file。
 - Status 和 dry-run 不取锁；并发 mutation 时结果是 best-effort snapshot。
 - 真实命令总是重新规划，不执行保存的 dry-run plan。
+- Status 与 dry-run 采用与 mutation 相同的 scope 加载：只解析相关 module 的 `module.toml`，
+  scope 外 module 的解析错误不影响结果。
 
 ## 11. Mutation、锁与恢复
 
 ```text
 acquire mutation lock
-  -> load strict config/state/manifests
+  -> load config/state 与 scope 内 manifests（strict）
   -> build prospective selection
   -> resolve desired and observe actual
   -> validate supported path conflicts
@@ -401,6 +424,8 @@ acquire mutation lock
 
 规则：
 
+- 严格加载 `dot.toml`；`module.toml` 只解析命令 scope 内的 module（full apply=effective 集，
+  scoped apply/remove=目标 ∪ effective），scope 外 module 的解析错误不阻塞本命令。
 - Deterministic config、path 或 ownership conflict 在 mutation 前失败，选定 scope 零写入。
 - 不建立通用 action snapshot 或 precondition 系统。
 - Local 和新 link 使用不可覆盖创建语义；target 已出现时停止。
@@ -433,6 +458,9 @@ acquire mutation lock
 | `1` | 配置、ownership、lock、文件系统或运行时失败 |
 | `2` | CLI 参数或用法错误 |
 
+未知或不适用的 module 属于配置/运行时条件，返回 `1`；`2` 仅用于 CLI 语法错误，例如未知 flag 或
+`remove` 缺少 `MODULE` 参数。
+
 运行时失败不要求维护完整的 completed/failed/not-attempted 结果协议。错误信息必须指出失败
 动作；已经发生 mutation 时提示本轮可能部分完成并建议重跑，不得把未执行动作显示为成功。
 
@@ -455,6 +483,10 @@ acquire mutation lock
 13. Selection、local create、link create/update、prune 和 state commit 中断后可重跑收敛。
 14. State missing 可以警告并继续；state corrupt、v1 或 too-new 时拒绝 mutation。
 15. 第二个 mutation process 失败；status/dry-run 不创建 lock，且 dry-run 严格零写入。
+16. Active profile 引用已删除 module 时 mutation 前失败、零写入；extra/state 中的已删除 module 允许 `remove` 清理。
+17. Scope 外 module 的 manifest 损坏不阻塞 scoped `apply`/`remove`；仅显式操作该坏 module 时失败。
+18. Link source 或 local example 缺失/类型不符时配置错误、零 mutation。
+19. 未知 distro 下 portable 模块适用、distro-gated variant 为 not-applicable；`os` 出现枚举外值为配置错误。
 
 所有成功 mutation 场景都追加一次相同 apply，并断言不再发生文件系统 mutation。
 
