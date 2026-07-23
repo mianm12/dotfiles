@@ -14,6 +14,7 @@
 ## 文档
 
 - [当前设计基线](docs/design-baseline.md)
+- [重构切换计划](docs/cutover-plan.md)（非规范性工程清单）
 - [文档索引](docs/README.md)
 - [历史存档](docs/archive/README.md)
 - [贡献与 Git 约定](CONTRIBUTING.md)

@@ -9,6 +9,8 @@
 ## 真相源
 
 - `docs/design-baseline.md` 是唯一当前产品与行为契约。
+- `docs/cutover-plan.md` 是非规范性的重构切换清单，规定当前工程阶段与顺序；与基线冲突时
+  以基线为准。
 - `README.md`、代码和测试说明当前已经实现什么，不能用目标设计代替实现证据。
 - `docs/archive/` 仅用于历史追溯，没有规范性，也不得指导新增实现。
 - `CONTRIBUTING.md` 规定 Git 和通用开发约定。
