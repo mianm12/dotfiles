@@ -40,6 +40,7 @@ type ResolvedPlacement struct {
 type resolvedControl struct {
 	label    string
 	lexical  string
+	entry    string
 	resolved string
 }
 
@@ -92,6 +93,10 @@ func resolveControls(controls Controls) ([]resolvedControl, error) {
 		if err != nil {
 			return nil, err
 		}
+		entry, err := resolveEntry(lexical)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s path entry %q: %w", input.label, input.path, err)
+		}
 		actual, err := resolvePath(lexical)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s path %q: %w", input.label, input.path, err)
@@ -99,6 +104,7 @@ func resolveControls(controls Controls) ([]resolvedControl, error) {
 		resolved[index] = resolvedControl{
 			label:    input.label,
 			lexical:  lexical,
+			entry:    entry,
 			resolved: actual,
 		}
 	}
@@ -152,8 +158,7 @@ func directoryContains(parent, child ResolvedPlacement) bool {
 func validateControlBoundaries(controls []resolvedControl, placements []ResolvedPlacement) error {
 	for _, placement := range placements {
 		for _, control := range controls {
-			if sameOrDescendant(control.lexical, placement.Target.lexical) ||
-				sameOrDescendant(control.resolved, placement.Target.resolved) {
+			if overlapsControl(control, placement.Target) {
 				return fmt.Errorf(
 					"%w: placement %q target %q is inside %s path %q",
 					ErrControlBoundary,
@@ -166,4 +171,17 @@ func validateControlBoundaries(controls []resolvedControl, placements []Resolved
 		}
 	}
 	return nil
+}
+
+func overlapsControl(control resolvedControl, target Target) bool {
+	controls := [...]string{control.lexical, control.entry, control.resolved}
+	targets := [...]string{target.lexical, target.resolved}
+	for _, controlPath := range controls {
+		for _, targetPath := range targets {
+			if sameOrDescendant(controlPath, targetPath) {
+				return true
+			}
+		}
+	}
+	return false
 }

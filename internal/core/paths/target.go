@@ -50,26 +50,31 @@ func ResolveTarget(home, expression string) (Target, error) {
 		return Target{}, err
 	}
 
-	parent, err := resolvePath(filepath.Dir(lexical))
+	resolved, err := resolveEntry(lexical)
 	if err != nil {
 		return Target{}, fmt.Errorf("resolve target %q parent: %w", expression, err)
 	}
-	info, err := os.Stat(parent)
+	info, err := os.Stat(filepath.Dir(resolved))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return Target{}, fmt.Errorf("inspect target %q parent %q: %w", expression, parent, err)
+		return Target{}, fmt.Errorf(
+			"inspect target %q parent %q: %w",
+			expression,
+			filepath.Dir(resolved),
+			err,
+		)
 	}
 	if err == nil && !info.IsDir() {
 		return Target{}, fmt.Errorf(
 			"%w: target %q parent %q is not a directory",
 			ErrPathBlocked,
 			expression,
-			parent,
+			filepath.Dir(resolved),
 		)
 	}
 
 	return Target{
 		lexical:  lexical,
-		resolved: filepath.Join(parent, filepath.Base(lexical)),
+		resolved: resolved,
 	}, nil
 }
 
@@ -107,6 +112,14 @@ func cleanAbsolute(label, path string) (string, error) {
 		return "", fmt.Errorf("%w: %s contains NUL", ErrInvalidPath, label)
 	}
 	return filepath.Clean(path), nil
+}
+
+func resolveEntry(path string) (string, error) {
+	parent, err := resolvePath(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(path)), nil
 }
 
 // resolvePath follows every existing symlink in path. If a suffix is missing,

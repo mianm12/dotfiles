@@ -129,6 +129,28 @@ func TestAcceptance12_RejectsTargetAndControlConflictsBeforeMutation(t *testing.
 			wantErr: corepaths.ErrControlBoundary,
 		},
 		{
+			name: "target reaches repository symlink entry through a resolved parent alias",
+			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
+				repository := filepath.Join(home, "repository")
+				actualRepository := filepath.Join(root, "actual-repository")
+				if err := os.MkdirAll(actualRepository, 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(actual repository) error = %v", err)
+				}
+				if err := os.Symlink(actualRepository, repository); err != nil {
+					t.Fatalf("os.Symlink(repository) error = %v", err)
+				}
+				if err := os.Symlink(".", filepath.Join(home, "home-alias")); err != nil {
+					t.Fatalf("os.Symlink(home alias) error = %v", err)
+				}
+				controls := controlsOutsideHome(root)
+				controls.Repository = repository
+				return controls, []corepaths.Placement{
+					{Label: "repository-entry", Target: "~/home-alias/repository"},
+				}
+			},
+			wantErr: corepaths.ErrControlBoundary,
+		},
+		{
 			name: "target is inside machine config path",
 			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
 				controls := controlsOutsideHome(root)
