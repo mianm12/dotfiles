@@ -199,18 +199,23 @@ func planActive(
 	}
 
 	recordApplies := exists && samePlacementTarget(desired, record)
-	actual, err := observe(desired.target.Lexical())
+	if desired.kind == state.KindLocal {
+		exists, err := observeLocal(desired.target.Lexical())
+		if err != nil {
+			return Action{}, false, err
+		}
+		return planLocal(base, exists), recordApplies, nil
+	}
+
+	actual, err := observeLink(desired.target.Lexical())
 	if err != nil {
 		return Action{}, false, err
-	}
-	if desired.kind == state.KindLocal {
-		return planLocal(base, actual), recordApplies, nil
 	}
 	return planLink(base, actual, record, recordApplies), recordApplies, nil
 }
 
-func planLocal(base Action, actual actual) Action {
-	if actual.kind == actualAbsent {
+func planLocal(base Action, exists bool) Action {
+	if !exists {
 		base.Decision = DecisionCreateLocal
 		return base
 	}
@@ -342,7 +347,7 @@ func planOneStale(
 		return base, staleWarning(key, base.Reason), nil
 	}
 
-	actual, err := observe(current.Lexical())
+	actual, err := observeLink(current.Lexical())
 	if err != nil {
 		return Action{}, "", fmt.Errorf(
 			"inspect stale link %s: %w",

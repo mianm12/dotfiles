@@ -22,7 +22,18 @@ type actual struct {
 	linkDestination string
 }
 
-func observe(path string) (actual, error) {
+func observeLocal(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect local target %q: %w", path, err)
+	}
+	return true, nil
+}
+
+func observeLink(path string) (actual, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return actual{kind: actualAbsent}, nil
