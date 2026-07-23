@@ -1,219 +1,141 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
+	"slices"
 
-	"github.com/mianm12/dotfiles/internal/planner"
-	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
+	"github.com/mianm12/dotfiles/internal/core/config"
+	"github.com/mianm12/dotfiles/internal/core/planner"
+	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/spf13/cobra"
 )
 
-type statusFinding struct {
-	target      string
-	description string
-}
-
-type statusProjection struct {
-	summary    string
-	drift      []statusFinding
-	pending    []statusFinding
-	orphans    []statusFinding
-	unassigned []statusFinding
-	notices    []string
-	clean      bool
-	exitCode   int
-}
-
-func newStatusCommand(env environment, global *globalOptions) *cobra.Command {
+func newStatusCommand(env environment) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Inspect the current dotfiles health",
-		Args:  cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			plan, err := planner.PlanApply(planner.ApplyOptions{
-				Runtime: dotruntime.Overrides{
-					Home: dotruntime.Override{
-						Value: global.home,
-						Set:   command.Flags().Changed(homeFlagName),
-					},
-					Repository: dotruntime.Override{
-						Value: global.repo,
-						Set:   command.Flags().Changed(repoFlagName),
-					},
-					Profile: dotruntime.Override{
-						Value: global.profile,
-						Set:   command.Flags().Changed(profileFlagName),
-					},
-				},
-			})
-			if err != nil {
-				return err
+		Use:   "status [MODULE]",
+		Short: "Inspect module convergence without mutation",
+		Args:  maximumArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			moduleID := ""
+			if len(args) == 1 {
+				moduleID = args[0]
 			}
-			projection, err := projectStatus(plan)
-			if err != nil {
-				return err
-			}
-			if err := printStatusProjection(command, projection); err != nil {
-				return err
-			}
-			return commandExit(projection.exitCode)
+			return runStatus(command, moduleID, env)
 		},
 	}
 }
 
-func projectStatus(plan planner.ApplyPlan) (statusProjection, error) {
-	if !plan.Valid() {
-		return statusProjection{}, errors.New("cannot present an invalid apply plan as status")
+func runStatus(command *cobra.Command, moduleID string, env environment) error {
+	context, err := resolveContext(env)
+	if err != nil {
+		return err
 	}
-	context := plan.Context()
-	observed := plan.Observed()
-	projection := statusProjection{
-		summary: fmt.Sprintf(
-			"Profile: %s (%d modules, %d files managed)",
-			context.Profile,
-			len(context.Modules),
-			len(observed.Targets()),
-		),
+	machine, err := loadRequiredMachine(context)
+	if err != nil {
+		return err
 	}
-	for _, action := range plan.FileActions() {
-		if action.Verb == planner.FileSkip {
-			continue
-		}
-		description, err := statusFileDescription(action)
-		if err != nil {
-			return statusProjection{}, err
-		}
-		finding := statusFinding{target: action.Target, description: description}
-		if action.Verb == planner.FileConflict {
-			projection.drift = append(projection.drift, finding)
-		} else {
-			projection.pending = append(projection.pending, finding)
-		}
+	repository, err := config.OpenRepository(machine.Repository)
+	if err != nil {
+		return err
 	}
-
-	for _, action := range plan.Hooks().Actions() {
-		switch action.Verb {
-		case planner.HookSkip:
-			continue
-		case planner.HookRun:
-			projection.pending = append(projection.pending, statusFinding{
-				target:      action.StateKey,
-				description: "run_once pending execution",
-			})
-		default:
-			return statusProjection{}, fmt.Errorf("unsupported status hook verb %q", action.Verb)
+	profileModules, err := repository.ProfileModules(machine.Profiles)
+	if err != nil {
+		return err
+	}
+	loaded, err := state.Load(context.statePath, context.home)
+	if err != nil {
+		return err
+	}
+	if moduleID != "" {
+		_, stateKnown := loaded.Snapshot.Modules[moduleID]
+		_, exists, _, inspectErr := repository.InspectModule(moduleID, context.platform)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		selectionKnown := slices.Contains(profileModules, moduleID) ||
+			slices.Contains(machine.ExtraModules, moduleID)
+		if !exists && !stateKnown && !selectionKnown {
+			return fmt.Errorf("unknown module %q", moduleID)
 		}
 	}
 
-	for _, action := range plan.Prune().Actions() {
-		description, err := statusOrphanDescription(action)
-		if err != nil {
-			return statusProjection{}, err
-		}
-		projection.orphans = append(projection.orphans, statusFinding{
-			target:      action.Target,
-			description: description,
-		})
+	resolution, err := repository.Resolve(machine.Scope(), context.platform)
+	if err != nil {
+		return err
+	}
+	var scope []string
+	if moduleID != "" {
+		scope = []string{moduleID}
+	}
+	plan, err := planner.Build(planner.Request{
+		Home:     context.home,
+		Controls: context.controls(machine.Repository),
+		Modules:  resolution.Modules,
+		Scope:    scope,
+		State:    loaded.Snapshot,
+	})
+	if err != nil {
+		return err
 	}
 
-	for _, module := range context.UnassignedModules {
-		projection.unassigned = append(projection.unassigned, statusFinding{
-			target:      module,
-			description: "not referenced by any profile",
-		})
+	effective := make(map[string]bool)
+	for _, id := range profileModules {
+		effective[id] = true
+	}
+	for _, id := range machine.ExtraModules {
+		effective[id] = true
+	}
+	notApplicable := make(map[string]bool)
+	for _, id := range resolution.NotApplicable {
+		notApplicable[id] = true
+	}
+	variants := make(map[string]string)
+	for _, module := range resolution.Modules {
+		variants[module.ID] = module.Variant
 	}
 
-	if len(projection.drift)+len(projection.pending)+len(projection.orphans) == 0 {
-		projection.clean = true
-		projection.exitCode = exitOK
-	} else {
-		projection.exitCode = exitActionable
+	ids := statusModuleIDs(moduleID, repository, machine, loaded.Snapshot)
+	statuses := make([]moduleStatus, 0, len(ids))
+	for _, id := range ids {
+		_, statePresent := loaded.Snapshot.Modules[id]
+		statuses = append(statuses, statusForModule(
+			id,
+			effective,
+			notApplicable,
+			variants,
+			statePresent,
+			plan,
+		))
 	}
-	return projection, nil
+	return printStatus(command, statuses, appendWarning(
+		loaded.Warning,
+		plan.Warnings,
+	))
 }
 
-func statusFileDescription(action planner.FileAction) (string, error) {
-	switch action.Reason {
-	case planner.FileReasonTargetMissing:
-		switch action.Desired.Kind {
-		case planner.DesiredLink:
-			return "desired symlink missing", nil
-		case planner.DesiredScaffold:
-			return "scaffold not yet created", nil
-		default:
-			return "", fmt.Errorf("unsupported status desired kind %q", action.Desired.Kind)
-		}
-	case planner.FileReasonStateMetadata:
-		return "state metadata needs refresh", nil
-	case planner.FileReasonOwnedLinkStale:
-		return "owned symlink points to previous source", nil
-	case planner.FileReasonLinkDrift:
-		return "symlink re-pointed elsewhere", nil
-	case planner.FileReasonUnownedLink:
-		return "unowned symlink blocks desired link", nil
-	case planner.FileReasonRegularConflict:
-		return "regular file blocks desired link", nil
-	case planner.FileReasonDirectoryConflict:
-		return "directory blocks desired link", nil
-	case planner.FileReasonSpecialConflict:
-		return "special file blocks desired link", nil
-	case planner.FileReasonScaffoldPresent:
-		return "scaffold lifecycle not recorded", nil
-	case planner.FileReasonOwnedLinkToScaffold:
-		return "owned symlink pending scaffold migration", nil
-	case planner.FileReasonReleaseOwnershipToScaffold:
-		return "scaffold ownership release pending", nil
-	case planner.FileReasonExpectedLink, planner.FileReasonScaffoldDeleted:
-		return "", fmt.Errorf("status received non-actionable reason %q for verb %q", action.Reason, action.Verb)
-	default:
-		return "", fmt.Errorf("unsupported status file reason %q", action.Reason)
+func statusModuleIDs(
+	moduleID string,
+	repository config.Repository,
+	machine config.Machine,
+	snapshot state.Snapshot,
+) []string {
+	if moduleID != "" {
+		return []string{moduleID}
 	}
-}
-
-func statusOrphanDescription(action planner.PruneAction) (string, error) {
-	var description string
-	switch action.Reason {
-	case planner.PruneReasonScaffold:
-		description = "scaffold orphan pending state cleanup"
-	case planner.PruneReasonOwned:
-		description = "owned orphan from previous profile"
-	case planner.PruneReasonUnowned:
-		description = "unowned orphan pending state cleanup"
-	default:
-		return "", fmt.Errorf("unsupported status prune reason %q", action.Reason)
+	set := make(map[string]bool)
+	for _, id := range repository.ModuleIDs() {
+		set[id] = true
 	}
-	if action.Deferred {
-		description += "; prune deferred by file conflict"
+	for _, id := range machine.ExtraModules {
+		set[id] = true
 	}
-	return description, nil
-}
-
-func printStatusProjection(command *cobra.Command, projection statusProjection) error {
-	for _, notice := range projection.notices {
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "notice: %s\n", notice); err != nil {
-			return fmt.Errorf("write status notice: %w", err)
-		}
+	for id := range snapshot.Modules {
+		set[id] = true
 	}
-	command.Println(projection.summary)
-	printStatusSection(command, "DRIFT", projection.drift)
-	printStatusSection(command, "PENDING", projection.pending)
-	printStatusSection(command, "ORPHAN / PENDING PRUNE", projection.orphans)
-	printStatusSection(command, "UNASSIGNED MODULES", projection.unassigned)
-	if projection.clean {
-		command.Println()
-		command.Println("Clean.")
+	ids := make([]string, 0, len(set))
+	for id := range set {
+		ids = append(ids, id)
 	}
-	return nil
-}
-
-func printStatusSection(command *cobra.Command, title string, findings []statusFinding) {
-	if len(findings) == 0 {
-		return
-	}
-	command.Println()
-	command.Printf("%s (%d)\n", title, len(findings))
-	for _, finding := range findings {
-		command.Printf("  %-30s  %s\n", finding.target, finding.description)
-	}
+	slices.Sort(ids)
+	return ids
 }

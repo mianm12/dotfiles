@@ -4,11 +4,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newVersionCommand(env environment, _ *globalOptions) *cobra.Command {
+func newVersionCommand(env environment) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Show build information",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			return runVersion(command, env)
 		},

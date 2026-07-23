@@ -58,6 +58,33 @@ func Run(request Request) (result Result, err error) {
 	return runLocked(request, commitState)
 }
 
+// RunWithLock applies a request while reusing an outer owner bound to the same
+// stable lock. B6 uses this after prospective selection preflight and machine
+// config publication so the entire mutation pipeline remains under one lock.
+func RunWithLock(
+	request Request,
+	owner *lock.Ownership,
+) (result Result, err error) {
+	if err := validateRequest(request); err != nil {
+		return Result{}, err
+	}
+	if owner == nil {
+		return Result{}, fmt.Errorf("executor lock owner is nil")
+	}
+	lockRoot := filepath.Dir(filepath.Clean(request.Controls.Lock))
+	guard, err := owner.Reuse(lockRoot, request.Controls.Lock)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() {
+		releaseErr := guard.Release()
+		if releaseErr != nil {
+			err = errors.Join(err, releaseErr)
+		}
+	}()
+	return runLocked(request, commitState)
+}
+
 func runLocked(request Request, commit stateCommitter) (Result, error) {
 	loaded, err := state.Load(request.Controls.State, request.Home)
 	if err != nil {

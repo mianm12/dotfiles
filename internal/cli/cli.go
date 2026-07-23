@@ -1,4 +1,4 @@
-// Package cli 使用 Cobra 组装 dot 命令，并将执行结果映射为进程退出码。
+// Package cli exposes the public dot command surface.
 package cli
 
 import (
@@ -9,122 +9,173 @@ import (
 	"runtime"
 
 	"github.com/mianm12/dotfiles/internal/buildinfo"
+	"github.com/mianm12/dotfiles/internal/core/config"
 	"github.com/spf13/cobra"
 )
 
 const (
-	exitOK         = 0
-	exitError      = 1
-	exitActionable = 2
-	exitConflict   = 3
+	exitOK    = 0
+	exitError = 1
+	exitUsage = 2
 )
 
-type commandExitError struct {
-	code int
+type usageError struct {
+	err error
 }
 
-func (e commandExitError) Error() string {
-	return fmt.Sprintf("command requested exit code %d", e.code)
+func (err usageError) Error() string { return err.err.Error() }
+func (err usageError) Unwrap() error { return err.err }
+
+func usagef(format string, arguments ...any) error {
+	return usageError{err: fmt.Errorf(format, arguments...)}
 }
 
-func commandExit(code int) error {
-	if code == exitOK {
-		return nil
-	}
-	return commandExitError{code: code}
-}
-
-// environment 集中保存 CLI 的外部依赖，便于测试替换 I/O、环境变量、HOME 和构建元数据。
 type environment struct {
-	stdin        io.Reader
-	stdout       io.Writer
-	stderr       io.Writer
-	lookupEnv    func(string) (string, bool)
-	userHomeDir  func() (string, error)
-	openTerminal func() (io.ReadCloser, error)
-	openInitTTY  func() (io.ReadWriteCloser, error)
-	applyRun     applyRun
-	applyNested  applyNestedRun
-	prepareInit  prepareInit
-	beginInit    beginInit
-	closeInit    closeInit
-	build        buildinfo.Info
-	goos         string
+	stdin                 io.Reader
+	stdout                io.Writer
+	stderr                io.Writer
+	userHomeDir           func() (string, error)
+	getwd                 func() (string, error)
+	platform              func() config.Platform
+	afterSelectionPublish func() error
+	build                 buildinfo.Info
 }
 
-// Run 使用不含程序名的 args 执行 dot，将调用方 stdin/stdout/stderr 传给命令，
-// 并返回进程退出码。
+// Run executes dot with arguments that exclude the program name.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return run(args, environment{
 		stdin:       stdin,
 		stdout:      stdout,
 		stderr:      stderr,
-		lookupEnv:   os.LookupEnv,
 		userHomeDir: os.UserHomeDir,
-		openTerminal: func() (io.ReadCloser, error) {
-			return os.Open("/dev/tty")
-		},
-		openInitTTY: func() (io.ReadWriteCloser, error) {
-			return os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		getwd:       os.Getwd,
+		platform: func() config.Platform {
+			return detectPlatform(runtime.GOOS, runtime.GOARCH, os.ReadFile)
 		},
 		build: buildinfo.Current(),
-		goos:  runtime.GOOS,
 	})
 }
 
 func run(args []string, env environment) int {
-	root, err := newRootCommand(env)
-	if err != nil {
-		_, _ = fmt.Fprintf(env.stderr, "error: initialize CLI: %v\n", err)
-		return exitError
-	}
+	root := newRootCommand(env)
 	output := newCommandOutput(env.stdout, env.stderr)
 	root.SetArgs(args)
 	root.SetIn(env.stdin)
 	root.SetOut(&output.stdout)
 	root.SetErr(&output.stderr)
+	root.InitDefaultHelpCmd()
 
+	if _, _, err := root.Find(args); err != nil {
+		_, _ = fmt.Fprintf(&output.stderr, "error: %v\n", err)
+		return output.finish(exitUsage)
+	}
 	if err := root.Execute(); err != nil {
-		var requested commandExitError
-		if errors.As(err, &requested) {
-			return output.finish(requested.code)
+		code := exitError
+		var usage usageError
+		if errors.As(err, &usage) {
+			code = exitUsage
 		}
 		root.PrintErrf("error: %v\n", err)
-		return output.finish(exitError)
+		return output.finish(code)
 	}
 	return output.finish(exitOK)
 }
 
-func newRootCommand(env environment) (*cobra.Command, error) {
-	var options globalOptions
-	// 禁用 Cobra 自动错误和 usage 输出，由命令与 run 按统一格式处理。
+func newRootCommand(env environment) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "dot",
 		Short:         "Manage a personal dotfiles repository",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE: func(command *cobra.Command, _ []string) error {
-			if err := command.Help(); err != nil {
-				return err
-			}
-			return errors.New("a command is required")
-		},
-		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
-			return options.validate(command)
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return usagef("a command is required")
 		},
 	}
-	// completion 尚未进入公开命令规范，因此禁用 Cobra 自动生成的子命令。
 	root.CompletionOptions.DisableDefaultCmd = true
-
-	if err := options.bind(root); err != nil {
-		return nil, err
-	}
-
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return usageError{err: err}
+	})
 	root.AddCommand(
-		newApplyCommand(env, &options),
-		newInitCommand(env, &options),
-		newStatusCommand(env, &options),
-		newVersionCommand(env, &options),
+		newInitCommand(env),
+		newStatusCommand(env),
+		newApplyCommand(env),
+		newRemoveCommand(env),
+		newVersionCommand(env),
 	)
-	return root, nil
+	return root
+}
+
+func noArgs(command *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return usagef("%s accepts no arguments", command.CommandPath())
+	}
+	return nil
+}
+
+func maximumArgs(maximum int) cobra.PositionalArgs {
+	return func(command *cobra.Command, args []string) error {
+		if len(args) > maximum {
+			return usagef(
+				"%s accepts at most %d argument(s)",
+				command.CommandPath(),
+				maximum,
+			)
+		}
+		return nil
+	}
+}
+
+func exactArgs(count int) cobra.PositionalArgs {
+	return func(command *cobra.Command, args []string) error {
+		if len(args) != count {
+			return usagef(
+				"%s requires exactly %d argument(s)",
+				command.CommandPath(),
+				count,
+			)
+		}
+		return nil
+	}
+}
+
+type errorTrackingWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (writer *errorTrackingWriter) Write(data []byte) (int, error) {
+	if writer.err != nil {
+		return 0, writer.err
+	}
+	written, err := writer.writer.Write(data)
+	if err == nil && written != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		writer.err = err
+	}
+	return written, err
+}
+
+type commandOutput struct {
+	stdout errorTrackingWriter
+	stderr errorTrackingWriter
+}
+
+func newCommandOutput(stdout, stderr io.Writer) *commandOutput {
+	return &commandOutput{
+		stdout: errorTrackingWriter{writer: stdout},
+		stderr: errorTrackingWriter{writer: stderr},
+	}
+}
+
+func (output *commandOutput) finish(code int) int {
+	if output.stdout.err != nil {
+		_, _ = fmt.Fprintf(&output.stderr, "error: write stdout: %v\n", output.stdout.err)
+		return exitError
+	}
+	if output.stderr.err != nil {
+		return exitError
+	}
+	return code
 }

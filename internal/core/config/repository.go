@@ -91,6 +91,69 @@ func (repository Repository) HasModule(id string) bool {
 	return repository.valid && exists
 }
 
+// ProfileModules returns the sorted module union selected by profiles without
+// decoding module manifests.
+func (repository Repository) ProfileModules(profiles []string) ([]string, error) {
+	if !repository.valid {
+		return nil, fmt.Errorf("%w: repository is invalid", ErrInvalidConfiguration)
+	}
+	if err := validateIDs("profile", profiles); err != nil {
+		return nil, err
+	}
+
+	selected := make(map[string]bool)
+	for _, profile := range profiles {
+		members, exists := repository.profiles[profile]
+		if !exists {
+			return nil, fmt.Errorf(
+				"%w: unknown profile %q",
+				ErrInvalidConfiguration,
+				profile,
+			)
+		}
+		for _, module := range members {
+			exists, err := repository.inspectModule(module)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				return nil, fmt.Errorf(
+					"%w: active profile %q references missing module %q",
+					ErrInvalidConfiguration,
+					profile,
+					module,
+				)
+			}
+			selected[module] = true
+		}
+	}
+	return sortedKeys(selected), nil
+}
+
+// InspectModule strictly decodes one recognized module. Missing modules are
+// reported without error so remove and status can distinguish inactive known
+// modules from state-only cleanup.
+func (repository Repository) InspectModule(
+	id string,
+	platform Platform,
+) (module Module, exists, applicable bool, err error) {
+	if !repository.valid {
+		return Module{}, false, false, fmt.Errorf(
+			"%w: repository is invalid",
+			ErrInvalidConfiguration,
+		)
+	}
+	if err := validateID("module", id); err != nil {
+		return Module{}, false, false, err
+	}
+	exists, err = repository.inspectModule(id)
+	if err != nil || !exists {
+		return Module{}, exists, false, err
+	}
+	module, applicable, err = loadModule(id, repository.modules[id], platform)
+	return module, true, applicable, err
+}
+
 func (repository Repository) inspectModule(id string) (bool, error) {
 	if repository.HasModule(id) {
 		return true, nil
