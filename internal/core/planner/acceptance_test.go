@@ -64,6 +64,38 @@ func TestAcceptance05_AddAndSafeStalePruneAreOrdered(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
+func TestAcceptance05_IndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testing.T) {
+	fixture := newFixture(t)
+	oldDestination := fixture.dir(t, "old-repo/app")
+	oldDestination, err := filepath.EvalSymlinks(oldDestination)
+	if err != nil {
+		t.Fatalf("filepath.EvalSymlinks(old destination) error = %v", err)
+	}
+	staleTarget := fixture.target("stale")
+	fixture.symlink(t, oldDestination, staleTarget)
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"old": linkRecord(
+			staleTarget,
+			fixture.resolved(t, staleTarget),
+			oldDestination,
+		),
+	})
+
+	alias := fixture.target("alias")
+	fixture.symlink(t, oldDestination, alias)
+	newSource := fixture.file(t, "repo/modules/app/new", "new")
+	module := linkModule("app", "new", newSource, "~/alias/child")
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, []config.Module{module}, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionPrune)
+	if plan.HasConflicts() {
+		t.Fatal("Build() has conflict, want independent alias target followed by stale prune")
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
 func TestAcceptance05_DriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
 	fixture := newFixture(t)
 	newSource := fixture.file(t, "repo/modules/app/new", "new")

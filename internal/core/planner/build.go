@@ -362,7 +362,7 @@ func planOneStale(
 	if actual.kind == actualSymlink &&
 		actual.linkDestination == record.LinkDestination &&
 		current.Resolved() == record.ResolvedTarget {
-		if staleLinkContainsDesired(record, current, desired) {
+		if staleLinkContainsDesired(current, desired) {
 			base.Decision = DecisionConflict
 			base.Reason = "stale directory link contains an active desired target"
 			return base, "", nil
@@ -441,13 +441,12 @@ func targetUsedByDesired(
 }
 
 func staleLinkContainsDesired(
-	record state.Placement,
 	target corepaths.Target,
 	desired []desiredPlacement,
 ) bool {
 	return slices.ContainsFunc(desired, func(placement desiredPlacement) bool {
 		return strictDescendant(target.Lexical(), placement.target.Lexical()) ||
-			strictDescendant(record.LinkDestination, placement.target.Resolved())
+			strictDescendant(target.Resolved(), placement.target.Resolved())
 	})
 }
 
