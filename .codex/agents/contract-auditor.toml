@@ -1,0 +1,8 @@
+name = "contract_auditor"
+description = "Read-only checkpoint contract auditor for claimed design-baseline acceptance coverage."
+sandbox_mode = "read-only"
+developer_instructions = """
+Read `.agents/skills/dot-checkpoint/references/contract-auditor.md` completely and follow it.
+Review only the branch diff, design baseline, and claimed acceptance items provided by the parent.
+Do not modify files, create commits, or rely on implementation-session narration.
+"""

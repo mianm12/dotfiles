@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dot Checkpoint"
+  short_description: "Run and review one dot refactor checkpoint safely"
+  default_prompt: "Use $dot-checkpoint to execute one dot refactor checkpoint with isolated validation and independent reviews."
