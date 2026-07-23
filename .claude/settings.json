@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "ask": [
+      "Edit(docs/design-baseline.md)",
+      "Write(docs/design-baseline.md)",
+      "Edit(docs/cutover-plan.md)",
+      "Write(docs/cutover-plan.md)"
+    ]
+  }
+}
