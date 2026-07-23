@@ -158,6 +158,50 @@ func TestValidate_DoesNotInventCaseUnicodeOrHardLinkAliases(t *testing.T) {
 	}
 }
 
+func TestValidateScopedIgnoresUnselectedOnlyConflictsAndBoundaries(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(home) error = %v", err)
+	}
+	controls := Controls{
+		Repository: filepath.Join(root, "repo"),
+		Config:     filepath.Join(home, ".control", "machine.toml"),
+		State:      filepath.Join(root, "state.json"),
+		Lock:       filepath.Join(root, "lock"),
+	}
+	placements := []Placement{
+		{Label: "selected", Target: "~/.config/selected"},
+		{Label: "outside-first", Target: "~/.config/shared"},
+		{Label: "outside-second", Target: "~/.config/shared"},
+		{Label: "outside-control", Target: "~/.control/machine.toml"},
+	}
+
+	resolved, err := ValidateScoped(
+		home,
+		controls,
+		placements,
+		[]string{"selected"},
+	)
+	if err != nil {
+		t.Fatalf("ValidateScoped(unrelated conflicts) error = %v", err)
+	}
+	if len(resolved) != len(placements) {
+		t.Fatalf("ValidateScoped() returned %d placements, want %d", len(resolved), len(placements))
+	}
+
+	placements[1].Target = "~/.config/selected"
+	resolved, err = ValidateScoped(
+		home,
+		controls,
+		placements,
+		[]string{"selected"},
+	)
+	if !errors.Is(err, ErrTargetConflict) {
+		t.Fatalf("ValidateScoped(selected conflict) = (%#v, %v), want target conflict", resolved, err)
+	}
+}
+
 func controlsOutsideFixture(root string) Controls {
 	controlRoot := filepath.Join(root, "control")
 	return Controls{

@@ -47,6 +47,32 @@ type resolvedControl struct {
 // Validate resolves and validates a complete placement set. It is read-only and
 // returns no partial result when any path is invalid or conflicting.
 func Validate(home string, controls Controls, placements []Placement) ([]ResolvedPlacement, error) {
+	return validate(home, controls, placements, nil)
+}
+
+// ValidateScoped applies target-set and control-boundary checks only when at
+// least one participating placement label is selected. All placements are
+// still resolved so selected targets can be compared with the complete
+// effective desired set.
+func ValidateScoped(
+	home string,
+	controls Controls,
+	placements []Placement,
+	selectedLabels []string,
+) ([]ResolvedPlacement, error) {
+	selected := make(map[string]bool, len(selectedLabels))
+	for _, label := range selectedLabels {
+		selected[label] = true
+	}
+	return validate(home, controls, placements, selected)
+}
+
+func validate(
+	home string,
+	controls Controls,
+	placements []Placement,
+	selected map[string]bool,
+) ([]ResolvedPlacement, error) {
 	resolvedControls, err := resolveControls(controls)
 	if err != nil {
 		return nil, err
@@ -68,10 +94,10 @@ func Validate(home string, controls Controls, placements []Placement) ([]Resolve
 		}
 	}
 
-	if err := validateTargetSet(resolved); err != nil {
+	if err := validateTargetSet(resolved, selected); err != nil {
 		return nil, err
 	}
-	if err := validateControlBoundaries(resolvedControls, resolved); err != nil {
+	if err := validateControlBoundaries(resolvedControls, resolved, selected); err != nil {
 		return nil, err
 	}
 	return resolved, nil
@@ -111,11 +137,17 @@ func resolveControls(controls Controls) ([]resolvedControl, error) {
 	return resolved, nil
 }
 
-func validateTargetSet(placements []ResolvedPlacement) error {
+func validateTargetSet(
+	placements []ResolvedPlacement,
+	selected map[string]bool,
+) error {
 	for leftIndex := range placements {
 		left := placements[leftIndex]
 		for rightIndex := leftIndex + 1; rightIndex < len(placements); rightIndex++ {
 			right := placements[rightIndex]
+			if !participates(selected, left.Label, right.Label) {
+				continue
+			}
 			if sameTarget(left.Target, right.Target) {
 				return fmt.Errorf(
 					"%w: placements %q and %q resolve to the same target",
@@ -155,8 +187,15 @@ func directoryContains(parent, child ResolvedPlacement) bool {
 			strictDescendant(parent.Target.resolved, child.Target.resolved))
 }
 
-func validateControlBoundaries(controls []resolvedControl, placements []ResolvedPlacement) error {
+func validateControlBoundaries(
+	controls []resolvedControl,
+	placements []ResolvedPlacement,
+	selected map[string]bool,
+) error {
 	for _, placement := range placements {
+		if selected != nil && !selected[placement.Label] {
+			continue
+		}
 		for _, control := range controls {
 			if overlapsControl(control, placement.Target) {
 				return fmt.Errorf(
@@ -171,6 +210,18 @@ func validateControlBoundaries(controls []resolvedControl, placements []Resolved
 		}
 	}
 	return nil
+}
+
+func participates(selected map[string]bool, labels ...string) bool {
+	if selected == nil {
+		return true
+	}
+	for _, label := range labels {
+		if selected[label] {
+			return true
+		}
+	}
+	return false
 }
 
 func overlapsControl(control resolvedControl, target Target) bool {
