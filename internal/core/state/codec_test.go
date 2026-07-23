@@ -183,6 +183,24 @@ func TestDecode_RejectsUnsafeOrAmbiguousDocuments(t *testing.T) {
 			want: corestate.ErrInvalid,
 		},
 		{
+			name: "local with null resolved target",
+			document: fmt.Sprintf(
+				`{"version":2,"home":%q,"modules":{"app":{"placements":{"config":{"kind":"local","target":%q,"resolved_target":null}}}}}`,
+				home,
+				target,
+			),
+			want: corestate.ErrInvalid,
+		},
+		{
+			name: "local with null link destination",
+			document: fmt.Sprintf(
+				`{"version":2,"home":%q,"modules":{"app":{"placements":{"config":{"kind":"local","target":%q,"link_destination":null}}}}}`,
+				home,
+				target,
+			),
+			want: corestate.ErrInvalid,
+		},
+		{
 			name: "invalid UTF-8",
 			document: string(append(
 				[]byte(fmt.Sprintf(`{"version":2,"home":%q,"modules":{"`, home)),
@@ -223,6 +241,8 @@ func TestDecode_ClassifiesVersionsBeforeLegacySchema(t *testing.T) {
 		{version: "999999999999999999999999999999", want: corestate.ErrTooNew},
 		{version: "0", want: corestate.ErrInvalid},
 		{version: "2.0", want: corestate.ErrInvalid},
+		{version: `"1"`, want: corestate.ErrInvalid},
+		{version: `"3"`, want: corestate.ErrInvalid},
 	}
 	for _, test := range tests {
 		t.Run(test.version, func(t *testing.T) {

@@ -327,11 +327,14 @@ func probeVersion(data []byte) (*big.Int, error) {
 	if !exists {
 		return nil, invalidf("required top-level version is missing")
 	}
-	var number json.Number
+	var value any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	if err := decoder.Decode(&number); err != nil ||
-		!integerPattern.MatchString(number.String()) {
+	if err := decoder.Decode(&value); err != nil {
+		return nil, invalidf("version must be a positive integer")
+	}
+	number, ok := value.(json.Number)
+	if !ok || !integerPattern.MatchString(number.String()) {
 		return nil, invalidf("version must be a positive integer")
 	}
 	version, ok := new(big.Int).SetString(number.String(), 10)
@@ -398,6 +401,16 @@ func validateObjectShapes(data []byte) error {
 				[]string{"kind", "target", "resolved_target", "link_destination"},
 			); err != nil {
 				return err
+			}
+			for _, field := range sortedKeys(placement) {
+				if bytes.Equal(bytes.TrimSpace(placement[field]), []byte("null")) {
+					return fmt.Errorf(
+						"module %q placement %q field %q must not be null",
+						moduleID,
+						placementID,
+						field,
+					)
+				}
 			}
 		}
 	}
