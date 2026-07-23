@@ -454,6 +454,53 @@ func TestAcceptance13_StateCommitFailureLeavesSafeArtifactForRerun(t *testing.T)
 	assertFilesUnchanged(t, before)
 }
 
+func TestAcceptance13_LocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
+	fixture := newFixture(t)
+	source := fixture.writeRepositoryFile(t, "modules/base/local.example", "example")
+	target := filepath.Join(fixture.home, ".local")
+	request := fixture.localRequest(source, "~/.local")
+
+	result, err := runLocked(request, func(string, state.Snapshot) error {
+		return errors.New("injected commit failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "partially applied") {
+		t.Fatalf("runLocked() = (%#v, %v), want partial-apply error", result, err)
+	}
+	if !result.TargetsChanged {
+		t.Fatalf("runLocked() = %#v, want published local", result)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "example" {
+		t.Fatalf("local target = (%q, %v), want example bytes", data, err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("os.Stat(local) error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("local permissions = %04o, want 0600", got)
+	}
+	if _, err := os.Lstat(fixture.state); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state path error = %v, want missing", err)
+	}
+
+	recovered, err := Run(request)
+	if err != nil {
+		t.Fatalf("Run(recovery) error = %v", err)
+	}
+	if recovered.TargetsChanged || !recovered.StateChanged {
+		t.Fatalf("Run(recovery) = %#v, want keep plus state commit", recovered)
+	}
+	before := snapshotFiles(t, target, fixture.state)
+	repeated, err := Run(request)
+	if err != nil {
+		t.Fatalf("Run(repeated) error = %v", err)
+	}
+	if repeated.TargetsChanged || repeated.StateChanged {
+		t.Fatalf("Run(repeated) = %#v, want zero mutation", repeated)
+	}
+	assertFilesUnchanged(t, before)
+}
+
 func TestAcceptance07_ScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.writeRepositoryFile(t, "modules/extra/file", "file")
