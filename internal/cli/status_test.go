@@ -46,9 +46,9 @@ func TestStatus_PrintsStableHealthSectionsAndReturnsActionable(t *testing.T) {
 		t.Fatalf("status changed isolated tree\nbefore=%v\nafter=%v", before, after)
 	}
 
-	diffOut, diffErr, diffCode := fixture.run(t, "diff", "alpha")
-	if diffCode != exitConflict || diffErr != "" || !strings.Contains(diffOut, "CONFLICT  ~/alpha/stable  (link-drift)") {
-		t.Fatalf("diff after status = stdout %q, stderr %q, exit %d; want existing conflict/3 contract", diffOut, diffErr, diffCode)
+	planOut, planErr, planCode := fixture.run(t, "apply", "alpha", "--dry-run")
+	if planCode != exitConflict || planErr != "" || !strings.Contains(planOut, "CONFLICT  ~/alpha/stable  (link-drift)") {
+		t.Fatalf("dry-run after status = stdout %q, stderr %q, exit %d; want existing conflict/3 contract", planOut, planErr, planCode)
 	}
 }
 

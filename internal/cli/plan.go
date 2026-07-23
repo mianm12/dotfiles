@@ -90,36 +90,6 @@ func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 	return command
 }
 
-func newDiffCommand(env environment, global *globalOptions) *cobra.Command {
-	var force bool
-	var prune bool
-	var noPrune bool
-	command := &cobra.Command{
-		Use:   "diff [module...]",
-		Short: "Show the read-only apply plan",
-		Args:  cobra.ArbitraryArgs,
-		RunE: func(command *cobra.Command, modules []string) error {
-			return runReadOnlyPlan(command, readOnlyPlanOptions{
-				modules:       append([]string(nil), modules...),
-				force:         force,
-				prune:         prune,
-				noPrune:       noPrune,
-				pruneSet:      command.Flags().Changed(pruneFlagName),
-				noPruneSet:    command.Flags().Changed(noPruneFlagName),
-				home:          global.home,
-				homeSet:       command.Flags().Changed(homeFlagName),
-				repository:    global.repo,
-				repositorySet: command.Flags().Changed(repoFlagName),
-				profile:       global.profile,
-				profileSet:    command.Flags().Changed(profileFlagName),
-				verbose:       global.verbose,
-			}, env)
-		},
-	}
-	bindReadOnlyPlanFlags(command, &force, &prune, &noPrune)
-	return command
-}
-
 func bindReadOnlyPlanFlags(command *cobra.Command, force, prune, noPrune *bool) {
 	flags := command.Flags()
 	flags.BoolVar(force, forceFlagName, false, "plan supported conflict replacements")

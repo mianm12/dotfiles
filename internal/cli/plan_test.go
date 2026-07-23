@@ -17,68 +17,6 @@ import (
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 )
 
-func TestDiff_PrintsStablePlanAndExitPriority(t *testing.T) {
-	fixture := newPlanCLIFixture(t)
-	before := snapshotCLITree(t, fixture.root)
-
-	stdout, stderr, code := fixture.run(t, "diff", "alpha", "--verbose")
-	wantStdout := "repo=" + fixture.repository + " profile=all os=" + runtime.GOOS + "\n" +
-		"CONFLICT  ~/alpha/conflict  (regular-conflict)\n" +
-		"link  ~/alpha/create  (target-missing)\n" +
-		"skip  ~/alpha/stable  (expected-link)\n" +
-		"prune (deferred)  ~/alpha/orphan  (owned-orphan)\n" +
-		"run-hook  alpha/hooks/setup.sh  (pending-run-once)\n"
-	if code != exitConflict || stdout != wantStdout || stderr != "" {
-		t.Fatalf("diff = stdout %q, stderr %q, exit %d; want stdout %q, empty stderr, exit %d", stdout, stderr, code, wantStdout, exitConflict)
-	}
-	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
-		t.Fatalf("diff changed isolated tree\nbefore=%v\nafter=%v", before, after)
-	}
-
-	stdout, stderr, code = fixture.run(t, "diff", "alpha")
-	if code != exitConflict || stderr != "" || strings.Contains(stdout, "skip  ~/alpha/stable") {
-		t.Fatalf("non-verbose diff = stdout %q, stderr %q, exit %d; want conflict without skip", stdout, stderr, code)
-	}
-}
-
-func TestDiff_ForceNoPruneAndFullScope(t *testing.T) {
-	fixture := newPlanCLIFixture(t)
-
-	forced, stderr, code := fixture.run(t, "diff", "alpha", "--force")
-	if code != exitActionable || stderr != "" {
-		t.Fatalf("forced diff = stdout %q, stderr %q, exit %d; want actionable", forced, stderr, code)
-	}
-	for _, want := range []string{
-		"backup+replace  ~/alpha/conflict  (regular-conflict)",
-		"prune  ~/alpha/orphan  (owned-orphan)",
-		"run-hook  alpha/hooks/setup.sh  (pending-run-once)",
-	} {
-		if !strings.Contains(forced, want) {
-			t.Errorf("forced diff stdout = %q, want line %q", forced, want)
-		}
-	}
-	if strings.Contains(forced, "prune (deferred)") {
-		t.Errorf("forced diff stdout = %q, want active prune", forced)
-	}
-
-	withoutPrune, stderr, code := fixture.run(t, "diff", "alpha", "--no-prune")
-	if code != exitConflict || stderr != "" || strings.Contains(withoutPrune, "prune") {
-		t.Fatalf("no-prune diff = stdout %q, stderr %q, exit %d; want conflict without prune", withoutPrune, stderr, code)
-	}
-
-	full, stderr, code := fixture.run(t, "diff", "--force")
-	if code != exitActionable || stderr != "" {
-		t.Fatalf("full diff = stdout %q, stderr %q, exit %d; want actionable", full, stderr, code)
-	}
-	alphaIndex := strings.Index(full, "link  ~/alpha/create")
-	betaIndex := strings.Index(full, "link  ~/beta/create")
-	alphaHookIndex := strings.Index(full, "run-hook  alpha/hooks/setup.sh")
-	betaHookIndex := strings.Index(full, "run-hook  beta/hooks/setup.sh")
-	if alphaIndex < 0 || betaIndex <= alphaIndex || alphaHookIndex <= betaIndex || betaHookIndex <= alphaHookIndex {
-		t.Fatalf("full diff output order is unstable: %q", full)
-	}
-}
-
 func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 	fixture := newPlanCLIFixture(t)
 	fixture.redirectEnvironment(t)
@@ -193,70 +131,22 @@ func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 	}
 }
 
-func TestDiff_NoOpAndPlannerError(t *testing.T) {
-	t.Run("no-op", func(t *testing.T) {
-		fixture := newNoOpPlanCLIFixture(t)
-		stdout, stderr, code := fixture.run(t, "diff")
-		want := "repo=" + fixture.repository + " profile=clean os=" + runtime.GOOS + "\nAlready up to date.\n"
-		if code != exitOK || stdout != want || stderr != "" {
-			t.Fatalf("no-op diff = stdout %q, stderr %q, exit %d; want %q, empty, 0", stdout, stderr, code, want)
-		}
-
-		verbose, stderr, code := fixture.run(t, "diff", "--verbose")
-		if code != exitOK || stderr != "" || !strings.Contains(verbose, "skip  ~/clean/stable  (expected-link)\n") || !strings.HasSuffix(verbose, "Already up to date.\n") {
-			t.Fatalf("verbose no-op = stdout %q, stderr %q, exit %d", verbose, stderr, code)
-		}
-	})
-
-	t.Run("runtime error wins", func(t *testing.T) {
-		fixture := newPlanCLIFixture(t)
-		writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "unknown = true\n")
-		before := snapshotCLITree(t, fixture.root)
-		stdout, stderr, code := fixture.run(t, "diff", "alpha")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "error:") {
-			t.Fatalf("invalid diff = stdout %q, stderr %q, exit %d; want error-only exit 1", stdout, stderr, code)
-		}
-		for _, forbidden := range []string{"repo=", "Already up to date.", "CONFLICT", "run-hook"} {
-			if strings.Contains(stdout+stderr, forbidden) {
-				t.Errorf("invalid diff output %q contains forbidden success text %q", stdout+stderr, forbidden)
-			}
-		}
-		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
-			t.Fatalf("invalid diff changed isolated tree\nbefore=%v\nafter=%v", before, after)
-		}
-	})
-}
-
-func TestApplyDryRun_MatchesDiffProjection(t *testing.T) {
+func TestApplyDryRun_PrintsStablePlanWithoutMutation(t *testing.T) {
 	fixture := newPlanCLIFixture(t)
-	tests := []struct {
-		name    string
-		options []string
-	}{
-		{name: "partial verbose conflict", options: []string{"alpha", "--verbose"}},
-		{name: "partial force", options: []string{"alpha", "--force"}},
-		{name: "partial no-prune", options: []string{"alpha", "--no-prune"}},
-		{name: "full force yes", options: []string{"--force", "--yes"}},
+	before := snapshotCLITree(t, fixture.root)
+
+	stdout, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run", "--verbose")
+	wantStdout := "repo=" + fixture.repository + " profile=all os=" + runtime.GOOS + "\n" +
+		"CONFLICT  ~/alpha/conflict  (regular-conflict)\n" +
+		"link  ~/alpha/create  (target-missing)\n" +
+		"skip  ~/alpha/stable  (expected-link)\n" +
+		"prune (deferred)  ~/alpha/orphan  (owned-orphan)\n" +
+		"run-hook  alpha/hooks/setup.sh  (pending-run-once)\n"
+	if code != exitConflict || stdout != wantStdout || stderr != "" {
+		t.Fatalf("apply dry-run = stdout %q, stderr %q, exit %d; want stdout %q, empty stderr, exit %d", stdout, stderr, code, wantStdout, exitConflict)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			diffArgs := append([]string{"diff"}, withoutOption(test.options, "--yes")...)
-			applyArgs := append([]string{"apply"}, test.options...)
-			applyArgs = append(applyArgs, "--dry-run")
-			diffStdout, diffStderr, diffCode := fixture.run(t, diffArgs...)
-			applyStdout, applyStderr, applyCode := fixture.run(t, applyArgs...)
-			if applyCode != diffCode || applyStdout != diffStdout || applyStderr != diffStderr {
-				t.Fatalf(
-					"apply dry-run = stdout %q, stderr %q, exit %d; diff = stdout %q, stderr %q, exit %d",
-					applyStdout,
-					applyStderr,
-					applyCode,
-					diffStdout,
-					diffStderr,
-					diffCode,
-				)
-			}
-		})
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("apply dry-run changed isolated tree\nbefore=%v\nafter=%v", before, after)
 	}
 
 	noPrune, noPruneStderr, noPruneCode := fixture.run(t, "apply", "alpha", "--dry-run", "--no-prune")
@@ -316,26 +206,18 @@ func TestApply_ReportsRuntimeErrors(t *testing.T) {
 }
 
 func TestReadOnlyPlan_RejectsConflictingPruneFlagsBeforeRuntime(t *testing.T) {
-	for _, command := range []string{"diff", "apply"} {
-		t.Run(command, func(t *testing.T) {
-			fixture := newPlanCLIFixture(t)
-			writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), "invalid = [")
-			before := snapshotCLITree(t, fixture.root)
-			args := []string{command, "--prune", "--no-prune"}
-			if command == "apply" {
-				args = append(args, "--dry-run")
-			}
-			stdout, stderr, code := fixture.run(t, args...)
-			if code != exitError || stdout != "" || !strings.Contains(stderr, "--prune and --no-prune must not be used together") {
-				t.Fatalf("conflicting prune = stdout %q, stderr %q, exit %d", stdout, stderr, code)
-			}
-			if strings.Contains(stderr, "machine config") {
-				t.Fatalf("conflicting prune read runtime: %q", stderr)
-			}
-			if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
-				t.Fatalf("conflicting prune changed isolated tree\nbefore=%v\nafter=%v", before, after)
-			}
-		})
+	fixture := newPlanCLIFixture(t)
+	writeCLIFile(t, filepath.Join(fixture.home, ".config", "dot", "config.toml"), "invalid = [")
+	before := snapshotCLITree(t, fixture.root)
+	stdout, stderr, code := fixture.run(t, "apply", "--dry-run", "--prune", "--no-prune")
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "--prune and --no-prune must not be used together") {
+		t.Fatalf("conflicting prune = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+	}
+	if strings.Contains(stderr, "machine config") {
+		t.Fatalf("conflicting prune read runtime: %q", stderr)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("conflicting prune changed isolated tree\nbefore=%v\nafter=%v", before, after)
 	}
 }
 
@@ -344,18 +226,12 @@ func TestPlanCommands_RegisterSpecifiedFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRootCommand() error = %v", err)
 	}
-	for _, commandName := range []string{"diff", "apply"} {
-		command, _, err := root.Find([]string{commandName})
-		if err != nil || command.Name() != commandName {
-			t.Fatalf("root.Find(%q) = (%#v, %v)", commandName, command, err)
-		}
-		for _, flagName := range []string{forceFlagName, pruneFlagName, noPruneFlagName} {
-			if command.Flags().Lookup(flagName) == nil {
-				t.Errorf("%s flag %q is not registered", commandName, flagName)
-			}
+	apply, _, _ := root.Find([]string{"apply"})
+	for _, flagName := range []string{forceFlagName, pruneFlagName, noPruneFlagName} {
+		if apply.Flags().Lookup(flagName) == nil {
+			t.Errorf("apply flag %q is not registered", flagName)
 		}
 	}
-	apply, _, _ := root.Find([]string{"apply"})
 	for _, flagName := range []string{dryRunFlagName, adoptFlagName, yesFlagName} {
 		if apply.Flags().Lookup(flagName) == nil {
 			t.Errorf("apply flag %q is not registered", flagName)
@@ -384,17 +260,13 @@ func TestReadOnlyPlan_SucceedsWhileMutationLockIsHeld(t *testing.T) {
 	})
 	before := snapshotCLITree(t, fixture.root)
 
-	for _, args := range [][]string{
-		{"diff", "alpha"},
-		{"apply", "alpha", "--dry-run"},
-	} {
-		stdout, stderr, code := fixture.run(t, args...)
-		if code != exitConflict || stderr != "" || !strings.Contains(stdout, "CONFLICT") {
-			t.Fatalf("occupied-lock %v = stdout %q, stderr %q, exit %d; want normal conflict plan", args, stdout, stderr, code)
-		}
-		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
-			t.Fatalf("occupied-lock %v changed isolated tree\nbefore=%v\nafter=%v", args, before, after)
-		}
+	args := []string{"apply", "alpha", "--dry-run"}
+	stdout, stderr, code := fixture.run(t, args...)
+	if code != exitConflict || stderr != "" || !strings.Contains(stdout, "CONFLICT") {
+		t.Fatalf("occupied-lock %v = stdout %q, stderr %q, exit %d; want normal conflict plan", args, stdout, stderr, code)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("occupied-lock %v changed isolated tree\nbefore=%v\nafter=%v", args, before, after)
 	}
 }
 
@@ -409,20 +281,16 @@ func TestReadOnlyPlan_MissingStateRootRemainsMissing(t *testing.T) {
 	}
 	before := snapshotCLITree(t, fixture.root)
 
-	for _, args := range [][]string{
-		{"diff", "alpha", "--force"},
-		{"apply", "alpha", "--dry-run", "--force"},
-	} {
-		stdout, stderr, code := fixture.run(t, args...)
-		if code != exitActionable || stderr != "" || !strings.Contains(stdout, "link  ~/alpha/create") {
-			t.Fatalf("missing-state %v = stdout %q, stderr %q, exit %d; want actionable plan", args, stdout, stderr, code)
-		}
-		if _, err := os.Lstat(stateRoot); !os.IsNotExist(err) {
-			t.Fatalf("missing-state %v created state root: %v", args, err)
-		}
-		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
-			t.Fatalf("missing-state %v changed isolated tree\nbefore=%v\nafter=%v", args, before, after)
-		}
+	args := []string{"apply", "alpha", "--dry-run", "--force"}
+	stdout, stderr, code := fixture.run(t, args...)
+	if code != exitActionable || stderr != "" || !strings.Contains(stdout, "link  ~/alpha/create") {
+		t.Fatalf("missing-state %v = stdout %q, stderr %q, exit %d; want actionable plan", args, stdout, stderr, code)
+	}
+	if _, err := os.Lstat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("missing-state %v created state root: %v", args, err)
+	}
+	if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("missing-state %v changed isolated tree\nbefore=%v\nafter=%v", args, before, after)
 	}
 }
 
@@ -434,7 +302,7 @@ func TestReadOnlyPlan_ErrorAndRefusalDoNotCreateMissingStateRoot(t *testing.T) {
 	}{
 		{
 			name: "planner error",
-			args: []string{"diff", "alpha"},
+			args: []string{"apply", "alpha", "--dry-run"},
 			mutate: func(t *testing.T, fixture planCLIFixture) {
 				writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "invalid = [")
 			},
@@ -486,7 +354,7 @@ func TestReadOnlyPlan_OutputErrorOverridesConflict(t *testing.T) {
 	fixture.redirectEnvironment(t)
 	var stderr bytes.Buffer
 	code := run([]string{
-		"diff", "alpha", "--home", fixture.home, "--repo", fixture.repository,
+		"apply", "alpha", "--dry-run", "--home", fixture.home, "--repo", fixture.repository,
 	}, environment{
 		stdout:      failingWriter{err: os.ErrClosed},
 		stderr:      &stderr,
@@ -506,8 +374,6 @@ func TestReadOnlyPlan_StderrFailureDoesNotRollBackComputedStdout(t *testing.T) {
 		fixture func(*testing.T) planCLIFixture
 		args    []string
 	}{
-		{name: "diff clean", fixture: newNoOpPlanCLIFixture, args: []string{"diff"}},
-		{name: "diff actionable", fixture: newPlanCLIFixture, args: []string{"diff", "alpha"}},
 		{name: "dry-run clean", fixture: newNoOpPlanCLIFixture, args: []string{"apply", "--dry-run"}},
 		{name: "dry-run actionable", fixture: newPlanCLIFixture, args: []string{"apply", "alpha", "--dry-run"}},
 	}
@@ -562,7 +428,7 @@ func TestReadOnlyPlan_StderrFailureDoesNotRollBackComputedStdout(t *testing.T) {
 	}
 }
 
-func TestDiff_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T) {
+func TestApplyDryRun_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T) {
 	t.Run("scaffold deleted", func(t *testing.T) {
 		fixture := newNoOpPlanCLIFixture(t)
 		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "deleted.template"), "template\n")
@@ -587,10 +453,10 @@ func TestDiff_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T) {
 			RunOnce: map[string]planRunOnce{},
 		})
 
-		stdout, stderr, code := fixture.run(t, "diff")
+		stdout, stderr, code := fixture.run(t, "apply", "--dry-run")
 		wantStdout := "repo=" + fixture.repository + " profile=clean os=" + runtime.GOOS + "\n"
 		if code != exitActionable || stdout != wantStdout || !strings.Contains(stderr, "warning: ~/clean/deleted: scaffold target was deleted") {
-			t.Fatalf("scaffold-deleted diff = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+			t.Fatalf("scaffold-deleted dry-run = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 		}
 	})
 
@@ -603,22 +469,12 @@ func TestDiff_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T) {
 		if err := os.Symlink("changed", orphan); err != nil {
 			t.Fatalf("os.Symlink(changed orphan) error = %v", err)
 		}
-		stdout, stderr, code := fixture.run(t, "diff", "alpha", "--force")
+		stdout, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run", "--force")
 		if code != exitActionable || !strings.Contains(stdout, "prune  ~/alpha/orphan  (unowned-orphan)") ||
 			!strings.Contains(stderr, "warning: ~/alpha/orphan: orphan target is no longer owned") {
-			t.Fatalf("unowned-orphan diff = stdout %q, stderr %q, exit %d", stdout, stderr, code)
+			t.Fatalf("unowned-orphan dry-run = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 		}
 	})
-}
-
-func withoutOption(values []string, omitted string) []string {
-	filtered := make([]string, 0, len(values))
-	for _, value := range values {
-		if value != omitted {
-			filtered = append(filtered, value)
-		}
-	}
-	return filtered
 }
 
 type planCLIFixture struct {
