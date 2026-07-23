@@ -62,6 +62,7 @@ func Build(request Request) (Plan, error) {
 
 	cleanup, warnings, err := planStale(
 		home,
+		request.Controls,
 		desired,
 		request.State,
 		usedState,
@@ -270,6 +271,7 @@ func planLink(
 
 func planStale(
 	home string,
+	controls corepaths.Controls,
 	desired []desiredPlacement,
 	snapshot state.Snapshot,
 	used map[placementKey]bool,
@@ -283,7 +285,13 @@ func planStale(
 			continue
 		}
 		record, _ := statePlacement(snapshot, key)
-		action, warning, err := planOneStale(home, desired, key, record)
+		action, warning, err := planOneStale(
+			home,
+			controls,
+			desired,
+			key,
+			record,
+		)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -297,6 +305,7 @@ func planStale(
 
 func planOneStale(
 	home string,
+	controls corepaths.Controls,
 	desired []desiredPlacement,
 	key placementKey,
 	record state.Placement,
@@ -321,7 +330,7 @@ func planOneStale(
 		return base, warning, nil
 	}
 
-	current, err := resolveStateTarget(home, record.Target)
+	current, err := resolveStateTarget(home, controls, record.Target)
 	if err != nil {
 		if !isSafeStaleResolutionDrift(err) {
 			return Action{}, "", fmt.Errorf(
@@ -459,7 +468,11 @@ func strictDescendant(parent, candidate string) bool {
 		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-func resolveStateTarget(home, target string) (corepaths.Target, error) {
+func resolveStateTarget(
+	home string,
+	controls corepaths.Controls,
+	target string,
+) (corepaths.Target, error) {
 	relative, err := filepath.Rel(home, target)
 	if err != nil ||
 		relative == "." ||
@@ -468,7 +481,18 @@ func resolveStateTarget(home, target string) (corepaths.Target, error) {
 		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return corepaths.Target{}, fmt.Errorf("state target %q is outside HOME %q", target, home)
 	}
-	return corepaths.ResolveTarget(home, "~/"+filepath.ToSlash(relative))
+	resolved, err := corepaths.Validate(
+		home,
+		controls,
+		[]corepaths.Placement{{
+			Label:  "state target",
+			Target: "~/" + filepath.ToSlash(relative),
+		}},
+	)
+	if err != nil {
+		return corepaths.Target{}, err
+	}
+	return resolved[0].Target, nil
 }
 
 func isSafeStaleResolutionDrift(err error) bool {

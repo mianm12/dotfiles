@@ -1,6 +1,7 @@
 package planner_test
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -94,6 +95,58 @@ func TestAcceptance05_IndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testi
 		t.Fatal("Build() has conflict, want independent alias target followed by stale prune")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestAcceptance05_StaleLinkInsideControlPathIsRejected(t *testing.T) {
+	for _, controlName := range []string{"repository", "config", "state", "lock"} {
+		t.Run(controlName, func(t *testing.T) {
+			fixture := newFixture(t)
+			controls := fixture.controls
+			var target string
+			switch controlName {
+			case "repository":
+				controls.Repository = fixture.target("repository")
+				if err := os.MkdirAll(controls.Repository, 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(repository) error = %v", err)
+				}
+				target = filepath.Join(controls.Repository, "owned-link")
+			case "config":
+				controls.Config = fixture.target(".config/dot/machine.toml")
+				target = controls.Config
+			case "state":
+				controls.State = fixture.target(".local/state/dot/state.json")
+				target = controls.State
+			case "lock":
+				controls.Lock = fixture.target(".local/state/dot/lock")
+				target = controls.Lock
+			}
+
+			source := fixture.file(t, "old-repo/source", "old")
+			fixture.symlink(t, source, target)
+			snapshot := fixture.snapshot(map[string]state.Placement{
+				"stale": linkRecord(
+					target,
+					fixture.resolved(t, target),
+					source,
+				),
+			})
+			before := snapshotTree(t, fixture.root)
+
+			plan, err := planner.Build(planner.Request{
+				Home:     fixture.home,
+				Controls: controls,
+				State:    snapshot,
+			})
+
+			if !errors.Is(err, corepaths.ErrControlBoundary) {
+				t.Fatalf("Build() = (%#v, %v), want control boundary error", plan, err)
+			}
+			if plan.Actions != nil || plan.Warnings != nil {
+				t.Fatalf("Build() returned partial plan %#v", plan)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
+		})
+	}
 }
 
 func TestAcceptance05_DriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
