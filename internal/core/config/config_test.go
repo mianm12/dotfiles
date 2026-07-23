@@ -242,6 +242,31 @@ root = "."
 	}
 }
 
+func TestResolve_DistroAllowsDuplicateLinuxMatchTokens(t *testing.T) {
+	root := t.TempDir()
+	repository := writeRepository(t, root, "version = 1\n[profiles]\nbase = [\"app\"]\n")
+	writeModule(t, repository, "app", `
+[match]
+os = ["linux", "linux"]
+distro = ["ubuntu"]
+`)
+
+	loaded, err := coreconfig.OpenRepository(repository)
+	if err != nil {
+		t.Fatalf("OpenRepository() error = %v", err)
+	}
+	resolution, err := loaded.Resolve(
+		coreconfig.Scope{Profiles: []string{"base"}},
+		coreconfig.Platform{OS: "linux", Distro: "ubuntu"},
+	)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"app"}) {
+		t.Fatalf("resolved modules = %v, want [app]", got)
+	}
+}
+
 func TestResolve_MaterializesFileAndDirectoryLinksAndLocal(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `

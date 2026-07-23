@@ -178,8 +178,11 @@ func validateMatch(module, location string, match *matchDocument) error {
 			)
 		}
 	}
-	if match.Distro != nil &&
-		(len(match.OS) != 1 || match.OS[0] != "linux") {
+	linuxOnly := len(match.OS) > 0
+	for _, operatingSystem := range match.OS {
+		linuxOnly = linuxOnly && operatingSystem == "linux"
+	}
+	if match.Distro != nil && !linuxOnly {
 		return fmt.Errorf(
 			"%w: module %q %s may declare distro only with os = [\"linux\"]",
 			ErrInvalidConfiguration,
