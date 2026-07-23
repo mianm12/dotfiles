@@ -15,6 +15,8 @@ tools: Read, Grep, Glob, Bash
 3. 检查是否有既有测试被删除或断言被弱化；删除必须能对应基线 §2 的非目标条款，并在
    commit message 中被指认。
 4. 成功 mutation 场景是否追加了"重复执行相同 apply 并断言零新 mutation"。
+5. Diff 是否触碰 `docs/design-baseline.md` 或 `docs/cutover-plan.md`：自主执行的检查点
+   分支上，对这两个文件的任何改动都是阻塞项（规范修改只能由人在计划会话中完成）。
 
 规则：
 
