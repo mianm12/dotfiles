@@ -57,6 +57,23 @@ func TestResolveTarget_RejectsUnsupportedOrEscapingExpressions(t *testing.T) {
 	}
 }
 
+func TestValidateTargetExpression_DoesNotConsultFilesystem(t *testing.T) {
+	for _, expression := range []string{"~/config", "~/.config/app/config", "~/missing/../config"} {
+		if err := ValidateTargetExpression(expression); err != nil {
+			t.Fatalf("ValidateTargetExpression(%q) error = %v", expression, err)
+		}
+	}
+	for _, expression := range []string{"", "~", "~/", "~/../../outside", "~/$HOME/config"} {
+		if err := ValidateTargetExpression(expression); !errors.Is(err, ErrInvalidPath) {
+			t.Fatalf(
+				"ValidateTargetExpression(%q) error = %v, want ErrInvalidPath",
+				expression,
+				err,
+			)
+		}
+	}
+}
+
 func TestResolveTarget_RejectsBlockedAndDanglingAncestors(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")

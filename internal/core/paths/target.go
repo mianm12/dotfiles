@@ -78,7 +78,27 @@ func ResolveTarget(home, expression string) (Target, error) {
 	}, nil
 }
 
+// ValidateTargetExpression validates the target syntax without consulting the
+// filesystem or requiring a concrete HOME.
+func ValidateTargetExpression(expression string) error {
+	_, err := targetRelative(expression)
+	return err
+}
+
 func expandTarget(home, expression string) (string, error) {
+	relative, err := targetRelative(expression)
+	if err != nil {
+		return "", err
+	}
+
+	lexical := filepath.Clean(filepath.Join(home, relative))
+	if !strictDescendant(home, lexical) {
+		return "", fmt.Errorf("%w: target %q escapes HOME %q", ErrInvalidPath, expression, home)
+	}
+	return lexical, nil
+}
+
+func targetRelative(expression string) (string, error) {
 	if !strings.HasPrefix(expression, "~/") {
 		return "", fmt.Errorf("%w: target %q must start with ~/", ErrInvalidPath, expression)
 	}
@@ -97,11 +117,12 @@ func expandTarget(home, expression string) (string, error) {
 		)
 	}
 
-	lexical := filepath.Clean(filepath.Join(home, relative))
-	if !strictDescendant(home, lexical) {
-		return "", fmt.Errorf("%w: target %q escapes HOME %q", ErrInvalidPath, expression, home)
+	cleaned := filepath.Clean(relative)
+	if cleaned == "." || cleaned == ".." ||
+		strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: target %q escapes HOME", ErrInvalidPath, expression)
 	}
-	return lexical, nil
+	return cleaned, nil
 }
 
 func cleanAbsolute(label, path string) (string, error) {
