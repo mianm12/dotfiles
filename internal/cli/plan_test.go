@@ -149,11 +149,90 @@ func TestApplyDryRun_PrintsStablePlanWithoutMutation(t *testing.T) {
 		t.Fatalf("apply dry-run changed isolated tree\nbefore=%v\nafter=%v", before, after)
 	}
 
+	stdout, stderr, code = fixture.run(t, "apply", "alpha", "--dry-run")
+	if code != exitConflict || stderr != "" || strings.Contains(stdout, "skip  ~/alpha/stable") {
+		t.Fatalf("non-verbose dry-run = stdout %q, stderr %q, exit %d; want conflict without skip", stdout, stderr, code)
+	}
+
 	noPrune, noPruneStderr, noPruneCode := fixture.run(t, "apply", "alpha", "--dry-run", "--no-prune")
 	pruneFalse, pruneFalseStderr, pruneFalseCode := fixture.run(t, "apply", "alpha", "--dry-run", "--prune=false")
 	if noPruneCode != pruneFalseCode || noPrune != pruneFalse || noPruneStderr != pruneFalseStderr {
 		t.Fatalf("--prune=false = (%q, %q, %d), want --no-prune projection (%q, %q, %d)", pruneFalse, pruneFalseStderr, pruneFalseCode, noPrune, noPruneStderr, noPruneCode)
 	}
+}
+
+func TestApplyDryRun_ForceNoPruneAndFullScope(t *testing.T) {
+	fixture := newPlanCLIFixture(t)
+
+	forced, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run", "--force")
+	if code != exitActionable || stderr != "" {
+		t.Fatalf("forced dry-run = stdout %q, stderr %q, exit %d; want actionable", forced, stderr, code)
+	}
+	for _, want := range []string{
+		"backup+replace  ~/alpha/conflict  (regular-conflict)",
+		"prune  ~/alpha/orphan  (owned-orphan)",
+		"run-hook  alpha/hooks/setup.sh  (pending-run-once)",
+	} {
+		if !strings.Contains(forced, want) {
+			t.Errorf("forced dry-run stdout = %q, want line %q", forced, want)
+		}
+	}
+	if strings.Contains(forced, "prune (deferred)") {
+		t.Errorf("forced dry-run stdout = %q, want active prune", forced)
+	}
+
+	withoutPrune, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run", "--no-prune")
+	if code != exitConflict || stderr != "" || strings.Contains(withoutPrune, "prune") {
+		t.Fatalf("no-prune dry-run = stdout %q, stderr %q, exit %d; want conflict without prune", withoutPrune, stderr, code)
+	}
+
+	full, stderr, code := fixture.run(t, "apply", "--dry-run", "--force")
+	if code != exitActionable || stderr != "" {
+		t.Fatalf("full dry-run = stdout %q, stderr %q, exit %d; want actionable", full, stderr, code)
+	}
+	alphaIndex := strings.Index(full, "link  ~/alpha/create")
+	betaIndex := strings.Index(full, "link  ~/beta/create")
+	alphaHookIndex := strings.Index(full, "run-hook  alpha/hooks/setup.sh")
+	betaHookIndex := strings.Index(full, "run-hook  beta/hooks/setup.sh")
+	if alphaIndex < 0 || betaIndex <= alphaIndex || alphaHookIndex <= betaIndex || betaHookIndex <= alphaHookIndex {
+		t.Fatalf("full dry-run output order is unstable: %q", full)
+	}
+}
+
+func TestApplyDryRun_NoOpAndPlannerError(t *testing.T) {
+	t.Run("no-op", func(t *testing.T) {
+		fixture := newNoOpPlanCLIFixture(t)
+		stdout, stderr, code := fixture.run(t, "apply", "--dry-run")
+		want := "repo=" + fixture.repository + " profile=clean os=" + runtime.GOOS + "\nAlready up to date.\n"
+		if code != exitOK || stdout != want || stderr != "" {
+			t.Fatalf("no-op dry-run = stdout %q, stderr %q, exit %d; want %q, empty, 0", stdout, stderr, code, want)
+		}
+
+		verbose, stderr, code := fixture.run(t, "apply", "--dry-run", "--verbose")
+		if code != exitOK || stderr != "" ||
+			!strings.Contains(verbose, "skip  ~/clean/stable  (expected-link)\n") ||
+			!strings.HasSuffix(verbose, "Already up to date.\n") {
+			t.Fatalf("verbose no-op dry-run = stdout %q, stderr %q, exit %d", verbose, stderr, code)
+		}
+	})
+
+	t.Run("runtime error wins", func(t *testing.T) {
+		fixture := newPlanCLIFixture(t)
+		writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "unknown = true\n")
+		before := snapshotCLITree(t, fixture.root)
+		stdout, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run")
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "error:") {
+			t.Fatalf("invalid dry-run = stdout %q, stderr %q, exit %d; want error-only exit 1", stdout, stderr, code)
+		}
+		for _, forbidden := range []string{"repo=", "Already up to date.", "CONFLICT", "run-hook"} {
+			if strings.Contains(stdout+stderr, forbidden) {
+				t.Errorf("invalid dry-run output %q contains forbidden success text %q", stdout+stderr, forbidden)
+			}
+		}
+		if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("invalid dry-run changed isolated tree\nbefore=%v\nafter=%v", before, after)
+		}
+	})
 }
 
 func TestApply_RejectsAdoptBeforeRuntime(t *testing.T) {
