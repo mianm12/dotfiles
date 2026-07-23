@@ -1,11 +1,16 @@
 ---
 name: dot-checkpoint
-description: Execute, continue, review, or accept exactly one refactor checkpoint from docs/cutover-plan.md in the dot repository. Use when Codex is asked to run a CP, B, or C checkpoint, perform its independent promotion reviews, or produce its checkpoint acceptance report.
+description: Execute, continue, review, or accept refactor checkpoints from docs/cutover-plan.md in the dot repository, including orchestrating a persistent Codex goal across the full cutover one checkpoint at a time. Use when Codex is asked to run a CP, B, or C checkpoint, start or resume a cutover goal, perform independent promotion reviews, or produce a checkpoint acceptance report.
 ---
 
 # Dot Checkpoint
 
 Execute one checkpoint without expanding its scope or weakening its gates.
+
+For a persistent goal spanning multiple checkpoints, read
+[references/goal-orchestration.md](references/goal-orchestration.md) completely before selecting
+the next checkpoint. A goal may span the full plan, but each continuation still executes at most
+one checkpoint.
 
 ## Establish the checkpoint
 
@@ -13,8 +18,8 @@ Execute one checkpoint without expanding its scope or weakening its gates.
    `docs/cutover-plan.md` completely.
 2. Identify the requested checkpoint, its exit conditions, its mapped §13 acceptance items, and
    its allowed files.
-3. Inspect the current branch, HEAD, worktree status, relevant implementation, tests, `Makefile`,
-   and CI workflow before changing anything.
+3. Record the current HEAD as `checkpoint_base`, then inspect the branch, worktree status, relevant
+   implementation, tests, `Makefile`, and CI workflow before changing anything.
 4. Preserve all pre-existing staged, unstaged, and untracked work. Stop if it overlaps the
    checkpoint and cannot be preserved safely.
 
@@ -64,15 +69,16 @@ After the implementation is complete and `make check` is green:
    - `contract_auditor`, following
      [references/contract-auditor.md](references/contract-auditor.md).
    - `bug_hunter`, following [references/bug-hunter.md](references/bug-hunter.md).
-3. Give reviewers only the branch diff, `docs/design-baseline.md`, the claimed §13 items, and the
-   relevant reviewer reference. Do not pass implementation-session narration or expected findings.
+3. Give reviewers only the checkpoint diff `checkpoint_base..reviewed_head`,
+   `docs/design-baseline.md`, the claimed §13 items, and the relevant reviewer reference. Do not
+   pass implementation-session narration or expected findings.
 4. Treat only correctness defects and contract violations as promotion blockers. Record style
    comments as non-blocking.
 5. Fix confirmed blockers in new commits and rerun both reviews from fresh contexts. Allow at most
    two fix-and-rereview rounds; unresolved disagreement goes to the user.
-6. Run a freshness gate: confirm the reviewed HEAD is still the branch HEAD, the complete diff is
-   the reviewed diff, the worktree contains no unexpected changes, and the required checks remain
-   green.
+6. Run a freshness gate: confirm the reviewed HEAD is still the branch HEAD, the
+   `checkpoint_base..HEAD` diff is the reviewed diff, the worktree contains no unexpected changes,
+   and the required checks remain green.
 
 The primary context alone decides whether the checkpoint is complete.
 
