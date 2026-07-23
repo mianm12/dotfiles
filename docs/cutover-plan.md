@@ -47,6 +47,10 @@ B6 切换时整体删除。
 **CP0 · 砍非目标命令与叶子包**
 - 建/删：删 `internal/add`、`internal/doctor`、CLI `add`(cli/add.go)、`doctor`(cli/doctor.go)、
   `diff`(cli/plan.go) 及其测试；重连 `cli.go` root 只保留 init/apply/status/version（help 自带）。
+- 同步删 Makefile 的 `doctor-manifest`（`check` 链、help 行与 target），并更新 CONTRIBUTING
+  中"真实仓库 manifest 门禁"的描述；否则删 doctor 后 `make check` 必红。
+- 根 `dot.toml` 是旧 schema（`requires` + 无 `version`），门禁删除后无消费者：改写为基线最小
+  合法 manifest（`version = 1` + 空 profiles），为 C2 本机切换保留 init 起点。
 - 验证：`make check` 绿；`dot help` 只列在范围命令。
 - 退出：树上无 add/doctor/diff 引用；LOC 明显下降。
 
