@@ -64,6 +64,12 @@ target = "~/.app"
 	assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "app", "config"))
 
 	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  converged") {
+		t.Fatalf("status after init = (%d, %q, %q), want converged", code, stdout, stderr)
+	}
+	assertCLIPathsUnchanged(t, before)
+
 	code, _, stderr = fixture.run("apply")
 	if code != exitOK || stderr != "" {
 		t.Fatalf("apply after init = (%d, %q), want clean success", code, stderr)
@@ -186,6 +192,13 @@ target = "~/.extra.local"
 	extraTarget := filepath.Join(fixture.home, ".extra")
 	localTarget := filepath.Join(fixture.home, ".extra.local")
 	profileTarget := filepath.Join(fixture.home, ".profiled")
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "profiled  converged") ||
+		!strings.Contains(stdout, "extra  converged") {
+		t.Fatalf("status after apply = (%d, %q, %q), want converged modules", code, stdout, stderr)
+	}
 
 	beforeDryRun := snapshotCLIPaths(
 		t,
@@ -338,6 +351,7 @@ func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *tes
 		}
 		assertCLIPathsUnchanged(t, before)
 		assertCLIMissing(t, fixture.state)
+		assertCLIMissing(t, fixture.lock)
 	})
 
 	t.Run("deleted manifest with extra and state cleans safely", func(t *testing.T) {

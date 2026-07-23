@@ -94,8 +94,12 @@ func statusForModule(
 		switch action.Decision {
 		case planner.DecisionConflict:
 			status = "conflict"
+		case planner.DecisionKeep:
+			continue
 		default:
-			if status != "conflict" {
+			if status != "conflict" &&
+				effective[moduleID] &&
+				!notApplicable[moduleID] {
 				status = "pending"
 			}
 		}
