@@ -503,15 +503,49 @@ func TestAcceptance13_LocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T
 
 func TestAcceptance07_ScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	fixture := newFixture(t)
-	source := fixture.writeRepositoryFile(t, "modules/extra/file", "file")
-	request := fixture.request([]config.Module{{
-		ID: "extra",
-		Links: []config.Link{{
-			ID:         "file",
-			SourcePath: source,
-			Target:     "~/.extra",
-		}},
-	}})
+	baseSource := fixture.writeRepositoryFile(t, "modules/base/file", "base")
+	extraSource := fixture.writeRepositoryFile(t, "modules/extra/file", "extra")
+	baseTarget := filepath.Join(fixture.home, ".base")
+	extraTarget := filepath.Join(fixture.home, ".extra")
+	if err := os.Symlink(baseSource, baseTarget); err != nil {
+		t.Fatalf("os.Symlink(base) error = %v", err)
+	}
+	resolvedBase, err := corepaths.ResolveTarget(fixture.home, "~/.base")
+	if err != nil {
+		t.Fatalf("ResolveTarget(base) error = %v", err)
+	}
+	baseState := state.Module{Placements: map[string]state.Placement{
+		"file": {
+			Kind:            state.KindLink,
+			Target:          baseTarget,
+			ResolvedTarget:  resolvedBase.Resolved(),
+			LinkDestination: baseSource,
+		},
+	}}
+	fixture.writeState(t, state.Snapshot{
+		Home:    fixture.home,
+		Modules: map[string]state.Module{"base": baseState},
+	})
+	baseBefore := snapshotFiles(t, baseTarget)
+
+	request := fixture.request([]config.Module{
+		{
+			ID: "base",
+			Links: []config.Link{{
+				ID:         "file",
+				SourcePath: baseSource,
+				Target:     "~/.base",
+			}},
+		},
+		{
+			ID: "extra",
+			Links: []config.Link{{
+				ID:         "file",
+				SourcePath: extraSource,
+				Target:     "~/.extra",
+			}},
+		},
+	})
 	request.Scope = []string{"extra"}
 
 	first, err := Run(request)
@@ -521,7 +555,16 @@ func TestAcceptance07_ScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	if !first.TargetsChanged || !first.StateChanged {
 		t.Fatalf("Run(first) = %#v, want target and state changes", first)
 	}
-	before := snapshotFiles(t, filepath.Join(fixture.home, ".extra"), fixture.state)
+	assertFilesUnchanged(t, baseBefore)
+	loaded, err := state.Load(fixture.state, fixture.home)
+	if err != nil {
+		t.Fatalf("state.Load() error = %v", err)
+	}
+	if got := loaded.Snapshot.Modules["base"]; !reflect.DeepEqual(got, baseState) {
+		t.Fatalf("base state = %#v, want unchanged %#v", got, baseState)
+	}
+
+	before := snapshotFiles(t, baseTarget, extraTarget, fixture.state)
 	second, err := Run(request)
 	if err != nil {
 		t.Fatalf("Run(second) error = %v", err)
