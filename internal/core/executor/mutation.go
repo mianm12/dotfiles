@@ -23,15 +23,40 @@ type mutationRun struct {
 func (run *mutationRun) apply(plan planner.Plan, snapshot *state.Snapshot) error {
 	active := make(map[actionKey]bool)
 	for _, action := range plan.Actions {
-		if action.Decision == planner.DecisionPrune ||
-			action.Decision == planner.DecisionForget {
+		if action.Decision != planner.DecisionCreateLocal &&
+			action.Decision != planner.DecisionCreateLink {
 			continue
 		}
-		if err := run.applyActive(action); err != nil {
+		if err := run.ensureParent(action.Target); err != nil {
 			return actionError(action, err)
 		}
-		applyState(snapshot, action)
-		active[actionKey{moduleID: action.ModuleID, placementID: action.PlacementID}] = true
+	}
+	for _, action := range plan.Actions {
+		if action.Decision != planner.DecisionCreateLocal &&
+			action.Decision != planner.DecisionCreateLink {
+			continue
+		}
+		if err := run.applyAndRecord(action, snapshot, active); err != nil {
+			return err
+		}
+	}
+	for _, action := range plan.Actions {
+		if action.Decision != planner.DecisionUpdate {
+			continue
+		}
+		if err := run.applyAndRecord(action, snapshot, active); err != nil {
+			return err
+		}
+	}
+	for _, action := range plan.Actions {
+		if action.Decision != planner.DecisionAdopt &&
+			action.Decision != planner.DecisionKeep &&
+			action.Decision != planner.DecisionRepairState {
+			continue
+		}
+		if err := run.applyAndRecord(action, snapshot, active); err != nil {
+			return err
+		}
 	}
 
 	for _, action := range plan.Actions {
@@ -51,6 +76,19 @@ func (run *mutationRun) apply(plan planner.Plan, snapshot *state.Snapshot) error
 	return nil
 }
 
+func (run *mutationRun) applyAndRecord(
+	action planner.Action,
+	snapshot *state.Snapshot,
+	active map[actionKey]bool,
+) error {
+	if err := run.applyActive(action); err != nil {
+		return actionError(action, err)
+	}
+	applyState(snapshot, action)
+	active[actionKey{moduleID: action.ModuleID, placementID: action.PlacementID}] = true
+	return nil
+}
+
 type actionKey struct {
 	moduleID    string
 	placementID string
@@ -59,17 +97,11 @@ type actionKey struct {
 func (run *mutationRun) applyActive(action planner.Action) error {
 	switch action.Decision {
 	case planner.DecisionCreateLocal:
-		if err := run.ensureParent(action.Target); err != nil {
-			return err
-		}
 		if err := run.createLocal(action.Source, action.Target); err != nil {
 			return err
 		}
 		return verifyLocal(action.Target)
 	case planner.DecisionCreateLink:
-		if err := run.ensureParent(action.Target); err != nil {
-			return err
-		}
 		if err := run.createLink(action.LinkDestination, action.Target); err != nil {
 			return err
 		}

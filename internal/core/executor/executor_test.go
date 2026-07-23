@@ -129,6 +129,48 @@ func TestExecutorDoesNotPruneUntilAllActiveCreatesSucceed(t *testing.T) {
 	}
 }
 
+func TestExecutorDoesNotUpdateUntilAllCreatesSucceed(t *testing.T) {
+	fixture := newFixture(t)
+	oldSource := fixture.writeRepositoryFile(t, "modules/base/old", "old")
+	newSource := fixture.writeRepositoryFile(t, "modules/base/new", "new")
+	target := filepath.Join(fixture.home, ".owned")
+	if err := os.Symlink(oldSource, target); err != nil {
+		t.Fatalf("os.Symlink(old) error = %v", err)
+	}
+	fixture.writeLinkState(t, target, oldSource)
+
+	request := fixture.request([]config.Module{
+		{
+			ID: "base",
+			Links: []config.Link{{
+				ID:         "file",
+				SourcePath: newSource,
+				Target:     "~/.owned",
+			}},
+		},
+		{
+			ID: "create",
+			Locals: []config.Local{{
+				ID:          "file",
+				ExamplePath: filepath.Join(fixture.repository, "missing.example"),
+				Target:      "~/.create",
+			}},
+		},
+	})
+	_, err := Run(request)
+	if err == nil {
+		t.Fatal("Run() error = nil, want create failure")
+	}
+	assertSymlink(t, target, oldSource)
+	loaded, loadErr := state.Load(fixture.state, fixture.home)
+	if loadErr != nil {
+		t.Fatalf("state.Load() error = %v", loadErr)
+	}
+	if got := loaded.Snapshot.Modules["base"].Placements["file"].LinkDestination; got != oldSource {
+		t.Fatalf("state destination = %q, want unchanged %q", got, oldSource)
+	}
+}
+
 func TestAcceptance06_ExecutorMovesTargetBeforePruning(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.writeRepositoryFile(t, "modules/base/file", "file")
@@ -401,6 +443,15 @@ func TestAcceptance13_StateCommitFailureLeavesSafeArtifactForRerun(t *testing.T)
 	if recovered.TargetsChanged || !recovered.StateChanged {
 		t.Fatalf("Run(recovery) = %#v, want adopt plus state commit", recovered)
 	}
+	before := snapshotFiles(t, filepath.Join(fixture.home, ".file"), fixture.state)
+	repeated, err := Run(request)
+	if err != nil {
+		t.Fatalf("Run(repeated) error = %v", err)
+	}
+	if repeated.TargetsChanged || repeated.StateChanged {
+		t.Fatalf("Run(repeated) = %#v, want zero mutation", repeated)
+	}
+	assertFilesUnchanged(t, before)
 }
 
 func TestAcceptance07_ScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
