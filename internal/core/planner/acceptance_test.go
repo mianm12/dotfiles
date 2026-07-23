@@ -195,6 +195,69 @@ func TestAcceptance09_ExampleUpdateDoesNotOverwriteLocal(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
+func TestAcceptance09_CrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *fixture, string, string)
+		want  planner.Decision
+	}{
+		{
+			name: "absent target creates local",
+			setup: func(*testing.T, *fixture, string, string) {
+			},
+			want: planner.DecisionCreateLocal,
+		},
+		{
+			name: "user file keeps local",
+			setup: func(t *testing.T, fixture *fixture, target, _ string) {
+				fixture.fileAbsolute(t, target, "user")
+			},
+			want: planner.DecisionKeep,
+		},
+		{
+			name: "matching old symlink keeps local",
+			setup: func(t *testing.T, fixture *fixture, target, source string) {
+				fixture.symlink(t, source, target)
+			},
+			want: planner.DecisionKeep,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t)
+			oldSource := fixture.file(t, "repo/modules/old/config", "old")
+			example := fixture.file(t, "repo/modules/new/local.example", "example")
+			target := fixture.target(".config/shared")
+			test.setup(t, fixture, target, oldSource)
+			snapshot := state.Snapshot{
+				Home: fixture.home,
+				Modules: map[string]state.Module{
+					"old": {
+						Placements: map[string]state.Placement{
+							"link": linkRecord(
+								target,
+								fixture.resolved(t, target),
+								oldSource,
+							),
+						},
+					},
+				},
+			}
+			module := localModule("new", "local", example, "~/.config/shared")
+			before := snapshotTree(t, fixture.root)
+
+			plan := fixture.build(t, []config.Module{module}, snapshot)
+
+			assertDecisions(t, plan, test.want, planner.DecisionForget)
+			if plan.HasConflicts() || len(plan.Warnings) != 1 {
+				t.Fatalf("Build() = %#v, want local decision plus stale warning/forget", plan)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
+		})
+	}
+}
+
 func TestAcceptance10_UnknownCorrectSymlinkAdopts(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.file(t, "repo/modules/app/config", "config")

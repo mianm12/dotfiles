@@ -174,14 +174,17 @@ func planActive(
 	snapshot state.Snapshot,
 ) (Action, bool, error) {
 	base := actionForDesired(desired)
-	if owner, exists := otherModuleOwner(snapshot, desired); exists {
-		base.Decision = DecisionConflict
-		base.Reason = fmt.Sprintf(
-			"target is owned by module %q placement %q",
-			owner.moduleID,
-			owner.placementID,
-		)
-		return base, false, nil
+	if desired.kind == state.KindLink {
+		owner, exists := otherModuleOwner(snapshot, desired)
+		if exists {
+			base.Decision = DecisionConflict
+			base.Reason = fmt.Sprintf(
+				"target is owned by module %q placement %q",
+				owner.moduleID,
+				owner.placementID,
+			)
+			return base, false, nil
+		}
 	}
 
 	record, exists := statePlacement(snapshot, desired.key)
