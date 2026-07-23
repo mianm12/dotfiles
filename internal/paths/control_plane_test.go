@@ -26,7 +26,6 @@ func TestResolveControlPlanePaths(t *testing.T) {
 		filepath.Join(cleanHome, ".local", "state", "dot"),
 		filepath.Join(cleanHome, ".local", "state", "dot", "state.json"),
 		filepath.Join(cleanHome, ".local", "state", "dot", "lock"),
-		filepath.Join(cleanHome, ".local", "state", "dot", "backup"),
 		filepath.Join(cleanHome, ".local", "bin", "dot"),
 	}
 	got := []string{
@@ -36,7 +35,6 @@ func TestResolveControlPlanePaths(t *testing.T) {
 		paths.StateRoot(),
 		paths.StateFile(),
 		paths.StateLock(),
-		paths.BackupRoot(),
 		paths.InstalledBinary(),
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -97,7 +95,7 @@ func TestResolveControlPlanePaths_StateFamilyIsSinglePlannedHierarchy(t *testing
 		if member.role != controlMemberRole(role) {
 			t.Errorf("member %d role = %d", role, member.role)
 		}
-		if role < int(controlMemberStateRoot) || role > int(controlMemberBackupRoot) {
+		if role < int(controlMemberStateRoot) || role > int(controlMemberStateLock) {
 			if member.family == controlFamilyState || member.hasParent {
 				t.Errorf("non-state member %d has state family or planned parent: %#v", role, member)
 			}

@@ -25,9 +25,7 @@ func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 			Home:       dotruntime.Override{Value: fixture.home, Set: true},
 			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
 		},
-		CLIVersion: "v0.0.0",
-		Modules:    []string{"alpha"},
-		Force:      true,
+		Modules: []string{"alpha"},
 	})
 	if err != nil {
 		t.Fatalf("planner.PlanApply() error = %v", err)
@@ -40,8 +38,6 @@ func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 	fileOutcomes := make(map[int]applyrunner.ActionOutcomeStatus)
 	for index, action := range files {
 		switch action.Target {
-		case "~/alpha/conflict":
-			fileOutcomes[index] = applyrunner.ActionFailed
 		case "~/alpha/create":
 			fileOutcomes[index] = applyrunner.ActionConflict
 		}
@@ -61,7 +57,7 @@ func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 		t.Errorf("runtime file conflict exit = %d, want %d", projection.exitCode, exitConflict)
 	}
 	for _, want := range []string{
-		"backup+replace  ~/alpha/conflict",
+		"CONFLICT  ~/alpha/conflict",
 		"CONFLICT  ~/alpha/create",
 		"prune (deferred)  ~/alpha/orphan",
 	} {
@@ -77,7 +73,6 @@ func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 		verb   string
 	}{
 		{name: "conflict", status: applyrunner.ActionConflict, verb: "CONFLICT"},
-		{name: "failed", status: applyrunner.ActionFailed, verb: "prune"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			projection, projectErr := projectApplyPlanWithOutcomes(
@@ -101,8 +96,6 @@ func TestProjectApplyPlanWithOutcomes_MapsRuntimeStatuses(t *testing.T) {
 			Home:       dotruntime.Override{Value: fixture.home, Set: true},
 			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
 		},
-		CLIVersion: "v0.0.0",
-		Force:      true,
 	})
 	if err != nil {
 		t.Fatalf("planner.PlanApply(full) error = %v", err)
@@ -158,44 +151,6 @@ func TestApplyDryRun_PrintsStablePlanWithoutMutation(t *testing.T) {
 	pruneFalse, pruneFalseStderr, pruneFalseCode := fixture.run(t, "apply", "alpha", "--dry-run", "--prune=false")
 	if noPruneCode != pruneFalseCode || noPrune != pruneFalse || noPruneStderr != pruneFalseStderr {
 		t.Fatalf("--prune=false = (%q, %q, %d), want --no-prune projection (%q, %q, %d)", pruneFalse, pruneFalseStderr, pruneFalseCode, noPrune, noPruneStderr, noPruneCode)
-	}
-}
-
-func TestApplyDryRun_ForceNoPruneAndFullScope(t *testing.T) {
-	fixture := newPlanCLIFixture(t)
-
-	forced, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run", "--force")
-	if code != exitActionable || stderr != "" {
-		t.Fatalf("forced dry-run = stdout %q, stderr %q, exit %d; want actionable", forced, stderr, code)
-	}
-	for _, want := range []string{
-		"backup+replace  ~/alpha/conflict  (regular-conflict)",
-		"prune  ~/alpha/orphan  (owned-orphan)",
-		"run-hook  alpha/hooks/setup.sh  (pending-run-once)",
-	} {
-		if !strings.Contains(forced, want) {
-			t.Errorf("forced dry-run stdout = %q, want line %q", forced, want)
-		}
-	}
-	if strings.Contains(forced, "prune (deferred)") {
-		t.Errorf("forced dry-run stdout = %q, want active prune", forced)
-	}
-
-	withoutPrune, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run", "--no-prune")
-	if code != exitConflict || stderr != "" || strings.Contains(withoutPrune, "prune") {
-		t.Fatalf("no-prune dry-run = stdout %q, stderr %q, exit %d; want conflict without prune", withoutPrune, stderr, code)
-	}
-
-	full, stderr, code := fixture.run(t, "apply", "--dry-run", "--force")
-	if code != exitActionable || stderr != "" {
-		t.Fatalf("full dry-run = stdout %q, stderr %q, exit %d; want actionable", full, stderr, code)
-	}
-	alphaIndex := strings.Index(full, "link  ~/alpha/create")
-	betaIndex := strings.Index(full, "link  ~/beta/create")
-	alphaHookIndex := strings.Index(full, "run-hook  alpha/hooks/setup.sh")
-	betaHookIndex := strings.Index(full, "run-hook  beta/hooks/setup.sh")
-	if alphaIndex < 0 || betaIndex <= alphaIndex || alphaHookIndex <= betaIndex || betaHookIndex <= alphaHookIndex {
-		t.Fatalf("full dry-run output order is unstable: %q", full)
 	}
 }
 
@@ -306,7 +261,7 @@ func TestPlanCommands_RegisterSpecifiedFlags(t *testing.T) {
 		t.Fatalf("newRootCommand() error = %v", err)
 	}
 	apply, _, _ := root.Find([]string{"apply"})
-	for _, flagName := range []string{forceFlagName, pruneFlagName, noPruneFlagName} {
+	for _, flagName := range []string{pruneFlagName, noPruneFlagName} {
 		if apply.Flags().Lookup(flagName) == nil {
 			t.Errorf("apply flag %q is not registered", flagName)
 		}
@@ -360,10 +315,10 @@ func TestReadOnlyPlan_MissingStateRootRemainsMissing(t *testing.T) {
 	}
 	before := snapshotCLITree(t, fixture.root)
 
-	args := []string{"apply", "alpha", "--dry-run", "--force"}
+	args := []string{"apply", "alpha", "--dry-run"}
 	stdout, stderr, code := fixture.run(t, args...)
-	if code != exitActionable || stderr != "" || !strings.Contains(stdout, "link  ~/alpha/create") {
-		t.Fatalf("missing-state %v = stdout %q, stderr %q, exit %d; want actionable plan", args, stdout, stderr, code)
+	if code != exitConflict || stderr != "" || !strings.Contains(stdout, "link  ~/alpha/create") {
+		t.Fatalf("missing-state %v = stdout %q, stderr %q, exit %d; want conflict plan", args, stdout, stderr, code)
 	}
 	if _, err := os.Lstat(stateRoot); !os.IsNotExist(err) {
 		t.Fatalf("missing-state %v created state root: %v", args, err)
@@ -447,70 +402,14 @@ func TestReadOnlyPlan_OutputErrorOverridesConflict(t *testing.T) {
 	}
 }
 
-func TestReadOnlyPlan_StderrFailureDoesNotRollBackComputedStdout(t *testing.T) {
-	tests := []struct {
-		name    string
-		fixture func(*testing.T) planCLIFixture
-		args    []string
-	}{
-		{name: "dry-run clean", fixture: newNoOpPlanCLIFixture, args: []string{"apply", "--dry-run"}},
-		{name: "dry-run actionable", fixture: newPlanCLIFixture, args: []string{"apply", "alpha", "--dry-run"}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := test.fixture(t)
-			fixture.redirectEnvironment(t)
-			args := append(append([]string(nil), test.args...),
-				"--home", fixture.home, "--repo", fixture.repository,
-			)
-			before := snapshotCLITree(t, fixture.root)
-
-			var wantStdout bytes.Buffer
-			var normalStderr bytes.Buffer
-			normalCode := run(args, environment{
-				stdout:      &wantStdout,
-				stderr:      &normalStderr,
-				lookupEnv:   os.LookupEnv,
-				userHomeDir: os.UserHomeDir,
-				build:       buildinfo.Info{Version: "dev"},
-				goos:        runtime.GOOS,
-			})
-			if normalCode == exitError || normalStderr.String() != "notice: development build skipped the requires version comparison\n" {
-				t.Fatalf(
-					"normal development plan = stderr %q, exit %d; want compatibility notice and non-error exit",
-					normalStderr.String(),
-					normalCode,
-				)
-			}
-
-			var stdout bytes.Buffer
-			code := run(args, environment{
-				stdout:      &stdout,
-				stderr:      failingWriter{err: os.ErrClosed},
-				lookupEnv:   os.LookupEnv,
-				userHomeDir: os.UserHomeDir,
-				build:       buildinfo.Info{Version: "dev"},
-				goos:        runtime.GOOS,
-			})
-			if code != exitError || stdout.String() != wantStdout.String() {
-				t.Fatalf(
-					"failed development notice = stdout %q, exit %d; want computed stdout %q and exit 1",
-					stdout.String(),
-					code,
-					wantStdout.String(),
-				)
-			}
-			if after := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(after, before) {
-				t.Fatalf("read-only plan output failure changed isolated tree\nbefore=%v\nafter=%v", before, after)
-			}
-		})
-	}
-}
-
 func TestApplyDryRun_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T) {
 	t.Run("scaffold deleted", func(t *testing.T) {
 		fixture := newNoOpPlanCLIFixture(t)
-		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "deleted.template"), "template\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "dot.toml"), `target = "~/clean"
+[files.deleted]
+kind = "scaffold"
+`)
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "deleted"), "literal\n")
 		stableSource := filepath.Join(fixture.repository, "modules", "clean", "stable")
 		writePlanState(t, fixture.home, planStateDocument{
 			Version: 1,
@@ -525,7 +424,7 @@ func TestApplyDryRun_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T)
 				"~/clean/deleted": {
 					Module:    "clean",
 					Kind:      "scaffold",
-					Source:    "modules/clean/deleted.template",
+					Source:    "modules/clean/deleted",
 					AppliedAt: "2026-07-19T00:00:00Z",
 				},
 			},
@@ -548,8 +447,8 @@ func TestApplyDryRun_ReportsScaffoldDeletedAndUnownedPruneWarnings(t *testing.T)
 		if err := os.Symlink("changed", orphan); err != nil {
 			t.Fatalf("os.Symlink(changed orphan) error = %v", err)
 		}
-		stdout, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run", "--force")
-		if code != exitActionable || !strings.Contains(stdout, "prune  ~/alpha/orphan  (unowned-orphan)") ||
+		stdout, stderr, code := fixture.run(t, "apply", "alpha", "--dry-run")
+		if code != exitConflict || !strings.Contains(stdout, "prune (deferred)  ~/alpha/orphan  (unowned-orphan)") ||
 			!strings.Contains(stderr, "warning: ~/alpha/orphan: orphan target is no longer owned") {
 			t.Fatalf("unowned-orphan dry-run = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 		}
@@ -569,8 +468,7 @@ func newPlanCLIFixture(t *testing.T) planCLIFixture {
 	repository := filepath.Join(root, "repo")
 	makeDirectory(t, home)
 	writeCLIFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
-	writeCLIFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeCLIFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["beta", "alpha"]
 `)
 	writePlanModule(t, repository, "alpha", true)
@@ -618,8 +516,7 @@ func newNoOpPlanCLIFixture(t *testing.T) planCLIFixture {
 	repository := filepath.Join(root, "repo")
 	makeDirectory(t, home)
 	writeCLIFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"clean\"\n")
-	writeCLIFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeCLIFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 clean = ["clean"]
 `)
 	writeCLIFile(t, filepath.Join(repository, "modules", "clean", "dot.toml"), `target = "~/clean"

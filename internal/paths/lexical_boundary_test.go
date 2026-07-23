@@ -22,8 +22,8 @@ func TestValidateLexicalTargetControlBoundaries(t *testing.T) {
 		t.Parallel()
 
 		err := ValidateLexicalTargetControlBoundaries(controlPaths, []LabeledTarget{{
-			Label: "state target ~/.local/state/dot/backup/item",
-			Path:  filepath.Join(controlPaths.BackupRoot(), "item"),
+			Label: "state target ~/.local/state/dot/cache/item",
+			Path:  filepath.Join(controlPaths.StateRoot(), "cache", "item"),
 		}})
 		if !errors.Is(err, ErrTargetControlOverlap) {
 			t.Fatalf("error = %v, want ErrTargetControlOverlap", err)

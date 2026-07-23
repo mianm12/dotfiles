@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mianm12/dotfiles/internal/backup"
 	"github.com/mianm12/dotfiles/internal/executor"
 	"github.com/mianm12/dotfiles/internal/planner"
 	"github.com/mianm12/dotfiles/internal/state"
@@ -92,24 +91,13 @@ func executeFilePhase(
 	result *Result,
 ) ([]state.EntryUpdate, bool, error) {
 	updates := make([]state.EntryUpdate, 0, len(files))
-	var backupBatch *backup.Batch
 	for index, action := range files {
 		if action.Verb.ExecutionClass() == planner.FilePlanOnly {
 			continue
 		}
 		outcome := &result.fileOutcomes[outcomePositions[index]]
-		if action.Verb == planner.FileBackupReplace && backupBatch == nil {
-			var backupErr error
-			backupBatch, backupErr = operations.backup(mutation.control().BackupRoot())
-			if backupErr != nil {
-				outcome.Status = ActionFailed
-				return updates, false, fmt.Errorf("begin force backup batch: %w", backupErr)
-			}
-		}
-
 		outcome.attempted = true
-		fileResult, executeErr := executeFileAction(mutation, action, backupBatch, operations)
-		outcome.backupPath = fileResult.BackupPath
+		fileResult, executeErr := operations.execute(mutation.control(), action)
 		outcome.targetCommitted = fileResult.TargetMutated
 
 		success, failure, protocolErr := validateFileResult(action, fileResult, executeErr)
@@ -148,18 +136,6 @@ func executeFilePhase(
 		outcome.Status = ActionSucceeded
 	}
 	return updates, true, nil
-}
-
-func executeFileAction(
-	mutation loadedMutation,
-	action planner.FileAction,
-	backupBatch *backup.Batch,
-	operations runOperations,
-) (executor.FileResult, error) {
-	if action.Verb == planner.FileBackupReplace {
-		return operations.executeBackup(mutation.control(), action, backupBatch)
-	}
-	return operations.execute(mutation.control(), action)
 }
 
 func executePrunePhase(

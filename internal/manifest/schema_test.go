@@ -10,8 +10,6 @@ import (
 
 func TestDecodeRootManifest(t *testing.T) {
 	path := writeManifest(t, `
-requires = ">=0.3.0"
-
 [defaults]
 os = ["darwin", "linux"]
 target = "~"
@@ -22,17 +20,11 @@ patterns = ["README.md"]
 [profiles]
 base = ["zsh"]
 
-[data.email]
-prompt = "Email"
-default = "me@example.com"
 `)
 
 	got, err := decodeRootManifest(path)
 	if err != nil {
 		t.Fatalf("decodeRootManifest() error = %v, want nil", err)
-	}
-	if got.requirement.String() != ">=0.3.0" {
-		t.Errorf("requirement = %q, want %q", got.requirement, ">=0.3.0")
 	}
 	if !got.defaults.os.set || strings.Join(got.defaults.os.value, ",") != "darwin,linux" {
 		t.Errorf("defaults.os = %#v, want explicit darwin,linux", got.defaults.os)
@@ -46,9 +38,6 @@ default = "me@example.com"
 	if strings.Join(got.declaredProfiles["base"], ",") != "zsh" {
 		t.Errorf("declaredProfiles.base = %v, want [zsh]", got.declaredProfiles["base"])
 	}
-	if got.data["email"].defaultValue == nil || *got.data["email"].defaultValue != "me@example.com" {
-		t.Errorf("data.email.default = %#v, want me@example.com", got.data["email"].defaultValue)
-	}
 }
 
 func TestDecodeRootManifest_RejectsInvalidSchema(t *testing.T) {
@@ -57,32 +46,24 @@ func TestDecodeRootManifest_RejectsInvalidSchema(t *testing.T) {
 		content string
 		want    string
 	}{
-		{name: "missing requires", content: "[profiles]\nbase = []", want: "requires is missing"},
-		{name: "requires wrong type", content: "requires = 1\n[profiles]\nbase = []", want: "cannot decode"},
-		{name: "invalid requires", content: "requires = \"^1.0.0\"\n[profiles]\nbase = []", want: "invalid requires"},
-		{name: "missing profiles", content: `requires = ">=1.0.0"`, want: "profiles must declare"},
-		{name: "empty profiles", content: "requires = \">=1.0.0\"\n[profiles]", want: "profiles must declare"},
-		{name: "unknown root", content: "requires = \">=1.0.0\"\nunknown = true\n[profiles]\nbase = []", want: "strict mode"},
-		{name: "unknown defaults", content: "requires = \">=1.0.0\"\n[defaults]\nunknown = true\n[profiles]\nbase = []", want: "strict mode"},
-		{name: "defaults os wrong type", content: "requires = \">=1.0.0\"\n[defaults]\nos = \"darwin\"\n[profiles]\nbase = []", want: "cannot decode"},
-		{name: "wrong profile type", content: "requires = \">=1.0.0\"\n[profiles]\nbase = 1", want: "cannot decode"},
-		{name: "invalid data key", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.Upper]\nprompt = \"x\"", want: "invalid data key"},
-		{name: "unknown data field", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\nunknown = \"x\"", want: "strict mode"},
-		{name: "data prompt wrong type", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\nprompt = 1", want: "cannot decode"},
-		{name: "data default wrong type", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\ndefault = true", want: "cannot decode"},
-		{name: "data from env wrong type", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\nfrom_env = 1", want: "cannot decode"},
-		{name: "from env", content: "requires = \">=1.0.0\"\n[profiles]\nbase = []\n[data.email]\nfrom_env = \"EMAIL\"", want: "requires M2"},
-		{name: "invalid defaults os", content: "requires = \">=1.0.0\"\n[defaults]\nos = [\"freebsd\"]\n[profiles]\nbase = []", want: "unsupported OS"},
-		{name: "duplicate defaults os", content: "requires = \">=1.0.0\"\n[defaults]\nos = [\"darwin\", \"darwin\"]\n[profiles]\nbase = []", want: "duplicate OS"},
-		{name: "wrong target type", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = 1\n[profiles]\nbase = []", want: "string or OS table"},
-		{name: "empty target table", content: "requires = \">=1.0.0\"\n[defaults.target]\n[profiles]\nbase = []", want: "must contain darwin or linux"},
-		{name: "unknown target os", content: "requires = \">=1.0.0\"\n[defaults.target]\nfreebsd = \"~\"\n[profiles]\nbase = []", want: "unsupported OS"},
-		{name: "non-string target", content: "requires = \">=1.0.0\"\n[defaults.target]\ndarwin = 1\n[profiles]\nbase = []", want: "must be a string"},
-		{name: "non-canonical target", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/a/../b\"\n[profiles]\nbase = []", want: "canonical"},
-		{name: "target environment variable", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/$HOME/app\"\n[profiles]\nbase = []", want: "canonical"},
-		{name: "target braced environment variable", content: "requires = \">=1.0.0\"\n[defaults]\ntarget = \"~/${HOME}/app\"\n[profiles]\nbase = []", want: "canonical"},
-		{name: "ignore patterns wrong type", content: "requires = \">=1.0.0\"\n[ignore]\npatterns = \"*.tmp\"\n[profiles]\nbase = []", want: "cannot decode"},
-		{name: "invalid ignore pattern", content: "requires = \">=1.0.0\"\n[ignore]\npatterns = [\"a/**b\"]\n[profiles]\nbase = []", want: "requires ** to occupy"},
+		{name: "missing profiles", content: ``, want: "profiles must declare"},
+		{name: "empty profiles", content: "[profiles]", want: "profiles must declare"},
+		{name: "unknown root", content: "unknown = true\n[profiles]\nbase = []", want: "strict mode"},
+		{name: "unknown defaults", content: "[defaults]\nunknown = true\n[profiles]\nbase = []", want: "strict mode"},
+		{name: "defaults os wrong type", content: "[defaults]\nos = \"darwin\"\n[profiles]\nbase = []", want: "cannot decode"},
+		{name: "wrong profile type", content: "[profiles]\nbase = 1", want: "cannot decode"},
+		{name: "unknown data", content: "[profiles]\nbase = []\n[data.email]\nprompt = \"x\"", want: "strict mode"},
+		{name: "invalid defaults os", content: "[defaults]\nos = [\"freebsd\"]\n[profiles]\nbase = []", want: "unsupported OS"},
+		{name: "duplicate defaults os", content: "[defaults]\nos = [\"darwin\", \"darwin\"]\n[profiles]\nbase = []", want: "duplicate OS"},
+		{name: "wrong target type", content: "[defaults]\ntarget = 1\n[profiles]\nbase = []", want: "string or OS table"},
+		{name: "empty target table", content: "[defaults.target]\n[profiles]\nbase = []", want: "must contain darwin or linux"},
+		{name: "unknown target os", content: "[defaults.target]\nfreebsd = \"~\"\n[profiles]\nbase = []", want: "unsupported OS"},
+		{name: "non-string target", content: "[defaults.target]\ndarwin = 1\n[profiles]\nbase = []", want: "must be a string"},
+		{name: "non-canonical target", content: "[defaults]\ntarget = \"~/a/../b\"\n[profiles]\nbase = []", want: "canonical"},
+		{name: "target environment variable", content: "[defaults]\ntarget = \"~/$HOME/app\"\n[profiles]\nbase = []", want: "canonical"},
+		{name: "target braced environment variable", content: "[defaults]\ntarget = \"~/${HOME}/app\"\n[profiles]\nbase = []", want: "canonical"},
+		{name: "ignore patterns wrong type", content: "[ignore]\npatterns = \"*.tmp\"\n[profiles]\nbase = []", want: "cannot decode"},
+		{name: "invalid ignore pattern", content: "[ignore]\npatterns = [\"a/**b\"]\n[profiles]\nbase = []", want: "requires ** to occupy"},
 	}
 
 	for _, tt := range tests {
@@ -116,6 +97,7 @@ darwin = "~/Library/Application Support/App"
 patterns = ["*.bak"]
 
 [files."settings.json.template"]
+kind = "scaffold"
 mode = "0600"
 target = "~/.config/app/settings.json"
 
@@ -158,7 +140,7 @@ func TestDecodeModuleManifest_FileKindMatrix(t *testing.T) {
 		{name: "suffixless explicit scaffold", source: "settings", declaration: `kind = "scaffold"`, want: FileKindScaffold},
 		{name: "tmpl explicit scaffold", source: "settings.tmpl", declaration: `kind = "scaffold"`, want: FileKindScaffold},
 		{name: "tmpl explicit link", source: "settings.tmpl", declaration: `kind = "link"`, want: FileKindLink},
-		{name: "template implicit scaffold", source: "settings.template", want: FileKindScaffold},
+		{name: "template suffix stays link", source: "settings.template", want: FileKindLink},
 	}
 
 	for _, tt := range tests {
@@ -197,7 +179,6 @@ func TestDecodeModuleManifest_RejectsInvalidSchema(t *testing.T) {
 		{name: "mode on link", content: "[files.x]\nmode = \"0644\"", want: "not allowed for link"},
 		{name: "kind wrong type", content: "[files.x]\nkind = true", want: "cannot decode"},
 		{name: "managed kind", content: "[files.x]\nkind = \"managed\"", want: "not supported in M1"},
-		{name: "implicit managed", content: "[files.\"x.tmpl\"]", want: "not supported in M1"},
 		{name: "invalid kind", content: "[files.x]\nkind = \"copy\"", want: "invalid kind"},
 		{name: "file target wrong type", content: "[files.x]\ntarget = 1", want: "cannot decode"},
 		{name: "invalid file target", content: "[files.x]\ntarget = \"/tmp/x\"", want: "canonical"},

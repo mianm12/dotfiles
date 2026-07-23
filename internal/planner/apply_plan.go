@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"slices"
@@ -21,18 +20,15 @@ var ErrApplyPlan = errors.New("apply plan failed")
 
 // ApplyOptions 保存唯一 apply-plan 入口的显式运行与 M1 决策选项。
 type ApplyOptions struct {
-	Runtime    dotruntime.Overrides
-	CLIVersion string
-	Modules    []string
-	Force      bool
-	NoPrune    bool
+	Runtime dotruntime.Overrides
+	Modules []string
+	NoPrune bool
 }
 
 // ApplyScopeOptions 保存从已严格加载输入形成 canonical plan 所需的纯决策选项。
 // 它不携带 runtime 路径或版本，避免 exact-input 调用方误以为 planner 会再次加载。
 type ApplyScopeOptions struct {
 	Modules []string
-	Force   bool
 	NoPrune bool
 }
 
@@ -40,16 +36,11 @@ type ApplyScopeOptions struct {
 type ApplyContext struct {
 	Profile           string
 	GOOS              string
-	GOARCH            string
-	Hostname          string
 	Home              string
 	Repository        string
-	Requirement       string
-	DevelopmentBuild  bool
 	Full              bool
 	Modules           []string
 	UnassignedModules []string
-	Force             bool
 	PruneEnabled      bool
 }
 
@@ -98,13 +89,12 @@ func (plan ApplyPlan) Hooks() HookPlan { return cloneHookPlan(plan.hooks) }
 // PlanApply 是 M1 apply/diff/dry-run/status 的纯只读加载入口。它复用 runtime strict load，
 // 不获取 lock；任一阶段失败都返回零值 plan。
 func PlanApply(options ApplyOptions) (ApplyPlan, error) {
-	inputs, err := dotruntime.LoadReadOnly(options.Runtime, options.CLIVersion)
+	inputs, err := dotruntime.LoadReadOnly(options.Runtime)
 	if err != nil {
 		return ApplyPlan{}, fmt.Errorf("%w: load runtime: %w", ErrApplyPlan, err)
 	}
 	plan, err := PlanLoadedApply(inputs, ApplyScopeOptions{
 		Modules: options.Modules,
-		Force:   options.Force,
 		NoPrune: options.NoPrune,
 	})
 	if err != nil {
@@ -126,19 +116,12 @@ func PlanLoadedApply(inputs dotruntime.LoadedInputs, options ApplyScopeOptions) 
 	if err != nil {
 		return ApplyPlan{}, fmt.Errorf("%w: validate complete profile: %w", ErrApplyPlan, err)
 	}
-	hostname, err := os.Hostname()
-	if err != nil {
-		return ApplyPlan{}, fmt.Errorf("%w: read hostname: %w", ErrApplyPlan, err)
+	runtimeContext := manifest.RuntimeContext{
+		OS:      goruntime.GOOS,
+		Profile: runContext.Profile(),
+		Home:    control.Home(),
 	}
-	renderContext := manifest.RuntimeContext{
-		OS:       goruntime.GOOS,
-		Arch:     goruntime.GOARCH,
-		Hostname: hostname,
-		Profile:  runContext.Profile(),
-		Home:     control.Home(),
-		Data:     runContext.Data(),
-	}
-	scoped, err := validated.RenderScope(options.Modules, renderContext)
+	scoped, err := validated.RenderScope(options.Modules, runtimeContext)
 	if err != nil {
 		return ApplyPlan{}, fmt.Errorf("%w: render scope: %w", ErrApplyPlan, err)
 	}
@@ -146,7 +129,6 @@ func PlanLoadedApply(inputs dotruntime.LoadedInputs, options ApplyScopeOptions) 
 		validated,
 		scoped,
 		inputs.State(),
-		DecisionOptions{Force: options.Force},
 	)
 	if err != nil {
 		return ApplyPlan{}, fmt.Errorf("%w: plan files: %w", ErrApplyPlan, err)
@@ -160,22 +142,16 @@ func PlanLoadedApply(inputs dotruntime.LoadedInputs, options ApplyScopeOptions) 
 	if err != nil {
 		return ApplyPlan{}, fmt.Errorf("%w: plan hooks: %w", ErrApplyPlan, err)
 	}
-	compatibility := inputs.Compatibility()
 	plan := ApplyPlan{
 		valid: true,
 		context: ApplyContext{
 			Profile:           runContext.Profile(),
 			GOOS:              goruntime.GOOS,
-			GOARCH:            goruntime.GOARCH,
-			Hostname:          hostname,
 			Home:              control.Home(),
 			Repository:        control.RepositoryPath(),
-			Requirement:       compatibility.Requirement().String(),
-			DevelopmentBuild:  compatibility.DevelopmentBuild(),
 			Full:              scoped.Full(),
 			Modules:           scoped.Modules(),
 			UnassignedModules: inputs.Manifest().UnassignedModules(),
-			Force:             options.Force,
 			PruneEnabled:      !options.NoPrune,
 		},
 		observed:    cloneObservedProfile(observed),
@@ -193,7 +169,6 @@ func planScopedFiles(
 	validated manifest.ValidatedProfile,
 	scoped manifest.ScopedProfile,
 	loaded state.Loaded,
-	options DecisionOptions,
 ) (ObservedProfile, []FileAction, error) {
 	if err := validateScopedProfile(validated, scoped); err != nil {
 		return ObservedProfile{}, nil, err
@@ -203,15 +178,7 @@ func planScopedFiles(
 		return ObservedProfile{}, nil, err
 	}
 	selected := stringSet(scoped.Modules())
-	regularDigestTargets := make(map[string]struct{})
-	if options.Force {
-		for _, entry := range scoped.Entries() {
-			if entry.Kind == manifest.FileKindLink {
-				regularDigestTargets[filepath.Clean(entry.TargetPath)] = struct{}{}
-			}
-		}
-	}
-	observed, err := observeProfileTargets(validated.Home(), entries, loaded, regularDigestTargets)
+	observed, err := observeProfileTargets(validated.Home(), entries, loaded)
 	if err != nil {
 		return ObservedProfile{}, nil, fmt.Errorf("observe complete profile: %w", err)
 	}
@@ -221,7 +188,7 @@ func planScopedFiles(
 		if _, ok := selected[target.Desired.Module]; !ok {
 			continue
 		}
-		action, err := Decide(target, options)
+		action, err := Decide(target)
 		if err != nil {
 			return ObservedProfile{}, nil, fmt.Errorf(
 				"decide module %q source %q: %w",
@@ -399,15 +366,9 @@ func validateApplyContext(context ApplyContext) error {
 	if context.Profile == "" || (context.GOOS != "darwin" && context.GOOS != "linux") {
 		return fmt.Errorf("plan context has invalid profile or OS")
 	}
-	if context.GOARCH != "arm64" && context.GOARCH != "amd64" {
-		return fmt.Errorf("plan context has unsupported architecture %q", context.GOARCH)
-	}
 	if context.Home == "" || !filepath.IsAbs(context.Home) ||
 		context.Repository == "" || !filepath.IsAbs(context.Repository) {
 		return fmt.Errorf("plan context HOME and repository must be absolute")
-	}
-	if context.Requirement == "" {
-		return fmt.Errorf("plan context requirement is empty")
 	}
 	if !strictlySorted(context.Modules) || !strictlySorted(context.UnassignedModules) {
 		return fmt.Errorf("plan context module lists are not strictly sorted")
@@ -475,14 +436,14 @@ func validateFileActions(context ApplyContext, profile ObservedProfile, actions 
 			if action.OnSuccess.Kind != StatePreserve {
 				return fmt.Errorf("file action %q %q must preserve state", action.Target, action.Verb)
 			}
-		case FileCreateLink, FileScaffold, FileAdopt, FileBackupReplace:
+		case FileCreateLink, FileScaffold, FileAdopt:
 			if action.OnSuccess.Kind != StateUpsert || action.OnSuccess.Key != action.Desired.Target {
 				return fmt.Errorf("file action %q %q has invalid state upsert", action.Target, action.Verb)
 			}
 		default:
 			return fmt.Errorf("file action %q uses unsupported verb %q", action.Target, action.Verb)
 		}
-		if err := validateCanonicalFileDecision(context.Force, target, action); err != nil {
+		if err := validateCanonicalFileDecision(target, action); err != nil {
 			return err
 		}
 	}
@@ -635,8 +596,8 @@ func validateStateResolutionPair(
 	}
 }
 
-func validateCanonicalFileDecision(force bool, target ObservedTarget, action FileAction) error {
-	expected, err := Decide(target, DecisionOptions{Force: force})
+func validateCanonicalFileDecision(target ObservedTarget, action FileAction) error {
+	expected, err := Decide(target)
 	if err != nil {
 		return fmt.Errorf("derive canonical decision for file action %q: %w", action.Target, err)
 	}
@@ -661,7 +622,7 @@ func validateCanonicalFileDecision(force bool, target ObservedTarget, action Fil
 
 func validateFileSourcePrecondition(action FileAction) error {
 	switch action.Verb {
-	case FileCreateLink, FileBackupReplace:
+	case FileCreateLink:
 		if !action.Precondition.RequireRegularSource ||
 			action.Precondition.SourcePath != action.Desired.SourcePath ||
 			!filepath.IsAbs(action.Precondition.SourcePath) {
@@ -692,7 +653,6 @@ func isSupportedFileReason(reason FileReason) bool {
 		FileReasonSpecialConflict,
 		FileReasonScaffoldPresent,
 		FileReasonScaffoldDeleted,
-		FileReasonScaffoldRebuild,
 		FileReasonOwnedLinkToScaffold,
 		FileReasonReleaseOwnershipToScaffold:
 		return true

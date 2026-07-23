@@ -14,9 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const setFlagName = "set"
-
-type prepareInit func(dotruntime.Overrides, string) (dotruntime.InitInputs, error)
+type prepareInit func(dotruntime.Overrides) (dotruntime.InitInputs, error)
 
 type beginInit func(dotruntime.Overrides) (*dotruntime.InitSession, error)
 
@@ -28,18 +26,16 @@ type initDecisions struct {
 }
 
 func newInitCommand(env environment, global *globalOptions) *cobra.Command {
-	var setValues []string
 	var yes bool
 	command := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize or update the machine configuration",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			return runInit(command, global, setValues, yes, env)
+			return runInit(command, global, yes, env)
 		},
 	}
 	flags := command.Flags()
-	flags.StringArrayVar(&setValues, setFlagName, nil, "set a declared data value (key=value)")
 	flags.BoolVarP(&yes, yesFlagName, "y", false, "apply immediately and confirm whole-module pruning")
 	return command
 }
@@ -47,14 +43,9 @@ func newInitCommand(env environment, global *globalOptions) *cobra.Command {
 func runInit(
 	command *cobra.Command,
 	global *globalOptions,
-	setValues []string,
 	yes bool,
 	env environment,
 ) (resultErr error) {
-	selectedData, err := parseInitSetValues(setValues)
-	if err != nil {
-		return err
-	}
 	overrides := dotruntime.Overrides{
 		Home: dotruntime.Override{
 			Value: global.home,
@@ -73,11 +64,11 @@ func runInit(
 	if prepare == nil {
 		prepare = dotruntime.PrepareInit
 	}
-	inputs, err := prepare(overrides, env.build.Version)
+	inputs, err := prepare(overrides)
 	if err != nil {
 		return err
 	}
-	decisions, err := resolveInitDecisions(inputs, selectedData, yes, env.openInitTTY)
+	decisions, err := resolveInitDecisions(inputs, yes, env.openInitTTY)
 	if err != nil {
 		return err
 	}
@@ -104,7 +95,7 @@ func runInit(
 	defer func() {
 		resultErr = finishInitClose(resultErr, closeSession(session))
 	}()
-	loaded, err := session.Load(env.build.Version)
+	loaded, err := session.Load()
 	if err != nil {
 		return err
 	}
@@ -135,11 +126,6 @@ func runInit(
 		return fmt.Errorf("write init config result: %w", err)
 	}
 	if !decisions.apply {
-		if inputs.Compatibility().DevelopmentBuild() {
-			if _, err := fmt.Fprintln(command.ErrOrStderr(), "notice: development build skipped the requires version comparison"); err != nil {
-				return fmt.Errorf("write init compatibility notice: %w", err)
-			}
-		}
 		return nil
 	}
 
@@ -152,12 +138,11 @@ func runInit(
 		runner = applyrunner.RunWithMutationSession
 	}
 	result, runErr := runner(applyrunner.Options{
-		Runtime:    overrides,
-		CLIVersion: env.build.Version,
-		Confirm:    confirmationCallback(command, yes, env.openTerminal),
-		Stdin:      command.InOrStdin(),
-		Stdout:     command.OutOrStdout(),
-		Stderr:     command.ErrOrStderr(),
+		Runtime: overrides,
+		Confirm: confirmationCallback(command, yes, env.openTerminal),
+		Stdin:   command.InOrStdin(),
+		Stdout:  command.OutOrStdout(),
+		Stderr:  command.ErrOrStderr(),
 	}, child)
 	return finishMutationApply(command, result, runErr, global.verbose, false)
 }
@@ -175,41 +160,12 @@ func finishInitClose(resultErr, closeErr error) error {
 	return errors.Join(resultErr, closeErr)
 }
 
-// parseInitSetValues 保留每次 --set 的 presence，并保守拒绝同一 key 的重复赋值。
-func parseInitSetValues(values []string) (map[string]dotruntime.Override, error) {
-	selections := make(map[string]dotruntime.Override, len(values))
-	for _, value := range values {
-		key, selected, ok := strings.Cut(value, "=")
-		if !ok || key == "" {
-			return nil, fmt.Errorf("invalid --set %q: want key=value", value)
-		}
-		if _, duplicate := selections[key]; duplicate {
-			return nil, fmt.Errorf("duplicate --set key %q", key)
-		}
-		selections[key] = dotruntime.Override{Value: selected, Set: true}
-	}
-	return selections, nil
-}
-
-// resolveInitDecisions 在调用方仍未取 lock 的阶段闭合 profile、data 与 apply 决策。
-// --yes 使用无歧义的旧值/default，只有缺少必要值时才要求用户终端。
+// resolveInitDecisions 在调用方仍未取 lock 的阶段闭合 profile 与 apply 决策。
 func resolveInitDecisions(
 	inputs dotruntime.InitInputs,
-	setValues map[string]dotruntime.Override,
 	yes bool,
 	openTerminal func() (io.ReadWriteCloser, error),
 ) (decisions initDecisions, resultErr error) {
-	declarations := inputs.Manifest().DataDeclarations()
-	declared := make(map[string]struct{}, len(declarations))
-	for _, declaration := range declarations {
-		declared[declaration.Key()] = struct{}{}
-	}
-	for key := range setValues {
-		if _, ok := declared[key]; !ok {
-			return initDecisions{}, fmt.Errorf("unknown init data key %q", key)
-		}
-	}
-
 	context := inputs.Context()
 	profiles := inputs.Manifest().ProfileNames()
 	profileResolved := false
@@ -222,25 +178,8 @@ func resolveInitDecisions(
 		profileResolved = true
 	}
 
-	existing, hasExisting := context.ExistingMachine()
-	missingData := make(map[string]struct{})
-	for _, declaration := range declarations {
-		key := declaration.Key()
-		if _, ok := setValues[key]; ok {
-			continue
-		}
-		if hasExisting {
-			if _, ok := existing.Data()[key]; ok {
-				continue
-			}
-		}
-		if _, ok := declaration.Default(); !ok {
-			missingData[key] = struct{}{}
-		}
-	}
-
-	needsTerminal := !yes || !profileResolved || len(missingData) > 0
-	selection := dotruntime.InitSelection{Data: cloneInitSelections(setValues)}
+	needsTerminal := !yes || !profileResolved
+	selection := dotruntime.InitSelection{}
 	if !needsTerminal {
 		candidate, err := inputs.BuildCandidate(selection)
 		if err != nil {
@@ -273,31 +212,6 @@ func resolveInitDecisions(
 			return initDecisions{}, err
 		}
 		selection.Profile = dotruntime.Override{Value: selected, Set: true}
-	}
-
-	for _, declaration := range declarations {
-		key := declaration.Key()
-		if _, explicit := selection.Data[key]; explicit {
-			continue
-		}
-		if yes {
-			if _, required := missingData[key]; !required {
-				continue
-			}
-		}
-		prompt, ok := declaration.Prompt()
-		if !ok {
-			prompt = key
-		}
-		defaultValue, hasDefault := initDataDefault(existing, hasExisting, key)
-		if !hasDefault {
-			defaultValue, hasDefault = declaration.Default()
-		}
-		selected, err := promptInitData(reader, terminal, prompt, defaultValue, hasDefault)
-		if err != nil {
-			return initDecisions{}, err
-		}
-		selection.Data[key] = dotruntime.Override{Value: selected, Set: true}
 	}
 
 	applyNow := true
@@ -336,27 +250,6 @@ func promptInitProfile(reader *bufio.Reader, writer io.Writer, profiles []string
 	}
 }
 
-func promptInitData(
-	reader *bufio.Reader,
-	writer io.Writer,
-	prompt string,
-	defaultValue string,
-	hasDefault bool,
-) (string, error) {
-	label := prompt + ": "
-	if hasDefault {
-		label = fmt.Sprintf("%s [%s]: ", prompt, defaultValue)
-	}
-	answer, err := readInitAnswer(reader, writer, label)
-	if err != nil {
-		return "", err
-	}
-	if answer == "" && hasDefault {
-		return defaultValue, nil
-	}
-	return answer, nil
-}
-
 func promptInitApply(reader *bufio.Reader, writer io.Writer) (bool, error) {
 	for {
 		answer, err := readInitAnswer(reader, writer, "Apply now? [Y/n] ")
@@ -385,20 +278,4 @@ func readInitAnswer(reader *bufio.Reader, writer io.Writer, prompt string) (stri
 		return "", fmt.Errorf("read init answer: %w", err)
 	}
 	return strings.TrimSuffix(strings.TrimSuffix(answer, "\n"), "\r"), nil
-}
-
-func initDataDefault(existing dotruntime.MachineContext, hasExisting bool, key string) (string, bool) {
-	if !hasExisting {
-		return "", false
-	}
-	value, ok := existing.Data()[key]
-	return value, ok
-}
-
-func cloneInitSelections(values map[string]dotruntime.Override) map[string]dotruntime.Override {
-	cloned := make(map[string]dotruntime.Override, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
-	return cloned
 }

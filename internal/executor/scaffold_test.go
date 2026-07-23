@@ -15,7 +15,7 @@ import (
 func TestExecuteScaffold_CreatePublishesCompleteFile(t *testing.T) {
 	fixture := newScaffoldFixture(t)
 	target := filepath.Join(fixture.home, ".config", "app", "config")
-	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false)
 	if action.Verb != planner.FileScaffold || action.Reason != planner.FileReasonTargetMissing {
 		t.Fatalf("planned action = %q/%q, want S3 scaffold", action.Verb, action.Reason)
 	}
@@ -34,7 +34,7 @@ func TestExecuteScaffold_CreatePublishesCompleteFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Stat() before second run error = %v", err)
 	}
-	secondAction := fixture.planScaffold(t, target, action.OnSuccess.Entry, true, false)
+	secondAction := fixture.planScaffold(t, target, action.OnSuccess.Entry, true)
 	if secondAction.Verb != planner.FileSkip || secondAction.Reason != planner.FileReasonScaffoldPresent {
 		t.Fatalf("second action = %q/%q, want S1a skip", secondAction.Verb, secondAction.Reason)
 	}
@@ -50,7 +50,7 @@ func TestExecuteScaffold_CreatePublishesCompleteFile(t *testing.T) {
 func TestExecuteScaffold_CreateDoesNotClobberCommitRace(t *testing.T) {
 	fixture := newScaffoldFixture(t)
 	target := filepath.Join(fixture.home, "raced")
-	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false)
 	operations := defaultFileOperations()
 	realLink := operations.hardLink
 	operations.hardLink = func(oldname, newname string) error {
@@ -75,7 +75,7 @@ func TestExecuteScaffold_CreateDoesNotClobberCommitRace(t *testing.T) {
 func TestExecuteScaffold_CreateCommitRaceWithCleanupFailureIsRuntimeError(t *testing.T) {
 	fixture := newScaffoldFixture(t)
 	target := filepath.Join(fixture.home, "raced-cleanup")
-	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false)
 	operations := defaultFileOperations()
 	realLink := operations.hardLink
 	operations.hardLink = func(oldname, newname string) error {
@@ -101,7 +101,7 @@ func TestExecuteScaffold_CreateCommitRaceWithCleanupFailureIsRuntimeError(t *tes
 func TestExecuteScaffold_CreateCleanupFailureKeepsSuccessEffect(t *testing.T) {
 	fixture := newScaffoldFixture(t)
 	target := filepath.Join(fixture.home, "cleanup-failure")
-	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false)
 	operations := defaultFileOperations()
 	realRemove := operations.remove
 	injected := errors.New("cleanup failed")
@@ -162,7 +162,7 @@ func TestExecuteScaffold_AdoptIsStateOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Lstat() before error = %v", err)
 	}
-	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false)
 	if action.Verb != planner.FileAdopt || action.Reason != planner.FileReasonScaffoldPresent {
 		t.Fatalf("planned action = %q/%q, want S1b adopt", action.Verb, action.Reason)
 	}
@@ -194,7 +194,7 @@ func TestExecuteScaffold_S1bPreconditionRequiresPresenceNotExactContent(t *testi
 		if err := os.WriteFile(target, []byte("plan-time data"), 0o600); err != nil {
 			t.Fatalf("os.WriteFile(plan-time target) error = %v", err)
 		}
-		action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+		action := fixture.planScaffold(t, target, planner.HistoricalState{}, false)
 		if action.Verb != planner.FileAdopt || action.Reason != planner.FileReasonScaffoldPresent {
 			t.Fatalf("planned action = %q/%q, want S1b adopt", action.Verb, action.Reason)
 		}
@@ -232,7 +232,7 @@ func TestExecuteScaffold_S1bPreconditionRequiresPresenceNotExactContent(t *testi
 		if err := os.WriteFile(target, []byte("plan-time data"), 0o600); err != nil {
 			t.Fatalf("os.WriteFile(plan-time target) error = %v", err)
 		}
-		action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+		action := fixture.planScaffold(t, target, planner.HistoricalState{}, false)
 		if err := os.Remove(target); err != nil {
 			t.Fatalf("os.Remove(target) error = %v", err)
 		}
@@ -260,7 +260,7 @@ func TestExecuteScaffold_ReleaseOwnershipRejectsRestoredOwnedLink(t *testing.T) 
 		Source:   "modules/old/config",
 		LinkDest: oldSource,
 	}
-	action := fixture.planScaffold(t, target, historical, true, false)
+	action := fixture.planScaffold(t, target, historical, true)
 	if action.Verb != planner.FileAdopt || action.Reason != planner.FileReasonReleaseOwnershipToScaffold {
 		t.Fatalf("planned action = %q/%q, want release-ownership adopt", action.Verb, action.Reason)
 	}
@@ -283,7 +283,7 @@ func TestValidateFileAction_RejectsPlanOnlyActions(t *testing.T) {
 		if err := os.WriteFile(target, []byte("edited by user"), 0o640); err != nil {
 			t.Fatalf("os.WriteFile() error = %v", err)
 		}
-		action := fixture.planScaffold(t, target, fixture.currentState(t, target), true, false)
+		action := fixture.planScaffold(t, target, fixture.currentState(t, target), true)
 		if action.Verb != planner.FileSkip || action.Reason != planner.FileReasonScaffoldPresent {
 			t.Fatalf("planned action = %q/%q, want S1a skip", action.Verb, action.Reason)
 		}
@@ -300,7 +300,7 @@ func TestValidateFileAction_RejectsPlanOnlyActions(t *testing.T) {
 	t.Run("S2 deleted", func(t *testing.T) {
 		fixture := newScaffoldFixture(t)
 		target := filepath.Join(fixture.home, "deleted")
-		action := fixture.planScaffold(t, target, fixture.currentState(t, target), true, false)
+		action := fixture.planScaffold(t, target, fixture.currentState(t, target), true)
 		if action.Verb != planner.FileSkip || action.Reason != planner.FileReasonScaffoldDeleted {
 			t.Fatalf("planned action = %q/%q, want S2 skip", action.Verb, action.Reason)
 		}
@@ -351,7 +351,7 @@ func TestExecuteScaffold_AdoptRefreshesMetadataWithoutMutation(t *testing.T) {
 			stale := fixture.currentState(t, target)
 			stale.Module = "old"
 			stale.Source = "modules/old/config.template"
-			action := fixture.planScaffold(t, target, stale, true, false)
+			action := fixture.planScaffold(t, target, stale, true)
 			if action.Verb != planner.FileAdopt || action.Reason != planner.FileReasonStateMetadata {
 				t.Fatalf("planned action = %q/%q, want metadata adopt", action.Verb, action.Reason)
 			}
@@ -373,24 +373,6 @@ func TestExecuteScaffold_AdoptRefreshesMetadataWithoutMutation(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestExecuteScaffold_ForceRebuild(t *testing.T) {
-	fixture := newScaffoldFixture(t)
-	target := filepath.Join(fixture.home, "deleted")
-	action := fixture.planScaffold(t, target, fixture.currentState(t, target), true, true)
-	if action.Verb != planner.FileScaffold || action.Reason != planner.FileReasonScaffoldRebuild {
-		t.Fatalf("planned action = %q/%q, want force S2 rebuild", action.Verb, action.Reason)
-	}
-
-	result, err := ExecuteFile(fixture.control, action)
-	if err != nil {
-		t.Fatalf("ExecuteFile() error = %v", err)
-	}
-	if !result.TargetMutated || result.StateEffect != action.OnSuccess || result.BackupPath != "" {
-		t.Fatalf("ExecuteFile() result = %#v, want committed rebuild without backup", result)
-	}
-	assertRegularFile(t, target, fixture.content, fixture.mode)
 }
 
 func TestExecuteScaffold_MigrationOwnedLinkToIndependentFile(t *testing.T) {
@@ -512,7 +494,7 @@ func TestExecuteScaffold_MigrationReleaseOwnershipIsStateOnly(t *testing.T) {
 				Source:   "modules/old/config",
 				LinkDest: oldSource,
 			}
-			action := fixture.planScaffold(t, target, historical, true, false)
+			action := fixture.planScaffold(t, target, historical, true)
 			if action.Verb != planner.FileAdopt ||
 				action.Reason != planner.FileReasonReleaseOwnershipToScaffold {
 				t.Fatalf("planned action = %q/%q, want release-ownership adopt", action.Verb, action.Reason)
@@ -555,7 +537,7 @@ func TestExecuteScaffold_HardLinkIsolation(t *testing.T) {
 	if !os.SameFile(beforeTarget, beforeSibling) {
 		t.Fatal("fixture target and sibling are not hard links")
 	}
-	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false, false)
+	action := fixture.planScaffold(t, target, planner.HistoricalState{}, false)
 
 	result, err := ExecuteFile(fixture.control, action)
 	if err != nil {
@@ -666,7 +648,6 @@ func (fixture scaffoldFixture) planScaffold(
 	target string,
 	historical planner.HistoricalState,
 	hasState bool,
-	force bool,
 ) planner.FileAction {
 	t.Helper()
 	resolution, err := paths.ResolveTarget(target)
@@ -692,7 +673,7 @@ func (fixture scaffoldFixture) planScaffold(
 		Observed:   observed,
 		State:      historical,
 		HasState:   hasState,
-	}, planner.DecisionOptions{Force: force})
+	})
 	if err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
@@ -728,7 +709,7 @@ func (fixture scaffoldFixture) planOwnedLinkToScaffold(
 		Source:   "modules/old/config",
 		LinkDest: oldSource,
 	}
-	action := fixture.planScaffold(t, target, historical, true, false)
+	action := fixture.planScaffold(t, target, historical, true)
 	if action.Verb != planner.FileScaffold || action.Reason != planner.FileReasonOwnedLinkToScaffold {
 		t.Fatalf("planned action = %q/%q, want owned link-to-scaffold", action.Verb, action.Reason)
 	}

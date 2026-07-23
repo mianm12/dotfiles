@@ -11,7 +11,7 @@ import (
 func TestOpenManifest_AllowsSymlinkToRegularFile(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target.toml")
-	if err := os.WriteFile(target, []byte("requires = \">=0.3.0\""), 0o600); err != nil {
+	if err := os.WriteFile(target, []byte("[profiles]\nbase = []"), 0o600); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", target, err)
 	}
 	path := filepath.Join(root, filename)

@@ -11,7 +11,7 @@ import (
 )
 
 func TestLoadSnapshot_PreservesMachineAndObjectEvidence(t *testing.T) {
-	path := writeConfig(t, "profile = \"mac\"\nrepo = \"~/repo\"\n[data]\nold = \"value\"\n")
+	path := writeConfig(t, "profile = \"mac\"\nrepo = \"~/repo\"\n")
 	if err := os.Chmod(path, 0o640); err != nil {
 		t.Fatalf("os.Chmod() error = %v", err)
 	}
@@ -25,11 +25,6 @@ func TestLoadSnapshot_PreservesMachineAndObjectEvidence(t *testing.T) {
 	}
 	if repo, ok := snapshot.Repo(); !ok || repo != "~/repo" {
 		t.Fatalf("Repo() = (%q, %t), want (~/repo, true)", repo, ok)
-	}
-	data := snapshot.Data()
-	data["old"] = "changed"
-	if got := snapshot.Data()["old"]; got != "value" {
-		t.Fatalf("mutating Data() changed snapshot: got %q", got)
 	}
 	precondition := snapshot.Precondition()
 	if !precondition.Exists() || precondition.Kind() != fs.FileMode(0) || precondition.Mode() != 0o640 {
@@ -58,7 +53,7 @@ func TestPublish_CreatesPrivateConfigAndEquivalentCandidateDoesNotRewrite(t *tes
 	if err != nil {
 		t.Fatalf("LoadSnapshot() error = %v", err)
 	}
-	candidate, err := NewCandidate(snapshot, Machine{Profile: "mac", Data: map[string]string{"email": "me@example.com"}})
+	candidate, err := NewCandidate(snapshot, Machine{Profile: "mac"})
 	if err != nil {
 		t.Fatalf("NewCandidate() error = %v", err)
 	}
@@ -245,7 +240,7 @@ func TestLoad_MissingConfig(t *testing.T) {
 	if exists {
 		t.Error("Load() exists = true, want false")
 	}
-	if got.Profile != "" || got.Repo != nil || len(got.Data) != 0 {
+	if got.Profile != "" || got.Repo != nil {
 		t.Errorf("Load() = %#v, want empty Machine", got)
 	}
 }
@@ -267,10 +262,6 @@ func TestLoad_ValidConfig(t *testing.T) {
 	path := writeConfig(t, `
 profile = "mac"
 repo = "~/src/dotfiles"
-
-[data]
-email = "me@example.com"
-machine = "work-mbp"
 `)
 
 	got, exists, err := Load(path)
@@ -290,12 +281,6 @@ machine = "work-mbp"
 	} else if *got.Repo != wantRepo {
 		t.Errorf("Load().Repo = %q, want %q", *got.Repo, wantRepo)
 	}
-	if got.Data["email"] != "me@example.com" {
-		t.Errorf("Load().Data[%q] = %q, want %q", "email", got.Data["email"], "me@example.com")
-	}
-	if got.Data["machine"] != "work-mbp" {
-		t.Errorf("Load().Data[%q] = %q, want %q", "machine", got.Data["machine"], "work-mbp")
-	}
 }
 
 func TestLoad_RejectsInvalidConfig(t *testing.T) {
@@ -307,8 +292,7 @@ func TestLoad_RejectsInvalidConfig(t *testing.T) {
 		{name: "empty profile", content: `profile = ""`},
 		{name: "empty repo", content: "profile = \"mac\"\nrepo = \"\""},
 		{name: "unknown top-level key", content: "profile = \"mac\"\nunknown = true"},
-		{name: "wrong data value type", content: "profile = \"mac\"\n[data]\nvalue = 1"},
-		{name: "invalid data key", content: "profile = \"mac\"\n[data]\nUpper = \"value\""},
+		{name: "data is unsupported", content: "profile = \"mac\"\n[data]\nvalue = \"x\""},
 		{name: "invalid toml", content: `profile =`},
 	}
 

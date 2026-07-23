@@ -21,7 +21,7 @@ const (
 )
 
 // FileOutcome 以 canonical plan index 与 target 标识一个可执行 file 动作的结果。
-// 物理提交、state effect 与 backup 事实由 Result 封装，不暴露第二套可变摘要。
+// 物理提交与 state effect 事实由 Result 封装，不暴露第二套可变摘要。
 type FileOutcome struct {
 	Index  int
 	Target string
@@ -30,7 +30,6 @@ type FileOutcome struct {
 	attempted        bool
 	targetCommitted  bool
 	stateEffectReady bool
-	backupPath       string
 }
 
 // PruneOutcome 以 canonical plan index 与 target 标识一个 prune 动作的结果。
@@ -217,25 +216,20 @@ func (result Result) validFileOutcomes(hasRuntimeError bool) bool {
 }
 
 func validFileOutcome(action planner.FileAction, outcome FileOutcome, hasRuntimeError bool) bool {
-	if action.Verb != planner.FileBackupReplace && outcome.backupPath != "" {
-		return false
-	}
 	switch outcome.Status {
 	case ActionSucceeded:
 		return outcome.attempted && outcome.stateEffectReady &&
-			outcome.targetCommitted == (action.Verb.ExecutionClass() == planner.FileTargetMutation) &&
-			(action.Verb != planner.FileBackupReplace || outcome.backupPath != "")
+			outcome.targetCommitted == (action.Verb.ExecutionClass() == planner.FileTargetMutation)
 	case ActionConflict:
 		return outcome.attempted && !outcome.targetCommitted && !outcome.stateEffectReady
 	case ActionDeferred:
-		return !outcome.attempted && !outcome.targetCommitted && !outcome.stateEffectReady && outcome.backupPath == ""
+		return !outcome.attempted && !outcome.targetCommitted && !outcome.stateEffectReady
 	case ActionFailed:
 		if !hasRuntimeError || outcome.stateEffectReady && !outcome.attempted {
 			return false
 		}
 		if !outcome.attempted {
-			return action.Verb == planner.FileBackupReplace && !outcome.targetCommitted &&
-				outcome.backupPath == ""
+			return false
 		}
 		if action.Verb.ExecutionClass() == planner.FileStateOnly && outcome.targetCommitted {
 			return false
@@ -522,14 +516,3 @@ func (result Result) ConfirmAccepted() bool { return result.confirmAccepted }
 
 // StateCommitted 报告成功 effect 的候选 state 是否已原子发布。
 func (result Result) StateCommitted() bool { return result.stateCommitted }
-
-// BackupPaths 返回本次已完整保留、应报告给用户的 backup 路径。
-func (result Result) BackupPaths() []string {
-	paths := make([]string, 0)
-	for _, outcome := range result.fileOutcomes {
-		if outcome.backupPath != "" {
-			paths = append(paths, outcome.backupPath)
-		}
-	}
-	return paths
-}

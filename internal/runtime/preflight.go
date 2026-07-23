@@ -56,12 +56,11 @@ func (context ControlContext) ConfigPath() string { return context.paths.Config(
 // RepositoryPath 返回本次运行的仓库路径。
 func (context ControlContext) RepositoryPath() string { return context.paths.Repository() }
 
-// MachineContext 是严格机器配置形成的不可变 profile/repo/data 快照。
+// MachineContext 是严格机器配置形成的不可变 profile/repo 快照。
 type MachineContext struct {
 	profile string
 	repo    string
 	repoSet bool
-	data    map[string]string
 }
 
 // Profile 返回该机器上下文的 profile。
@@ -70,10 +69,7 @@ func (context MachineContext) Profile() string { return context.profile }
 // Repo 返回机器配置中持久化的 repo；字段缺失时 ok 为 false。
 func (context MachineContext) Repo() (value string, ok bool) { return context.repo, context.repoSet }
 
-// Data 返回机器 data 的独立副本。
-func (context MachineContext) Data() map[string]string { return cloneData(context.data) }
-
-// RunContext 是普通 profile/data 消费者的完整 preflight 结果。
+// RunContext 是普通 profile 消费者的完整 preflight 结果。
 type RunContext struct {
 	control ControlContext
 	machine MachineContext
@@ -84,9 +80,6 @@ func (context RunContext) Control() ControlContext { return context.control }
 
 // Profile 返回本次运行的 effective profile。
 func (context RunContext) Profile() string { return context.machine.Profile() }
-
-// Data 返回本次运行 machine data 的独立副本。
-func (context RunContext) Data() map[string]string { return context.machine.Data() }
 
 // InitContext 保存 init 配置选择所需的控制面、已有机器配置和显式 profile 覆盖。
 // 配置缺失时不会向调用方暴露伪造的普通 RunContext。
@@ -278,20 +271,12 @@ func runContextFromLoaded(loaded loadedContext, overrides Overrides) RunContext 
 }
 
 func machineContext(machine config.Machine) MachineContext {
-	context := MachineContext{profile: machine.Profile, data: cloneData(machine.Data)}
+	context := MachineContext{profile: machine.Profile}
 	if machine.Repo != nil {
 		context.repo = *machine.Repo
 		context.repoSet = true
 	}
 	return context
-}
-
-func cloneData(data map[string]string) map[string]string {
-	cloned := make(map[string]string, len(data))
-	for key, value := range data {
-		cloned[key] = value
-	}
-	return cloned
 }
 
 func validateProfileOverride(overrides Overrides) error {

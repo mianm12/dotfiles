@@ -38,7 +38,7 @@ func TestMutationSession_OrdersTrustedStages(t *testing.T) {
 		t.Fatalf("beginMutation() error = %v", err)
 	}
 	t.Cleanup(func() { closeMutationSession(t, session) })
-	result, err := session.Load("v1.0.0")
+	result, err := session.Load()
 	if err != nil {
 		t.Fatalf("MutationSession.Load() error = %v", err)
 	}
@@ -46,7 +46,7 @@ func TestMutationSession_OrdersTrustedStages(t *testing.T) {
 		t.Fatalf("State().Status() = %v, want StatusLoaded", result.Inputs().State().Status())
 	}
 	want := []string{
-		"preflight", "acquire", "requires", "satisfies", "manifest", "satisfies",
+		"preflight", "acquire", "manifest",
 		"state", "lexical-boundaries", "path-boundaries",
 	}
 	if !reflect.DeepEqual(*events, want) {
@@ -91,59 +91,19 @@ func TestBeginMutation_BusyStopsBeforeRepositoryAndState(t *testing.T) {
 }
 
 func TestMutationSession_RepositoryFailuresShortCircuit(t *testing.T) {
-	t.Run("requires", func(t *testing.T) {
-		fixture := newLoadingFixture(t, true)
-		writeManifest(t, fixture.repo, ">=9.0.0", "")
-		session, err := BeginMutation(fixture.overrides)
-		if err != nil {
-			t.Fatalf("BeginMutation() error = %v", err)
-		}
-		_, err = session.Load("v1.0.0")
-		if !errors.Is(err, ErrRequiresUnsatisfied) {
-			t.Fatalf("MutationSession.Load() error = %v, want ErrRequiresUnsatisfied", err)
-		}
-		closeMutationSession(t, session)
-		assertLockAvailable(t, fixture)
-	})
-
-	t.Run("strict manifest", func(t *testing.T) {
-		fixture := newLoadingFixture(t, true)
-		writeManifest(t, fixture.repo, ">=1.0.0", "unknown = true\n")
-		writeState(t, fixture, "{")
-		session, err := BeginMutation(fixture.overrides)
-		if err != nil {
-			t.Fatalf("BeginMutation() error = %v", err)
-		}
-		_, err = session.Load("v1.0.0")
-		if err == nil || errors.Is(err, state.ErrCorrupt) {
-			t.Fatalf("MutationSession.Load() error = %v, want strict manifest error before state", err)
-		}
-		closeMutationSession(t, session)
-		assertLockAvailable(t, fixture)
-	})
-
-	t.Run("strict requirement snapshot", func(t *testing.T) {
-		fixture := newLoadingFixture(t, true)
-		operations := defaultLoadingOperations()
-		readRequirement := operations.readRequirement
-		operations.readRequirement = func(repo string) (manifest.Requirement, error) {
-			requirement, err := readRequirement(repo)
-			if err == nil {
-				writeManifest(t, repo, ">=9.0.0", "")
-			}
-			return requirement, err
-		}
-		session, err := beginMutation(fixture.overrides, operations)
-		if err != nil {
-			t.Fatalf("beginMutation() error = %v", err)
-		}
-		_, err = session.Load("v1.0.0")
-		if !errors.Is(err, ErrRequiresUnsatisfied) {
-			t.Fatalf("MutationSession.Load() error = %v, want strict ErrRequiresUnsatisfied", err)
-		}
-		closeMutationSession(t, session)
-		assertLockAvailable(t, fixture)
-	})
+	fixture := newLoadingFixture(t, true)
+	writeManifest(t, fixture.repo, "unknown = true\n")
+	writeState(t, fixture, "{")
+	session, err := BeginMutation(fixture.overrides)
+	if err != nil {
+		t.Fatalf("BeginMutation() error = %v", err)
+	}
+	_, err = session.Load()
+	if err == nil || errors.Is(err, state.ErrCorrupt) {
+		t.Fatalf("MutationSession.Load() error = %v, want strict manifest error before state", err)
+	}
+	closeMutationSession(t, session)
+	assertLockAvailable(t, fixture)
 }
 
 func TestMutationSession_LoadFailureKeepsCallerOwnedLock(t *testing.T) {
@@ -154,7 +114,7 @@ func TestMutationSession_LoadFailureKeepsCallerOwnedLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginMutation() error = %v", err)
 	}
-	_, err = session.Load("v1.0.0")
+	_, err = session.Load()
 	if !errors.Is(err, state.ErrCorrupt) {
 		t.Fatalf("MutationSession.Load() error = %v, want ErrCorrupt", err)
 	}
@@ -168,8 +128,8 @@ func TestMutationSession_LoadAndCloseFailuresKeepRetryableSession(t *testing.T) 
 	releaseErr := errors.New("release failed")
 	releaser := &stubSessionReleaser{err: releaseErr}
 	operations := defaultLoadingOperations()
-	operations.readRequirement = func(string) (manifest.Requirement, error) {
-		return manifest.Requirement{}, loadErr
+	operations.loadManifest = func(string) (manifest.Repository, error) {
+		return manifest.Repository{}, loadErr
 	}
 	session := newMutationSession(
 		newSessionLease(&lock.Ownership{}, releaser),
@@ -177,7 +137,7 @@ func TestMutationSession_LoadAndCloseFailuresKeepRetryableSession(t *testing.T) 
 		operations,
 	)
 
-	if _, err := session.Load("v1.0.0"); !errors.Is(err, loadErr) {
+	if _, err := session.Load(); !errors.Is(err, loadErr) {
 		t.Fatalf("MutationSession.Load() error = %v, want load failure", err)
 	}
 	if err := session.Close(); !errors.Is(err, releaseErr) {
@@ -222,7 +182,7 @@ func TestLoadReadOnly_StateStatusesAreClassifiedWithoutLock(t *testing.T) {
 				writeState(t, fixture, test.state)
 			}
 			before := snapshotFixtureTree(t, fixture.root)
-			result, err := LoadReadOnly(fixture.overrides, "v1.0.0")
+			result, err := LoadReadOnly(fixture.overrides)
 			if test.wantErr != nil {
 				if !errors.Is(err, test.wantErr) {
 					t.Fatalf("LoadReadOnly() error = %v, want %v", err, test.wantErr)
@@ -242,23 +202,6 @@ func TestLoadReadOnly_StateStatusesAreClassifiedWithoutLock(t *testing.T) {
 			assertMissing(t, fixture.paths.StateLock())
 		})
 	}
-}
-
-func TestLoadReadOnly_DevelopmentBuildReturnsCompatibility(t *testing.T) {
-	fixture := newLoadingFixture(t, true)
-	writeManifest(t, fixture.repo, ">=999.0.0", "")
-
-	result, err := LoadReadOnly(fixture.overrides, "dev")
-	if err != nil {
-		t.Fatalf("LoadReadOnly() error = %v", err)
-	}
-	if !result.Compatibility().DevelopmentBuild() {
-		t.Fatal("DevelopmentBuild = false, want true")
-	}
-	if got := result.Compatibility().Requirement().String(); got != ">=999.0.0" {
-		t.Fatalf("Requirement = %q", got)
-	}
-	assertMissing(t, fixture.paths.StateRoot())
 }
 
 func TestLoadReadOnly_StatePathClassification(t *testing.T) {
@@ -437,7 +380,7 @@ func TestLoadReadOnly_StatePathClassification(t *testing.T) {
 func loadReadOnlyWithoutMutation(t *testing.T, fixture loadingFixture) (LoadedInputs, error) {
 	t.Helper()
 	before := snapshotFixtureTree(t, fixture.root)
-	result, err := LoadReadOnly(fixture.overrides, "v1.0.0")
+	result, err := LoadReadOnly(fixture.overrides)
 	after := snapshotFixtureTree(t, fixture.root)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("LoadReadOnly() changed fixture tree\nbefore: %#v\nafter:  %#v", before, after)
@@ -462,16 +405,6 @@ func wrapLoadingEvents(operations *loadingOperations) *[]string {
 	operations.reuse = func(owner *lock.Ownership, root, path string) (*lock.Guard, error) {
 		events = append(events, "reuse")
 		return reuse(owner, root, path)
-	}
-	readRequirement := operations.readRequirement
-	operations.readRequirement = func(repo string) (manifest.Requirement, error) {
-		events = append(events, "requires")
-		return readRequirement(repo)
-	}
-	satisfies := operations.satisfies
-	operations.satisfies = func(version string, requirement manifest.Requirement) (bool, bool, error) {
-		events = append(events, "satisfies")
-		return satisfies(version, requirement)
 	}
 	loadManifest := operations.loadManifest
 	operations.loadManifest = func(repo string) (manifest.Repository, error) {
@@ -509,9 +442,9 @@ func newLoadingFixture(t *testing.T, configExists bool) loadingFixture {
 	if err := os.MkdirAll(repo, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(repo) error = %v", err)
 	}
-	writeManifest(t, repo, ">=1.0.0", "")
+	writeManifest(t, repo, "")
 	if configExists {
-		writeFile(t, config, []byte("profile = \"mac\"\n\n[data]\nemail = \"test@example.com\"\n"), 0o600)
+		writeFile(t, config, []byte("profile = \"mac\"\n"), 0o600)
 	}
 	t.Setenv(paths.ConfigEnvironment, config)
 	controlPaths, err := paths.ResolveControlPlanePaths(home, repo, config)
@@ -573,9 +506,9 @@ func snapshotFixtureTree(t *testing.T, root string) map[string]fixtureTreeEntry 
 	return snapshot
 }
 
-func writeManifest(t *testing.T, repo, requirement, extra string) {
+func writeManifest(t *testing.T, repo, extra string) {
 	t.Helper()
-	content := fmt.Sprintf("requires = %q\n%s\n[profiles]\nmac = []\n", requirement, extra)
+	content := fmt.Sprintf("%s\n[profiles]\nmac = []\n", extra)
 	writeFile(t, filepath.Join(repo, "dot.toml"), []byte(content), 0o600)
 }
 

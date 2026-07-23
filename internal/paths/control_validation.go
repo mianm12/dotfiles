@@ -132,8 +132,6 @@ func (role controlMemberRole) String() string {
 		return "state file"
 	case controlMemberStateLock:
 		return "state lock"
-	case controlMemberBackupRoot:
-		return "backup root"
 	case controlMemberInstalledBinary:
 		return "installed binary"
 	default:

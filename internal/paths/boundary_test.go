@@ -79,7 +79,6 @@ func TestValidatePathBoundaries_DesiredControlOverlapMatrix(t *testing.T) {
 		controlMemberStateRoot,
 		controlMemberStateFile,
 		controlMemberStateLock,
-		controlMemberBackupRoot,
 		controlMemberInstalledBinary,
 	}
 
@@ -87,18 +86,12 @@ func TestValidatePathBoundaries_DesiredControlOverlapMatrix(t *testing.T) {
 		t.Run(role.String(), func(t *testing.T) {
 			controlPaths := writeValidControlPlaneFixture(t)
 			targetPath := controlPaths.members[role].path
-			if role > controlMemberStateRoot && role <= controlMemberBackupRoot {
+			if role > controlMemberStateRoot && role <= controlMemberStateLock {
 				external := filepath.Join(
 					filepath.Dir(controlPaths.Repository()),
 					"external-"+filepath.Base(targetPath),
 				)
-				if role == controlMemberBackupRoot {
-					if err := os.Mkdir(external, 0o700); err != nil {
-						t.Fatalf("os.Mkdir(%q) error = %v", external, err)
-					}
-				} else {
-					writeFixtureFile(t, external)
-				}
+				writeFixtureFile(t, external)
 				if err := os.Remove(targetPath); err != nil {
 					t.Fatalf("os.Remove(%q) error = %v", targetPath, err)
 				}

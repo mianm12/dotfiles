@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 
-	"github.com/mianm12/dotfiles/internal/datakey"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -49,16 +48,11 @@ func validateMachine(machine Machine) error {
 	if machine.Repo != nil && *machine.Repo == "" {
 		return fmt.Errorf("repo must be a non-empty string")
 	}
-	for key := range machine.Data {
-		if !datakey.Valid(key) {
-			return fmt.Errorf("invalid data key %q", key)
-		}
-	}
 	return nil
 }
 
 func cloneMachine(machine Machine) Machine {
-	cloned := Machine{Profile: machine.Profile, Data: cloneData(machine.Data)}
+	cloned := Machine{Profile: machine.Profile}
 	if machine.Repo != nil {
 		repo := *machine.Repo
 		cloned.Repo = &repo

@@ -11,7 +11,6 @@ import (
 
 func TestEnumerateModuleSources_AppliesIgnoreInStableOrder(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["app"]
 `)
@@ -64,7 +63,6 @@ run_once = ["scripts/setup.sh"]
 
 func TestEnumerateModuleSources_RejectsSymlinksEvenWhenIgnored(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["app"]
 `)
@@ -87,7 +85,6 @@ base = ["app"]
 
 func TestEnumerateModuleSources_RejectsSpecialFiles(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["app"]
 `)
@@ -142,7 +139,7 @@ func TestEnumerateModuleSources_ValidatesReferences(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
+			repo := writeRepositoryManifest(t, "[profiles]\nbase = [\"app\"]")
 			writeModule(t, repo, "app", tt.manifest)
 			moduleRoot := filepath.Join(repo, "modules", "app")
 			if tt.setup != nil {
@@ -159,7 +156,7 @@ func TestEnumerateModuleSources_ValidatesReferences(t *testing.T) {
 }
 
 func TestEnumerateModuleSources_RejectsHardLinkedHookScripts(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = [\"app\"]")
 	writeModule(t, repo, "app", "[hooks]\nrun_once = [\"hooks/first\", \"scripts/alias\"]")
 	moduleRoot := filepath.Join(repo, "modules", "app")
 	writeSourceFile(t, moduleRoot, "hooks/first", "script")
@@ -179,7 +176,7 @@ func TestEnumerateModuleSources_RejectsHardLinkedHookScripts(t *testing.T) {
 }
 
 func TestEnumerateModuleSources_DoesNotWrite(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = [\"app\"]")
 	writeModule(t, repo, "app", "")
 	writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config", "value")
 	module := resolveOnlyModule(t, repo)

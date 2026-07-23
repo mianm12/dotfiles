@@ -25,18 +25,14 @@ func TestInitSession_ConfigMissingLoadsManifestAfterLockAndSkipsState(t *testing
 		t.Fatalf("beginInit() error = %v", err)
 	}
 	t.Cleanup(func() { closeInitSession(t, session) })
-	result, err := session.Load("v1.0.0")
+	result, err := session.Load()
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
-	inputs := result.Inputs()
-	if !inputs.Context().ConfigMissing() {
+	if !result.Inputs().Context().ConfigMissing() {
 		t.Fatal("ConfigMissing() = false, want true")
 	}
-	if got := inputs.Compatibility().Requirement().String(); got != ">=1.0.0" {
-		t.Fatalf("Requirement = %q", got)
-	}
-	want := []string{"init-preflight", "acquire", "init-preflight", "requires", "satisfies", "manifest", "satisfies"}
+	want := []string{"init-preflight", "acquire", "init-preflight", "manifest"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}
@@ -58,14 +54,14 @@ func TestBeginInit_ExistingInvalidConfigFailsBeforeLock(t *testing.T) {
 
 func TestInitSession_ManifestFailureKeepsLockAndSkipsState(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	writeManifest(t, fixture.repo, ">=1.0.0", "unknown = true\n")
+	writeManifest(t, fixture.repo, "unknown = true\n")
 	writeState(t, fixture, "{")
 
 	session, err := BeginInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("BeginInit() error = %v", err)
 	}
-	_, err = session.Load("v1.0.0")
+	_, err = session.Load()
 	if err == nil || errors.Is(err, state.ErrCorrupt) {
 		t.Fatalf("InitSession.Load() error = %v, want manifest error before state", err)
 	}
@@ -76,7 +72,7 @@ func TestInitSession_ManifestFailureKeepsLockAndSkipsState(t *testing.T) {
 
 func TestRecoverySession_SkipsManifestAndStateButHoldsLock(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
-	writeManifest(t, fixture.repo, "invalid", "unknown = true\n")
+	writeManifest(t, fixture.repo, "unknown = true\n")
 	writeState(t, fixture, "{")
 
 	operations := defaultLoadingOperations()
@@ -158,7 +154,7 @@ func TestBeginRecovery_ExistingInvalidConfigFailsBeforeLock(t *testing.T) {
 
 func TestLoadControlRecovery_AllowsMissingConfigAndDoesNotLockOrReadState(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	writeManifest(t, fixture.repo, "invalid", "unknown = true\n")
+	writeManifest(t, fixture.repo, "unknown = true\n")
 	writeState(t, fixture, "{")
 	before, err := os.ReadFile(fixture.paths.StateFile())
 	if err != nil {
@@ -200,17 +196,17 @@ func TestLoadControlRecovery_ExistingInvalidConfigFailsWithoutLock(t *testing.T)
 
 func TestPrepareInit_LoadsStrictConfigAndManifestWithoutLockOrState(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
-	writeFile(t, fixture.config, []byte("profile = \"mac\"\nrepo = \""+fixture.repo+"\"\n[data]\nold = \"kept\"\n"), 0o640)
-	writeManifest(t, fixture.repo, ">=1.0.0", "[data.email]\ndefault = \"\"\n")
+	writeFile(t, fixture.config, []byte("profile = \"mac\"\nrepo = \""+fixture.repo+"\"\n"), 0o640)
+	writeManifest(t, fixture.repo, "")
 	writeState(t, fixture, "{")
 	before := snapshotFixtureTree(t, fixture.root)
 
-	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	prepared, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
 	machine, ok := prepared.Context().ExistingMachine()
-	if !ok || machine.Profile() != "mac" || machine.Data()["old"] != "kept" {
+	if !ok || machine.Profile() != "mac" {
 		t.Fatalf("ExistingMachine() = (%#v, %t), want complete old machine", machine, ok)
 	}
 	if repo, ok := machine.Repo(); !ok || repo != fixture.repo {
@@ -218,10 +214,6 @@ func TestPrepareInit_LoadsStrictConfigAndManifestWithoutLockOrState(t *testing.T
 	}
 	if prepared.Context().RepositorySource() != paths.RepositorySourceFlag {
 		t.Fatalf("RepositorySource() = %q, want flag", prepared.Context().RepositorySource())
-	}
-	declarations := prepared.Manifest().DataDeclarations()
-	if len(declarations) != 1 || declarations[0].Key() != "email" {
-		t.Fatalf("manifest declarations = %#v, want only email", declarations)
 	}
 	if after := snapshotFixtureTree(t, fixture.root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("PrepareInit() changed fixture tree\nbefore: %#v\nafter: %#v", before, after)
@@ -232,32 +224,27 @@ func TestPrepareInit_LoadsStrictConfigAndManifestWithoutLockOrState(t *testing.T
 func TestPrepareInit_InvalidConfigDoesNotFallback(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
-	if _, err := PrepareInit(fixture.overrides, "v1.0.0"); err == nil {
+	if _, err := PrepareInit(fixture.overrides); err == nil {
 		t.Fatal("PrepareInit() error = nil, want strict config error")
 	}
 	assertMissing(t, fixture.paths.StateRoot())
 }
 
-func TestInitInputs_BuildCandidateMergesSelectionsAndPreservesOldFields(t *testing.T) {
+func TestInitInputs_BuildCandidatePreservesProfileAndUsesRepositoryOverride(t *testing.T) {
 	fixture := newLoadingFixture(t, true)
-	writeFile(t, fixture.config, []byte("profile = \"mac\"\nrepo = \"~/old-repo\"\n[data]\nemail = \"old@example.com\"\nlegacy = \"kept\"\n"), 0o600)
-	writeManifest(t, fixture.repo, ">=1.0.0", "[data.email]\n[data.empty]\ndefault = \"fallback\"\n")
-	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	writeFile(t, fixture.config, []byte("profile = \"mac\"\nrepo = \"~/old-repo\"\n"), 0o600)
+	writeManifest(t, fixture.repo, "")
+	prepared, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
-	candidate, err := prepared.BuildCandidate(InitSelection{Data: map[string]Override{
-		"empty": {Value: "", Set: true},
-	}})
+	candidate, err := prepared.BuildCandidate(InitSelection{})
 	if err != nil {
 		t.Fatalf("BuildCandidate() error = %v", err)
 	}
 	machine := candidate.Machine()
 	if machine.Profile != "mac" || machine.Repo == nil || *machine.Repo != fixture.repo {
 		t.Fatalf("candidate machine = %#v, want mac with explicit override repo %q", machine, fixture.repo)
-	}
-	if machine.Data["email"] != "old@example.com" || machine.Data["empty"] != "" || machine.Data["legacy"] != "kept" {
-		t.Fatalf("candidate data = %#v, want old/default selections plus legacy", machine.Data)
 	}
 	if strings.Contains(string(candidate.Bytes()), "old-repo") {
 		t.Fatalf("candidate bytes retained old repo despite explicit runtime override: %s", candidate.Bytes())
@@ -266,10 +253,10 @@ func TestInitInputs_BuildCandidateMergesSelectionsAndPreservesOldFields(t *testi
 
 func TestInitInputs_BuildCandidateProfileOverrideBeatsInteractionSelection(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	writeFile(t, filepath.Join(fixture.repo, "dot.toml"), []byte("requires = \">=1.0.0\"\n[profiles]\nlinux = []\nmac = []\n"), 0o600)
+	writeFile(t, filepath.Join(fixture.repo, "dot.toml"), []byte("[profiles]\nlinux = []\nmac = []\n"), 0o600)
 	overrides := fixture.overrides
 	overrides.Profile = Override{Value: "mac", Set: true}
-	prepared, err := PrepareInit(overrides, "v1.0.0")
+	prepared, err := PrepareInit(overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
@@ -282,7 +269,7 @@ func TestInitInputs_BuildCandidateProfileOverrideBeatsInteractionSelection(t *te
 	}
 }
 
-func TestInitInputs_BuildCandidateDefaultsAndRejectsIncompleteOrUnknown(t *testing.T) {
+func TestInitInputs_BuildCandidateRequiresProfile(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repo := filepath.Join(home, ".local", "share", "dot", "repo")
@@ -290,9 +277,9 @@ func TestInitInputs_BuildCandidateDefaultsAndRejectsIncompleteOrUnknown(t *testi
 	if err := os.MkdirAll(repo, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(repo) error = %v", err)
 	}
-	writeManifest(t, repo, ">=1.0.0", "[data.optional]\ndefault = \"value\"\n[data.required]\n")
+	writeManifest(t, repo, "")
 	resolver := NewResolver(lookup(map[string]string{paths.ConfigEnvironment: configPath}), fixedHome(home))
-	prepared, err := resolver.PrepareInit(Overrides{Home: Override{Value: home, Set: true}}, "v1.0.0")
+	prepared, err := resolver.PrepareInit(Overrides{Home: Override{Value: home, Set: true}})
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
@@ -300,21 +287,14 @@ func TestInitInputs_BuildCandidateDefaultsAndRejectsIncompleteOrUnknown(t *testi
 	if _, err := prepared.BuildCandidate(InitSelection{}); err == nil || !strings.Contains(err.Error(), "profile") {
 		t.Fatalf("BuildCandidate(missing profile) error = %v", err)
 	}
-	selection := InitSelection{
-		Profile: Override{Value: "mac", Set: true},
-		Data:    map[string]Override{"required": {Value: "set", Set: true}},
-	}
+	selection := InitSelection{Profile: Override{Value: "mac", Set: true}}
 	candidate, err := prepared.BuildCandidate(selection)
 	if err != nil {
 		t.Fatalf("BuildCandidate(defaults) error = %v", err)
 	}
 	machine := candidate.Machine()
-	if machine.Repo != nil || machine.Data["optional"] != "value" || machine.Data["required"] != "set" {
-		t.Fatalf("candidate machine = %#v, want omitted default repo and complete data", machine)
-	}
-	selection.Data["unknown"] = Override{Value: "x", Set: true}
-	if _, err := prepared.BuildCandidate(selection); err == nil || !strings.Contains(err.Error(), "unknown") {
-		t.Fatalf("BuildCandidate(unknown data) error = %v", err)
+	if machine.Repo != nil || machine.Profile != "mac" {
+		t.Fatalf("candidate machine = %#v, want mac with omitted default repo", machine)
 	}
 }
 
@@ -326,10 +306,10 @@ func TestInitInputs_BuildCandidatePreservesConfiguredRepoWhenOverrideOmitted(t *
 	if err := os.MkdirAll(repo, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(repo) error = %v", err)
 	}
-	writeManifest(t, repo, ">=1.0.0", "")
+	writeManifest(t, repo, "")
 	writeFile(t, configPath, []byte("profile = \"mac\"\nrepo = \""+repo+"\"\n"), 0o600)
 	resolver := NewResolver(lookup(map[string]string{paths.ConfigEnvironment: configPath}), fixedHome(home))
-	prepared, err := resolver.PrepareInit(Overrides{Home: Override{Value: home, Set: true}}, "v1.0.0")
+	prepared, err := resolver.PrepareInit(Overrides{Home: Override{Value: home, Set: true}})
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
@@ -358,7 +338,7 @@ func TestRecoverySession_NestedMutationFailureKeepsExplicitOwnership(t *testing.
 	if err != nil {
 		t.Fatalf("RecoverySession.BeginMutation() error = %v", err)
 	}
-	_, err = nested.Load("v1.0.0")
+	_, err = nested.Load()
 	if !errors.Is(err, state.ErrCorrupt) {
 		t.Fatalf("MutationSession.Load() error = %v, want ErrCorrupt", err)
 	}
@@ -382,7 +362,7 @@ func TestRecoverySession_ClosingOuterKeepsNestedOwnership(t *testing.T) {
 
 	closeRecoverySession(t, outer)
 	assertLockBusy(t, fixture)
-	if _, err := nested.Load("v1.0.0"); err != nil {
+	if _, err := nested.Load(); err != nil {
 		t.Fatalf("MutationSession.Load() after outer Close error = %v", err)
 	}
 	closeMutationSession(t, nested)
@@ -422,7 +402,7 @@ func TestClosedRoleSessionsRejectFurtherUse(t *testing.T) {
 			t.Fatalf("BeginInit() error = %v", err)
 		}
 		closeInitSession(t, session)
-		if _, err := session.Load("v1.0.0"); !errors.Is(err, ErrSessionClosed) {
+		if _, err := session.Load(); !errors.Is(err, ErrSessionClosed) {
 			t.Fatalf("InitSession.Load() error = %v, want ErrSessionClosed", err)
 		}
 		if _, err := session.BeginMutation(fixture.overrides); !errors.Is(err, ErrSessionClosed) {
@@ -477,16 +457,6 @@ func wrapRepositoryEvents(operations *loadingOperations, events *[]string) {
 	operations.acquire = func(root, path string) (*lock.Ownership, error) {
 		*events = append(*events, "acquire")
 		return acquire(root, path)
-	}
-	readRequirement := operations.readRequirement
-	operations.readRequirement = func(repo string) (manifest.Requirement, error) {
-		*events = append(*events, "requires")
-		return readRequirement(repo)
-	}
-	satisfies := operations.satisfies
-	operations.satisfies = func(version string, requirement manifest.Requirement) (bool, bool, error) {
-		*events = append(*events, "satisfies")
-		return satisfies(version, requirement)
 	}
 	loadManifest := operations.loadManifest
 	operations.loadManifest = func(repo string) (manifest.Repository, error) {

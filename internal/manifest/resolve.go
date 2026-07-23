@@ -9,12 +9,11 @@ import (
 const defaultScaffoldMode = "0644"
 
 // ResolvedProfile 表示一个 profile 在指定 GOOS 上的有效 manifest 配置。字段保持私有，
-// 确保 Enumerate 使用的模块、GOOS 与 data 声明来自同一次 Resolve。
+// 确保 Enumerate 使用的模块与 GOOS 来自同一次 Resolve。
 type ResolvedProfile struct {
-	name     string
-	modules  []ResolvedModule
-	goos     string
-	dataKeys []string
+	name    string
+	modules []ResolvedModule
+	goos    string
 }
 
 // ModuleTargetMappingError 表示 active module 的 effective target table 缺当前 GOOS 映射。
@@ -95,10 +94,9 @@ func (r Repository) Resolve(profile, goos string) (ResolvedProfile, error) {
 		}
 	}
 	return ResolvedProfile{
-		name:     profile,
-		modules:  modules,
-		goos:     goos,
-		dataKeys: sortedKeys(r.manifest.data),
+		name:    profile,
+		modules: modules,
+		goos:    goos,
 	}, nil
 }
 

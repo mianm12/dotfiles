@@ -16,11 +16,12 @@ func TestGlobalPathValidation_ValidProfileIsReadOnlyAndUnrendered(t *testing.T) 
 	repository := filepath.Join(root, "repository")
 	controlPaths := writeGlobalControlFixture(t, home, repository)
 	sourceRoot := filepath.Join(repository, "modules", "app")
-	writeSourceFile(t, sourceRoot, "config.template", `{{ if }}`)
+	writeSourceFile(t, sourceRoot, "config", `{{ if }}`)
 	profile := testResolvedProfile(ResolvedModule{
 		Name:       "app",
 		SourceDir:  sourceRoot,
 		TargetRoot: "~/.config/app",
+		FileRules:  []ResolvedFileRule{{Source: "config", Kind: FileKindScaffold, Mode: "0644"}},
 	})
 	targetPath := filepath.Join(home, ".config", "app", "config")
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
@@ -36,8 +37,8 @@ func TestGlobalPathValidation_ValidProfileIsReadOnlyAndUnrendered(t *testing.T) 
 		t.Fatalf("ValidatePathBoundaries() error = %v", err)
 	}
 	entries := validated.Entries()
-	if len(entries) != 1 || entries[0].Source != "config.template" || entries[0].Content != nil {
-		t.Fatalf("Entries() = %#v, want one unrendered scaffold", entries)
+	if len(entries) != 1 || entries[0].Source != "config" || entries[0].Content != nil {
+		t.Fatalf("Entries() = %#v, want one unread scaffold", entries)
 	}
 	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("ValidatePathBoundaries() changed fixture: before=%v after=%v", before, after)
@@ -130,7 +131,6 @@ func writeGlobalControlFixture(t *testing.T, home, repository string) paths.Cont
 	for _, directory := range []string{
 		controlPaths.Repository(),
 		controlPaths.StateRoot(),
-		controlPaths.BackupRoot(),
 		filepath.Dir(controlPaths.InstalledBinary()),
 	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {

@@ -9,11 +9,6 @@ import (
 // ErrUnsupportedDecisionInput 表示输入含 M1 planner 不支持或不能安全解释的封闭类型。
 var ErrUnsupportedDecisionInput = errors.New("unsupported decision input")
 
-// DecisionOptions 保存会改变纯决策结果的显式用户授权；它不提供执行能力。
-type DecisionOptions struct {
-	Force bool
-}
-
 // Owned 是 M1 planner 与后续 prune 共享的唯一所有权谓词。symlink 只比较 raw link text；
 // scaffold 记录只表示一次性生命周期，永不拥有 target。
 func Owned(historical HistoricalState, observed Observation) bool {
@@ -29,31 +24,23 @@ func Owned(historical HistoricalState, observed Observation) bool {
 
 // Decide 按 desired kind 对一个已完成 identity join 的 target 纯函数决策。任一不支持输入都
 // fail closed，返回零值 FileAction；本函数不读取文件系统、不修改 target 或 state。
-func Decide(target ObservedTarget, options DecisionOptions) (FileAction, error) {
+func Decide(target ObservedTarget) (FileAction, error) {
 	if err := validateDecisionInput(target); err != nil {
 		return FileAction{}, err
-	}
-	if options.Force && target.Desired.Kind == DesiredLink &&
-		target.Observed.Kind == ObjectRegular && target.Observed.Hash == "" {
-		return FileAction{}, fmt.Errorf(
-			"%w: force regular target %q lacks digest evidence",
-			ErrUnsupportedDecisionInput,
-			target.Desired.Target,
-		)
 	}
 
 	switch target.Desired.Kind {
 	case DesiredLink:
 		if target.HasState && target.State.Kind == StateScaffold {
 			// 迁出 scaffold 不继承任何所有权，但旧记录必须保留到新动作成功。
-			return decideLink(target, options, false), nil
+			return decideLink(target, false), nil
 		}
-		return decideLink(target, options, target.HasState), nil
+		return decideLink(target, target.HasState), nil
 	case DesiredScaffold:
 		if target.HasState && target.State.Kind == StateSymlink {
 			return decideSymlinkToScaffold(target), nil
 		}
-		return decideScaffold(target, options), nil
+		return decideScaffold(target), nil
 	default:
 		return FileAction{}, fmt.Errorf(
 			"%w: desired kind %q",
@@ -68,7 +55,7 @@ func decideSymlinkToScaffold(target ObservedTarget) FileAction {
 		// owned 旧链可以安全转换为携带已渲染 Content 的独立普通文件；该动作不需要备份。
 		return plannedAction(target, FileScaffold, FileReasonOwnedLinkToScaffold, StateUpsert)
 	}
-	// 旧证据不成立或 target 缺失时只释放所有权，不触碰 target；force 不改变迁入 scaffold 规则。
+	// 旧证据不成立或 target 缺失时只释放所有权，不触碰 target。
 	return plannedAction(target, FileAdopt, FileReasonReleaseOwnershipToScaffold, StateUpsert)
 }
 
@@ -96,7 +83,7 @@ func validateDecisionInput(target ObservedTarget) error {
 	}
 }
 
-func decideLink(target ObservedTarget, options DecisionOptions, useStateEvidence bool) FileAction {
+func decideLink(target ObservedTarget, useStateEvidence bool) FileAction {
 	observed := target.Observed
 	switch observed.Kind {
 	case ObjectMissing: // L1
@@ -112,13 +99,10 @@ func decideLink(target ObservedTarget, options DecisionOptions, useStateEvidence
 			if Owned(target.State, observed) { // L3
 				return plannedAction(target, FileCreateLink, FileReasonOwnedLinkStale, StateUpsert)
 			}
-			return linkConflict(target, options, FileReasonLinkDrift) // L4
+			return plannedAction(target, FileConflict, FileReasonLinkDrift, StatePreserve) // L4
 		}
-		return linkConflict(target, options, FileReasonUnownedLink) // L5
+		return plannedAction(target, FileConflict, FileReasonUnownedLink, StatePreserve) // L5
 	case ObjectRegular: // L6
-		if options.Force {
-			return plannedAction(target, FileBackupReplace, FileReasonRegularConflict, StateUpsert)
-		}
 		return plannedAction(target, FileConflict, FileReasonRegularConflict, StatePreserve)
 	case ObjectDirectory: // L6
 		return plannedAction(target, FileConflict, FileReasonDirectoryConflict, StatePreserve)
@@ -129,14 +113,7 @@ func decideLink(target ObservedTarget, options DecisionOptions, useStateEvidence
 	}
 }
 
-func linkConflict(target ObservedTarget, options DecisionOptions, reason FileReason) FileAction {
-	if options.Force {
-		return plannedAction(target, FileBackupReplace, reason, StateUpsert)
-	}
-	return plannedAction(target, FileConflict, reason, StatePreserve)
-}
-
-func decideScaffold(target ObservedTarget, options DecisionOptions) FileAction {
+func decideScaffold(target ObservedTarget) FileAction {
 	if target.Observed.Kind != ObjectMissing {
 		if !target.HasState { // S1b
 			return plannedAction(target, FileAdopt, FileReasonScaffoldPresent, StateUpsert)
@@ -149,9 +126,6 @@ func decideScaffold(target ObservedTarget, options DecisionOptions) FileAction {
 
 	if !target.HasState { // S3
 		return plannedAction(target, FileScaffold, FileReasonTargetMissing, StateUpsert)
-	}
-	if options.Force { // S2
-		return plannedAction(target, FileScaffold, FileReasonScaffoldRebuild, StateUpsert)
 	}
 	if !scaffoldMetadataCurrent(target.Desired, target.State) {
 		return plannedAction(target, FileAdopt, FileReasonStateMetadata, StateUpsert)
@@ -170,7 +144,7 @@ func plannedAction(
 		TargetResolution: target.Resolution,
 		Leaf:             fileLeafCondition(target, verb, reason),
 	}
-	if verb == FileCreateLink || verb == FileBackupReplace {
+	if verb == FileCreateLink {
 		precondition.SourcePath = target.Desired.SourcePath
 		precondition.RequireRegularSource = true
 	}
@@ -215,15 +189,6 @@ func fileLeafCondition(target ObservedTarget, verb FileVerb, reason FileReason) 
 			return LeafCondition{Kind: LeafExactSymlink, LinkDest: target.State.LinkDest}
 		}
 		return LeafCondition{Kind: LeafMissing}
-	case FileBackupReplace:
-		if target.Observed.Kind == ObjectRegular {
-			return LeafCondition{
-				Kind:        LeafExactRegular,
-				Hash:        target.Observed.Hash,
-				Permissions: target.Observed.Mode.Perm(),
-			}
-		}
-		return LeafCondition{Kind: LeafExactSymlink, LinkDest: target.Observed.LinkDest}
 	default:
 		return LeafCondition{}
 	}

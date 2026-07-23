@@ -14,7 +14,6 @@ import (
 
 func TestResolvedProfileEnumerate_AppliesPriorityAndReturnsStableDesired(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["zsh", "app"]
 `)
@@ -28,6 +27,8 @@ mode = "0600"
 target = "~/.config/app/readme"
 [files."literal.template"]
 kind = "link"
+[files.scaffold]
+kind = "scaffold"
 [files.seed]
 kind = "scaffold"
 mode = "0700"
@@ -37,7 +38,7 @@ mode = "0700"
 	writeSourceFile(t, appRoot, "README.md", "explicit beats ignore")
 	writeSourceFile(t, appRoot, "ignored.txt", "ignored")
 	writeSourceFile(t, appRoot, "literal.template", `{{ env "HOME" }}`)
-	writeSourceFile(t, appRoot, "scaffold.template", "scaffold")
+	writeSourceFile(t, appRoot, "scaffold", "scaffold")
 	writeSourceFile(t, appRoot, "seed", "scaffold without suffix")
 
 	writeModule(t, repo, "zsh", "")
@@ -79,14 +80,14 @@ mode = "0700"
 			Module:     "app",
 			Source:     "literal.template",
 			SourcePath: filepath.Join(appRoot, "literal.template"),
-			Target:     "~/.config/app/literal",
-			TargetPath: filepath.Join(home, ".config", "app", "literal"),
+			Target:     "~/.config/app/literal.template",
+			TargetPath: filepath.Join(home, ".config", "app", "literal.template"),
 			Kind:       FileKindLink,
 		},
 		{
 			Module:     "app",
-			Source:     "scaffold.template",
-			SourcePath: filepath.Join(appRoot, "scaffold.template"),
+			Source:     "scaffold",
+			SourcePath: filepath.Join(appRoot, "scaffold"),
 			Target:     "~/.config/app/scaffold",
 			TargetPath: filepath.Join(home, ".config", "app", "scaffold"),
 			Kind:       FileKindScaffold,
@@ -141,151 +142,6 @@ mode = "0700"
 	}
 	if !reflect.DeepEqual(third, second) {
 		t.Fatalf("mutating result changed profile: got %#v, want %#v", third, second)
-	}
-}
-
-func TestRepositoryValidateTemplates_DoesNotRequireRuntimeData(t *testing.T) {
-	tests := []struct {
-		name    string
-		source  string
-		wantErr string
-	}{
-		{name: "declared variable", source: `{{ .email }}`},
-		{name: "syntax", source: `{{ if }}`, wantErr: "parse template"},
-		{name: "function", source: `{{ len .email }}`, wantErr: `function "len" is not allowed`},
-		{name: "undeclared variable", source: `{{ .token }}`, wantErr: "not declared by manifest data"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
-[profiles]
-base = ["app"]
-[data.email]
-`)
-			writeModule(t, repo, "app", "")
-			writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.template", tt.source)
-			loaded, err := Load(repo)
-			if err != nil {
-				t.Fatalf("Load() error = %v, want nil", err)
-			}
-			err = loaded.ValidateTemplates()
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("ValidateTemplates() error = %v, want nil", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("ValidateTemplates() error = %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestRepositoryValidateTemplates_CoversModuleLocalTemplateCandidates(t *testing.T) {
-	tests := []struct {
-		name    string
-		profile string
-		setup   func(t *testing.T, repo string)
-		wantErr string
-	}{
-		{
-			name:    "unassigned module",
-			profile: `base = ["active"]`,
-			setup: func(t *testing.T, repo string) {
-				writeModule(t, repo, "active", "")
-				writeSourceFile(t, filepath.Join(repo, "modules", "active"), "config", "literal")
-				writeModule(t, repo, "unassigned", "")
-				writeSourceFile(t, filepath.Join(repo, "modules", "unassigned"), "config.template", `{{ .token }}`)
-			},
-			wantErr: `module "unassigned" scaffold source "config.template"`,
-		},
-		{
-			name:    "module inactive on darwin",
-			profile: `base = ["app"]`,
-			setup: func(t *testing.T, repo string) {
-				writeModule(t, repo, "app", `os = ["linux"]`)
-				writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.template", `{{ .token }}`)
-			},
-			wantErr: `user variable ".token" is not declared`,
-		},
-		{
-			name:    "suffixless explicit scaffold",
-			profile: `base = ["app"]`,
-			setup: func(t *testing.T, repo string) {
-				writeModule(t, repo, "app", "[files.config]\nkind = \"scaffold\"")
-				writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config", `{{ .token }}`)
-			},
-			wantErr: `user variable ".token" is not declared`,
-		},
-		{
-			name:    "template suffix explicitly linked",
-			profile: `base = ["app"]`,
-			setup: func(t *testing.T, repo string) {
-				writeModule(t, repo, "app", "[files.\"config.template\"]\nkind = \"link\"")
-				writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.template", `{{ .token }}`)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\n"+tt.profile+"\n[data.email]\n")
-			tt.setup(t, repo)
-			loaded, err := Load(repo)
-			if err != nil {
-				t.Fatalf("Load() error = %v, want nil", err)
-			}
-
-			err = loaded.ValidateTemplates()
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("ValidateTemplates() error = %v, want nil", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("ValidateTemplates() error = %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestRepositoryValidateTemplates_RejectsInvalidTargetDerivationOutsideProfiles(t *testing.T) {
-	tests := []struct {
-		name           string
-		source         string
-		moduleManifest string
-	}{
-		{name: "implicit scaffold", source: ".template"},
-		{
-			name:           "explicit link template suffix",
-			source:         ".template",
-			moduleManifest: "[files.\".template\"]\nkind = \"link\"\n",
-		},
-		{
-			name:           "explicit scaffold managed suffix",
-			source:         ".tmpl",
-			moduleManifest: "[files.\".tmpl\"]\nkind = \"scaffold\"\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []\n")
-			writeModule(t, repo, "unassigned", tt.moduleManifest)
-			writeSourceFile(t, filepath.Join(repo, "modules", "unassigned"), tt.source, "value")
-
-			loaded, err := Load(repo)
-			if err != nil {
-				t.Fatalf("Load() error = %v, want nil", err)
-			}
-			if err := loaded.ValidateTemplates(); err == nil || !strings.Contains(err.Error(), "empty target basename") {
-				t.Fatalf("ValidateTemplates() error = %v, want empty target basename", err)
-			}
-		})
 	}
 }
 
@@ -351,19 +207,18 @@ func TestResolvedProfileEnumerate_ValidatesStructuralInputs(t *testing.T) {
 	}
 }
 
-func TestResolvedProfileEnumerate_RendersScaffoldContentAndMode(t *testing.T) {
+func TestResolvedProfileEnumerate_ReadsLiteralScaffoldContentAndMode(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["app"]
-[data.email]
 `)
 	writeModule(t, repo, "app", `
-[files."config.template"]
+[files.config]
+kind = "scaffold"
 mode = "0600"
 `)
 	root := filepath.Join(repo, "modules", "app")
-	writeSourceFile(t, root, "config.template", "{{ .OS }}/{{ .Arch }}/{{ .Hostname }}/{{ .Profile }}/{{ .Home }}/{{ .email }}")
+	writeSourceFile(t, root, "config", "{{ .email }} stays literal")
 	loaded, err := Load(repo)
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
@@ -374,7 +229,6 @@ mode = "0600"
 	}
 	homeRoot := t.TempDir()
 	context := testRuntimeContext(filepath.Join(homeRoot, "parent", "..", "home"))
-	context.Data = map[string]string{"email": "me@example.com", "stale": "ignored"}
 
 	entries, err := profile.Enumerate(context)
 	if err != nil {
@@ -383,24 +237,13 @@ mode = "0600"
 	if len(entries) != 1 {
 		t.Fatalf("Enumerate() entries = %#v, want one", entries)
 	}
-	wantContent := "darwin/arm64/test-host/base/" + filepath.Join(homeRoot, "home") + "/me@example.com"
+	wantContent := "{{ .email }} stays literal"
 	if string(entries[0].Content) != wantContent || entries[0].Mode != 0o600 {
 		t.Fatalf(
 			"Enumerate() entry = %#v, want content %q and mode 0600",
 			entries[0],
 			wantContent,
 		)
-	}
-}
-
-func TestResolvedProfileEnumerate_RejectsEmptySuffixResult(t *testing.T) {
-	root := t.TempDir()
-	writeSourceFile(t, root, ".template", "value")
-	profile := testResolvedProfile(ResolvedModule{Name: "app", SourceDir: root, TargetRoot: "~"})
-
-	_, err := profile.Enumerate(testRuntimeContext(t.TempDir()))
-	if err == nil || !strings.Contains(err.Error(), "empty target basename") {
-		t.Fatalf("Enumerate() error = %v, want empty target basename error", err)
 	}
 }
 
@@ -452,7 +295,6 @@ func TestResolvedProfileEnumerate_RejectsInvalidRuntimeContext(t *testing.T) {
 		{name: "relative home", mutate: func(context *RuntimeContext) { context.Home = "relative" }, want: "effective HOME"},
 		{name: "wrong os", mutate: func(context *RuntimeContext) { context.OS = "linux" }, want: "does not match resolved profile OS"},
 		{name: "wrong profile", mutate: func(context *RuntimeContext) { context.Profile = "other" }, want: "does not match resolved profile"},
-		{name: "unsupported arch", mutate: func(context *RuntimeContext) { context.Arch = "386" }, want: "architecture"},
 	}
 
 	profile := testResolvedProfile()
@@ -467,10 +309,15 @@ func TestResolvedProfileEnumerate_RejectsInvalidRuntimeContext(t *testing.T) {
 	}
 }
 
-func TestResolvedProfileValidateTargetStructure_DoesNotRenderScaffolds(t *testing.T) {
+func TestResolvedProfileValidateTargetStructure_DoesNotReadScaffolds(t *testing.T) {
 	root := t.TempDir()
-	writeSourceFile(t, root, "config.template", `{{ if }}`)
-	profile := testResolvedProfile(ResolvedModule{Name: "app", SourceDir: root, TargetRoot: "~"})
+	writeSourceFile(t, root, "config", `{{ if }}`)
+	profile := testResolvedProfile(ResolvedModule{
+		Name:       "app",
+		SourceDir:  root,
+		TargetRoot: "~",
+		FileRules:  []ResolvedFileRule{{Source: "config", Kind: FileKindScaffold, Mode: "0644"}},
+	})
 	homeRoot := t.TempDir()
 	home := filepath.Join(homeRoot, "home")
 	target := filepath.Join(home, "config")
@@ -482,8 +329,8 @@ func TestResolvedProfileValidateTargetStructure_DoesNotRenderScaffolds(t *testin
 	if err != nil {
 		t.Fatalf("validateTargetStructure() error = %v", err)
 	}
-	if len(entries) != 1 || entries[0].Source != "config.template" || entries[0].Content != nil {
-		t.Fatalf("validateTargetStructure() entries = %#v, want unrendered scaffold", entries)
+	if len(entries) != 1 || entries[0].Source != "config" || entries[0].Content != nil {
+		t.Fatalf("validateTargetStructure() entries = %#v, want unread scaffold", entries)
 	}
 	if after := snapshotTree(t, root); !reflect.DeepEqual(after, beforeSource) {
 		t.Fatalf("validateTargetStructure() changed source tree: before=%v after=%v", beforeSource, after)
@@ -496,9 +343,9 @@ func TestResolvedProfileValidateTargetStructure_DoesNotRenderScaffolds(t *testin
 		t.Fatalf("target %q content = %q, error = %v", target, content, err)
 	}
 
-	_, err = profile.Enumerate(testRuntimeContext(home))
-	if err == nil || !strings.Contains(err.Error(), "parse template") {
-		t.Fatalf("Enumerate() error = %v, want proof scaffold would fail rendering path", err)
+	enumerated, err := profile.Enumerate(testRuntimeContext(home))
+	if err != nil || len(enumerated) != 1 || string(enumerated[0].Content) != "{{ if }}" {
+		t.Fatalf("Enumerate() = (%#v, %v), want literal scaffold content", enumerated, err)
 	}
 }
 
@@ -523,37 +370,6 @@ func TestResolvedProfileValidateTargetStructure_RejectsDerivedAndExplicitCollisi
 			},
 			wants: []string{`module "alpha"`, `source "config"`, `module "beta"`, `target "~/.config/config"`},
 			path:  filepath.FromSlash(".config/config"),
-		},
-		{
-			name: "template suffix",
-			modules: func(t *testing.T) []ResolvedModule {
-				root := t.TempDir()
-				writeSourceFile(t, root, "config", "link")
-				writeSourceFile(t, root, "config.template", "scaffold")
-				return []ResolvedModule{{Name: "app", SourceDir: root, TargetRoot: "~"}}
-			},
-			wants: []string{`source "config"`, `source "config.template"`, `target "~/config"`},
-			path:  "config",
-		},
-		{
-			name: "explicit tmpl scaffold suffix",
-			modules: func(t *testing.T) []ResolvedModule {
-				root := t.TempDir()
-				writeSourceFile(t, root, "settings", "link")
-				writeSourceFile(t, root, "settings.tmpl", "scaffold")
-				return []ResolvedModule{{
-					Name:       "app",
-					SourceDir:  root,
-					TargetRoot: "~",
-					FileRules: []ResolvedFileRule{{
-						Source: "settings.tmpl",
-						Kind:   FileKindScaffold,
-						Mode:   "0600",
-					}},
-				}}
-			},
-			wants: []string{`source "settings"`, `source "settings.tmpl"`, `target "~/settings"`},
-			path:  "settings",
 		},
 		{
 			name: "target override",
@@ -667,62 +483,6 @@ func TestResolvedProfileValidateTargetStructure_RejectsInvalidHomeAndBlockedTarg
 	}
 }
 
-func TestResolvedProfileEnumerate_TemplateErrorsReturnNoPrePlanResult(t *testing.T) {
-	tests := []struct {
-		name        string
-		invalid     string
-		contextData map[string]string
-		want        string
-	}{
-		{name: "parse", invalid: `{{ if }}`, contextData: map[string]string{"email": "value"}, want: "parse template"},
-		{name: "undeclared variable", invalid: `{{ .missing }}`, contextData: map[string]string{"email": "value"}, want: "not declared by manifest data"},
-		{name: "render", invalid: `{{ default "fallback" 1 }}`, contextData: map[string]string{"email": "value"}, want: "render template"},
-		{name: "missing declared data", invalid: `literal`, contextData: map[string]string{}, want: "rerun init"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
-[profiles]
-base = ["app"]
-[data.email]
-default = "manifest fallback must not render"
-`)
-			writeModule(t, repo, "app", "")
-			root := filepath.Join(repo, "modules", "app")
-			writeSourceFile(t, root, "a.template", "valid first")
-			writeSourceFile(t, root, "z.template", tt.invalid)
-			loaded, err := Load(repo)
-			if err != nil {
-				t.Fatalf("Load() error = %v, want nil", err)
-			}
-			profile, err := loaded.Resolve("base", "darwin")
-			if err != nil {
-				t.Fatalf("Resolve() error = %v, want nil", err)
-			}
-			home := filepath.Join(t.TempDir(), "target-home")
-			context := testRuntimeContext(home)
-			context.Data = tt.contextData
-			before := snapshotTree(t, repo)
-
-			entries, err := profile.Enumerate(context)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("Enumerate() error = %v, want containing %q", err, tt.want)
-			}
-			if entries != nil {
-				t.Fatalf("Enumerate() entries = %#v, want nil pre-plan result", entries)
-			}
-			if after := snapshotTree(t, repo); !reflect.DeepEqual(after, before) {
-				t.Fatalf("Enumerate() changed repository\nbefore: %v\nafter:  %v", before, after)
-			}
-			if _, statErr := os.Lstat(home); !os.IsNotExist(statErr) {
-				t.Fatalf("Enumerate() target home Lstat error = %v, want not exist", statErr)
-			}
-		})
-	}
-}
-
 func TestParseDesiredMode(t *testing.T) {
 	mode, err := parseDesiredMode("app", "config.template", FileKindScaffold, "0777")
 	if err != nil {
@@ -739,10 +499,8 @@ func testResolvedProfile(modules ...ResolvedModule) ResolvedProfile {
 
 func testRuntimeContext(home string) RuntimeContext {
 	return RuntimeContext{
-		OS:       "darwin",
-		Arch:     "arm64",
-		Hostname: "test-host",
-		Profile:  "base",
-		Home:     home,
+		OS:      "darwin",
+		Profile: "base",
+		Home:    home,
 	}
 }

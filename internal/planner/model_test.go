@@ -32,7 +32,6 @@ func TestFileVerbExecutionClass(t *testing.T) {
 		{verb: FileAdopt, want: FileStateOnly},
 		{verb: FileCreateLink, want: FileTargetMutation},
 		{verb: FileScaffold, want: FileTargetMutation},
-		{verb: FileBackupReplace, want: FileTargetMutation},
 		{verb: FileVerb("future"), want: ""},
 	}
 	for _, test := range tests {
@@ -77,19 +76,8 @@ func TestLeafConditionMatchesOnlyRequiredEvidence(t *testing.T) {
 			observed:  Observation{Kind: ObjectSymlink, LinkDest: "owned"},
 		},
 		{
-			name:      "exact regular",
-			condition: LeafCondition{Kind: LeafExactRegular, Hash: regular.Hash, Permissions: 0o640},
-			observed:  regular,
-			want:      true,
-		},
-		{
-			name:      "exact regular rejects mode",
-			condition: LeafCondition{Kind: LeafExactRegular, Hash: regular.Hash, Permissions: 0o600},
-			observed:  regular,
-		},
-		{
 			name:      "invalid condition",
-			condition: LeafCondition{Kind: LeafPresent, Hash: "unexpected"},
+			condition: LeafCondition{Kind: LeafPresent, LinkDest: "unexpected"},
 			observed:  regular,
 		},
 	}

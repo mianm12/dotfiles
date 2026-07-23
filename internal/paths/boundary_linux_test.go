@@ -45,7 +45,6 @@ func TestValidatePathBoundaries_LinuxMissingControlPlaneIsReadOnly(t *testing.T)
 		controlPaths.StateRoot(),
 		controlPaths.StateFile(),
 		controlPaths.StateLock(),
-		controlPaths.BackupRoot(),
 		controlPaths.InstalledBinary(),
 	} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {

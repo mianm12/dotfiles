@@ -8,18 +8,24 @@ import (
 	"testing"
 )
 
-func TestValidatedProfileRenderScope_RendersOnlyRequestedModule(t *testing.T) {
+func TestValidatedProfileRenderScope_LoadsOnlyRequestedModule(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repository := filepath.Join(root, "repository")
 	control := writeGlobalControlFixture(t, home, repository)
 	requestedRoot := filepath.Join(repository, "modules", "requested")
 	unrequestedRoot := filepath.Join(repository, "modules", "unrequested")
-	writeSourceFile(t, requestedRoot, "config.template", "hello {{ .Hostname }}\n")
-	writeSourceFile(t, unrequestedRoot, "broken.template", "{{ if }}")
+	writeSourceFile(t, requestedRoot, "config", "literal requested\n")
+	writeSourceFile(t, unrequestedRoot, "config", "literal unrequested\n")
 	profile := testResolvedProfile(
-		ResolvedModule{Name: "unrequested", SourceDir: unrequestedRoot, TargetRoot: "~/unrequested"},
-		ResolvedModule{Name: "requested", SourceDir: requestedRoot, TargetRoot: "~/requested"},
+		ResolvedModule{
+			Name: "unrequested", SourceDir: unrequestedRoot, TargetRoot: "~/unrequested",
+			FileRules: []ResolvedFileRule{{Source: "config", Kind: FileKindScaffold, Mode: "0644"}},
+		},
+		ResolvedModule{
+			Name: "requested", SourceDir: requestedRoot, TargetRoot: "~/requested",
+			FileRules: []ResolvedFileRule{{Source: "config", Kind: FileKindScaffold, Mode: "0644"}},
+		},
 	)
 
 	validated, err := profile.ValidatePathBoundaries(control)
@@ -32,8 +38,8 @@ func TestValidatedProfileRenderScope_RendersOnlyRequestedModule(t *testing.T) {
 		t.Fatalf("RenderScope(requested) error = %v", err)
 	}
 	entries := scoped.Entries()
-	if len(entries) != 1 || entries[0].Module != "requested" || string(entries[0].Content) != "hello test-host\n" {
-		t.Fatalf("RenderScope(requested) entries = %#v, want one rendered requested entry", entries)
+	if len(entries) != 1 || entries[0].Module != "requested" || string(entries[0].Content) != "literal requested\n" {
+		t.Fatalf("RenderScope(requested) entries = %#v, want one loaded requested entry", entries)
 	}
 	if !reflect.DeepEqual(scoped.Modules(), []string{"requested"}) || scoped.Full() {
 		t.Fatalf("RenderScope(requested) scope = modules %v full=%t", scoped.Modules(), scoped.Full())
@@ -43,14 +49,14 @@ func TestValidatedProfileRenderScope_RendersOnlyRequestedModule(t *testing.T) {
 	}
 
 	entries[0].Content[0] = 'X'
-	if again := scoped.Entries(); string(again[0].Content) != "hello test-host\n" {
+	if again := scoped.Entries(); string(again[0].Content) != "literal requested\n" {
 		t.Fatalf("mutating Entries() result changed scope: %#v", again)
 	}
 	if full := validated.Entries(); len(full) != 2 || full[0].Content != nil || full[1].Content != nil {
 		t.Fatalf("validated structural entries changed by scoped render: %#v", full)
 	}
-	if _, err := validated.RenderScope(nil, testRuntimeContext(home)); err == nil || !strings.Contains(err.Error(), "unrequested") {
-		t.Fatalf("RenderScope(full) error = %v, want unrequested template failure", err)
+	if full, err := validated.RenderScope(nil, testRuntimeContext(home)); err != nil || len(full.Entries()) != 2 {
+		t.Fatalf("RenderScope(full) = (%#v, %v), want both literal scaffolds", full, err)
 	}
 }
 
@@ -64,7 +70,7 @@ func TestValidatedProfileRenderScope_RejectsDifferentValidatedHomeWithoutWrites(
 		t.Fatalf("os.Mkdir(%q) error = %v", otherHome, err)
 	}
 	moduleRoot := filepath.Join(repository, "modules", "app")
-	writeSourceFile(t, moduleRoot, "config.template", "home={{ .Home }}\n")
+	writeSourceFile(t, moduleRoot, "config", "literal\n")
 	writeSourceFile(t, moduleRoot, "hooks/setup", "#!/bin/sh\n")
 	profile := testResolvedProfile(ResolvedModule{
 		Name:       "app",

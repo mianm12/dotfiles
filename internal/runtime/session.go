@@ -95,7 +95,7 @@ type mutationSessionCore struct {
 	stateCommitted bool
 }
 
-// LoadedMutation 是成功完成 requires、strict manifest、state 与路径校验后获得的提交 capability。
+// LoadedMutation 是成功完成 strict manifest、state 与路径校验后获得的提交 capability。
 // 它只由 MutationSession.Load 创建；值副本共享同一 capability，零值或加载失败没有提交权限。
 type LoadedMutation struct {
 	capability *loadedMutationCapability
@@ -114,7 +114,7 @@ func (mutation *LoadedMutation) Inputs() LoadedInputs {
 	return mutation.capability.inputs
 }
 
-// BeginMutation 在严格 preflight 后取得 mutation 锁，但不读取 requires、manifest 或 state。
+// BeginMutation 在严格 preflight 后取得 mutation 锁，但不读取 manifest 或 state。
 func BeginMutation(overrides Overrides) (*MutationSession, error) {
 	return systemResolver().BeginMutation(overrides)
 }
@@ -168,9 +168,9 @@ func newMutationSession(
 	}}
 }
 
-// Load 在 session 已持锁的前提下按 requires、strict manifest、state 顺序加载可信输入。
+// Load 在 session 已持锁的前提下按 strict manifest、state 顺序加载可信输入。
 // 失败不会自动关闭 session；调用方仍负责 Close 并处理其错误。
-func (session *MutationSession) Load(cliVersion string) (*LoadedMutation, error) {
+func (session *MutationSession) Load() (*LoadedMutation, error) {
 	if session == nil || session.core == nil {
 		return nil, ErrSessionClosed
 	}
@@ -183,7 +183,7 @@ func (session *MutationSession) Load(cliVersion string) (*LoadedMutation, error)
 	if core.loaded != nil {
 		return nil, fmt.Errorf("%w: mutation inputs already loaded", ErrSessionOrder)
 	}
-	inputs, err := loadFull(core.context, cliVersion, core.operations)
+	inputs, err := loadFull(core.context, core.operations)
 	if err != nil {
 		return nil, err
 	}
@@ -306,8 +306,8 @@ func newInitSession(
 	}}
 }
 
-// Load 在 init session 已持锁时加载 requires 与 strict manifest，但不读取 state。
-func (session *InitSession) Load(cliVersion string) (*LoadedInit, error) {
+// Load 在 init session 已持锁时加载 strict manifest，但不读取 state。
+func (session *InitSession) Load() (*LoadedInit, error) {
 	if session == nil || session.core == nil {
 		return nil, ErrSessionClosed
 	}
@@ -327,18 +327,16 @@ func (session *InitSession) Load(cliVersion string) (*LoadedInit, error) {
 	if refreshed.Control().Paths() != core.context.Control().Paths() {
 		return nil, fmt.Errorf("%w: init control context changed after lock acquisition", config.ErrPreconditionChanged)
 	}
-	compatibility, repository, err := loadRepository(
+	repository, err := loadRepository(
 		refreshed.Control().RepositoryPath(),
-		cliVersion,
 		core.operations,
 	)
 	if err != nil {
 		return nil, err
 	}
 	inputs := InitInputs{
-		context:       refreshed,
-		compatibility: compatibility,
-		repository:    repository,
+		context:    refreshed,
+		repository: repository,
 	}
 	capability := &loadedInitCapability{session: core, inputs: inputs}
 	core.context = refreshed
@@ -397,11 +395,6 @@ func validateInitCandidate(inputs InitInputs, candidate InitCandidate) error {
 	if !slices.Contains(inputs.Manifest().ProfileNames(), machine.Profile) {
 		return fmt.Errorf("unknown init profile %q after locked refresh", machine.Profile)
 	}
-	for _, declaration := range inputs.Manifest().DataDeclarations() {
-		if _, ok := machine.Data[declaration.Key()]; !ok {
-			return fmt.Errorf("init data %q is missing after locked refresh", declaration.Key())
-		}
-	}
 	switch context.RepositorySource() {
 	case paths.RepositorySourceFlag, paths.RepositorySourceEnvironment:
 		if machine.Repo == nil || *machine.Repo != control.RepositoryPath() {
@@ -459,7 +452,7 @@ type RecoverySession struct {
 	operations loadingOperations
 }
 
-// BeginRecovery 在 repository-only preflight 后取得锁，不读取 requires、manifest 或 state。
+// BeginRecovery 在 repository-only preflight 后取得锁，不读取 manifest 或 state。
 func BeginRecovery(overrides Overrides) (*RecoverySession, error) {
 	return systemResolver().BeginRecovery(overrides)
 }

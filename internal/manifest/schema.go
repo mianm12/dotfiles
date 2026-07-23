@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/mianm12/dotfiles/internal/datakey"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -33,11 +32,9 @@ type optional[T any] struct {
 // raw 类型只描述允许的 TOML 键和基础类型。target 与 run_once 使用 any 表达规范规定的
 // 联合形态，随后由 parseTarget 和 parseRunOnce 收口到封闭类型集合。
 type rawRootManifest struct {
-	Requires *string                 `toml:"requires"`
-	Defaults *rawDefaults            `toml:"defaults"`
-	Ignore   *rawIgnore              `toml:"ignore"`
-	Profiles *map[string][]string    `toml:"profiles"`
-	Data     map[string]rawDataEntry `toml:"data"`
+	Defaults *rawDefaults         `toml:"defaults"`
+	Ignore   *rawIgnore           `toml:"ignore"`
+	Profiles *map[string][]string `toml:"profiles"`
 }
 
 type rawDefaults struct {
@@ -47,12 +44,6 @@ type rawDefaults struct {
 
 type rawIgnore struct {
 	Patterns []string `toml:"patterns"`
-}
-
-type rawDataEntry struct {
-	Prompt  *string `toml:"prompt"`
-	Default *string `toml:"default"`
-	FromEnv *string `toml:"from_env"`
 }
 
 type rawModuleManifest struct {
@@ -74,21 +65,14 @@ type rawHooks struct {
 }
 
 type rootSpec struct {
-	requirement      Requirement
 	defaults         defaultsSpec
 	ignore           []string
 	declaredProfiles map[string][]string
-	data             map[string]dataSpec
 }
 
 type defaultsSpec struct {
 	os     optional[[]string]
 	target optional[targetSpec]
-}
-
-type dataSpec struct {
-	prompt       *string
-	defaultValue *string
 }
 
 type moduleSpec struct {
@@ -128,15 +112,6 @@ func decodeRootManifest(path string) (rootSpec, error) {
 	if err != nil {
 		return rootSpec{}, err
 	}
-	if raw.Requires == nil {
-		return rootSpec{}, markInvalidRequirement(
-			fmt.Errorf("manifest %q: required top-level requires is missing", path),
-		)
-	}
-	requirement, err := ParseRequirement(*raw.Requires)
-	if err != nil {
-		return rootSpec{}, markInvalidRequirement(fmt.Errorf("manifest %q: %w", path, err))
-	}
 	if raw.Profiles == nil || len(*raw.Profiles) == 0 {
 		return rootSpec{}, fmt.Errorf("manifest %q: profiles must declare at least one profile", path)
 	}
@@ -145,29 +120,15 @@ func decodeRootManifest(path string) (rootSpec, error) {
 	if err != nil {
 		return rootSpec{}, err
 	}
-	data := make(map[string]dataSpec, len(raw.Data))
-	for _, key := range sortedKeys(raw.Data) {
-		entry := raw.Data[key]
-		if !datakey.Valid(key) {
-			return rootSpec{}, fmt.Errorf("manifest %q: invalid data key %q", path, key)
-		}
-		if entry.FromEnv != nil {
-			return rootSpec{}, fmt.Errorf("manifest %q: data.%s.from_env requires M2", path, key)
-		}
-		data[key] = dataSpec{prompt: entry.Prompt, defaultValue: entry.Default}
-	}
-
 	ignore, err := parseIgnore(path, "ignore.patterns", raw.Ignore)
 	if err != nil {
 		return rootSpec{}, err
 	}
 
 	return rootSpec{
-		requirement:      requirement,
 		defaults:         defaults,
 		ignore:           ignore,
 		declaredProfiles: cloneProfiles(*raw.Profiles),
-		data:             data,
 	}, nil
 }
 
@@ -364,14 +325,7 @@ func parseFile(path, source string, raw rawFile) (fileSpec, error) {
 }
 
 func parseFileKind(path, source string, declared *string) (FileKind, error) {
-	// 后缀只提供缺省；显式 kind 可以把模板后缀覆盖为 M1 支持的 link 或 scaffold。
 	kindName := string(FileKindLink)
-	switch {
-	case strings.HasSuffix(source, ".tmpl"):
-		kindName = managedFileKindName
-	case strings.HasSuffix(source, ".template"):
-		kindName = string(FileKindScaffold)
-	}
 	if declared != nil {
 		kindName = *declared
 	}

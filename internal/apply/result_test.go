@@ -18,7 +18,7 @@ func TestResult_HookOutcomesAreSealedAndSecondRunIsIdempotent(t *testing.T) {
 	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "dot.toml"), `target = "~"
 [hooks]
 run_once = ["hooks/first.sh", "hooks/second.sh"]
-[files."config.template"]
+[files.config]
 kind = "scaffold"
 mode = "0600"
 `)
@@ -171,7 +171,6 @@ func TestResult_ValidRejectsInconsistentProtocolFacts(t *testing.T) {
 			result.fileOutcomes[len(result.fileOutcomes)-1].Status = ActionFailed
 		}},
 		{name: "state effect without commit", mutate: func(result *Result) { result.stateCommitted = false }},
-		{name: "backup on non-backup action", mutate: func(result *Result) { result.fileOutcomes[0].backupPath = "/tmp/forged" }},
 		{name: "accepted confirmation was not requested", mutate: func(result *Result) { result.confirmAccepted = true }},
 		{name: "planned stage carries outcomes", hasRuntimeError: true, mutate: func(result *Result) { result.stage = resultPlanned }},
 	}
@@ -286,32 +285,6 @@ func TestResult_ValidRejectsCrossPhaseContradictions(t *testing.T) {
 			test.mutate(&result)
 			if result.Valid(false) {
 				t.Fatalf("cross-phase contradiction unexpectedly valid: %#v", result)
-			}
-		})
-	}
-}
-
-func TestValidFileOutcome_BackupInitializationFailureHasNoPerActionCommit(t *testing.T) {
-	action := planner.FileAction{Verb: planner.FileBackupReplace}
-	base := FileOutcome{Status: ActionFailed}
-	if !validFileOutcome(action, base, true) {
-		t.Fatal("backup batch initialization failure is not representable")
-	}
-
-	tests := []struct {
-		name   string
-		mutate func(*FileOutcome)
-	}{
-		{name: "target committed", mutate: func(outcome *FileOutcome) { outcome.targetCommitted = true }},
-		{name: "state effect ready", mutate: func(outcome *FileOutcome) { outcome.stateEffectReady = true }},
-		{name: "backup retained", mutate: func(outcome *FileOutcome) { outcome.backupPath = "/tmp/forged" }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			outcome := base
-			test.mutate(&outcome)
-			if validFileOutcome(action, outcome, true) {
-				t.Fatalf("unattempted backup action accepted contradictory facts: %#v", outcome)
 			}
 		})
 	}

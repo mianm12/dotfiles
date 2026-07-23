@@ -6,7 +6,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/mianm12/dotfiles/internal/backup"
 	"github.com/mianm12/dotfiles/internal/executor"
 	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/planner"
@@ -19,15 +18,13 @@ var ErrExecutionProtocol = errors.New("apply execution protocol violation")
 
 // Options 保存内部 M1 link/scaffold runner 的严格 runtime 与 scope 输入。
 type Options struct {
-	Runtime    dotruntime.Overrides
-	CLIVersion string
-	Modules    []string
-	Force      bool
-	NoPrune    bool
-	Confirm    ConfirmPrune
-	Stdin      io.Reader
-	Stdout     io.Writer
-	Stderr     io.Writer
+	Runtime dotruntime.Overrides
+	Modules []string
+	NoPrune bool
+	Confirm ConfirmPrune
+	Stdin   io.Reader
+	Stdout  io.Writer
+	Stderr  io.Writer
 }
 
 // ConfirmPrune 请求一次 whole-module prune 汇总确认。accepted=false 表示用户拒绝；error 表示
@@ -35,7 +32,7 @@ type Options struct {
 type ConfirmPrune func([]planner.PruneConfirmationGroup) (accepted bool, err error)
 
 type mutationSession interface {
-	load(string) (loadedMutation, error)
+	load() (loadedMutation, error)
 	close() error
 }
 
@@ -47,14 +44,12 @@ type loadedMutation interface {
 }
 
 type runOperations struct {
-	begin         func(dotruntime.Overrides) (mutationSession, error)
-	plan          func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (planner.ApplyPlan, error)
-	execute       func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error)
-	backup        func(string) (*backup.Batch, error)
-	executeBackup func(paths.ControlPlanePaths, planner.FileAction, *backup.Batch) (executor.FileResult, error)
-	pruneExecute  func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error)
-	executeHook   func(planner.HookAction, executor.HookStreams) (executor.HookResult, error)
-	now           func() time.Time
+	begin        func(dotruntime.Overrides) (mutationSession, error)
+	plan         func(dotruntime.LoadedInputs, planner.ApplyScopeOptions) (planner.ApplyPlan, error)
+	execute      func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error)
+	pruneExecute func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error)
+	executeHook  func(planner.HookAction, executor.HookStreams) (executor.HookResult, error)
+	now          func() time.Time
 }
 
 type executionScope struct {
@@ -65,7 +60,7 @@ type executionScope struct {
 }
 
 // Run 在一个 mutation lock 周期内完成 strict load、exact-input plan、scope gate、file、
-// force backup、confirmation、prune、hook execution 和一次 state commit。它不连接 CLI。
+// confirmation、prune、hook execution 和一次 state commit。它不连接 CLI。
 func Run(options Options) (Result, error) {
 	return runWithOperations(options, defaultRunOperations())
 }
@@ -95,7 +90,6 @@ func runWithOperations(options Options, operations runOperations) (Result, error
 
 func validateRunOperations(operations runOperations) error {
 	if operations.plan == nil || operations.execute == nil ||
-		operations.backup == nil || operations.executeBackup == nil ||
 		operations.pruneExecute == nil || operations.executeHook == nil || operations.now == nil {
 		return fmt.Errorf("%w: apply runner operations are incomplete", ErrExecutionProtocol)
 	}
@@ -120,7 +114,7 @@ func runWithSession(
 		}
 	}()
 
-	mutation, err := session.load(options.CLIVersion)
+	mutation, err := session.load()
 	if err != nil {
 		return Result{}, fmt.Errorf("load apply mutation inputs: %w", err)
 	}
@@ -129,7 +123,6 @@ func runWithSession(
 	}
 	plan, err := operations.plan(mutation.inputs(), planner.ApplyScopeOptions{
 		Modules: options.Modules,
-		Force:   options.Force,
 		NoPrune: options.NoPrune,
 	})
 	if err != nil {
@@ -237,22 +230,6 @@ func validateFileResult(
 			action.Target,
 		)
 	}
-	if action.Verb == planner.FileBackupReplace {
-		if success && result.BackupPath == "" {
-			return false, false, fmt.Errorf(
-				"%w: backup-replace action %q returned success without a backup path",
-				ErrExecutionProtocol,
-				action.Target,
-			)
-		}
-	} else if result.BackupPath != "" {
-		return false, false, fmt.Errorf(
-			"%w: non-backup file action %q reported a backup path",
-			ErrExecutionProtocol,
-			action.Target,
-		)
-	}
-
 	switch action.Verb.ExecutionClass() {
 	case planner.FileStateOnly:
 		if result.TargetMutated {
@@ -331,8 +308,8 @@ type runtimeMutationSession struct {
 	session *dotruntime.MutationSession
 }
 
-func (session runtimeMutationSession) load(cliVersion string) (loadedMutation, error) {
-	mutation, err := session.session.Load(cliVersion)
+func (session runtimeMutationSession) load() (loadedMutation, error) {
+	mutation, err := session.session.Load()
 	if err != nil {
 		return nil, err
 	}
@@ -370,12 +347,10 @@ func defaultRunOperations() runOperations {
 			}
 			return runtimeMutationSession{session: session}, nil
 		},
-		plan:          planner.PlanLoadedApply,
-		execute:       executor.ExecuteFile,
-		backup:        backup.NewBatch,
-		executeBackup: executor.ExecuteFileWithBackup,
-		pruneExecute:  executor.ExecutePrune,
-		executeHook:   executor.ExecuteHook,
-		now:           time.Now,
+		plan:         planner.PlanLoadedApply,
+		execute:      executor.ExecuteFile,
+		pruneExecute: executor.ExecutePrune,
+		executeHook:  executor.ExecuteHook,
+		now:          time.Now,
 	}
 }

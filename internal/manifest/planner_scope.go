@@ -19,7 +19,7 @@ type HookDescriptor struct {
 }
 
 // ScopedProfile 是完整 profile 已通过全局路径校验后形成的请求 scope。entries 已在 scope 内
-// fail-fast 渲染；hooks 只包含相同 effective module scope。
+// fail-fast 读取；hooks 只包含相同 effective module scope。
 type ScopedProfile struct {
 	name    string
 	goos    string
@@ -53,15 +53,15 @@ func (profile ValidatedProfile) RenderScope(
 	if profile.name == "" || !isSupportedGOOS(profile.goos) {
 		return ScopedProfile{}, fmt.Errorf("validated profile is invalid")
 	}
-	renderProfile := ResolvedProfile{name: profile.name, goos: profile.goos, dataKeys: profile.dataKeys}
-	renderContext, err := renderProfile.validateRuntimeContext(context)
+	runtimeProfile := ResolvedProfile{name: profile.name, goos: profile.goos}
+	home, err := runtimeProfile.validateRuntimeContext(context)
 	if err != nil {
 		return ScopedProfile{}, err
 	}
-	if renderContext.Home != profile.home {
+	if home != profile.home {
 		return ScopedProfile{}, fmt.Errorf(
 			"runtime HOME %q does not match validated HOME %q",
-			renderContext.Home,
+			home,
 			profile.home,
 		)
 	}
@@ -80,7 +80,7 @@ func (profile ValidatedProfile) RenderScope(
 			entries = append(entries, entry)
 		}
 	}
-	rendered, err := renderScaffolds(entries, profile.dataKeys, renderContext)
+	loaded, err := loadScaffolds(entries)
 	if err != nil {
 		return ScopedProfile{}, err
 	}
@@ -90,8 +90,8 @@ func (profile ValidatedProfile) RenderScope(
 		home:    profile.home,
 		full:    full,
 		modules: selected,
-		entries: rendered,
-		hooks:   scopedHookDescriptors(profile.modules, selectedSet, renderContext.Home),
+		entries: loaded,
+		hooks:   scopedHookDescriptors(profile.modules, selectedSet, home),
 	}, nil
 }
 
@@ -101,7 +101,7 @@ func (profile ScopedProfile) Name() string { return profile.name }
 // GOOS 返回 effective profile 的目标 GOOS。
 func (profile ScopedProfile) GOOS() string { return profile.goos }
 
-// Home 返回完整路径校验和 scope render 共用的 clean effective HOME。
+// Home 返回完整路径校验和 scope 读取共用的 clean effective HOME。
 func (profile ScopedProfile) Home() string { return profile.home }
 
 // Full 报告调用方是否选择完整 effective profile，而非显式 module scope。
@@ -112,7 +112,7 @@ func (profile ScopedProfile) Modules() []string {
 	return append([]string(nil), profile.modules...)
 }
 
-// Entries 返回 scope 内已经完成 scaffold 渲染的 desired 副本。
+// Entries 返回 scope 内已经读取 scaffold 字面内容的 desired 副本。
 func (profile ScopedProfile) Entries() []DesiredEntry {
 	return cloneDesiredEntries(profile.entries)
 }

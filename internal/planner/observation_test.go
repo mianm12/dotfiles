@@ -58,15 +58,6 @@ func TestObserveTarget_RegularFileCarriesMetadataWithoutReadingDigest(t *testing
 	if observed.Mode.Perm() != 0o640 {
 		t.Fatalf("ObserveTarget() mode = %v, want 0640", observed.Mode)
 	}
-
-	digested, err := ObserveTargetWithDigest(target)
-	if err != nil {
-		t.Fatalf("ObserveTargetWithDigest() error = %v", err)
-	}
-	if digested.Kind != ObjectRegular || digested.Mode != observed.Mode ||
-		digested.Hash != "sha256:25dd5c6f41d6e6054f9a55a81a53f0cf54e9536fa4394321accbca0e0b387ece" {
-		t.Fatalf("ObserveTargetWithDigest() = %#v, want stable sha256 and same metadata", digested)
-	}
 }
 
 func TestObserveTarget_ClassifiesMissingDirectoryAndSpecial(t *testing.T) {

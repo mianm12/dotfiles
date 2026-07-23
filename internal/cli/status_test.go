@@ -153,7 +153,7 @@ func TestStatus_HasNoModuleScopeOrPlanFlags(t *testing.T) {
 	if err != nil || command.Name() != "status" {
 		t.Fatalf("root.Find(status) = (%#v, %v)", command, err)
 	}
-	for _, flag := range []string{forceFlagName, pruneFlagName, noPruneFlagName, dryRunFlagName, adoptFlagName, yesFlagName} {
+	for _, flag := range []string{pruneFlagName, noPruneFlagName, dryRunFlagName, adoptFlagName, yesFlagName} {
 		if command.Flags().Lookup(flag) != nil {
 			t.Errorf("status unexpectedly registers local flag %q", flag)
 		}
@@ -163,18 +163,24 @@ func TestStatus_HasNoModuleScopeOrPlanFlags(t *testing.T) {
 func TestStatus_ScaffoldLifecycleDistinguishesCleanSkipsFromPending(t *testing.T) {
 	t.Run("user-owned scaffold missing and modified are clean", func(t *testing.T) {
 		fixture := newNoOpPlanCLIFixture(t)
-		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "deleted.template"), "blueprint\n")
-		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "modified.template"), "blueprint\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "dot.toml"), `target = "~/clean"
+[files.deleted]
+kind = "scaffold"
+[files.modified]
+kind = "scaffold"
+`)
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "deleted"), "literal\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "modified"), "literal\n")
 		writeCLIFile(t, filepath.Join(fixture.home, "clean", "modified"), "user changed bytes\n")
 		stableSource := filepath.Join(fixture.repository, "modules", "clean", "stable")
 		writePlanState(t, fixture.home, planStateDocument{
 			Version: 1,
 			Entries: map[string]planStateEntry{
 				"~/clean/deleted": {
-					Module: "clean", Kind: "scaffold", Source: "modules/clean/deleted.template", AppliedAt: "2026-07-19T00:00:00Z",
+					Module: "clean", Kind: "scaffold", Source: "modules/clean/deleted", AppliedAt: "2026-07-19T00:00:00Z",
 				},
 				"~/clean/modified": {
-					Module: "clean", Kind: "scaffold", Source: "modules/clean/modified.template", AppliedAt: "2026-07-19T00:00:00Z",
+					Module: "clean", Kind: "scaffold", Source: "modules/clean/modified", AppliedAt: "2026-07-19T00:00:00Z",
 				},
 				"~/clean/stable": {
 					Module: "clean", Kind: "symlink", Source: "modules/clean/stable", LinkDest: stableSource, AppliedAt: "2026-07-19T00:00:00Z",
@@ -192,7 +198,11 @@ func TestStatus_ScaffoldLifecycleDistinguishesCleanSkipsFromPending(t *testing.T
 
 	t.Run("new scaffold is pending", func(t *testing.T) {
 		fixture := newNoOpPlanCLIFixture(t)
-		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "fresh.template"), "blueprint\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "dot.toml"), `target = "~/clean"
+[files.fresh]
+kind = "scaffold"
+`)
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "fresh"), "literal\n")
 
 		stdout, stderr, code := fixture.run(t, "status")
 		want := "Profile: clean (1 modules, 2 files managed)\n" +
@@ -207,8 +217,12 @@ func TestStatus_ScaffoldLifecycleDistinguishesCleanSkipsFromPending(t *testing.T
 func TestStatus_KindMigrationAndAliasUseTheirOwnTaxonomy(t *testing.T) {
 	t.Run("kind migrations", func(t *testing.T) {
 		fixture := newNoOpPlanCLIFixture(t)
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "dot.toml"), `target = "~/clean"
+[files.to-scaffold]
+kind = "scaffold"
+`)
 		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "from-scaffold"), "desired link\n")
-		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "to-scaffold.template"), "blueprint\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "clean", "to-scaffold"), "literal\n")
 		writeCLIFile(t, filepath.Join(fixture.home, "clean", "from-scaffold"), "user file\n")
 		stableSource := filepath.Join(fixture.repository, "modules", "clean", "stable")
 		if err := os.Symlink(stableSource, filepath.Join(fixture.home, "clean", "to-scaffold")); err != nil {
@@ -302,7 +316,6 @@ func TestStatus_HookSkipAndProfileOverrideUsePlannerScope(t *testing.T) {
 				Home:       dotruntime.Override{Value: fixture.home, Set: true},
 				Repository: dotruntime.Override{Value: fixture.repository, Set: true},
 			},
-			CLIVersion: "v0.0.0",
 		})
 		if err != nil {
 			t.Fatalf("planner.PlanApply() error = %v", err)
@@ -333,8 +346,7 @@ func TestStatus_HookSkipAndProfileOverrideUsePlannerScope(t *testing.T) {
 
 	t.Run("global profile selects a complete profile", func(t *testing.T) {
 		fixture := newPlanCLIFixture(t)
-		writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+		writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), `[profiles]
 all = ["beta", "alpha"]
 alpha = ["alpha"]
 `)
@@ -447,65 +459,13 @@ func TestStatus_OutputErrorOverridesClean(t *testing.T) {
 	}
 }
 
-func TestStatus_DevelopmentNoticeFailureDoesNotPublishVerdict(t *testing.T) {
-	tests := []struct {
-		name    string
-		fixture func(*testing.T) planCLIFixture
-	}{
-		{name: "clean", fixture: newNoOpPlanCLIFixture},
-		{name: "actionable", fixture: newPlanCLIFixture},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := test.fixture(t)
-			fixture.redirectEnvironment(t)
-			var stdout bytes.Buffer
-			code := run([]string{"status", "--home", fixture.home, "--repo", fixture.repository}, environment{
-				stdout:      &stdout,
-				stderr:      failingWriter{err: os.ErrClosed},
-				lookupEnv:   os.LookupEnv,
-				userHomeDir: os.UserHomeDir,
-				build:       buildinfo.Info{Version: "dev"},
-				goos:        runtime.GOOS,
-			})
-			if code != exitError || stdout.String() != "" {
-				t.Fatalf("dev status with failed notice = stdout %q, exit %d; want no trusted stdout and exit 1", stdout.String(), code)
-			}
-		})
-	}
-}
-
-func TestStatus_DevelopmentNoticePreservesNormalOutput(t *testing.T) {
-	fixture := newNoOpPlanCLIFixture(t)
-	fixture.redirectEnvironment(t)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"status", "--home", fixture.home, "--repo", fixture.repository}, environment{
-		stdout:      &stdout,
-		stderr:      &stderr,
-		lookupEnv:   os.LookupEnv,
-		userHomeDir: os.UserHomeDir,
-		build:       buildinfo.Info{Version: "dev"},
-		goos:        runtime.GOOS,
-	})
-	wantStdout := "Profile: clean (1 modules, 1 files managed)\n\nClean.\n"
-	wantStderr := "notice: development build skipped the requires version comparison\n"
-	if code != exitOK || stdout.String() != wantStdout || stderr.String() != wantStderr {
-		t.Fatalf(
-			"dev status = stdout %q, stderr %q, exit %d; want stdout %q, stderr %q, exit 0",
-			stdout.String(), stderr.String(), code, wantStdout, wantStderr,
-		)
-	}
-}
-
 func newAliasStatusFixture(t *testing.T) planCLIFixture {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	repository := filepath.Join(root, "repo")
 	writeCLIFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"alias\"\n")
-	writeCLIFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeCLIFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 alias = ["alias"]
 `)
 	writeCLIFile(t, filepath.Join(repository, "modules", "alias", "dot.toml"), "target = \"~/alias\"\n")

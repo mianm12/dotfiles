@@ -29,7 +29,7 @@ func executeScaffoldFile(
 		return FileResult{StateEffect: action.OnSuccess}, nil
 	case planner.FileScaffold:
 		switch action.Reason {
-		case planner.FileReasonTargetMissing, planner.FileReasonScaffoldRebuild:
+		case planner.FileReasonTargetMissing:
 			return createMissingScaffold(control, action, operations)
 		case planner.FileReasonOwnedLinkToScaffold:
 			return migrateOwnedLinkToScaffold(control, action, operations)
@@ -230,12 +230,11 @@ func validateScaffoldAction(action planner.FileAction) error {
 			return err
 		}
 		if action.Reason != planner.FileReasonTargetMissing &&
-			action.Reason != planner.FileReasonScaffoldRebuild &&
 			action.Reason != planner.FileReasonOwnedLinkToScaffold {
 			return fmt.Errorf("%w: reason %q is not a scaffold create", ErrUnsupportedFileAction, action.Reason)
 		}
 		switch action.Reason {
-		case planner.FileReasonTargetMissing, planner.FileReasonScaffoldRebuild:
+		case planner.FileReasonTargetMissing:
 			if action.Precondition.Leaf.Kind != planner.LeafMissing {
 				return fmt.Errorf("%w: scaffold create target was not planned missing", ErrUnsupportedFileAction)
 			}

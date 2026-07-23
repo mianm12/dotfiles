@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	forceFlagName   = "force"
 	pruneFlagName   = "prune"
 	noPruneFlagName = "no-prune"
 	dryRunFlagName  = "dry-run"
@@ -25,7 +24,6 @@ const (
 
 type readOnlyPlanOptions struct {
 	modules       []string
-	force         bool
 	prune         bool
 	noPrune       bool
 	pruneSet      bool
@@ -45,7 +43,6 @@ type applyNestedRun func(applyrunner.Options, *dotruntime.MutationSession) (appl
 
 func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 	var dryRun bool
-	var force bool
 	var adopt bool
 	var prune bool
 	var noPrune bool
@@ -60,7 +57,6 @@ func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 			}
 			options := readOnlyPlanOptions{
 				modules:       append([]string(nil), modules...),
-				force:         force,
 				prune:         prune,
 				noPrune:       noPrune,
 				pruneSet:      command.Flags().Changed(pruneFlagName),
@@ -86,13 +82,12 @@ func newApplyCommand(env environment, global *globalOptions) *cobra.Command {
 	flags.BoolVarP(&dryRun, dryRunFlagName, "n", false, "print the plan without mutation")
 	flags.BoolVar(&adopt, adoptFlagName, false, "adopt matching unmanaged rendered files (M2)")
 	flags.BoolVarP(&yes, yesFlagName, "y", false, "skip interactive confirmations")
-	bindReadOnlyPlanFlags(command, &force, &prune, &noPrune)
+	bindReadOnlyPlanFlags(command, &prune, &noPrune)
 	return command
 }
 
-func bindReadOnlyPlanFlags(command *cobra.Command, force, prune, noPrune *bool) {
+func bindReadOnlyPlanFlags(command *cobra.Command, prune, noPrune *bool) {
 	flags := command.Flags()
-	flags.BoolVar(force, forceFlagName, false, "plan supported conflict replacements")
 	flags.BoolVar(prune, pruneFlagName, true, "include orphan pruning in the plan")
 	flags.BoolVar(noPrune, noPruneFlagName, false, "omit orphan pruning from the plan")
 }
@@ -136,10 +131,8 @@ func plannerOptions(options readOnlyPlanOptions, env environment) planner.ApplyO
 				Set:   options.profileSet,
 			},
 		},
-		CLIVersion: env.build.Version,
-		Modules:    options.modules,
-		Force:      options.force,
-		NoPrune:    options.noPrune || !options.prune,
+		Modules: options.modules,
+		NoPrune: options.noPrune || !options.prune,
 	}
 }
 
@@ -150,15 +143,13 @@ func runMutationApply(command *cobra.Command, options readOnlyPlanOptions, yes b
 		runner = applyrunner.Run
 	}
 	result, runErr := runner(applyrunner.Options{
-		Runtime:    plannerOptions(options, env).Runtime,
-		CLIVersion: env.build.Version,
-		Modules:    append([]string(nil), options.modules...),
-		Force:      options.force,
-		NoPrune:    options.noPrune || !options.prune,
-		Confirm:    confirm,
-		Stdin:      command.InOrStdin(),
-		Stdout:     command.OutOrStdout(),
-		Stderr:     command.ErrOrStderr(),
+		Runtime: plannerOptions(options, env).Runtime,
+		Modules: append([]string(nil), options.modules...),
+		NoPrune: options.noPrune || !options.prune,
+		Confirm: confirm,
+		Stdin:   command.InOrStdin(),
+		Stdout:  command.OutOrStdout(),
+		Stderr:  command.ErrOrStderr(),
 	})
 	return finishMutationApply(command, result, runErr, options.verbose, true)
 }
@@ -182,9 +173,6 @@ func finishMutationApply(
 			return errors.Join(runErr, projectionErr)
 		}
 		printPlanProjectionWithContext(command, projection, includeContext)
-		for _, backupPath := range result.BackupPaths() {
-			command.Println("backup  " + backupPath)
-		}
 		if runErr == nil {
 			return commandExit(projection.exitCode)
 		}
@@ -346,10 +334,6 @@ func projectApplyPlanWithAllOutcomes(
 	projection := planProjection{
 		contextLine: fmt.Sprintf("repo=%s profile=%s os=%s", context.Repository, context.Profile, context.GOOS),
 	}
-	if context.DevelopmentBuild {
-		projection.notices = append(projection.notices, "development build skipped the requires version comparison")
-	}
-
 	actionable := false
 	conflict := false
 	for index, action := range plan.FileActions() {
@@ -369,7 +353,7 @@ func projectApplyPlanWithAllOutcomes(
 				actionable = true
 				projection.warnings = append(
 					projection.warnings,
-					fmt.Sprintf("%s: scaffold target was deleted; use --force to rebuild", action.Target),
+					fmt.Sprintf("%s: scaffold target was deleted; remove stale state before rebuilding", action.Target),
 				)
 			}
 		default:
@@ -456,8 +440,6 @@ func filePresentationVerb(verb planner.FileVerb) (string, error) {
 		return "scaffold", nil
 	case planner.FileAdopt:
 		return "adopt", nil
-	case planner.FileBackupReplace:
-		return "backup+replace", nil
 	case planner.FileConflict:
 		return "CONFLICT", nil
 	default:

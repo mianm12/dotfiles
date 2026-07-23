@@ -13,12 +13,11 @@ func TestManagedInputIsExplicitlyUnsupported(t *testing.T) {
 		manifest string
 	}{
 		{name: "declared managed", manifest: "[files.config]\nkind = \"managed\""},
-		{name: "declared source infers managed", manifest: "[files.\"config.tmpl\"]"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
+			repo := writeRepositoryManifest(t, "[profiles]\nbase = [\"app\"]")
 			writeModule(t, repo, "app", tt.manifest)
 
 			_, err := Load(repo)
@@ -29,22 +28,7 @@ func TestManagedInputIsExplicitlyUnsupported(t *testing.T) {
 	}
 }
 
-func TestResolvedProfileEnumerate_RejectsImplicitManaged(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
-	writeModule(t, repo, "app", "")
-	writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.tmpl", "template")
-	module := resolveOnlyModule(t, repo)
-
-	entries, err := testResolvedProfile(module).Enumerate(testRuntimeContext(t.TempDir()))
-	if !errors.Is(err, ErrManagedUnsupported) {
-		t.Fatalf("Enumerate() error = %v, want ErrManagedUnsupported", err)
-	}
-	if entries != nil {
-		t.Fatalf("Enumerate() entries = %#v, want nil on managed input", entries)
-	}
-}
-
-func TestResolvedProfileEnumerate_DoesNotInferManagedBeforeHigherPriorities(t *testing.T) {
+func TestResolvedProfileEnumerate_TreatsSuffixAsLiteral(t *testing.T) {
 	tests := []struct {
 		name       string
 		manifest   string
@@ -54,30 +38,30 @@ func TestResolvedProfileEnumerate_DoesNotInferManagedBeforeHigherPriorities(t *t
 		wantCount  int
 	}{
 		{
-			name:      "ignore precedes suffix inference",
+			name:      "ignore still excludes literal suffix",
 			manifest:  "[ignore]\npatterns = [\"*.tmpl\"]",
 			wantCount: 0,
 		},
 		{
-			name:       "explicit link precedes suffix inference",
+			name:       "explicit link",
 			manifest:   "[files.\"config.tmpl\"]\nkind = \"link\"",
 			wantKind:   FileKindLink,
-			wantTarget: "~/config",
+			wantTarget: "~/config.tmpl",
 			wantCount:  1,
 		},
 		{
-			name:       "explicit scaffold precedes suffix inference",
+			name:       "explicit scaffold",
 			manifest:   "[files.\"config.tmpl\"]\nkind = \"scaffold\"\nmode = \"0600\"",
 			wantKind:   FileKindScaffold,
 			wantMode:   0o600,
-			wantTarget: "~/config",
+			wantTarget: "~/config.tmpl",
 			wantCount:  1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
+			repo := writeRepositoryManifest(t, "[profiles]\nbase = [\"app\"]")
 			writeModule(t, repo, "app", tt.manifest)
 			writeSourceFile(t, filepath.Join(repo, "modules", "app"), "config.tmpl", "template")
 			module := resolveOnlyModule(t, repo)

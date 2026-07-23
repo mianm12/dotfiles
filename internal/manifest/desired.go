@@ -10,10 +10,9 @@ import (
 	"strings"
 
 	"github.com/mianm12/dotfiles/internal/paths"
-	templateengine "github.com/mianm12/dotfiles/internal/template"
 )
 
-// DesiredEntry 是 render、target 身份校验和 planner 消费的结构性期望值。“只读”描述
+// DesiredEntry 是 source 读取、target 身份校验和 planner 消费的结构性期望值。“只读”描述
 // enumerate 的 IO 边界和下游消费约定；该类型仍是普通 Go 值，每次调用返回彼此独立的结果。
 // Source 是规范化模块相对路径，Target 是规范化 ~/ 展示路径；对应的 Path 字段是绝对路径。
 // Mode 与 Content 仅对 scaffold 有效；link 的 Mode 恒为零且 Content 为 nil。
@@ -26,56 +25,45 @@ type DesiredEntry struct {
 	Kind       FileKind
 	Mode       fs.FileMode
 	Content    []byte
-
-	prospectiveContent []byte
-	prospective        bool
 }
 
-// RuntimeContext 是 desired 形成时唯一允许传给模板的显式运行输入。
+// RuntimeContext 是 desired 形成时允许使用的显式运行输入。
 type RuntimeContext struct {
-	OS       string
-	Arch     string
-	Hostname string
-	Profile  string
-	Home     string
-	Data     map[string]string
+	OS      string
+	Profile string
+	Home    string
 }
 
 // ValidatedProfile 是完整 effective profile 的结构性 desired 已通过全部路径边界后的只读结果。
 // scope 选择只能消费 Entries 返回的副本，不能作为全局校验输入。
 type ValidatedProfile struct {
-	name     string
-	goos     string
-	home     string
-	dataKeys []string
-	modules  []ResolvedModule
-	entries  []DesiredEntry
+	name    string
+	goos    string
+	home    string
+	modules []ResolvedModule
+	entries []DesiredEntry
 }
 
-// Entries 返回完整 profile 的结构性 desired 副本；scaffold 尚未渲染。
+// Entries 返回完整 profile 的结构性 desired 副本；scaffold 尚未读取。
 func (profile ValidatedProfile) Entries() []DesiredEntry {
 	return cloneDesiredEntries(profile.entries)
 }
 
-// Enumerate 把 effective profile 转换为确定排序且已完成 scaffold 渲染的 desired entries。
-// 它只读取 source 树，不读取或修改 target，也不执行文件系统身份或控制面校验。任一模板
-// parse、变量或渲染错误都返回 nil，planner 不会看到部分结果。
+// Enumerate 把 effective profile 转换为确定排序且已读取 scaffold 字面内容的 desired entries。
+// 它只读取 source 树，不读取或修改 target，也不执行文件系统身份或控制面校验。
 func (p ResolvedProfile) Enumerate(context RuntimeContext) ([]DesiredEntry, error) {
-	renderContext, err := p.validateRuntimeContext(context)
+	home, err := p.validateRuntimeContext(context)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := p.enumerateStructure(renderContext.Home, nil)
+	entries, err := p.enumerateStructure(home)
 	if err != nil {
 		return nil, err
 	}
-	return renderScaffolds(entries, p.dataKeys, renderContext)
+	return loadScaffolds(entries)
 }
 
-func (p ResolvedProfile) enumerateStructure(
-	home string,
-	prospective prospectiveSources,
-) ([]DesiredEntry, error) {
+func (p ResolvedProfile) enumerateStructure(home string) ([]DesiredEntry, error) {
 	// 不依赖 Resolve 的既有顺序，也不原地排序 receiver，保持值语义和稳定结果。
 	modules := append([]ResolvedModule(nil), p.modules...)
 	slices.SortFunc(modules, func(left, right ResolvedModule) int {
@@ -87,7 +75,7 @@ func (p ResolvedProfile) enumerateStructure(
 
 	entries := make([]DesiredEntry, 0)
 	for _, module := range modules {
-		moduleEntries, err := enumerateModuleDesired(module, home, prospective[module.Name])
+		moduleEntries, err := enumerateModuleDesired(module, home)
 		if err != nil {
 			return nil, err
 		}
@@ -103,10 +91,10 @@ func (p ResolvedProfile) enumerateStructure(
 }
 
 // validateTargetStructure 从 receiver 的完整 effective modules 形成结构性 desired，
-// 并在不渲染 scaffold 的前提下整体校验 target identity/topology。
+// 并在不读取 scaffold 的前提下整体校验 target identity/topology。
 // 该接缝保持私有，避免消费者绕过 control-plane 全局入口直接取得结构性 desired。
 func (p ResolvedProfile) validateTargetStructure(home string) ([]DesiredEntry, error) {
-	entries, targets, err := p.targetStructure(home, nil)
+	entries, targets, err := p.targetStructure(home)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +114,7 @@ func (p ResolvedProfile) ValidatePathBoundaries(
 	if err != nil {
 		return ValidatedProfile{}, err
 	}
-	entries, targets, err := p.targetStructure(home, nil)
+	entries, targets, err := p.targetStructure(home)
 	if err != nil {
 		return ValidatedProfile{}, err
 	}
@@ -134,18 +122,16 @@ func (p ResolvedProfile) ValidatePathBoundaries(
 		return ValidatedProfile{}, fmt.Errorf("resolved profile %q path boundaries: %w", p.name, err)
 	}
 	return ValidatedProfile{
-		name:     p.name,
-		goos:     p.goos,
-		home:     home,
-		dataKeys: append([]string(nil), p.dataKeys...),
-		modules:  cloneResolvedModules(p.modules),
-		entries:  entries,
+		name:    p.name,
+		goos:    p.goos,
+		home:    home,
+		modules: cloneResolvedModules(p.modules),
+		entries: entries,
 	}, nil
 }
 
 func (p ResolvedProfile) targetStructure(
 	home string,
-	prospective prospectiveSources,
 ) ([]DesiredEntry, []paths.LabeledTarget, error) {
 	if !manifestNamePattern.MatchString(p.name) {
 		return nil, nil, fmt.Errorf("invalid resolved profile name %q", p.name)
@@ -157,7 +143,7 @@ func (p ResolvedProfile) targetStructure(
 	if err != nil {
 		return nil, nil, err
 	}
-	entries, err := p.enumerateStructure(cleanHome, prospective)
+	entries, err := p.enumerateStructure(cleanHome)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -180,44 +166,33 @@ func cloneDesiredEntries(entries []DesiredEntry) []DesiredEntry {
 	cloned := append([]DesiredEntry(nil), entries...)
 	for index := range cloned {
 		cloned[index].Content = append([]byte(nil), cloned[index].Content...)
-		cloned[index].prospectiveContent = append([]byte(nil), cloned[index].prospectiveContent...)
 	}
 	return cloned
 }
 
-func (p ResolvedProfile) validateRuntimeContext(context RuntimeContext) (templateengine.Context, error) {
+func (p ResolvedProfile) validateRuntimeContext(context RuntimeContext) (string, error) {
 	if !isSupportedGOOS(p.goos) {
-		return templateengine.Context{}, fmt.Errorf("resolved profile has unsupported GOOS %q", p.goos)
+		return "", fmt.Errorf("resolved profile has unsupported GOOS %q", p.goos)
 	}
 	if context.OS != p.goos {
-		return templateengine.Context{}, fmt.Errorf(
+		return "", fmt.Errorf(
 			"runtime OS %q does not match resolved profile OS %q",
 			context.OS,
 			p.goos,
 		)
 	}
 	if context.Profile != p.name {
-		return templateengine.Context{}, fmt.Errorf(
+		return "", fmt.Errorf(
 			"runtime profile %q does not match resolved profile %q",
 			context.Profile,
 			p.name,
 		)
 	}
-	if context.Arch != "arm64" && context.Arch != "amd64" {
-		return templateengine.Context{}, fmt.Errorf("runtime architecture %q is not supported", context.Arch)
-	}
 	cleanHome, err := cleanEffectiveHome(context.Home)
 	if err != nil {
-		return templateengine.Context{}, err
+		return "", err
 	}
-	return templateengine.Context{
-		OS:       context.OS,
-		Arch:     context.Arch,
-		Hostname: context.Hostname,
-		Profile:  context.Profile,
-		Home:     cleanHome,
-		Data:     context.Data,
-	}, nil
+	return cleanHome, nil
 }
 
 func cleanEffectiveHome(home string) (string, error) {
@@ -227,27 +202,18 @@ func cleanEffectiveHome(home string) (string, error) {
 	return filepath.Clean(home), nil
 }
 
-// renderScaffolds 在副本上填充 Content，并在首个错误时返回 nil，调用方不会收到
-// 已渲染与未渲染条目混合的部分可信结果。
-func renderScaffolds(
-	entries []DesiredEntry,
-	dataKeys []string,
-	context templateengine.Context,
-) ([]DesiredEntry, error) {
-	rendered := append([]DesiredEntry(nil), entries...)
-	for index := range rendered {
-		entry := &rendered[index]
+// loadScaffolds 在副本上填充 scaffold 的字面 Content。
+func loadScaffolds(entries []DesiredEntry) ([]DesiredEntry, error) {
+	loaded := append([]DesiredEntry(nil), entries...)
+	for index := range loaded {
+		entry := &loaded[index]
 		if entry.Kind != FileKindScaffold {
 			continue
 		}
-		compiled, err := compileScaffoldTemplate(*entry, dataKeys)
-		if err != nil {
-			return nil, err
-		}
-		content, err := compiled.Render(context)
+		content, err := os.ReadFile(entry.SourcePath)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"module %q scaffold source %q: %w",
+				"read scaffold for module %q source %q: %w",
 				entry.Module,
 				entry.Source,
 				err,
@@ -255,51 +221,7 @@ func renderScaffolds(
 		}
 		entry.Content = content
 	}
-	return rendered, nil
-}
-
-// validateScaffolds 是 doctor 的静态路径：复用 plan 前的编译入口，但不需要运行 data，
-// 也不执行模板。
-func validateScaffolds(entries []DesiredEntry, dataKeys []string) error {
-	for _, entry := range entries {
-		if entry.Kind != FileKindScaffold {
-			continue
-		}
-		if _, err := compileScaffoldTemplate(entry, dataKeys); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// compileScaffoldTemplate 是 manifest 层连接 source 文件系统与纯模板引擎的唯一桥接点；
-// 读取完成后，parser 与 renderer 都只接收内存中的显式输入。
-func compileScaffoldTemplate(entry DesiredEntry, dataKeys []string) (*templateengine.Template, error) {
-	var source []byte
-	if entry.prospective {
-		source = append([]byte(nil), entry.prospectiveContent...)
-	} else {
-		var err error
-		source, err = os.ReadFile(entry.SourcePath)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"read scaffold template for module %q source %q: %w",
-				entry.Module,
-				entry.Source,
-				err,
-			)
-		}
-	}
-	compiled, err := templateengine.Compile(entry.Module+"/"+entry.Source, source, dataKeys)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"module %q scaffold source %q: %w",
-			entry.Module,
-			entry.Source,
-			err,
-		)
-	}
-	return compiled, nil
+	return loaded, nil
 }
 
 type classifiedModuleSource struct {
@@ -308,14 +230,11 @@ type classifiedModuleSource struct {
 	Kind           FileKind
 	Mode           fs.FileMode
 	TargetOverride string
-	Content        []byte
-	Prospective    bool
 }
 
 func enumerateModuleDesired(
 	module ResolvedModule,
 	home string,
-	prospective map[string]prospectiveSourceData,
 ) ([]DesiredEntry, error) {
 	if err := validateResolvedModuleSource(module); err != nil {
 		return nil, err
@@ -324,7 +243,7 @@ func enumerateModuleDesired(
 		return nil, fmt.Errorf("module %q target root: %w", module.Name, err)
 	}
 
-	sources, err := classifyModuleSources(module, prospective)
+	sources, err := classifyModuleSources(module)
 	if err != nil {
 		return nil, err
 	}
@@ -342,35 +261,6 @@ func enumerateModuleDesired(
 			TargetPath: expandDesiredTarget(home, target),
 			Kind:       source.Kind,
 			Mode:       source.Mode,
-
-			prospectiveContent: append([]byte(nil), source.Content...),
-			prospective:        source.Prospective,
-		})
-	}
-	return entries, nil
-}
-
-// enumerateModuleScaffolds 复用完整 source 定级规则，确保 doctor 尊重 [files] kind 与
-// ignore 优先级，而不是只按 .template 后缀扫描。
-func enumerateModuleScaffolds(module ResolvedModule) ([]DesiredEntry, error) {
-	if err := validateResolvedModuleSource(module); err != nil {
-		return nil, err
-	}
-	sources, err := classifyModuleSources(module, nil)
-	if err != nil {
-		return nil, err
-	}
-	entries := make([]DesiredEntry, 0)
-	for _, source := range sources {
-		if source.Kind != FileKindScaffold {
-			continue
-		}
-		entries = append(entries, DesiredEntry{
-			Module:     module.Name,
-			Source:     source.Source,
-			SourcePath: source.SourcePath,
-			Kind:       source.Kind,
-			Mode:       source.Mode,
 		})
 	}
 	return entries, nil
@@ -386,15 +276,12 @@ func validateResolvedModuleSource(module ResolvedModule) error {
 	return nil
 }
 
-func classifyModuleSources(
-	module ResolvedModule,
-	prospective map[string]prospectiveSourceData,
-) ([]classifiedModuleSource, error) {
+func classifyModuleSources(module ResolvedModule) ([]classifiedModuleSource, error) {
 	rules, err := indexFileRules(module)
 	if err != nil {
 		return nil, err
 	}
-	sources, err := enumerateModuleSourcesProspective(module, prospective)
+	sources, err := enumerateModuleSources(module)
 	if err != nil {
 		return nil, err
 	}
@@ -415,14 +302,6 @@ func classifyModuleSources(
 		if err != nil {
 			return nil, err
 		}
-		// target override 缺失时，落地名必然来自同一后缀派生规则。这里在 source
-		// 定级完成后立即验证，使 unassigned 与当前 GOOS inactive 模块也不能把
-		// 无效 target 推迟到未来进入 profile 后才暴露。
-		if targetOverride == "" {
-			if _, err := stripTemplateSuffix(source.path); err != nil {
-				return nil, fmt.Errorf("module %q source %q: %w", module.Name, source.path, err)
-			}
-		}
 		mode, err := parseDesiredMode(module.Name, source.path, kind, modeText)
 		if err != nil {
 			return nil, err
@@ -433,8 +312,6 @@ func classifyModuleSources(
 			Kind:           kind,
 			Mode:           mode,
 			TargetOverride: targetOverride,
-			Content:        append([]byte(nil), source.prospectiveContent...),
-			Prospective:    source.prospective,
 		})
 	}
 
@@ -463,7 +340,7 @@ func indexFileRules(module ResolvedModule) (map[string]ResolvedFileRule, error) 
 	return rules, nil
 }
 
-// classifyDesiredSource 只处理优先级的最后两层：[files] 显式声明和文件名后缀推断。
+// classifyDesiredSource 处理 [files] 显式声明；未声明的普通文件均为字面 link source。
 // 内置 ignore 已在 source 层移除，用户 ignore 已由调用方处理。
 func classifyDesiredSource(
 	module, source string,
@@ -480,12 +357,6 @@ func classifyDesiredSource(
 			}
 			return "", "", "", fmt.Errorf("module %q source %q has unsupported kind %q", module, source, rule.Kind)
 		}
-	}
-	if strings.HasSuffix(source, ".tmpl") {
-		return "", "", "", fmt.Errorf("module %q source %q resolves to managed: %w", module, source, ErrManagedUnsupported)
-	}
-	if strings.HasSuffix(source, ".template") {
-		return FileKindScaffold, defaultScaffoldMode, "", nil
 	}
 	return FileKindLink, "", "", nil
 }
@@ -517,14 +388,9 @@ func parseDesiredMode(module, source string, kind FileKind, raw string) (fs.File
 func desiredTarget(module ResolvedModule, source, override string) (string, error) {
 	target := override
 	if target == "" {
-		// [files].target 是完整 entry target；只有未声明时才从 source 去后缀派生。
-		derived, err := stripTemplateSuffix(source)
-		if err != nil {
-			return "", fmt.Errorf("module %q source %q: %w", module.Name, source, err)
-		}
-		target = module.TargetRoot + "/" + derived
+		target = module.TargetRoot + "/" + source
 		if module.TargetRoot == "~" {
-			target = "~/" + derived
+			target = "~/" + source
 		}
 	}
 	if err := validateEntryTargetPath(target); err != nil {
@@ -540,20 +406,6 @@ func desiredTarget(module ResolvedModule, source, override string) (string, erro
 		)
 	}
 	return target, nil
-}
-
-func stripTemplateSuffix(source string) (string, error) {
-	result := source
-	switch {
-	case strings.HasSuffix(result, ".template"):
-		result = strings.TrimSuffix(result, ".template")
-	case strings.HasSuffix(result, ".tmpl"):
-		result = strings.TrimSuffix(result, ".tmpl")
-	}
-	if result == "" || strings.HasSuffix(result, "/") {
-		return "", fmt.Errorf("template suffix removal leaves an empty target basename")
-	}
-	return result, nil
 }
 
 func expandDesiredTarget(home, target string) string {

@@ -14,19 +14,6 @@ func TestValidateExecutionScope_RejectsUnsupportedExecutablePlan(t *testing.T) {
 		prune []planner.PruneAction
 		hooks []planner.HookAction
 	}{
-		{
-			name: "backup replace",
-			files: []planner.FileAction{{
-				Verb: planner.FileBackupReplace,
-			}},
-		},
-		{
-			name: "force scaffold rebuild",
-			files: []planner.FileAction{{
-				Verb:   planner.FileScaffold,
-				Reason: planner.FileReasonScaffoldRebuild,
-			}},
-		},
 		{name: "malformed active prune", prune: []planner.PruneAction{{Mode: planner.PruneStateOnly}}},
 		{name: "malformed hook run", hooks: []planner.HookAction{{Verb: planner.HookRun}}},
 	}

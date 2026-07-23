@@ -352,8 +352,7 @@ func newHookPlanFixture(t *testing.T) hookPlanFixture {
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatalf("MkdirAll(home) error = %v", err)
 	}
-	writeHookManifestFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeHookManifestFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["beta", "alpha"]
 `)
 	writeHookModule(t, repository, "alpha", []string{"hooks/second.sh", "hooks/first.sh"})
@@ -380,11 +379,9 @@ all = ["beta", "alpha"]
 		t.Fatalf("ValidatePathBoundaries() error = %v", err)
 	}
 	context := manifest.RuntimeContext{
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
-		Hostname: "test-host",
-		Profile:  "all",
-		Home:     home,
+		OS:      runtime.GOOS,
+		Profile: "all",
+		Home:    home,
 	}
 	full, err := validated.RenderScope(nil, context)
 	if err != nil {

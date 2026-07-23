@@ -15,7 +15,7 @@ func TestResolve_MissingActiveModuleTargetReturnsClassifiedError(t *testing.T) {
 			if goos == "linux" {
 				otherGOOS = "darwin"
 			}
-			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"app\"]")
+			repo := writeRepositoryManifest(t, "[profiles]\nbase = [\"app\"]")
 			writeModule(t, repo, "app", "[target]\n"+otherGOOS+" = \"~\"")
 			loaded, err := Load(repo)
 			if err != nil {
@@ -36,7 +36,7 @@ func TestResolve_MissingActiveModuleTargetReturnsClassifiedError(t *testing.T) {
 }
 
 func TestResolve_AppliesBuiltInDefaults(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = [\"zsh\"]")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = [\"zsh\"]")
 	writeModule(t, repo, "zsh", "")
 	loaded, err := Load(repo)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestResolve_MergeMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := "requires = \">=0.3.0\"\n"
+			root := ""
 			if tt.defaults != "" {
 				root += "[defaults]\n" + tt.defaults + "\n"
 			}
@@ -207,20 +207,19 @@ func TestResolve_MergeMatrix(t *testing.T) {
 
 func TestResolve_ReturnsStableFileRulesAndHooks(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["app"]
-[data.machine]
-[data.email]
 `)
 	writeModule(t, repo, "app", `
 [ignore]
 patterns = ["*.bak"]
 [files."z.template"]
+kind = "scaffold"
 [files.a]
 kind = "link"
 target = "~/.config/app/a"
 [files."b.template"]
+kind = "scaffold"
 mode = "0600"
 [hooks]
 run_once = ["hooks/z", "hooks/a"]
@@ -255,14 +254,13 @@ run_once = ["hooks/z", "hooks/a"]
 	if !reflect.DeepEqual(first.modules[0].Ignore, []string{"*.bak"}) {
 		t.Errorf("Ignore = %v, want [*.bak]", first.modules[0].Ignore)
 	}
-	if first.goos != "darwin" || !reflect.DeepEqual(first.dataKeys, []string{"email", "machine"}) {
-		t.Errorf("resolved context = GOOS %q, data %v; want darwin and [email machine]", first.goos, first.dataKeys)
+	if first.goos != "darwin" {
+		t.Errorf("resolved GOOS = %q, want darwin", first.goos)
 	}
 
 	first.modules[0].FileRules[0].Source = "changed"
 	first.modules[0].Ignore[0] = "changed"
 	first.modules[0].RunOnce[0] = "changed"
-	first.dataKeys[0] = "changed"
 	third, err := loaded.Resolve("base", "darwin")
 	if err != nil {
 		t.Fatalf("Resolve() third error = %v, want nil", err)
@@ -290,7 +288,7 @@ func TestResolve_ValidatesFileTargetWithinEffectiveRoot(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := "requires = \">=0.3.0\"\n[defaults]\ntarget = \"" + tt.defaultsRoot + "\"\n[profiles]\nbase = [\"app\"]"
+			root := "[defaults]\ntarget = \"" + tt.defaultsRoot + "\"\n[profiles]\nbase = [\"app\"]"
 			repo := writeRepositoryManifest(t, root)
 			module := ""
 			if tt.moduleRoot != "" {
@@ -321,7 +319,7 @@ func TestResolve_ValidatesFileTargetWithinEffectiveRoot(t *testing.T) {
 }
 
 func TestResolve_RejectsUnknownProfileAndGOOS(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = []")
 	loaded, err := Load(repo)
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
@@ -336,7 +334,6 @@ func TestResolve_RejectsUnknownProfileAndGOOS(t *testing.T) {
 
 func TestResolve_DoesNotWriteOnSuccessOrFailure(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["app"]
 `)

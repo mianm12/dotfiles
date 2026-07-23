@@ -307,24 +307,6 @@ func TestValidateControlPlane_RejectsUnexpectedStateOverlap(t *testing.T) {
 			"equal",
 		)
 	})
-
-	t.Run("backup root consumes state root", func(t *testing.T) {
-		paths := writeValidControlPlaneFixture(t)
-		if err := os.Remove(paths.BackupRoot()); err != nil {
-			t.Fatalf("os.Remove(%q) error = %v", paths.BackupRoot(), err)
-		}
-		if err := os.Symlink(".", paths.BackupRoot()); err != nil {
-			t.Fatalf("os.Symlink(%q, %q) error = %v", ".", paths.BackupRoot(), err)
-		}
-
-		assertControlPlaneOverlap(
-			t,
-			paths,
-			controlMemberStateRoot,
-			controlMemberBackupRoot,
-			"equal",
-		)
-	})
 }
 
 func TestValidateControlPlane_FailsClosedOnIdentityError(t *testing.T) {
@@ -407,7 +389,6 @@ func writeValidControlPlaneFixture(t *testing.T) ControlPlanePaths {
 	for _, directory := range []string{
 		paths.Repository(),
 		paths.StateRoot(),
-		paths.BackupRoot(),
 		filepath.Dir(paths.InstalledBinary()),
 	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {

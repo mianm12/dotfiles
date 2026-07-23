@@ -13,7 +13,7 @@ type DesiredKind string
 const (
 	// DesiredLink 要求 target 是指向 source 的精确 symlink。
 	DesiredLink DesiredKind = "link"
-	// DesiredScaffold 要求 target 仅在首次缺失时接收渲染蓝本。
+	// DesiredScaffold 要求 target 仅在首次缺失时接收 source 的字面内容。
 	DesiredScaffold DesiredKind = "scaffold"
 )
 
@@ -129,12 +129,10 @@ const (
 	FileSkip FileVerb = "skip"
 	// FileCreateLink 创建或重建精确 symlink。
 	FileCreateLink FileVerb = "create-link"
-	// FileScaffold 写入一次性渲染蓝本。
+	// FileScaffold 写入一次性字面蓝本。
 	FileScaffold FileVerb = "scaffold"
 	// FileAdopt 只更新 state，不触碰 target。
 	FileAdopt FileVerb = "adopt"
-	// FileBackupReplace 先建立可用备份再替换普通对象。
-	FileBackupReplace FileVerb = "backup-replace"
 	// FileConflict 保留 unresolved 用户决策。
 	FileConflict FileVerb = "conflict"
 )
@@ -158,7 +156,7 @@ func (verb FileVerb) ExecutionClass() FileExecutionClass {
 		return FilePlanOnly
 	case FileAdopt:
 		return FileStateOnly
-	case FileCreateLink, FileScaffold, FileBackupReplace:
+	case FileCreateLink, FileScaffold:
 		return FileTargetMutation
 	default:
 		return ""
@@ -183,16 +181,14 @@ const (
 	FileReasonUnownedLink FileReason = "unowned-link"
 	// FileReasonRegularConflict 表示普通文件阻挡 link desired。
 	FileReasonRegularConflict FileReason = "regular-conflict"
-	// FileReasonDirectoryConflict 表示目录阻挡 link desired，不能 force 替换。
+	// FileReasonDirectoryConflict 表示目录阻挡 link desired。
 	FileReasonDirectoryConflict FileReason = "directory-conflict"
-	// FileReasonSpecialConflict 表示特殊对象阻挡 link desired，不能 force 替换。
+	// FileReasonSpecialConflict 表示特殊对象阻挡 link desired。
 	FileReasonSpecialConflict FileReason = "special-conflict"
 	// FileReasonScaffoldPresent 表示 target 已满足 scaffold 的一次性生命周期。
 	FileReasonScaffoldPresent FileReason = "scaffold-present"
 	// FileReasonScaffoldDeleted 表示已有 scaffold 记录且 target 缺失，应保留用户删除决定。
 	FileReasonScaffoldDeleted FileReason = "scaffold-deleted"
-	// FileReasonScaffoldRebuild 表示显式 force 要求重建仍缺失的 scaffold。
-	FileReasonScaffoldRebuild FileReason = "scaffold-rebuild"
 	// FileReasonOwnedLinkToScaffold 表示把仍 owned 的 symlink 转成独立 scaffold 文件。
 	FileReasonOwnedLinkToScaffold FileReason = "owned-link-to-scaffold"
 	// FileReasonReleaseOwnershipToScaffold 表示只改记 scaffold，立即释放旧所有权。
@@ -213,36 +209,24 @@ const (
 	LeafExactSymlink LeafConditionKind = "exact-symlink"
 	// LeafNotOwnedSymlink 要求 leaf 不是指向记录目标的 owned symlink。
 	LeafNotOwnedSymlink LeafConditionKind = "not-owned-symlink"
-	// LeafExactRegular 要求 regular digest 与普通权限位精确相等。
-	LeafExactRegular LeafConditionKind = "exact-regular"
 )
 
-// LeafCondition 保存一个封闭 leaf 谓词所需的最小证据。LinkDest 只用于 symlink 条件；Hash
-// 与 Permissions 只用于 exact-regular。
+// LeafCondition 保存一个封闭 leaf 谓词所需的最小证据。LinkDest 只用于 symlink 条件。
 type LeafCondition struct {
-	Kind        LeafConditionKind
-	LinkDest    string
-	Hash        string
-	Permissions fs.FileMode
+	Kind     LeafConditionKind
+	LinkDest string
 }
 
 // Valid 报告条件字段组合是否封闭且无歧义。
 func (condition LeafCondition) Valid() bool {
 	switch condition.Kind {
 	case LeafAny, LeafMissing, LeafPresent:
-		return condition.LinkDest == "" && condition.Hash == "" && condition.Permissions == 0
+		return condition.LinkDest == ""
 	case LeafExactSymlink, LeafNotOwnedSymlink:
-		return condition.LinkDest != "" && condition.Hash == "" && condition.Permissions == 0
-	case LeafExactRegular:
-		return condition.LinkDest == "" && condition.Hash != "" && condition.Permissions&^fs.ModePerm == 0
+		return condition.LinkDest != ""
 	default:
 		return false
 	}
-}
-
-// RequiresRegularDigest 报告复核该条件是否必须读取 regular 内容摘要。
-func (condition LeafCondition) RequiresRegularDigest() bool {
-	return condition.Kind == LeafExactRegular
 }
 
 // Matches 报告可信 leaf observation 是否满足当前条件。无效条件或未知 observation 永不匹配。
@@ -261,10 +245,6 @@ func (condition LeafCondition) Matches(observed Observation) bool {
 		return observed.Kind == ObjectSymlink && observed.LinkDest == condition.LinkDest
 	case LeafNotOwnedSymlink:
 		return observed.Kind != ObjectSymlink || observed.LinkDest != condition.LinkDest
-	case LeafExactRegular:
-		return observed.Kind == ObjectRegular &&
-			observed.Hash == condition.Hash &&
-			observed.Mode.Perm() == condition.Permissions
 	default:
 		return false
 	}

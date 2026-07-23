@@ -23,16 +23,9 @@ func TestMutationSession_LoadFailureDoesNotGrantStateCommit(t *testing.T) {
 		match func(error) bool
 	}{
 		{
-			name: "requires unsatisfied",
-			setup: func(fixture loadingFixture) {
-				writeManifest(t, fixture.repo, ">=9.0.0", "")
-			},
-			match: func(err error) bool { return errors.Is(err, ErrRequiresUnsatisfied) },
-		},
-		{
 			name: "strict manifest invalid",
 			setup: func(fixture loadingFixture) {
-				writeManifest(t, fixture.repo, ">=1.0.0", "unknown = true\n")
+				writeManifest(t, fixture.repo, "unknown = true\n")
 			},
 			match: func(err error) bool {
 				return err != nil && strings.Contains(err.Error(), "strict mode")
@@ -76,7 +69,7 @@ func TestMutationSession_LoadFailureDoesNotGrantStateCommit(t *testing.T) {
 				t.Fatalf("BeginMutation() error = %v", err)
 			}
 			t.Cleanup(func() { closeMutationSession(t, session) })
-			mutation, err := session.Load("v1.0.0")
+			mutation, err := session.Load()
 			if mutation != nil || !test.match(err) {
 				t.Fatalf("MutationSession.Load() = (%#v, %v), want matched failure", mutation, err)
 			}
@@ -103,14 +96,14 @@ func TestLoadedMutation_CommitsOnceAfterSuccessfulLoad(t *testing.T) {
 	}
 	t.Cleanup(func() { closeMutationSession(t, session) })
 
-	mutation, err := session.Load("v1.0.0")
+	mutation, err := session.Load()
 	if err != nil {
 		t.Fatalf("MutationSession.Load() error = %v", err)
 	}
 	if mutation.Inputs().State().Status() != state.StatusLoaded {
 		t.Fatalf("LoadedMutation state status = %v, want StatusLoaded", mutation.Inputs().State().Status())
 	}
-	if second, err := session.Load("v1.0.0"); second != nil || !errors.Is(err, ErrSessionOrder) {
+	if second, err := session.Load(); second != nil || !errors.Is(err, ErrSessionOrder) {
 		t.Fatalf("second MutationSession.Load() = (%#v, %v), want ErrSessionOrder", second, err)
 	}
 
@@ -149,11 +142,11 @@ func TestMutationSession_CopiesShareLoadAndCommitState(t *testing.T) {
 	t.Cleanup(func() { closeMutationSession(t, session) })
 	copiedSession := *session
 
-	mutation, err := session.Load("v1.0.0")
+	mutation, err := session.Load()
 	if err != nil {
 		t.Fatalf("MutationSession.Load() error = %v", err)
 	}
-	if second, err := copiedSession.Load("v1.0.0"); second != nil || !errors.Is(err, ErrSessionOrder) {
+	if second, err := copiedSession.Load(); second != nil || !errors.Is(err, ErrSessionOrder) {
 		t.Fatalf("copied MutationSession.Load() = (%#v, %v), want ErrSessionOrder", second, err)
 	}
 
@@ -199,7 +192,7 @@ func TestMutationSession_CopiesLoadConcurrentlyOnce(t *testing.T) {
 	for _, handle := range []*MutationSession{session, &copied} {
 		go func(candidate *MutationSession) {
 			<-start
-			mutation, err := candidate.Load("v1.0.0")
+			mutation, err := candidate.Load()
 			results <- result{mutation: mutation, err: err}
 		}(handle)
 	}
@@ -238,7 +231,7 @@ func TestLoadedMutation_CopiesCommitConcurrentlyOnce(t *testing.T) {
 		t.Fatalf("beginMutation() error = %v", err)
 	}
 	t.Cleanup(func() { closeMutationSession(t, session) })
-	mutation, err := session.Load("v1.0.0")
+	mutation, err := session.Load()
 	if err != nil {
 		t.Fatalf("MutationSession.Load() error = %v", err)
 	}
@@ -294,10 +287,10 @@ func TestMutationSession_LoadFailureCanBeRetriedBeforeCapability(t *testing.T) {
 	}
 	t.Cleanup(func() { closeMutationSession(t, session) })
 
-	if mutation, err := session.Load("v1.0.0"); mutation != nil || !errors.Is(err, loadErr) {
+	if mutation, err := session.Load(); mutation != nil || !errors.Is(err, loadErr) {
 		t.Fatalf("first MutationSession.Load() = (%#v, %v), want load failure without capability", mutation, err)
 	}
-	mutation, err := session.Load("v1.0.0")
+	mutation, err := session.Load()
 	if err != nil || mutation == nil {
 		t.Fatalf("second MutationSession.Load() = (%#v, %v), want capability", mutation, err)
 	}
@@ -311,7 +304,7 @@ func TestLoadedMutation_ValidatesCandidateBeforeStore(t *testing.T) {
 		t.Fatalf("BeginMutation() error = %v", err)
 	}
 	t.Cleanup(func() { closeMutationSession(t, session) })
-	mutation, err := session.Load("v1.0.0")
+	mutation, err := session.Load()
 	if err != nil {
 		t.Fatalf("MutationSession.Load() error = %v", err)
 	}
@@ -361,7 +354,7 @@ func TestLoadedMutation_StoreFailureCanBeRetried(t *testing.T) {
 		t.Fatalf("beginMutation() error = %v", err)
 	}
 	t.Cleanup(func() { closeMutationSession(t, session) })
-	mutation, err := session.Load("v1.0.0")
+	mutation, err := session.Load()
 	if err != nil {
 		t.Fatalf("MutationSession.Load() error = %v", err)
 	}
@@ -387,17 +380,17 @@ func TestInitSession_CopiesShareLoadPhase(t *testing.T) {
 	t.Cleanup(func() { closeInitSession(t, session) })
 	copied := *session
 
-	if _, err := session.Load("v1.0.0"); err != nil {
+	if _, err := session.Load(); err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
-	if _, err := copied.Load("v1.0.0"); !errors.Is(err, ErrSessionOrder) {
+	if _, err := copied.Load(); !errors.Is(err, ErrSessionOrder) {
 		t.Fatalf("copied InitSession.Load() error = %v, want ErrSessionOrder", err)
 	}
 }
 
 func TestInitSession_NestedMutationUsesUpdatedConfigAndSameOwnership(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	prepared, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
@@ -413,11 +406,11 @@ func TestInitSession_NestedMutationUsesUpdatedConfigAndSameOwnership(t *testing.
 	if nested, err := outer.BeginMutation(fixture.overrides); nested != nil || !errors.Is(err, ErrSessionOrder) {
 		t.Fatalf("BeginMutation() before init Load = (%#v, %v), want ErrSessionOrder", nested, err)
 	}
-	loaded, err := outer.Load("v1.0.0")
+	loaded, err := outer.Load()
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
-	if _, err := outer.Load("v1.0.0"); !errors.Is(err, ErrSessionOrder) {
+	if _, err := outer.Load(); !errors.Is(err, ErrSessionOrder) {
 		t.Fatalf("second InitSession.Load() error = %v, want ErrSessionOrder", err)
 	}
 	if !loaded.Inputs().Context().ConfigMissing() {
@@ -438,7 +431,7 @@ func TestInitSession_NestedMutationUsesUpdatedConfigAndSameOwnership(t *testing.
 	}
 	closeInitSession(t, outer)
 	assertLockBusy(t, fixture)
-	if mutation, err := nested.Load("v1.0.0"); mutation != nil || !errors.Is(err, state.ErrCorrupt) {
+	if mutation, err := nested.Load(); mutation != nil || !errors.Is(err, state.ErrCorrupt) {
 		t.Fatalf("nested MutationSession.Load() = (%#v, %v), want ErrCorrupt", mutation, err)
 	}
 	configSnapshot, err := config.LoadSnapshot(fixture.config)
@@ -451,7 +444,7 @@ func TestInitSession_NestedMutationUsesUpdatedConfigAndSameOwnership(t *testing.
 
 func TestLoadedInit_ConfigCommitIsSingleUseAndEquivalentNoOpOpensGate(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	initial, err := PrepareInit(fixture.overrides, "v1.0.0")
+	initial, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit(initial) error = %v", err)
 	}
@@ -461,7 +454,7 @@ func TestLoadedInit_ConfigCommitIsSingleUseAndEquivalentNoOpOpensGate(t *testing
 	}
 	writeFile(t, fixture.config, initialCandidate.Bytes(), 0o600)
 
-	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	prepared, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit(existing) error = %v", err)
 	}
@@ -474,7 +467,7 @@ func TestLoadedInit_ConfigCommitIsSingleUseAndEquivalentNoOpOpensGate(t *testing
 		t.Fatalf("BeginInit() error = %v", err)
 	}
 	t.Cleanup(func() { closeInitSession(t, session) })
-	loaded, err := session.Load("v1.0.0")
+	loaded, err := session.Load()
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
@@ -494,7 +487,7 @@ func TestLoadedInit_ConfigCommitIsSingleUseAndEquivalentNoOpOpensGate(t *testing
 
 func TestLoadedInit_PreconditionFailureKeepsConfigGateClosed(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	prepared, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
@@ -507,7 +500,7 @@ func TestLoadedInit_PreconditionFailureKeepsConfigGateClosed(t *testing.T) {
 		t.Fatalf("BeginInit() error = %v", err)
 	}
 	t.Cleanup(func() { closeInitSession(t, session) })
-	loaded, err := session.Load("v1.0.0")
+	loaded, err := session.Load()
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
@@ -522,8 +515,8 @@ func TestLoadedInit_PreconditionFailureKeepsConfigGateClosed(t *testing.T) {
 
 func TestLoadedInit_LockedProfileOverrideRejectsCandidateFromDifferentPreparation(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	writeFile(t, filepath.Join(fixture.repo, "dot.toml"), []byte("requires = \">=1.0.0\"\n[profiles]\nlinux = []\nmac = []\n"), 0o600)
-	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	writeFile(t, filepath.Join(fixture.repo, "dot.toml"), []byte("[profiles]\nlinux = []\nmac = []\n"), 0o600)
+	prepared, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
@@ -538,7 +531,7 @@ func TestLoadedInit_LockedProfileOverrideRejectsCandidateFromDifferentPreparatio
 		t.Fatalf("BeginInit() error = %v", err)
 	}
 	t.Cleanup(func() { closeInitSession(t, session) })
-	loaded, err := session.Load("v1.0.0")
+	loaded, err := session.Load()
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
@@ -559,7 +552,7 @@ func TestInitSession_LoadRerunsStrictConfigInsideLock(t *testing.T) {
 	}
 	t.Cleanup(func() { closeInitSession(t, session) })
 	writeFile(t, fixture.config, []byte("unknown = true\n"), 0o600)
-	if loaded, err := session.Load("v1.0.0"); loaded != nil || err == nil {
+	if loaded, err := session.Load(); loaded != nil || err == nil {
 		t.Fatalf("InitSession.Load() = (%#v, %v), want locked strict config error", loaded, err)
 	}
 	assertLockBusy(t, fixture)
@@ -567,7 +560,7 @@ func TestInitSession_LoadRerunsStrictConfigInsideLock(t *testing.T) {
 
 func TestLoadedInit_PublisherFailureIsRetryableAndKeepsGateClosed(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	prepared, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
@@ -586,7 +579,7 @@ func TestLoadedInit_PublisherFailureIsRetryableAndKeepsGateClosed(t *testing.T) 
 		t.Fatalf("beginInit() error = %v", err)
 	}
 	t.Cleanup(func() { closeInitSession(t, session) })
-	loaded, err := session.Load("v1.0.0")
+	loaded, err := session.Load()
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}
@@ -605,7 +598,7 @@ func TestLoadedInit_PublisherFailureIsRetryableAndKeepsGateClosed(t *testing.T) 
 
 func TestLoadedInit_PostPublishCleanupFailureRecordsCommittedGate(t *testing.T) {
 	fixture := newLoadingFixture(t, false)
-	prepared, err := PrepareInit(fixture.overrides, "v1.0.0")
+	prepared, err := PrepareInit(fixture.overrides)
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}
@@ -623,7 +616,7 @@ func TestLoadedInit_PostPublishCleanupFailureRecordsCommittedGate(t *testing.T) 
 		t.Fatalf("beginInit() error = %v", err)
 	}
 	t.Cleanup(func() { closeInitSession(t, session) })
-	loaded, err := session.Load("v1.0.0")
+	loaded, err := session.Load()
 	if err != nil {
 		t.Fatalf("InitSession.Load() error = %v", err)
 	}

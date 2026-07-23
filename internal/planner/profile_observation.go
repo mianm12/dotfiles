@@ -30,14 +30,13 @@ func ObserveProfileTargets(
 	entries []manifest.DesiredEntry,
 	loaded state.Loaded,
 ) (ObservedProfile, error) {
-	return observeProfileTargets(home, entries, loaded, nil)
+	return observeProfileTargets(home, entries, loaded)
 }
 
 func observeProfileTargets(
 	home string,
 	entries []manifest.DesiredEntry,
 	loaded state.Loaded,
-	regularDigestTargets map[string]struct{},
 ) (ObservedProfile, error) {
 	if home == "" || !filepath.IsAbs(home) {
 		return ObservedProfile{}, fmt.Errorf("effective HOME %q must be a non-empty absolute path", home)
@@ -61,8 +60,7 @@ func observeProfileTargets(
 	matchedHistory := make([]bool, len(history))
 	targets := make([]ObservedTarget, 0, len(desired))
 	for _, candidate := range desired {
-		_, requireDigest := regularDigestTargets[candidate.desired.TargetPath]
-		observed, err := observeTarget(candidate.desired.TargetPath, requireDigest)
+		observed, err := ObserveTarget(candidate.desired.TargetPath)
 		if err != nil {
 			return ObservedProfile{}, err
 		}

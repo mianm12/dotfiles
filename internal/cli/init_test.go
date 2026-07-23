@@ -19,50 +19,15 @@ import (
 	dotruntime "github.com/mianm12/dotfiles/internal/runtime"
 )
 
-func TestParseInitSetValues_PreservesEmptyAndRejectsAmbiguity(t *testing.T) {
-	values, err := parseInitSetValues([]string{"email=me@example.com", "empty="})
-	if err != nil {
-		t.Fatalf("parseInitSetValues() error = %v", err)
-	}
-	if got := values["email"]; !got.Set || got.Value != "me@example.com" {
-		t.Fatalf("email selection = %#v", got)
-	}
-	if got := values["empty"]; !got.Set || got.Value != "" {
-		t.Fatalf("empty selection = %#v, want explicit empty", got)
-	}
-
-	for _, test := range []struct {
-		name   string
-		values []string
-		want   string
-	}{
-		{name: "missing equals", values: []string{"email"}, want: "want key=value"},
-		{name: "empty key", values: []string{"=value"}, want: "want key=value"},
-		{name: "duplicate", values: []string{"email=first", "email=second"}, want: "duplicate --set key"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := parseInitSetValues(test.values); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("parseInitSetValues(%q) error = %v, want %q", test.values, err, test.want)
-			}
-		})
-	}
-}
-
-func TestResolveInitDecisions_YesUsesUnambiguousInputsWithoutTerminal(t *testing.T) {
-	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
-[profiles]
+func TestResolveInitDecisions_YesUsesProfileWithoutTerminal(t *testing.T) {
+	fixture := newInitDecisionFixture(t, `[profiles]
 mac = []
-[data.email]
-default = "default@example.com"
-[data.empty]
-default = "fallback"
 `, "")
 	inputs := fixture.prepare(t, dotruntime.Override{Value: "mac", Set: true})
 	before := snapshotCLITree(t, fixture.root)
 	opened := false
 	decisions, err := resolveInitDecisions(
 		inputs,
-		map[string]dotruntime.Override{"empty": {Value: "", Set: true}},
 		true,
 		func() (io.ReadWriteCloser, error) {
 			opened = true
@@ -83,30 +48,27 @@ default = "fallback"
 		t.Fatalf("BuildCandidate() error = %v", err)
 	}
 	machine := candidate.Machine()
-	if machine.Profile != "mac" || machine.Data["email"] != "default@example.com" || machine.Data["empty"] != "" {
+	if machine.Profile != "mac" {
 		t.Fatalf("candidate machine = %#v", machine)
 	}
 	fixture.assertUnchanged(t, before)
 }
 
 func TestResolveInitDecisions_NoTerminalLeavesAllMutationPathsMissing(t *testing.T) {
-	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
-[profiles]
+	fixture := newInitDecisionFixture(t, `[profiles]
 linux = []
 mac = []
-[data.email]
-prompt = "Git email"
 `, "")
 	inputs := fixture.prepare(t, dotruntime.Override{})
 	before := snapshotCLITree(t, fixture.root)
-	_, err := resolveInitDecisions(inputs, nil, true, func() (io.ReadWriteCloser, error) {
+	_, err := resolveInitDecisions(inputs, true, func() (io.ReadWriteCloser, error) {
 		return nil, os.ErrNotExist
 	})
 	if err == nil || !strings.Contains(err.Error(), "open user terminal") {
 		t.Fatalf("resolveInitDecisions() error = %v, want no terminal", err)
 	}
 	fixture.assertUnchanged(t, before)
-	for _, path := range []string{fixture.config, fixture.state, fixture.lock, fixture.backup} {
+	for _, path := range []string{fixture.config, fixture.state, fixture.lock} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("mutation path %q exists or cannot be inspected: %v", path, err)
 		}
@@ -114,24 +76,14 @@ prompt = "Git email"
 }
 
 func TestResolveInitDecisions_InteractiveUsesTTYAndRepairsStaleProfile(t *testing.T) {
-	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
-[profiles]
+	fixture := newInitDecisionFixture(t, `[profiles]
 linux = []
 mac = []
-[data.email]
-prompt = "Git email"
-default = "manifest@example.com"
-[data.machine]
-`, `profile = "retired"
-
-[data]
-email = "old@example.com"
-machine = "old-machine"
-`)
+`, `profile = "retired"`)
 	inputs := fixture.prepare(t, dotruntime.Override{})
 	before := snapshotCLITree(t, fixture.root)
-	terminal := newInitTestTerminal("linux\n\nnew-machine\nn\n")
-	decisions, err := resolveInitDecisions(inputs, nil, false, func() (io.ReadWriteCloser, error) {
+	terminal := newInitTestTerminal("linux\nn\n")
+	decisions, err := resolveInitDecisions(inputs, false, func() (io.ReadWriteCloser, error) {
 		return terminal, nil
 	})
 	if err != nil {
@@ -145,10 +97,10 @@ machine = "old-machine"
 		t.Fatalf("BuildCandidate() error = %v", err)
 	}
 	machine := candidate.Machine()
-	if machine.Profile != "linux" || machine.Data["email"] != "old@example.com" || machine.Data["machine"] != "new-machine" {
+	if machine.Profile != "linux" {
 		t.Fatalf("candidate machine = %#v", machine)
 	}
-	for _, want := range []string{"Profiles:\n  linux\n  mac\n", "Profile: ", "Git email [old@example.com]: ", "machine [old-machine]: ", "Apply now? [Y/n] "} {
+	for _, want := range []string{"Profiles:\n  linux\n  mac\n", "Profile: ", "Apply now? [Y/n] "} {
 		if !strings.Contains(terminal.written.String(), want) {
 			t.Fatalf("terminal output = %q, want %q", terminal.written.String(), want)
 		}
@@ -159,36 +111,10 @@ machine = "old-machine"
 	fixture.assertUnchanged(t, before)
 }
 
-func TestResolveInitDecisions_RejectsUndeclaredSetBeforeOpeningTerminal(t *testing.T) {
-	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
-[profiles]
-mac = []
-`, "")
-	inputs := fixture.prepare(t, dotruntime.Override{Value: "mac", Set: true})
-	opened := false
-	_, err := resolveInitDecisions(
-		inputs,
-		map[string]dotruntime.Override{"unknown": {Value: "value", Set: true}},
-		false,
-		func() (io.ReadWriteCloser, error) {
-			opened = true
-			return nil, errors.New("must not open")
-		},
-	)
-	if err == nil || !strings.Contains(err.Error(), "unknown init data key") {
-		t.Fatalf("resolveInitDecisions() error = %v", err)
-	}
-	if opened {
-		t.Fatal("unknown --set opened a user terminal")
-	}
-}
-
 func TestInit_NoTerminalWithIncompleteInputsIsZeroWrite(t *testing.T) {
-	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
-[profiles]
+	fixture := newInitDecisionFixture(t, `[profiles]
 linux = []
 mac = []
-[data.email]
 `, "")
 	before := snapshotCLITree(t, fixture.root)
 	stdout, stderr, code := fixture.run(
@@ -201,7 +127,7 @@ mac = []
 		t.Fatalf("init no TTY = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 	}
 	fixture.assertUnchanged(t, before)
-	for _, path := range []string{fixture.config, fixture.state, fixture.lock, fixture.backup} {
+	for _, path := range []string{fixture.config, fixture.state, fixture.lock} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("mutation path %q exists or cannot be inspected: %v", path, err)
 		}
@@ -209,45 +135,37 @@ mac = []
 }
 
 func TestInit_NoTerminalWithoutApplyDecisionIsZeroWrite(t *testing.T) {
-	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
-[profiles]
+	fixture := newInitDecisionFixture(t, `[profiles]
 mac = []
-[data.email]
 `, "")
 	before := snapshotCLITree(t, fixture.root)
 	stdout, stderr, code := fixture.run(
 		t,
 		"command stdin must not be used\n",
 		func() (io.ReadWriteCloser, error) { return nil, os.ErrNotExist },
-		"init", "--profile", "mac", "--set", "email=ready@example.com",
+		"init", "--profile", "mac",
 	)
 	if code != exitError || stdout != "" || !strings.Contains(stderr, "open user terminal") {
 		t.Fatalf("init without apply decision = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 	}
 	fixture.assertUnchanged(t, before)
-	for _, path := range []string{fixture.config, fixture.state, fixture.lock, fixture.backup} {
+	for _, path := range []string{fixture.config, fixture.state, fixture.lock} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("mutation path %q exists or cannot be inspected: %v", path, err)
 		}
 	}
 }
 
-func TestInit_ConfigOnlyPersistsRepoAndExplicitEmpty(t *testing.T) {
-	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
-[profiles]
+func TestInit_ConfigOnlyPersistsRepoAndProfile(t *testing.T) {
+	fixture := newInitDecisionFixture(t, `[profiles]
 mac = []
-[data.email]
-prompt = "Git email"
-default = "default@example.com"
-[data.empty]
-default = "fallback"
 `, "")
-	terminal := newInitTestTerminal("\nn\n")
+	terminal := newInitTestTerminal("n\n")
 	stdout, stderr, code := fixture.run(
 		t,
 		"must not be read\n",
 		func() (io.ReadWriteCloser, error) { return terminal, nil },
-		"init", "--profile", "mac", "--set", "empty=",
+		"init", "--profile", "mac",
 	)
 	if code != exitOK || stderr != "" || !strings.Contains(stdout, "config  "+fixture.config+"  (updated)") {
 		t.Fatalf("config-only init = stdout %q, stderr %q, exit %d", stdout, stderr, code)
@@ -258,8 +176,7 @@ default = "fallback"
 		t.Fatalf("LoadSnapshot(config) error = %v", err)
 	}
 	machine := snapshot.Machine()
-	if machine.Profile != "mac" || machine.Repo == nil || *machine.Repo != fixture.repo ||
-		machine.Data["email"] != "default@example.com" || machine.Data["empty"] != "" {
+	if machine.Profile != "mac" || machine.Repo == nil || *machine.Repo != fixture.repo {
 		t.Fatalf("machine config = %#v", machine)
 	}
 	if snapshot.Precondition().Mode() != 0o600 {
@@ -268,8 +185,7 @@ default = "fallback"
 	if _, err := os.Lstat(fixture.state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("config-only init state error = %v, want missing", err)
 	}
-	if !strings.Contains(terminal.written.String(), "Git email [default@example.com]: ") ||
-		!strings.Contains(terminal.written.String(), "Apply now? [Y/n] ") {
+	if !strings.Contains(terminal.written.String(), "Apply now? [Y/n] ") {
 		t.Fatalf("terminal output = %q", terminal.written.String())
 	}
 
@@ -278,39 +194,13 @@ default = "fallback"
 	}
 	prepared, err := dotruntime.PrepareInit(dotruntime.Overrides{
 		Home: dotruntime.Override{Value: fixture.home, Set: true},
-	}, "v0.0.0")
+	})
 	if err != nil {
 		t.Fatalf("PrepareInit(after removing repo override) error = %v", err)
 	}
 	if got := prepared.Context().Control().RepositoryPath(); got != fixture.repo {
 		t.Fatalf("persisted repository = %q, want %q", got, fixture.repo)
 	}
-}
-
-func TestInit_DuplicateSetFailsBeforePrepareOrTerminal(t *testing.T) {
-	fixture := newInitDecisionFixture(t, `requires = ">=0.0.0"
-[profiles]
-mac = []
-[data.email]
-`, "")
-	before := snapshotCLITree(t, fixture.root)
-	opened := false
-	stdout, stderr, code := fixture.run(
-		t,
-		"",
-		func() (io.ReadWriteCloser, error) {
-			opened = true
-			return nil, errors.New("must not open")
-		},
-		"init", "--yes", "--profile", "mac", "--set", "email=first", "--set", "email=second",
-	)
-	if code != exitError || stdout != "" || !strings.Contains(stderr, "duplicate --set key") {
-		t.Fatalf("duplicate --set = stdout %q, stderr %q, exit %d", stdout, stderr, code)
-	}
-	if opened {
-		t.Fatal("duplicate --set opened terminal")
-	}
-	fixture.assertUnchanged(t, before)
 }
 
 func TestInit_YesRunsNestedApplyHooksAndSecondRunConverges(t *testing.T) {
@@ -448,7 +338,7 @@ func TestInit_PruneConfirmationAndYesAuthorization(t *testing.T) {
 	})
 }
 
-func TestInit_YesDoesNotForceConflicts(t *testing.T) {
+func TestInit_YesPreservesConflicts(t *testing.T) {
 	fixture := newMutationCLIFixture(t)
 	target := filepath.Join(fixture.home, "alpha", "file")
 	writeCLIFile(t, target, "user-owned\n")
@@ -460,16 +350,11 @@ func TestInit_YesDoesNotForceConflicts(t *testing.T) {
 		nil,
 		"init", "--profile", "all", "--yes",
 	)
-	if code != exitConflict || stderr != "" || !strings.Contains(stdout, "CONFLICT  ~/alpha/file") ||
-		strings.Contains(stdout, "backup  ") {
+	if code != exitConflict || stderr != "" || !strings.Contains(stdout, "CONFLICT  ~/alpha/file") {
 		t.Fatalf("init --yes conflict = stdout %q, stderr %q, exit %d", stdout, stderr, code)
 	}
 	if content, err := os.ReadFile(target); err != nil || string(content) != "user-owned\n" {
 		t.Fatalf("init --yes changed conflict target: %q, %v", content, err)
-	}
-	backupRoot := filepath.Join(fixture.home, ".local", "state", "dot", "backup")
-	if _, err := os.Lstat(backupRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("init --yes backup root error = %v, want missing", err)
 	}
 }
 
@@ -611,7 +496,6 @@ type initDecisionFixture struct {
 	config   string
 	state    string
 	lock     string
-	backup   string
 }
 
 func newInitDecisionFixture(t *testing.T, manifest, machine string) initDecisionFixture {
@@ -626,7 +510,6 @@ func newInitDecisionFixture(t *testing.T, manifest, machine string) initDecision
 	fixture.config = filepath.Join(fixture.home, ".config", "dot", "config.toml")
 	fixture.state = filepath.Join(fixture.home, ".local", "state", "dot", "state.json")
 	fixture.lock = filepath.Join(fixture.home, ".local", "state", "dot", "lock")
-	fixture.backup = filepath.Join(fixture.home, ".local", "state", "dot", "backup")
 	writeCLIFile(t, filepath.Join(fixture.repo, "dot.toml"), manifest)
 	writeCLIFile(t, filepath.Join(fixture.realHome, "sentinel"), "unchanged\n")
 	if machine != "" {
@@ -651,7 +534,7 @@ func (fixture initDecisionFixture) prepare(t *testing.T, profile dotruntime.Over
 		Home:       dotruntime.Override{Value: fixture.home, Set: true},
 		Repository: dotruntime.Override{Value: fixture.repo, Set: true},
 		Profile:    profile,
-	}, "v0.0.0")
+	})
 	if err != nil {
 		t.Fatalf("PrepareInit() error = %v", err)
 	}

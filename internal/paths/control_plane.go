@@ -22,7 +22,6 @@ const (
 	controlMemberStateRoot
 	controlMemberStateFile
 	controlMemberStateLock
-	controlMemberBackupRoot
 	controlMemberInstalledBinary
 	controlMemberCount
 )
@@ -83,10 +82,6 @@ func ResolveControlPlanePaths(home, repo, config string) (ControlPlanePaths, err
 			controlMemberStateLock,
 			filepath.Join(stateRoot, "lock"),
 		),
-		controlMemberBackupRoot: newStateChild(
-			controlMemberBackupRoot,
-			filepath.Join(stateRoot, "backup"),
-		),
 		controlMemberInstalledBinary: {
 			role:   controlMemberInstalledBinary,
 			family: controlFamilyBinary,
@@ -141,11 +136,6 @@ func (paths ControlPlanePaths) StateFile() string {
 // StateLock 返回单实例 lock 文件展示路径。
 func (paths ControlPlanePaths) StateLock() string {
 	return paths.members[controlMemberStateLock].path
-}
-
-// BackupRoot 返回 backup 家族根目录展示路径。
-func (paths ControlPlanePaths) BackupRoot() string {
-	return paths.members[controlMemberBackupRoot].path
 }
 
 // InstalledBinary 返回规范安装位置中的 dot binary 展示路径。

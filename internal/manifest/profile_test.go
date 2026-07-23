@@ -8,7 +8,6 @@ import (
 
 func TestLoad_ExpandsProfilesAndFindsUnassignedModules(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["zsh", "git"]
 dev = ["@base", "nvim", "zsh"]
@@ -44,7 +43,6 @@ empty = []
 
 func TestLoad_ExpandsDiamondProfileOnce(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = ["git"]
 left = ["@base", "zsh"]
@@ -84,7 +82,7 @@ func TestLoad_RejectsInvalidProfiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\n"+tt.profiles)
+			repo := writeRepositoryManifest(t, "[profiles]\n"+tt.profiles)
 			for _, module := range tt.modules {
 				writeModule(t, repo, module, "")
 			}
@@ -98,8 +96,8 @@ func TestLoad_RejectsInvalidProfiles(t *testing.T) {
 
 func TestLoad_ProfileResultsAreStable(t *testing.T) {
 	contents := []string{
-		"requires = \">=0.3.0\"\n[profiles]\nwork = [\"@base\", \"nvim\"]\nbase = [\"zsh\", \"git\"]",
-		"requires = \">=0.3.0\"\n[profiles]\nbase = [\"zsh\", \"git\"]\nwork = [\"@base\", \"nvim\"]",
+		"[profiles]\nwork = [\"@base\", \"nvim\"]\nbase = [\"zsh\", \"git\"]",
+		"[profiles]\nbase = [\"zsh\", \"git\"]\nwork = [\"@base\", \"nvim\"]",
 	}
 	orders := [][]string{{"nvim", "git", "unused", "zsh"}, {"zsh", "unused", "git", "nvim"}}
 

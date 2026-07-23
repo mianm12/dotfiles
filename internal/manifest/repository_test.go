@@ -12,7 +12,6 @@ import (
 
 func TestLoad_DiscoversModulesInStableOrder(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 base = []
 `)
@@ -22,9 +21,6 @@ base = []
 	got, err := Load(repo)
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
-	}
-	if got.Requirement().String() != ">=0.3.0" {
-		t.Errorf("Load().Requirement() = %q, want %q", got.Requirement(), ">=0.3.0")
 	}
 	wantModules := []string{"git", "zsh"}
 	if !reflect.DeepEqual(got.ModuleNames(), wantModules) {
@@ -37,70 +33,8 @@ base = []
 	}
 }
 
-func TestRepositoryDataKeys_ReturnsStableCopy(t *testing.T) {
-	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
-[profiles]
-base = []
-[data.machine]
-[data.email]
-`)
-	loaded, err := Load(repo)
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-
-	want := []string{"email", "machine"}
-	first := loaded.DataKeys()
-	if !reflect.DeepEqual(first, want) {
-		t.Fatalf("DataKeys() = %v, want %v", first, want)
-	}
-	first[0] = "changed"
-	if got := loaded.DataKeys(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("mutating DataKeys result changed repository: got %v, want %v", got, want)
-	}
-}
-
-func TestRepositoryDataDeclarations_PreservePresenceAndReturnCopy(t *testing.T) {
-	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
-[profiles]
-base = []
-[data.email]
-prompt = "Email"
-default = ""
-[data.machine]
-`)
-	loaded, err := Load(repo)
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
-	}
-
-	declarations := loaded.DataDeclarations()
-	if len(declarations) != 2 || declarations[0].Key() != "email" || declarations[1].Key() != "machine" {
-		t.Fatalf("DataDeclarations() = %#v, want email then machine", declarations)
-	}
-	if prompt, ok := declarations[0].Prompt(); !ok || prompt != "Email" {
-		t.Fatalf("email Prompt() = (%q, %t), want (Email, true)", prompt, ok)
-	}
-	if value, ok := declarations[0].Default(); !ok || value != "" {
-		t.Fatalf("email Default() = (%q, %t), want explicit empty", value, ok)
-	}
-	if _, ok := declarations[1].Prompt(); ok {
-		t.Fatal("machine Prompt() exists, want omitted")
-	}
-	if _, ok := declarations[1].Default(); ok {
-		t.Fatal("machine Default() exists, want omitted")
-	}
-	declarations[0] = DataDeclaration{}
-	if got := loaded.DataDeclarations()[0].Key(); got != "email" {
-		t.Fatalf("mutating DataDeclarations result changed repository: first key = %q", got)
-	}
-}
-
 func TestRepositoryProfileLineWithModule_PreservesDirectDeclaration(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 shared = ["core"]
 all = ["alpha", "@shared"]
@@ -134,7 +68,6 @@ all = ["alpha", "@shared"]
 
 func TestRepositoryProfileLineWithModule_QuotesDottedProfileRoundTrip(t *testing.T) {
 	repo := writeRepositoryManifest(t, `
-requires = ">=0.3.0"
 [profiles]
 "work.mac" = ["alpha"]
 `)
@@ -153,7 +86,7 @@ requires = ">=0.3.0"
 		t.Fatalf("ProfileLineWithModule() = %q, want %q", line, want)
 	}
 
-	roundTrip := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\n"+line+"\n")
+	roundTrip := writeRepositoryManifest(t, "[profiles]\n"+line+"\n")
 	for _, module := range []string{"alpha", "beta"} {
 		writeModule(t, roundTrip, module, "")
 	}
@@ -218,7 +151,7 @@ func TestRepositoryModuleActivationGuidance_UsesExpandedMembershipAndEffectiveOv
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := "requires = \">=0.3.0\"\n"
+			root := ""
 			if tt.rootDefaults != "" {
 				root += "[defaults]\n" + tt.rootDefaults + "\n"
 			}
@@ -245,7 +178,7 @@ func TestRepositoryModuleActivationGuidance_UsesExpandedMembershipAndEffectiveOv
 }
 
 func TestRepositoryValidateModuleRules_CoversUnassignedModules(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = []")
 	writeModule(t, repo, "unassigned", `target = { darwin = "~/.config/app" }`)
 	loaded, err := Load(repo)
 	if err != nil {
@@ -264,7 +197,7 @@ func TestRepositoryValidateModuleRules_CoversUnassignedModules(t *testing.T) {
 }
 
 func TestLoad_MissingModulesDirectoryMeansNoModules(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = []")
 
 	got, err := Load(repo)
 	if err != nil {
@@ -302,7 +235,7 @@ func TestLoad_RejectsInvalidModulesDirectoryPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+			repo := writeRepositoryManifest(t, "[profiles]\nbase = []")
 			modulesRoot := filepath.Join(repo, "modules")
 			tt.setup(t, modulesRoot)
 
@@ -330,7 +263,7 @@ func TestLoad_RejectsUnavailableOrInvalidRepository(t *testing.T) {
 }
 
 func TestLoad_RejectsInvalidModuleName(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = []")
 	writeModule(t, repo, "_invalid", "")
 
 	_, err := Load(repo)
@@ -340,7 +273,7 @@ func TestLoad_RejectsInvalidModuleName(t *testing.T) {
 }
 
 func TestLoad_RejectsInvalidModuleManifest(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = []")
 	writeModule(t, repo, "zsh", "unknown = true")
 
 	_, err := Load(repo)
@@ -350,7 +283,7 @@ func TestLoad_RejectsInvalidModuleManifest(t *testing.T) {
 }
 
 func TestLoad_RejectsDanglingModuleManifestSymlink(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = []")
 	moduleRoot := filepath.Join(repo, "modules", "zsh")
 	if err := os.MkdirAll(moduleRoot, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(%q) error = %v", moduleRoot, err)
@@ -373,8 +306,8 @@ func TestLoad_DoesNotWriteOnSuccessOrFailure(t *testing.T) {
 		module    string
 		wantError bool
 	}{
-		{name: "success", root: "requires = \">=0.3.0\"\n[profiles]\nbase = []", module: `os = ["darwin"]`},
-		{name: "failure", root: "requires = \">=0.3.0\"\n[profiles]\nbase = []", module: "unknown = true", wantError: true},
+		{name: "success", root: "[profiles]\nbase = []", module: `os = ["darwin"]`},
+		{name: "failure", root: "[profiles]\nbase = []", module: "unknown = true", wantError: true},
 	}
 
 	for _, tt := range tests {
@@ -396,7 +329,7 @@ func TestLoad_DoesNotWriteOnSuccessOrFailure(t *testing.T) {
 }
 
 func TestLoad_ReadOnlyRepository(t *testing.T) {
-	repo := writeRepositoryManifest(t, "requires = \">=0.3.0\"\n[profiles]\nbase = []")
+	repo := writeRepositoryManifest(t, "[profiles]\nbase = []")
 	writeModule(t, repo, "zsh", "")
 	setTreeWritable(t, repo, false)
 	t.Cleanup(func() { setTreeWritable(t, repo, true) })

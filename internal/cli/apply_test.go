@@ -94,7 +94,7 @@ func TestApply_HookStdioStateHistoryAndIdempotence(t *testing.T) {
 		t.Fatalf("idempotent hook log = %q, %v", content, readErr)
 	}
 
-	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "requires = \">=0.0.0\"\n[profiles]\nall = []\n")
+	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "[profiles]\nall = []\n")
 	stdout, stderr, code = fixture.runWithInput(t, "", nil, "apply", "--no-prune")
 	if code != exitOK || stderr != "" || !strings.HasSuffix(stdout, "Already up to date.\n") {
 		t.Fatalf("profile removal apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
@@ -102,7 +102,7 @@ func TestApply_HookStdioStateHistoryAndIdempotence(t *testing.T) {
 	if _, exists := readPlanState(t, fixture.home).RunOnce["alpha/hooks/setup.sh"]; !exists {
 		t.Fatal("profile removal discarded run_once history")
 	}
-	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "requires = \">=0.0.0\"\n[profiles]\nall = [\"alpha\"]\n")
+	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "[profiles]\nall = [\"alpha\"]\n")
 	stdout, stderr, code = fixture.runWithInput(t, "must-not-be-read\n", nil, "apply", "--no-prune", "--verbose")
 	if code != exitOK || stderr != "" || !strings.Contains(stdout, "skip  alpha/hooks/setup.sh  (fingerprint-current)") {
 		t.Fatalf("profile restore apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
@@ -112,38 +112,6 @@ func TestApply_HookStdioStateHistoryAndIdempotence(t *testing.T) {
 	}
 	if realHomeAfter := snapshotCLIPath(t, fixture.realHome); !reflect.DeepEqual(realHomeAfter, realHomeBefore) {
 		t.Fatalf("hook apply changed real HOME sentinel: before=%v after=%v", realHomeBefore, realHomeAfter)
-	}
-}
-
-func TestApply_ForceReportsExactBackupPath(t *testing.T) {
-	fixture := newMutationCLIFixture(t)
-	target := filepath.Join(fixture.home, "alpha", "file")
-	makeDirectory(t, filepath.Dir(target))
-	writeCLIFile(t, target, "user data\n")
-
-	stdout, stderr, code := fixture.run(t, nil, "apply", "--force")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("force apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
-	}
-	line := findLineWithPrefix(stdout, "backup  ")
-	if line == "" {
-		t.Fatalf("force apply stdout = %q, want exact backup line", stdout)
-	}
-	backupPath := strings.TrimPrefix(line, "backup  ")
-	content, err := os.ReadFile(backupPath)
-	if err != nil || string(content) != "user data\n" {
-		t.Fatalf("reported backup %q = %q, %v", backupPath, content, err)
-	}
-	if !strings.HasPrefix(backupPath, filepath.Join(fixture.home, ".local", "state", "dot", "backup")+string(os.PathSeparator)) {
-		t.Fatalf("reported backup %q is outside isolated backup root", backupPath)
-	}
-	afterFirst := snapshotCLITree(t, fixture.root)
-	stdout, stderr, code = fixture.run(t, nil, "apply", "--force")
-	if code != exitOK || stderr != "" || !strings.HasSuffix(stdout, "Already up to date.\n") || strings.Contains(stdout, "backup  ") {
-		t.Fatalf("converged force apply = stdout %q, stderr %q, exit %d", stdout, stderr, code)
-	}
-	if afterSecond := snapshotCLITree(t, fixture.root); !reflect.DeepEqual(afterSecond, afterFirst) {
-		t.Fatalf("converged force apply changed tree\nafter first=%v\nafter second=%v", afterFirst, afterSecond)
 	}
 }
 
@@ -265,7 +233,7 @@ func TestApply_ConflictStillCommitsIndependentSuccess(t *testing.T) {
 func TestApply_PartialScopeAndCanonicalPruneEffects(t *testing.T) {
 	t.Run("partial scope", func(t *testing.T) {
 		fixture := newMutationCLIFixture(t)
-		writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "requires = \">=0.0.0\"\n[profiles]\nall = [\"alpha\", \"beta\"]\n")
+		writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "[profiles]\nall = [\"alpha\", \"beta\"]\n")
 		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "beta", "dot.toml"), "target = \"~/beta\"\n")
 		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "beta", "file"), "beta\n")
 		stdout, stderr, code := fixture.run(t, nil, "apply", "alpha")
@@ -329,7 +297,11 @@ func TestApply_M1UnsupportedInputsFailClosed(t *testing.T) {
 		{
 			name: "managed desired",
 			mutate: func(t *testing.T, fixture mutationCLIFixture) {
-				writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "managed.tmpl"), "managed\n")
+				writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"), `target = "~/alpha"
+[files.managed]
+kind = "managed"
+`)
+				writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "managed"), "managed\n")
 			},
 			want: "managed",
 		},
@@ -358,9 +330,6 @@ func TestApply_M1UnsupportedInputsFailClosed(t *testing.T) {
 			if !errorsMatchNotExist(beforeStateErr, afterStateErr) || !bytes.Equal(afterState, beforeState) {
 				t.Fatalf("unsupported apply changed state: before=%q/%v after=%q/%v", beforeState, beforeStateErr, afterState, afterStateErr)
 			}
-			if _, err := os.Stat(filepath.Join(fixture.home, ".local", "state", "dot", "backup")); !os.IsNotExist(err) {
-				t.Fatalf("unsupported apply created backup: %v", err)
-			}
 		})
 	}
 }
@@ -380,11 +349,14 @@ func TestApply_YesSkipsTerminalAndHookFailureHasRuntimePriority(t *testing.T) {
 
 	t.Run("partial hook failure stops after selected scope", func(t *testing.T) {
 		fixture := newPlanCLIFixture(t)
+		if err := os.Remove(filepath.Join(fixture.home, "alpha", "conflict")); err != nil {
+			t.Fatalf("os.Remove(alpha conflict) error = %v", err)
+		}
 		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "alpha", "hooks", "setup.sh"),
 			"printf 'alpha-hook-out\\n'\nprintf 'alpha-hook-err\\n' >&2\nexit 23\n")
 		writeCLIFile(t, filepath.Join(fixture.repository, "modules", "beta", "hooks", "setup.sh"),
 			"printf launched > \"$HOME/beta-hook-launched\"\n")
-		stdout, stderr, code := fixture.run(t, "apply", "alpha", "--force")
+		stdout, stderr, code := fixture.run(t, "apply", "alpha")
 		if code != exitError || !strings.Contains(stdout, "alpha-hook-out") ||
 			!strings.Contains(stdout, "run-hook  alpha/hooks/setup.sh  (execution-failed)") ||
 			!strings.Contains(stderr, "alpha-hook-err") || !strings.Contains(stderr, "exit status 23") {
@@ -483,7 +455,6 @@ func TestApply_SealedExecutedResultPreservesRuntimeErrorPriority(t *testing.T) {
 			Home:       dotruntime.Override{Value: fixture.home, Set: true},
 			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
 		},
-		CLIVersion: "v0.0.0",
 	})
 	if err != nil || !result.Valid(false) || !result.StateCommitted() {
 		t.Fatalf("applyrunner.Run() = (%#v, %v), want valid committed result", result, err)
@@ -514,7 +485,7 @@ func newMutationCLIFixture(t *testing.T) mutationCLIFixture {
 	makeDirectory(t, realHome)
 	writeCLIFile(t, filepath.Join(realHome, "sentinel"), "unchanged\n")
 	writeCLIFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
-	writeCLIFile(t, filepath.Join(repository, "dot.toml"), "requires = \">=0.0.0\"\n[profiles]\nall = [\"alpha\"]\n")
+	writeCLIFile(t, filepath.Join(repository, "dot.toml"), "[profiles]\nall = [\"alpha\"]\n")
 	writeCLIFile(t, filepath.Join(repository, "modules", "alpha", "dot.toml"), "target = \"~/alpha\"\n")
 	writeCLIFile(t, filepath.Join(repository, "modules", "alpha", "file"), "managed\n")
 	return mutationCLIFixture{root: root, home: home, repository: repository, realHome: realHome}
@@ -627,15 +598,6 @@ func runInjectedApply(
 		},
 	})
 	return stdout.String(), stderr.String(), code
-}
-
-func findLineWithPrefix(output, prefix string) string {
-	for _, line := range strings.Split(output, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			return line
-		}
-	}
-	return ""
 }
 
 func readPlanState(t *testing.T, home string) planStateDocument {

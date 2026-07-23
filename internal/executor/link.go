@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mianm12/dotfiles/internal/backup"
 	"github.com/mianm12/dotfiles/internal/paths"
 	"github.com/mianm12/dotfiles/internal/planner"
 )
@@ -71,33 +70,17 @@ type fileOperations struct {
 	remove     func(string) error
 }
 
-type backupStore interface {
-	SaveRegular(string, string, string, fs.FileMode) (string, error)
-	SaveSymlink(string, string, string) (string, error)
-}
-
 // FileResult 保存单个动作供 runtime 消费的结果。StateEffect 已按成功或失败分支选择；
 // TargetMutated 只在 target 提交点已经越过时为 true。
 type FileResult struct {
 	StateEffect   planner.StateEffect
 	TargetMutated bool
-	BackupPath    string
 }
 
 // ExecuteFile 执行当前 M1 link/scaffold 切片支持的动作。调用方负责只传入可信 ApplyPlan 中的
 // 动作，本函数仍会拒绝不安全的动作形态，并在每个 target 提交点前重新复核 Precondition。
 func ExecuteFile(control paths.ControlPlanePaths, action planner.FileAction) (FileResult, error) {
-	return executeFileWithBackup(control, action, defaultFileOperations(), nil)
-}
-
-// ExecuteFileWithBackup 执行可能需要持久备份的 file action。batch 必须属于当前 apply 运行；
-// 成功备份的精确路径会保留在 FileResult 中，即使后续 target 提交失败。
-func ExecuteFileWithBackup(
-	control paths.ControlPlanePaths,
-	action planner.FileAction,
-	batch *backup.Batch,
-) (FileResult, error) {
-	return executeFileWithBackup(control, action, defaultFileOperations(), batch)
+	return executeFile(control, action, defaultFileOperations())
 }
 
 func executeFile(
@@ -105,22 +88,13 @@ func executeFile(
 	action planner.FileAction,
 	operations fileOperations,
 ) (FileResult, error) {
-	return executeFileWithBackup(control, action, operations, nil)
-}
-
-func executeFileWithBackup(
-	control paths.ControlPlanePaths,
-	action planner.FileAction,
-	operations fileOperations,
-	batch backupStore,
-) (FileResult, error) {
 	failure := FileResult{StateEffect: action.OnFailure}
 	if err := ValidateFileAction(action); err != nil {
 		return failure, err
 	}
 	switch action.Desired.Kind {
 	case planner.DesiredLink:
-		return executeLinkFile(control, action, operations, batch)
+		return executeLinkFile(control, action, operations)
 	case planner.DesiredScaffold:
 		return executeScaffoldFile(control, action, operations)
 	default:
@@ -158,7 +132,6 @@ func executeLinkFile(
 	control paths.ControlPlanePaths,
 	action planner.FileAction,
 	operations fileOperations,
-	batch backupStore,
 ) (FileResult, error) {
 	failure := FileResult{StateEffect: action.OnFailure}
 
@@ -181,8 +154,6 @@ func executeLinkFile(
 				action.Reason,
 			)
 		}
-	case planner.FileBackupReplace:
-		return backupReplaceLink(control, action, operations, batch)
 	default:
 		return failure, fmt.Errorf(
 			"%w: verb %q is not implemented",
@@ -190,90 +161,6 @@ func executeLinkFile(
 			action.Verb,
 		)
 	}
-}
-
-func backupReplaceLink(
-	control paths.ControlPlanePaths,
-	action planner.FileAction,
-	operations fileOperations,
-	batch backupStore,
-) (FileResult, error) {
-	failure := FileResult{StateEffect: action.OnFailure}
-	if batch == nil {
-		return failure, fmt.Errorf("backup-replace requires an initialized backup batch")
-	}
-	if err := validatePrecondition(control, action); err != nil {
-		return failure, err
-	}
-
-	var (
-		backupPath string
-		err        error
-	)
-	switch action.Precondition.Leaf.Kind {
-	case planner.LeafExactRegular:
-		backupPath, err = batch.SaveRegular(
-			action.Precondition.TargetPath,
-			action.Target,
-			action.Precondition.Leaf.Hash,
-			action.Precondition.Leaf.Permissions,
-		)
-	case planner.LeafExactSymlink:
-		backupPath, err = batch.SaveSymlink(
-			action.Precondition.TargetPath,
-			action.Target,
-			action.Precondition.Leaf.LinkDest,
-		)
-	default:
-		return failure, fmt.Errorf("%w: backup-replace lacks exact backup evidence", ErrUnsupportedFileAction)
-	}
-	if err != nil {
-		if backup.IsPureEvidenceMismatch(err) {
-			return failure, fmt.Errorf(
-				"%w: target changed during backup preparation: %s",
-				ErrPreconditionMismatch,
-				err.Error(),
-			)
-		}
-		return failure, fmt.Errorf("persist target backup: %w", err)
-	}
-	failure.BackupPath = backupPath
-
-	temporaryDirectory, err := operations.mkdirTemp(
-		filepath.Dir(action.Precondition.TargetPath),
-		temporaryDirectoryPrefix,
-	)
-	if err != nil {
-		return failure, fmt.Errorf("create force-replace temporary directory: %w", err)
-	}
-	temporaryLink := filepath.Join(temporaryDirectory, temporaryLinkName)
-	cleanup := func() error {
-		return cleanupTemporaryLink(operations, temporaryLink, temporaryDirectory)
-	}
-	failPrepared := func(primary error) (FileResult, error) {
-		return failure, errors.Join(primary, cleanup())
-	}
-
-	if err := operations.symlink(action.Desired.SourcePath, temporaryLink); err != nil {
-		return failPrepared(fmt.Errorf("prepare complete force-replace symlink: %w", err))
-	}
-	// 备份过程和临时对象准备都不能延长计划快照；replace 前重新建立完整证明。
-	if err := validatePrecondition(control, action); err != nil {
-		return failPrepared(err)
-	}
-	if err := operations.rename(temporaryLink, action.Precondition.TargetPath); err != nil {
-		return failPrepared(fmt.Errorf("commit force-replace symlink: %w", err))
-	}
-
-	result := FileResult{
-		StateEffect:   action.OnSuccess,
-		TargetMutated: true,
-		BackupPath:    backupPath,
-	}
-	if err := cleanup(); err != nil {
-		return result, fmt.Errorf("cleanup committed force-replace temporary directory: %w", err)
-	}
-	return result, nil
 }
 
 func defaultFileOperations() fileOperations {
@@ -412,24 +299,6 @@ func validateLinkAction(action planner.FileAction) error {
 		default:
 			return fmt.Errorf("%w: create-link reason %q is not a link action", ErrUnsupportedFileAction, action.Reason)
 		}
-	case planner.FileBackupReplace:
-		if !action.Precondition.RequireRegularSource ||
-			action.Precondition.SourcePath != action.Desired.SourcePath ||
-			!filepath.IsAbs(action.Precondition.SourcePath) {
-			return fmt.Errorf("%w: backup-replace lacks its regular source requirement", ErrUnsupportedFileAction)
-		}
-		switch action.Reason {
-		case planner.FileReasonLinkDrift, planner.FileReasonUnownedLink:
-			if action.Precondition.Leaf.Kind != planner.LeafExactSymlink {
-				return fmt.Errorf("%w: symlink backup-replace lacks exact link evidence", ErrUnsupportedFileAction)
-			}
-		case planner.FileReasonRegularConflict:
-			if action.Precondition.Leaf.Kind != planner.LeafExactRegular {
-				return fmt.Errorf("%w: regular backup-replace lacks exact file evidence", ErrUnsupportedFileAction)
-			}
-		default:
-			return fmt.Errorf("%w: reason %q is not a backup-replace action", ErrUnsupportedFileAction, action.Reason)
-		}
 	default:
 		return fmt.Errorf("%w: verb %q is not a link execution action", ErrUnsupportedFileAction, action.Verb)
 	}
@@ -482,11 +351,7 @@ func validateTargetPrecondition(
 	if !resolution.Equal(precondition.TargetResolution) {
 		return fmt.Errorf("%w: target identity changed", ErrPreconditionMismatch)
 	}
-	observe := planner.ObserveTarget
-	if precondition.Leaf.RequiresRegularDigest() {
-		observe = planner.ObserveTargetWithDigest
-	}
-	observed, err := observe(precondition.TargetPath)
+	observed, err := planner.ObserveTarget(precondition.TargetPath)
 	if err != nil {
 		return fmt.Errorf("%w: observe target: %w", ErrPrecondition, err)
 	}

@@ -46,7 +46,6 @@ func newStatusCommand(env environment, global *globalOptions) *cobra.Command {
 						Set:   command.Flags().Changed(profileFlagName),
 					},
 				},
-				CLIVersion: env.build.Version,
 			})
 			if err != nil {
 				return err
@@ -77,10 +76,6 @@ func projectStatus(plan planner.ApplyPlan) (statusProjection, error) {
 			len(observed.Targets()),
 		),
 	}
-	if context.DevelopmentBuild {
-		projection.notices = append(projection.notices, "development build skipped the requires version comparison")
-	}
-
 	for _, action := range plan.FileActions() {
 		if action.Verb == planner.FileSkip {
 			continue
@@ -165,8 +160,6 @@ func statusFileDescription(action planner.FileAction) (string, error) {
 		return "special file blocks desired link", nil
 	case planner.FileReasonScaffoldPresent:
 		return "scaffold lifecycle not recorded", nil
-	case planner.FileReasonScaffoldRebuild:
-		return "scaffold rebuild pending", nil
 	case planner.FileReasonOwnedLinkToScaffold:
 		return "owned symlink pending scaffold migration", nil
 	case planner.FileReasonReleaseOwnershipToScaffold:

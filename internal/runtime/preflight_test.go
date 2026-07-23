@@ -22,8 +22,6 @@ func TestPreflight_ResolvesRepositoryAndProfilePriority(t *testing.T) {
 	configPath := writeMachineConfig(t, root, "machine.toml", strings.Join([]string{
 		`profile = "configured"`,
 		`repo = "` + configuredRepo + `"`,
-		`[data]`,
-		`email = "me@example.com"`,
 	}, "\n"))
 
 	tests := []struct {
@@ -80,11 +78,6 @@ func TestPreflight_ResolvesRepositoryAndProfilePriority(t *testing.T) {
 			if context.Profile() != tt.wantProfile {
 				t.Errorf("Preflight().Profile() = %q, want %q", context.Profile(), tt.wantProfile)
 			}
-			data := context.Data()
-			if data["email"] != "me@example.com" {
-				t.Errorf("Preflight().Data()[email] = %q, want machine value", data["email"])
-			}
-			data["email"] = "changed"
 			second, err := resolver.Preflight(Overrides{
 				Home:       Override{Value: home, Set: true},
 				Repository: Override{Value: tt.repo, Set: tt.repoSet},
@@ -93,8 +86,8 @@ func TestPreflight_ResolvesRepositoryAndProfilePriority(t *testing.T) {
 			if err != nil {
 				t.Fatalf("second Preflight() error = %v", err)
 			}
-			if second.Data()["email"] != "me@example.com" || context.Data()["email"] != "me@example.com" {
-				t.Errorf("Preflight() retained caller data mutation: second=%q original=%q", second.Data()["email"], context.Data()["email"])
+			if second.Profile() != context.Profile() {
+				t.Errorf("second Preflight().Profile() = %q, want %q", second.Profile(), context.Profile())
 			}
 		})
 	}
@@ -238,8 +231,6 @@ func TestPreflightInit_PreservesExistingMachineAndExplicitProfileSeparately(t *t
 	}
 	configPath := writeMachineConfig(t, root, "machine.toml", strings.Join([]string{
 		`profile = "configured"`,
-		`[data]`,
-		`email = "me@example.com"`,
 	}, "\n"))
 	resolver := NewResolver(lookup(map[string]string{"DOT_CONFIG": configPath}), fixedHome(home))
 
@@ -254,17 +245,12 @@ func TestPreflightInit_PreservesExistingMachineAndExplicitProfileSeparately(t *t
 		t.Fatal("ConfigMissing() = true, want false")
 	}
 	machine, ok := context.ExistingMachine()
-	if !ok || machine.Profile() != "configured" || machine.Data()["email"] != "me@example.com" {
+	if !ok || machine.Profile() != "configured" {
 		t.Fatalf("ExistingMachine() = (%#v, %t), want configured machine", machine, ok)
 	}
 	profile, ok := context.ProfileOverride()
 	if !ok || profile != "requested" {
 		t.Fatalf("ProfileOverride() = (%q, %t), want requested, true", profile, ok)
-	}
-	data := machine.Data()
-	data["email"] = "changed"
-	if machine.Data()["email"] != "me@example.com" {
-		t.Fatal("MachineContext.Data() exposed mutable internal state")
 	}
 }
 

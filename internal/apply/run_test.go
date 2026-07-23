@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mianm12/dotfiles/internal/backup"
 	"github.com/mianm12/dotfiles/internal/executor"
 	"github.com/mianm12/dotfiles/internal/lock"
 	"github.com/mianm12/dotfiles/internal/paths"
@@ -36,11 +35,6 @@ func TestRun_RejectsInvalidCanonicalPlanBeforeMutation(t *testing.T) {
 		executed = true
 		return executor.FileResult{}, nil
 	}
-	backupStarted := false
-	operations.backup = func(string) (*backup.Batch, error) {
-		backupStarted = true
-		return nil, nil
-	}
 	pruneExecuted := false
 	operations.pruneExecute = func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
 		pruneExecuted = true
@@ -55,13 +49,12 @@ func TestRun_RejectsInvalidCanonicalPlanBeforeMutation(t *testing.T) {
 	if !errors.Is(err, ErrExecutionProtocol) {
 		t.Fatalf("runWithOperations() error = %v, want ErrExecutionProtocol", err)
 	}
-	if result.Valid(true) || executed || backupStarted || pruneExecuted || confirmed ||
+	if result.Valid(true) || executed || pruneExecuted || confirmed ||
 		fixture.loaded.commitCalls != 0 {
 		t.Fatalf(
-			"invalid plan escaped gate: result=%#v execute=%t backup=%t prune=%t confirm=%t commit=%d",
+			"invalid plan escaped gate: result=%#v execute=%t prune=%t confirm=%t commit=%d",
 			result,
 			executed,
-			backupStarted,
 			pruneExecuted,
 			confirmed,
 			fixture.loaded.commitCalls,
@@ -142,64 +135,6 @@ func TestRun_PartialSuccessCommitsOnceAndJoinsExecutionCommitCloseErrors(t *test
 	}
 	if !fixture.session.closed {
 		t.Fatal("session close was not attempted")
-	}
-}
-
-func TestRun_ReportsRetainedBackupAfterReplaceFailure(t *testing.T) {
-	fixture := newRunSeamFixture(t)
-	action := seamBackupReplaceAction("~/.forced")
-	operations := fixture.operations(executionPlan{files: []planner.FileAction{action}})
-	replaceErr := errors.New("replace failed")
-	wantPath := filepath.Join(fixture.loaded.controlPaths.BackupRoot(), "batch", "~", ".forced")
-	operations.executeBackup = func(
-		paths.ControlPlanePaths,
-		planner.FileAction,
-		*backup.Batch,
-	) (executor.FileResult, error) {
-		return executor.FileResult{StateEffect: action.OnFailure, BackupPath: wantPath}, replaceErr
-	}
-
-	result, err := operations.run(Options{})
-	if !errors.Is(err, replaceErr) {
-		t.Fatalf("runWithOperations() error = %v, want replace failure", err)
-	}
-	if result.FileAttempts() != 1 || len(result.BackupPaths()) != 1 || result.BackupPaths()[0] != wantPath ||
-		result.StateCommitted() || fixture.loaded.commitCalls != 0 {
-		t.Fatalf("run result = %#v commitCalls=%d", result, fixture.loaded.commitCalls)
-	}
-}
-
-func TestRun_ReportsRetainedBackupAfterPostCommitCleanupFailure(t *testing.T) {
-	fixture := newRunSeamFixture(t)
-	action := seamBackupReplaceAction("~/.forced")
-	operations := fixture.operations(executionPlan{files: []planner.FileAction{action}})
-	cleanupErr := errors.New("cleanup failed")
-	wantPath := filepath.Join(fixture.loaded.controlPaths.BackupRoot(), "batch", "~", ".forced")
-	if err := os.MkdirAll(filepath.Dir(wantPath), 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(backup parent) error = %v", err)
-	}
-	if err := os.WriteFile(wantPath, []byte("retained backup"), 0o600); err != nil {
-		t.Fatalf("os.WriteFile(backup) error = %v", err)
-	}
-	operations.executeBackup = func(
-		paths.ControlPlanePaths,
-		planner.FileAction,
-		*backup.Batch,
-	) (executor.FileResult, error) {
-		return executor.FileResult{
-			StateEffect:   action.OnSuccess,
-			TargetMutated: true,
-			BackupPath:    wantPath,
-		}, cleanupErr
-	}
-
-	result, err := operations.run(Options{})
-	if !errors.Is(err, cleanupErr) || result.FileAttempts() != 1 || result.TargetCommits() != 1 ||
-		len(result.BackupPaths()) != 1 || result.BackupPaths()[0] != wantPath || !result.StateCommitted() {
-		t.Fatalf("run result/error = (%#v, %v)", result, err)
-	}
-	if _, err := os.Lstat(wantPath); err != nil {
-		t.Fatalf("reported backup Lstat() error = %v", err)
 	}
 }
 
@@ -996,7 +931,7 @@ func TestRunWithMutationSession_RejectsNilAndClosesAlreadyLoadedSession(t *testi
 	if err != nil {
 		t.Fatalf("BeginMutation() error = %v", err)
 	}
-	if _, err := session.Load(options.CLIVersion); err != nil {
+	if _, err := session.Load(); err != nil {
 		t.Fatalf("MutationSession.Load() error = %v", err)
 	}
 	if _, err := RunWithMutationSession(options, session); !errors.Is(err, dotruntime.ErrSessionOrder) {
@@ -1005,104 +940,6 @@ func TestRunWithMutationSession_RejectsNilAndClosesAlreadyLoadedSession(t *testi
 	if err := session.Close(); !errors.Is(err, dotruntime.ErrSessionClosed) {
 		t.Fatalf("already loaded session Close() error = %v, want ErrSessionClosed", err)
 	}
-}
-
-func TestRun_ForceBacksUpRegularAndConverges(t *testing.T) {
-	fixture := newRunIntegrationFixture(t)
-	original := []byte("user zshrc\n")
-	if err := os.WriteFile(fixture.linkTarget, original, 0o640); err != nil {
-		t.Fatalf("os.WriteFile(conflict target) error = %v", err)
-	}
-	options := fixture.options()
-	options.Force = true
-
-	first, err := Run(options)
-	if err != nil {
-		t.Fatalf("Run(force) error = %v", err)
-	}
-	if first.FileAttempts() != 2 || first.TargetCommits() != 2 || len(first.BackupPaths()) != 1 ||
-		!first.StateCommitted() {
-		t.Fatalf("force result = %#v", first)
-	}
-	backupContent, err := os.ReadFile(first.BackupPaths()[0])
-	if err != nil || string(backupContent) != string(original) {
-		t.Fatalf("backup content = (%q, %v), want %q", backupContent, err, original)
-	}
-	backupInfo, err := os.Stat(first.BackupPaths()[0])
-	if err != nil || backupInfo.Mode().Perm() != 0o640 {
-		t.Fatalf("backup mode = (%v, %v), want 0640", backupInfo, err)
-	}
-	assertRunTargets(t, fixture)
-
-	second, err := Run(options)
-	if err != nil {
-		t.Fatalf("Run(converged force) error = %v", err)
-	}
-	if second.FileAttempts() != 0 || second.TargetCommits() != 0 || len(second.BackupPaths()) != 0 ||
-		second.StateCommitted() {
-		t.Fatalf("converged force result = %#v", second)
-	}
-	if _, err := os.Lstat(first.BackupPaths()[0]); err != nil {
-		t.Fatalf("successful backup was not retained: %v", err)
-	}
-}
-
-func TestRun_ForceStateStoreFailureRetainsAndReportsBackup(t *testing.T) {
-	fixture := newRunIntegrationFixture(t)
-	original := []byte("user zshrc\n")
-	if err := os.WriteFile(fixture.linkTarget, original, 0o640); err != nil {
-		t.Fatalf("os.WriteFile(conflict target) error = %v", err)
-	}
-	storeErr := errors.New("state store failed")
-	operations := defaultRunOperations()
-	operations.begin = func(overrides dotruntime.Overrides) (mutationSession, error) {
-		session, err := dotruntime.BeginMutationWithStateStore(
-			overrides,
-			func(string, string, state.Snapshot) error { return storeErr },
-		)
-		if err != nil {
-			return nil, err
-		}
-		return runtimeMutationSession{session: session}, nil
-	}
-	options := fixture.options()
-	options.Force = true
-
-	result, err := runWithOperations(options, operations)
-	if !errors.Is(err, storeErr) || result.FileAttempts() != 2 || result.TargetCommits() != 2 ||
-		len(result.BackupPaths()) != 1 || result.StateCommitted() {
-		t.Fatalf("force Store failure result/error = (%#v, %v)", result, err)
-	}
-	backupContent, readErr := os.ReadFile(result.BackupPaths()[0])
-	if readErr != nil || string(backupContent) != string(original) {
-		t.Fatalf("reported backup = (%q, %v), want %q", backupContent, readErr, original)
-	}
-	assertRunTargets(t, fixture)
-	if _, statErr := os.Lstat(fixture.stateFile); !errors.Is(statErr, fs.ErrNotExist) {
-		t.Fatalf("failed Store state file Lstat error = %v, want missing", statErr)
-	}
-}
-
-func TestRun_ForceRebuildsDeletedScaffoldWithoutBackup(t *testing.T) {
-	fixture := newRunIntegrationFixture(t)
-	if _, err := Run(fixture.options()); err != nil {
-		t.Fatalf("initial Run() error = %v", err)
-	}
-	if err := os.Remove(fixture.scaffoldTarget); err != nil {
-		t.Fatalf("os.Remove(scaffold) error = %v", err)
-	}
-	options := fixture.options()
-	options.Force = true
-
-	result, err := Run(options)
-	if err != nil {
-		t.Fatalf("Run(force rebuild) error = %v", err)
-	}
-	if result.FileAttempts() != 1 || result.TargetCommits() != 1 || len(result.BackupPaths()) != 0 ||
-		!result.StateCommitted() {
-		t.Fatalf("force rebuild result = %#v", result)
-	}
-	assertRunTargets(t, fixture)
 }
 
 func TestRun_RejectsSelfTraversingEffectiveTargetBeforeExecutor(t *testing.T) {
@@ -1206,6 +1043,10 @@ func TestRun_RejectsUnsafeCandidateStateTopologyBeforeExecutor(t *testing.T) {
 
 func TestRun_RejectsMatchedAliasCandidateStateTopologyBeforeExecutor(t *testing.T) {
 	fixture := newRunCandidateTopologyFixture(t)
+	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "dot.toml"), `target = "~"
+[files.alias]
+kind = "scaffold"
+`)
 	realRoot := filepath.Join(fixture.home, "real")
 	if err := os.MkdirAll(realRoot, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(real root) error = %v", err)
@@ -1215,7 +1056,7 @@ func TestRun_RejectsMatchedAliasCandidateStateTopologyBeforeExecutor(t *testing.
 	}
 	writeRunFile(t, filepath.Join(realRoot, "child"), "user data\n")
 	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "00"), "first link\n")
-	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "alias.template"), "scaffold\n")
+	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "alias"), "scaffold\n")
 	writeRunFile(t, filepath.Join(fixture.repository, "modules", "app", "real", "child"), "wanted link\n")
 	writeRunFile(t, fixture.stateFile, `{
   "version": 1,
@@ -1533,14 +1374,6 @@ func (fixture runSeamFixture) operations(plan executionPlan) seamOperations {
 			execute: func(paths.ControlPlanePaths, planner.FileAction) (executor.FileResult, error) {
 				return executor.FileResult{}, nil
 			},
-			backup: backup.NewBatch,
-			executeBackup: func(
-				paths.ControlPlanePaths,
-				planner.FileAction,
-				*backup.Batch,
-			) (executor.FileResult, error) {
-				return executor.FileResult{}, nil
-			},
 			pruneExecute: func(paths.ControlPlanePaths, planner.PruneAction) (executor.PruneResult, error) {
 				return executor.PruneResult{}, nil
 			},
@@ -1572,7 +1405,7 @@ type fakeMutationSession struct {
 	closed   bool
 }
 
-func (session *fakeMutationSession) load(string) (loadedMutation, error) {
+func (session *fakeMutationSession) load() (loadedMutation, error) {
 	return session.loaded, session.loadErr
 }
 
@@ -1651,18 +1484,6 @@ func seamLinkAdoptAction(target string) planner.FileAction {
 	}
 	action.Precondition.SourcePath = ""
 	action.Precondition.RequireRegularSource = false
-	return action
-}
-
-func seamBackupReplaceAction(target string) planner.FileAction {
-	action := seamLinkAction(target)
-	action.Verb = planner.FileBackupReplace
-	action.Reason = planner.FileReasonRegularConflict
-	action.Precondition.Leaf = planner.LeafCondition{
-		Kind:        planner.LeafExactRegular,
-		Hash:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-		Permissions: 0o600,
-	}
 	return action
 }
 
@@ -1795,14 +1616,13 @@ func newRunSelfTraversalFixture(t *testing.T, includeGood bool) runSelfTraversal
 	if includeGood {
 		profileModules = "all = [\"bad\", \"good\"]"
 	}
-	writeRunFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeRunFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 `+profileModules+"\n")
 	writeRunFile(t, filepath.Join(repository, "modules", "bad", "dot.toml"), `target = "~/detour"
-[files."bridge.template"]
+[files.bridge]
 kind = "scaffold"
 `)
-	writeRunFile(t, filepath.Join(repository, "modules", "bad", "bridge.template"), "scaffold content\n")
+	writeRunFile(t, filepath.Join(repository, "modules", "bad", "bridge"), "scaffold content\n")
 	if includeGood {
 		writeRunFile(t, filepath.Join(repository, "modules", "good", "dot.toml"), "target = \"~\"\n")
 		writeRunFile(t, filepath.Join(repository, "modules", "good", "good"), "link source\n")
@@ -1822,8 +1642,7 @@ func (fixture runSelfTraversalFixture) options() Options {
 			Home:       dotruntime.Override{Value: fixture.home, Set: true},
 			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
 		},
-		CLIVersion: "dev",
-		NoPrune:    true,
+		NoPrune: true,
 	}
 }
 
@@ -1834,8 +1653,7 @@ func newRunCandidateTopologyFixture(t *testing.T) runCandidateTopologyFixture {
 	repository := filepath.Join(root, "repo")
 	isolateRunMutationEnvironment(t, root, home, repository)
 	writeRunFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
-	writeRunFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeRunFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["app"]
 `)
 	writeRunFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~"
@@ -1853,8 +1671,7 @@ func (fixture runCandidateTopologyFixture) options() Options {
 			Home:       dotruntime.Override{Value: fixture.home, Set: true},
 			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
 		},
-		CLIVersion: "dev",
-		NoPrune:    true,
+		NoPrune: true,
 	}
 }
 
@@ -1865,17 +1682,16 @@ func newRunIntegrationFixture(t *testing.T) runIntegrationFixture {
 	repository := filepath.Join(root, "repo")
 	isolateRunMutationEnvironment(t, root, home, repository)
 	writeRunFile(t, filepath.Join(home, ".config", "dot", "config.toml"), "profile = \"all\"\n")
-	writeRunFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeRunFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["app"]
 `)
 	writeRunFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~"
-[files."config.template"]
+[files.config]
 kind = "scaffold"
 mode = "0600"
 `)
 	writeRunFile(t, filepath.Join(repository, "modules", "app", "zshrc"), "link source\n")
-	writeRunFile(t, filepath.Join(repository, "modules", "app", "config.template"), "scaffold content\n")
+	writeRunFile(t, filepath.Join(repository, "modules", "app", "config"), "scaffold content\n")
 	return runIntegrationFixture{
 		root:           root,
 		home:           home,
@@ -2001,8 +1817,7 @@ func (fixture runIntegrationFixture) options() Options {
 			Home:       dotruntime.Override{Value: fixture.home, Set: true},
 			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
 		},
-		CLIVersion: "dev",
-		NoPrune:    true,
+		NoPrune: true,
 	}
 }
 

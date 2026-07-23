@@ -12,20 +12,11 @@ import (
 // moduleSource 是通过 Lstat 确认的普通 source 文件。ignored 只表示命中用户 ignore；
 // [files] 是否覆盖该结果由 desired 定级阶段决定。
 type moduleSource struct {
-	path               string
-	ignored            bool
-	prospectiveContent []byte
-	prospective        bool
+	path    string
+	ignored bool
 }
 
 func enumerateModuleSources(module ResolvedModule) ([]moduleSource, error) {
-	return enumerateModuleSourcesProspective(module, nil)
-}
-
-func enumerateModuleSourcesProspective(
-	module ResolvedModule,
-	prospective map[string]prospectiveSourceData,
-) ([]moduleSource, error) {
 	patterns := make([]ignorePattern, 0, len(module.Ignore))
 	for _, raw := range module.Ignore {
 		pattern, err := parseIgnorePattern(raw)
@@ -47,30 +38,6 @@ func enumerateModuleSourcesProspective(
 	if err := walkModuleTree(module, patterns, hookPaths, objects, &sources); err != nil {
 		return nil, err
 	}
-	for _, source := range sortedKeys(prospective) {
-		candidate := prospective[source]
-		if _, exists := objects[source]; exists {
-			return nil, fmt.Errorf("module %q prospective source %q already exists", module.Name, source)
-		}
-		if reason := builtInIgnoreReason(source, false, hookPaths); reason != "" {
-			return nil, fmt.Errorf(
-				"module %q prospective source %q is excluded by built-in ignore: %s",
-				module.Name,
-				source,
-				reason,
-			)
-		}
-		if err := validateProspectiveAncestors(module, source, objects); err != nil {
-			return nil, err
-		}
-		objects[source] = prospectiveFileInfo{name: filepath.Base(source), mode: candidate.mode, size: int64(len(candidate.content))}
-		sources = append(sources, moduleSource{
-			path:               source,
-			ignored:            matchesAnyIgnore(patterns, source, false),
-			prospectiveContent: append([]byte(nil), candidate.content...),
-			prospective:        true,
-		})
-	}
 	if err := validateSourceReferences(module, objects); err != nil {
 		return nil, err
 	}
@@ -78,30 +45,6 @@ func enumerateModuleSourcesProspective(
 		return strings.Compare(left.path, right.path)
 	})
 	return sources, nil
-}
-
-func validateProspectiveAncestors(module ResolvedModule, source string, objects map[string]fs.FileInfo) error {
-	parent := filepath.ToSlash(filepath.Dir(filepath.FromSlash(source)))
-	if parent == "." {
-		return nil
-	}
-	parts := strings.Split(parent, "/")
-	for index := range parts {
-		ancestor := strings.Join(parts[:index+1], "/")
-		info, exists := objects[ancestor]
-		if !exists {
-			continue
-		}
-		if !info.IsDir() {
-			return fmt.Errorf(
-				"module %q prospective source %q has non-directory ancestor %q",
-				module.Name,
-				source,
-				ancestor,
-			)
-		}
-	}
-	return nil
 }
 
 func walkModuleTree(

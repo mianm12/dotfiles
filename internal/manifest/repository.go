@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -12,6 +13,11 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/paths"
 )
+
+const filename = "dot.toml"
+
+// ErrRepositoryUnavailable 表示仓库路径缺失。
+var ErrRepositoryUnavailable = errors.New("repository unavailable")
 
 var manifestNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
@@ -75,11 +81,6 @@ func Load(repo string) (Repository, error) {
 		profileNames:     profileNames,
 		unassigned:       unassigned,
 	}, nil
-}
-
-// Requirement 返回根 manifest 声明的最低 CLI 版本约束。
-func (r Repository) Requirement() Requirement {
-	return r.manifest.requirement
 }
 
 // ModuleNames 返回按字节序排列的全部已发现模块名。
@@ -170,79 +171,6 @@ func formatTOMLKey(key string) string {
 		return key
 	}
 	return strconv.Quote(key)
-}
-
-// DataKeys 返回根 manifest 声明的用户 data key，结果按字节序排列。
-func (r Repository) DataKeys() []string {
-	return sortedKeys(r.manifest.data)
-}
-
-// DataDeclaration 是 init 消费的单个 M1 data 声明快照。
-// prompt/default 的 presence 与值分别保存，因此显式空字符串不会退化为缺失。
-type DataDeclaration struct {
-	key          string
-	prompt       string
-	promptSet    bool
-	defaultValue string
-	defaultSet   bool
-}
-
-// Key 返回声明的 data key。
-func (declaration DataDeclaration) Key() string { return declaration.key }
-
-// Prompt 返回显式 prompt；未声明时 ok 为 false。
-func (declaration DataDeclaration) Prompt() (value string, ok bool) {
-	return declaration.prompt, declaration.promptSet
-}
-
-// Default 返回显式 default；未声明时 ok 为 false。
-func (declaration DataDeclaration) Default() (value string, ok bool) {
-	return declaration.defaultValue, declaration.defaultSet
-}
-
-// DataDeclarations 返回按 key 字节序排列的不可变 M1 data 声明副本。
-func (r Repository) DataDeclarations() []DataDeclaration {
-	keys := r.DataKeys()
-	declarations := make([]DataDeclaration, 0, len(keys))
-	for _, key := range keys {
-		spec := r.manifest.data[key]
-		declaration := DataDeclaration{key: key}
-		if spec.prompt != nil {
-			declaration.prompt = *spec.prompt
-			declaration.promptSet = true
-		}
-		if spec.defaultValue != nil {
-			declaration.defaultValue = *spec.defaultValue
-			declaration.defaultSet = true
-		}
-		declarations = append(declarations, declaration)
-	}
-	return declarations
-}
-
-// ValidateTemplates 静态检查仓库中每个有效 scaffold 的语法、函数与变量引用。
-// 检查不受 profile 或 OS 过滤影响，因此也覆盖 unassigned 与当前 OS 不活跃的模块；
-// 它不需要运行 data，不渲染模板，也不读取 target。
-func (r Repository) ValidateTemplates() error {
-	entries := make([]DesiredEntry, 0)
-	for _, name := range r.moduleNames {
-		loaded := r.modules[name]
-		// doctor 不经 Resolve，以免 profile 或 OS 过滤漏掉模板；这里只构造 source
-		// 定级需要的字段，target 与运行上下文不参与静态检查。
-		module := ResolvedModule{
-			Name:      name,
-			SourceDir: loaded.root,
-			Ignore:    mergeIgnore(r.manifest.ignore, loaded.manifest.ignore),
-			FileRules: materializeFileRules(loaded.manifest.files),
-			RunOnce:   append([]string(nil), loaded.manifest.runOnce...),
-		}
-		moduleEntries, err := enumerateModuleScaffolds(module)
-		if err != nil {
-			return err
-		}
-		entries = append(entries, moduleEntries...)
-	}
-	return validateScaffolds(entries, r.DataKeys())
 }
 
 // ValidateModuleRules 在指定 GOOS 上检查全部模块的 effective 局部规则，不形成跨模块 target

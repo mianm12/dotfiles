@@ -15,9 +15,8 @@ import (
 // Machine 表示机器本地配置。Repo 为 nil 表示字段缺失；非 nil 空字符串会被 Load 拒绝。
 // Repo 保留配置原值；依赖 effective HOME 的路径解析由调用方完成。
 type Machine struct {
-	Profile string            `toml:"profile"`
-	Repo    *string           `toml:"repo"`
-	Data    map[string]string `toml:"data"`
+	Profile string  `toml:"profile"`
+	Repo    *string `toml:"repo"`
 }
 
 // Precondition 密封一次机器配置读取所依据的对象证据。
@@ -49,7 +48,6 @@ type Snapshot struct {
 	profile      string
 	repo         string
 	repoSet      bool
-	data         map[string]string
 	precondition Precondition
 }
 
@@ -61,9 +59,6 @@ func (snapshot Snapshot) Profile() string { return snapshot.profile }
 
 // Repo 返回已有 repo；字段省略时 ok 为 false。
 func (snapshot Snapshot) Repo() (value string, ok bool) { return snapshot.repo, snapshot.repoSet }
-
-// Data 返回已有 machine data 的独立副本。
-func (snapshot Snapshot) Data() map[string]string { return cloneData(snapshot.data) }
 
 // Precondition 返回本快照密封的提交前提。
 func (snapshot Snapshot) Precondition() Precondition { return clonePrecondition(snapshot.precondition) }
@@ -93,7 +88,6 @@ func LoadSnapshot(path string) (Snapshot, error) {
 		if paths.IsMissing(path, err) {
 			return Snapshot{
 				valid:        true,
-				data:         map[string]string{},
 				precondition: Precondition{valid: true},
 			}, nil
 		}
@@ -139,7 +133,6 @@ func LoadSnapshot(path string) (Snapshot, error) {
 		valid:   true,
 		exists:  true,
 		profile: machine.Profile,
-		data:    cloneData(machine.Data),
 		precondition: Precondition{
 			valid:  true,
 			exists: true,
@@ -156,20 +149,12 @@ func LoadSnapshot(path string) (Snapshot, error) {
 }
 
 func (snapshot Snapshot) machine() Machine {
-	machine := Machine{Profile: snapshot.profile, Data: cloneData(snapshot.data)}
+	machine := Machine{Profile: snapshot.profile}
 	if snapshot.repoSet {
 		repo := snapshot.repo
 		machine.Repo = &repo
 	}
 	return machine
-}
-
-func cloneData(data map[string]string) map[string]string {
-	cloned := make(map[string]string, len(data))
-	for key, value := range data {
-		cloned[key] = value
-	}
-	return cloned
 }
 
 func clonePrecondition(precondition Precondition) Precondition {

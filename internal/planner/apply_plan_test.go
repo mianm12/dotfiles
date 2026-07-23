@@ -30,7 +30,6 @@ func TestPlanScopedFiles_UsesCompleteObservationAndScopeDecisions(t *testing.T) 
 		fixture.validated,
 		scoped,
 		fixture.loadedState,
-		DecisionOptions{},
 	)
 	if err != nil {
 		t.Fatalf("planScopedFiles() error = %v", err)
@@ -48,7 +47,7 @@ func TestPlanScopedFiles_UsesCompleteObservationAndScopeDecisions(t *testing.T) 
 	if action.Desired.Module != "alpha" || action.Desired.Source != "item.template" {
 		t.Fatalf("scope action desired = %#v, want alpha/item.template", action.Desired)
 	}
-	if got, want := string(action.Desired.Content), "profile=all"; got != want {
+	if got, want := string(action.Desired.Content), "profile={{ .Profile }}"; got != want {
 		t.Fatalf("scope scaffold content = %q, want %q", got, want)
 	}
 	if action.Verb != FileScaffold || action.Reason != FileReasonOwnedLinkToScaffold {
@@ -58,9 +57,8 @@ func TestPlanScopedFiles_UsesCompleteObservationAndScopeDecisions(t *testing.T) 
 		t.Fatalf("alias migration state effect = %#v", action.OnSuccess)
 	}
 
-	// beta 的 scaffold 故意包含非法模板；完整 scope 会失败，但 alpha partial 不渲染它。
-	if full, fullErr := fixture.validated.RenderScope(nil, fixture.context); fullErr == nil {
-		t.Fatalf("RenderScope(full) = %#v, nil; want beta template failure", full)
+	if full, fullErr := fixture.validated.RenderScope(nil, fixture.context); fullErr != nil || len(full.Entries()) != 2 {
+		t.Fatalf("RenderScope(full) = (%#v, %v), want both literal scaffolds", full, fullErr)
 	}
 	if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("planScopedFiles() changed fixture tree\nbefore=%v\nafter=%v", before, after)
@@ -75,7 +73,6 @@ func TestPlanScopedFiles_RejectsInvalidScopeWithoutPartialResult(t *testing.T) {
 		fixture.validated,
 		manifest.ScopedProfile{},
 		fixture.loadedState,
-		DecisionOptions{},
 	)
 	if err == nil {
 		t.Fatal("planScopedFiles(invalid scope) error = nil")
@@ -131,18 +128,6 @@ func TestPlanApply_ComposesDeterministicFullAndPartialPlansWithoutWrites(t *test
 		t.Fatalf("partial hooks = %#v, want alpha run-hook despite conflict", hooks)
 	}
 
-	forceOptions := options
-	forceOptions.Force = true
-	forced, err := PlanApply(forceOptions)
-	if err != nil {
-		t.Fatalf("PlanApply(partial force) error = %v", err)
-	}
-	if forced.FileActions()[0].Verb != FileBackupReplace ||
-		forced.FileActions()[0].Precondition.Leaf.Kind != LeafExactRegular ||
-		forced.FileActions()[0].Precondition.Leaf.Hash == "" ||
-		forced.Prune().Actions()[0].Deferred {
-		t.Fatalf("forced file/prune plan = file %#v prune %#v", forced.FileActions(), forced.Prune().Actions())
-	}
 	noPruneOptions := options
 	noPruneOptions.NoPrune = true
 	withoutPrune, err := PlanApply(noPruneOptions)
@@ -219,7 +204,7 @@ func TestPlanLoadedApply_UsesExactLoadedStateWithoutReload(t *testing.T) {
 	fixture := newApplyIntegrationFixture(t)
 	fixture.redirectEnvironment(t)
 	options := fixture.options()
-	inputs, err := dotruntime.LoadReadOnly(options.Runtime, options.CLIVersion)
+	inputs, err := dotruntime.LoadReadOnly(options.Runtime)
 	if err != nil {
 		t.Fatalf("LoadReadOnly() error = %v", err)
 	}
@@ -264,30 +249,7 @@ func TestPlanLoadedApply_UsesExactLoadedStateWithoutReload(t *testing.T) {
 	}
 }
 
-func TestPlanApply_PartialScopeSkipsUnrequestedTemplateRenderButNotFullCollision(t *testing.T) {
-	t.Run("unrequested template failure", func(t *testing.T) {
-		fixture := newApplyIntegrationFixture(t)
-		fixture.redirectEnvironment(t)
-		writeApplyFile(t, filepath.Join(fixture.repository, "modules", "beta", "broken.template"), `{{`)
-		before := snapshotObservationTree(t, fixture.root)
-
-		partialOptions := fixture.options()
-		partialOptions.Modules = []string{"alpha"}
-		if plan, err := PlanApply(partialOptions); err != nil || !plan.Valid() {
-			t.Fatalf("PlanApply(partial alpha) = (%#v, %v), want valid plan", plan, err)
-		}
-		full, err := PlanApply(fixture.options())
-		if err == nil || !strings.Contains(err.Error(), "broken.template") {
-			t.Fatalf("PlanApply(full) error = %v, want beta template failure", err)
-		}
-		if !reflect.DeepEqual(full, ApplyPlan{}) {
-			t.Fatalf("failed full plan = %#v, want zero", full)
-		}
-		if after := snapshotObservationTree(t, fixture.root); !reflect.DeepEqual(after, before) {
-			t.Fatalf("template failure planning changed fixture\nbefore=%v\nafter=%v", before, after)
-		}
-	})
-
+func TestPlanApply_PartialScopeStillValidatesFullCollision(t *testing.T) {
 	t.Run("complete profile collision", func(t *testing.T) {
 		fixture := newApplyIntegrationFixture(t)
 		fixture.redirectEnvironment(t)
@@ -318,7 +280,6 @@ func TestPlanApply_ReadsRegularDigestOnlyWhenRequired(t *testing.T) {
 
 		options := fixture.options()
 		options.Modules = []string{"alpha"}
-		options.Force = true
 		plan, err := PlanApply(options)
 		if err != nil {
 			t.Fatalf("PlanApply(partial alpha) error = %v", err)
@@ -347,31 +308,18 @@ func TestPlanApply_ReadsRegularDigestOnlyWhenRequired(t *testing.T) {
 		}
 	})
 
-	t.Run("force L6 requires regular digest", func(t *testing.T) {
-		fixture := newApplyIntegrationFixture(t)
-		fixture.redirectEnvironment(t)
-		target := filepath.Join(fixture.home, "alpha", "conflict.txt")
-		makeUnreadableRegular(t, target)
-
-		options := fixture.options()
-		options.Modules = []string{"alpha"}
-		options.NoPrune = true
-		options.Force = true
-		plan, err := PlanApply(options)
-		if err == nil || !strings.Contains(err.Error(), "digest") {
-			t.Fatalf("PlanApply(force L6) = (%#v, %v), want digest read failure", plan, err)
-		}
-		if !reflect.DeepEqual(plan, ApplyPlan{}) {
-			t.Fatalf("failed force plan = %#v, want zero", plan)
-		}
-	})
-
 	t.Run("S1b scaffold present", func(t *testing.T) {
 		fixture := newApplyIntegrationFixture(t)
 		fixture.redirectEnvironment(t)
+		writeApplyFile(t, filepath.Join(fixture.repository, "modules", "alpha", "dot.toml"), `target = "~/alpha"
+[files.local]
+kind = "scaffold"
+[hooks]
+run_once = ["hooks/setup.sh"]
+`)
 		writeApplyFile(
 			t,
-			filepath.Join(fixture.repository, "modules", "alpha", "local.template"),
+			filepath.Join(fixture.repository, "modules", "alpha", "local"),
 			"scaffold bytes\n",
 		)
 		target := filepath.Join(fixture.home, "alpha", "local")
@@ -387,7 +335,7 @@ func TestPlanApply_ReadsRegularDigestOnlyWhenRequired(t *testing.T) {
 		}
 		var found *FileAction
 		for _, action := range plan.FileActions() {
-			if action.Desired.Source == "local.template" {
+			if action.Desired.Source == "local" {
 				candidate := action
 				found = &candidate
 				break
@@ -408,8 +356,7 @@ func TestPlanApply_FailsClosedWithZeroPlan(t *testing.T) {
 		{
 			name: "invalid manifest",
 			mutate: func(t *testing.T, fixture applyIntegrationFixture) {
-				writeApplyFile(t, filepath.Join(fixture.repository, "dot.toml"), `requires = ">=0.0.0"
-unknown = true
+				writeApplyFile(t, filepath.Join(fixture.repository, "dot.toml"), `unknown = true
 [profiles]
 all = ["alpha"]
 `)
@@ -433,6 +380,12 @@ all = ["alpha"]
 		{
 			name: "managed desired outside scope",
 			mutate: func(t *testing.T, fixture applyIntegrationFixture) {
+				writeApplyFile(t, filepath.Join(fixture.repository, "modules", "beta", "dot.toml"), `target = "~/beta"
+[files."managed.tmpl"]
+kind = "managed"
+[hooks]
+run_once = ["hooks/setup.sh"]
+`)
 				writeApplyFile(t, filepath.Join(fixture.repository, "modules", "beta", "managed.tmpl"), "managed\n")
 			},
 			want: "managed",
@@ -592,7 +545,6 @@ func TestValidateApplyPlan_RejectsInconsistentAction(t *testing.T) {
 func TestValidateApplyPlan_RejectsInvalidActionShape(t *testing.T) {
 	tests := []struct {
 		name   string
-		force  bool
 		mutate func(*testing.T, *ApplyPlan)
 		want   string
 	}{
@@ -602,15 +554,6 @@ func TestValidateApplyPlan_RejectsInvalidActionShape(t *testing.T) {
 				index := fileActionIndex(t, plan.fileActions, FileCreateLink)
 				plan.fileActions[index].Precondition.SourcePath = ""
 				plan.fileActions[index].Precondition.RequireRegularSource = false
-			},
-			want: "regular source",
-		},
-		{
-			name:  "backup-replace with mismatched source",
-			force: true,
-			mutate: func(t *testing.T, plan *ApplyPlan) {
-				index := fileActionIndex(t, plan.fileActions, FileBackupReplace)
-				plan.fileActions[index].Precondition.SourcePath = filepath.Join(plan.context.Repository, "wrong-source")
 			},
 			want: "regular source",
 		},
@@ -676,9 +619,7 @@ func TestValidateApplyPlan_RejectsInvalidActionShape(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newApplyIntegrationFixture(t)
 			fixture.redirectEnvironment(t)
-			options := fixture.options()
-			options.Force = test.force
-			plan, err := PlanApply(options)
+			plan, err := PlanApply(fixture.options())
 			if err != nil {
 				t.Fatalf("PlanApply() error = %v", err)
 			}
@@ -712,9 +653,7 @@ func TestValidateApplyPlan_RejectsNonCanonicalPrunePlan(t *testing.T) {
 		if err := os.Symlink(filepath.Join(fixture.root, "user-owned"), legacyTarget); err != nil {
 			t.Fatalf("Symlink(unowned legacy target) error = %v", err)
 		}
-		options := fixture.options()
-		options.Force = true
-		plan, err := PlanApply(options)
+		plan, err := PlanApply(fixture.options())
 		if err != nil {
 			t.Fatalf("PlanApply(unowned orphan) error = %v", err)
 		}
@@ -1288,8 +1227,7 @@ func newPruneAncestorFixture(
 	configPath := filepath.Join(home, ".config", "dot", "config.toml")
 	statePath := filepath.Join(home, ".local", "state", "dot", "state.json")
 	writeApplyFile(t, configPath, "profile = \"all\"\n")
-	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["cleanup", "app"]
 `)
 	writeApplyFile(t, filepath.Join(repository, "modules", "cleanup", "dot.toml"), `target = "~"
@@ -1328,16 +1266,15 @@ func newFileUpsertStateTopologyFixture(
 	configPath := filepath.Join(home, ".config", "dot", "config.toml")
 	statePath := filepath.Join(home, ".local", "state", "dot", "state.json")
 	writeApplyFile(t, configPath, "profile = \"all\"\n")
-	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["app"]
 `)
-	writeApplyFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~"
-`)
+	moduleManifest := "target = \"~\"\n"
 	parentSource := "parent"
 	if scaffold {
-		parentSource = "parent.template"
+		moduleManifest += "[files.parent]\nkind = \"scaffold\"\n"
 	}
+	writeApplyFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), moduleManifest)
 	writeApplyFile(t, filepath.Join(repository, "modules", "app", parentSource), "source content\n")
 	if childConflict {
 		writeApplyFile(t, filepath.Join(repository, "modules", "app", "blocked"), "wanted\n")
@@ -1367,13 +1304,14 @@ func newFileAdoptStateTopologyFixture(t *testing.T) applyIntegrationFixture {
 	configPath := filepath.Join(home, ".config", "dot", "config.toml")
 	statePath := filepath.Join(home, ".local", "state", "dot", "state.json")
 	writeApplyFile(t, configPath, "profile = \"all\"\n")
-	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["app"]
 `)
 	writeApplyFile(t, filepath.Join(repository, "modules", "app", "dot.toml"), `target = "~/parent"
+[files.child]
+kind = "scaffold"
 `)
-	writeApplyFile(t, filepath.Join(repository, "modules", "app", "child.template"), "scaffold source\n")
+	writeApplyFile(t, filepath.Join(repository, "modules", "app", "child"), "scaffold source\n")
 	writeApplyFile(t, filepath.Join(home, "parent", "child"), "existing user data\n")
 	writeApplyState(t, statePath, map[string]applyStateEntry{
 		"~/parent": {
@@ -1399,8 +1337,7 @@ func newApplyIntegrationFixture(t *testing.T) applyIntegrationFixture {
 	configPath := filepath.Join(home, ".config", "dot", "config.toml")
 	statePath := filepath.Join(home, ".local", "state", "dot", "state.json")
 	writeApplyFile(t, configPath, "profile = \"all\"\n")
-	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["beta", "alpha"]
 `)
 	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "dot.toml"), `target = "~/alpha"
@@ -1477,7 +1414,6 @@ func (fixture applyIntegrationFixture) options() ApplyOptions {
 			Home:       dotruntime.Override{Value: fixture.home, Set: true},
 			Repository: dotruntime.Override{Value: fixture.repository, Set: true},
 		},
-		CLIVersion: "dev",
 	}
 }
 
@@ -1531,15 +1467,19 @@ func newFileCompositionFixture(t *testing.T) fileCompositionFixture {
 		t.Fatalf("Symlink(home/alias) error = %v", err)
 	}
 
-	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `requires = ">=0.0.0"
-[profiles]
+	writeApplyFile(t, filepath.Join(repository, "dot.toml"), `[profiles]
 all = ["beta", "alpha"]
 `)
 	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "dot.toml"), `target = "~/alias"
+[files."item.template"]
+kind = "scaffold"
+target = "~/alias/item"
 `)
 	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "item.template"), `profile={{ .Profile }}`)
 	writeApplyFile(t, filepath.Join(repository, "modules", "alpha", "hooks", "old.txt"), "old\n")
 	writeApplyFile(t, filepath.Join(repository, "modules", "beta", "dot.toml"), `target = "~/beta"
+[files."broken.template"]
+kind = "scaffold"
 `)
 	writeApplyFile(t, filepath.Join(repository, "modules", "beta", "broken.template"), `{{`)
 
@@ -1577,12 +1517,9 @@ all = ["beta", "alpha"]
 		t.Fatalf("ValidatePathBoundaries() error = %v", err)
 	}
 	context := manifest.RuntimeContext{
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
-		Hostname: "apply-test",
-		Profile:  "all",
-		Home:     home,
-		Data:     map[string]string{},
+		OS:      runtime.GOOS,
+		Profile: "all",
+		Home:    home,
 	}
 	return fileCompositionFixture{
 		root:        root,
