@@ -97,13 +97,12 @@ func runStatus(command *cobra.Command, moduleID string, env environment) error {
 	ids := statusModuleIDs(moduleID, repository, machine, loaded.Snapshot)
 	statuses := make([]moduleStatus, 0, len(ids))
 	for _, id := range ids {
-		_, statePresent := loaded.Snapshot.Modules[id]
 		statuses = append(statuses, statusForModule(
 			id,
 			effective,
 			notApplicable,
 			variants,
-			statePresent,
+			loaded.Snapshot,
 			plan,
 		))
 	}

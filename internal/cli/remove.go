@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/mianm12/dotfiles/internal/core/executor"
 	"github.com/spf13/cobra"
 )
 
@@ -77,6 +78,14 @@ func runRemove(
 				err,
 				moduleID,
 			)
+		}
+		if !selectionChanged &&
+			prepared.loaded.Missing &&
+			len(prepared.plan.Actions) == 0 {
+			return printResult(command, executor.Result{
+				Plan:     prepared.plan,
+				Warnings: preparedWarnings(prepared),
+			}, false)
 		}
 		result, runErr := executePrepared(context, prepared, owner.ownership())
 		if runErr != nil {

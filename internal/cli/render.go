@@ -7,6 +7,7 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/core/executor"
 	"github.com/mianm12/dotfiles/internal/core/planner"
+	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/spf13/cobra"
 )
 
@@ -75,9 +76,10 @@ func statusForModule(
 	moduleID string,
 	effective, notApplicable map[string]bool,
 	variants map[string]string,
-	statePresent bool,
+	snapshot state.Snapshot,
 	plan planner.Plan,
 ) moduleStatus {
+	_, statePresent := snapshot.Modules[moduleID]
 	status := "inactive"
 	switch {
 	case notApplicable[moduleID]:
@@ -94,14 +96,17 @@ func statusForModule(
 		switch action.Decision {
 		case planner.DecisionConflict:
 			status = "conflict"
-		case planner.DecisionKeep:
 			continue
-		default:
-			if status != "conflict" &&
-				effective[moduleID] &&
-				!notApplicable[moduleID] {
-				status = "pending"
+		case planner.DecisionKeep:
+			if action.Kind != state.KindLocal ||
+				localProvenanceRecorded(snapshot, action) {
+				continue
 			}
+		}
+		if status != "conflict" &&
+			effective[moduleID] &&
+			!notApplicable[moduleID] {
+			status = "pending"
 		}
 	}
 	return moduleStatus{
@@ -109,6 +114,17 @@ func statusForModule(
 		variant: variants[moduleID],
 		status:  status,
 	}
+}
+
+func localProvenanceRecorded(snapshot state.Snapshot, action planner.Action) bool {
+	module, exists := snapshot.Modules[action.ModuleID]
+	if !exists {
+		return false
+	}
+	placement, exists := module.Placements[action.PlacementID]
+	return exists &&
+		placement.Kind == state.KindLocal &&
+		placement.Target == action.Target
 }
 
 func printStatus(command *cobra.Command, statuses []moduleStatus, warnings []string) error {

@@ -77,6 +77,53 @@ target = "~/.app"
 	assertCLIPathsUnchanged(t, before)
 }
 
+func TestB6StatusLocalWithoutProvenanceIsPending(t *testing.T) {
+	fixture := newCLIFixture(t, "base = [\"app\"]")
+	fixture.writeModule(t, "app", `
+[[locals]]
+id = "local"
+example = "local.example"
+target = "~/.app.local"
+`, map[string]string{"local.example": "example"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	target := filepath.Join(fixture.home, ".app.local")
+	writeCLIFile(t, target, "personal")
+
+	beforeStatus := snapshotCLIPaths(t, fixture.config, target)
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK ||
+		!strings.Contains(stdout, "app  pending") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf("status before provenance = (%d, %q, %q), want pending", code, stdout, stderr)
+	}
+	assertCLIPathsUnchanged(t, beforeStatus)
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, fixture.lock)
+
+	code, stdout, stderr = fixture.run("apply")
+	if code != exitOK ||
+		!strings.Contains(stdout, "state_changed=true") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf("apply local provenance = (%d, %q, %q), want state-only mutation", code, stdout, stderr)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "personal" {
+		t.Fatalf("local after apply = (%q, %v), want preserved", data, err)
+	}
+
+	beforeRepeat := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
+	code, stdout, stderr = fixture.run("status")
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  converged") {
+		t.Fatalf("status after provenance = (%d, %q, %q), want converged", code, stdout, stderr)
+	}
+	assertCLIPathsUnchanged(t, beforeRepeat)
+
+	code, _, stderr = fixture.run("apply")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("repeated apply = (%d, %q), want zero mutation", code, stderr)
+	}
+	assertCLIPathsUnchanged(t, beforeRepeat)
+}
+
 func TestB6InitDryRunIsStrictlyReadOnly(t *testing.T) {
 	fixture := newCLIFixture(t, "base = [\"app\"]")
 	fixture.writeModule(t, "app", `
@@ -250,6 +297,39 @@ target = "~/.extra.local"
 		t.Fatalf("remove profiled = (%d, %q), want refusal", code, stderr)
 	}
 	assertCLIPathsUnchanged(t, before)
+}
+
+func TestAcceptance08_InactiveKnownModuleWithoutStateIsNoop(t *testing.T) {
+	fixture := newCLIFixture(t, "base = []")
+	fixture.writeModule(t, "idle", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.idle"
+`, map[string]string{"config": "idle"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	target := filepath.Join(fixture.home, ".idle")
+	before := snapshotCLIPaths(t, fixture.config)
+
+	code, stdout, stderr := fixture.run("remove", "idle")
+	if code != exitOK ||
+		!strings.Contains(stdout, "state_changed=false") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf("remove inactive module = (%d, %q, %q), want no-op", code, stdout, stderr)
+	}
+	assertCLIPathsUnchanged(t, before)
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, target)
+
+	code, stdout, stderr = fixture.run("remove", "idle")
+	if code != exitOK ||
+		!strings.Contains(stdout, "state_changed=false") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf("repeated remove inactive module = (%d, %q, %q), want no-op", code, stdout, stderr)
+	}
+	assertCLIPathsUnchanged(t, before)
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, target)
 }
 
 func TestAcceptance13_SelectionInterruptionConvergesOnRerun(t *testing.T) {
