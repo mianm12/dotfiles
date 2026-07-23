@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -48,7 +50,7 @@ source = "config"
 target = "~/.app"
 `, map[string]string{"config": "portable"})
 
-	code, _, stderr := fixture.run("init", "--profile", "base")
+	code, _, stderr := fixture.run("init", fixture.repository, "--profile", "base")
 	if code != exitOK || stderr == "" {
 		t.Fatalf("init = (%d, %q), want success with missing-state warning", code, stderr)
 	}
@@ -96,25 +98,29 @@ target = "~/.app"
 
 func TestAcceptance03_ExplicitNotApplicableDoesNotChangeSelection(t *testing.T) {
 	fixture := newCLIFixture(t, "base = []")
-	fixture.writeModule(t, "mac", `
+	otherOS := "macos"
+	if runtime.GOOS == "darwin" {
+		otherOS = "linux"
+	}
+	fixture.writeModule(t, "other-platform", `
 [match]
-os = ["macos"]
+os = ["`+otherOS+`"]
 
 [[links]]
 id = "config"
 source = "config"
-target = "~/.mac"
-`, map[string]string{"config": "mac"})
+target = "~/.other-platform"
+`, map[string]string{"config": "other"})
 	fixture.writeMachine(t, []string{"base"}, nil)
 	before := snapshotCLIPaths(t, fixture.config)
 
-	code, _, stderr := fixture.run("apply", "mac")
+	code, _, stderr := fixture.run("apply", "other-platform")
 	if code != exitError || !strings.Contains(stderr, "not applicable") {
-		t.Fatalf("apply mac = (%d, %q), want not-applicable failure", code, stderr)
+		t.Fatalf("apply other-platform = (%d, %q), want not-applicable failure", code, stderr)
 	}
 	assertCLIPathsUnchanged(t, before)
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, filepath.Join(fixture.home, ".mac"))
+	assertCLIMissing(t, filepath.Join(fixture.home, ".other-platform"))
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 		t.Fatalf("extra_modules = %v, want unchanged", extras)
 	}
@@ -214,6 +220,12 @@ target = "~/.extra.local"
 	}
 
 	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, localTarget, profileTarget)
+	code, _, stderr = fixture.run("apply")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("apply after remove = (%d, %q), want zero mutation", code, stderr)
+	}
+	assertCLIPathsUnchanged(t, before)
+
 	code, _, stderr = fixture.run("remove", "extra")
 	if code != exitOK {
 		t.Fatalf("repeated remove known inactive module = (%d, %q)", code, stderr)
@@ -240,7 +252,7 @@ target = "~/.extra"
 	fixture.env.afterSelectionPublish = func() error {
 		return errors.New("injected interruption")
 	}
-	code, _, stderr := fixture.run("apply", "extra")
+	code, _, stderr := fixture.runInjected("apply", "extra")
 	if code != exitError || !strings.Contains(stderr, "selection was saved") {
 		t.Fatalf("interrupted apply = (%d, %q), want persisted-selection failure", code, stderr)
 	}
@@ -279,7 +291,7 @@ func TestAcceptance15_LockBusyAndReadOnlyCommandsNeverCreateLock(t *testing.T) {
 			}
 		}()
 
-		code, _, stderr := fixture.run("apply")
+		code, _, stderr := fixture.runProcess("apply")
 		if code != exitError || !strings.Contains(stderr, "another dot process") {
 			t.Fatalf("locked apply = (%d, %q), want busy failure", code, stderr)
 		}
@@ -369,6 +381,13 @@ func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *tes
 		if _, exists := loaded.Snapshot.Modules["gone"]; exists {
 			t.Fatalf("state still contains gone: %#v", loaded.Snapshot)
 		}
+		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock)
+		code, _, stderr = fixture.run("apply")
+		if code != exitOK || stderr != "" {
+			t.Fatalf("apply after deleted-module cleanup = (%d, %q)", code, stderr)
+		}
+		assertCLIPathsUnchanged(t, before)
+		assertCLIMissing(t, target)
 	})
 }
 
@@ -437,6 +456,8 @@ target = "~/.app"
 		{"apply", "--unknown"},
 		{"init", fixture.repository},
 		{"version", "extra"},
+		{"help", "does-not-exist"},
+		{"help", "apply", "extra"},
 		{"unknown"},
 	} {
 		code, _, _ := fixture.run(args...)
@@ -543,16 +564,62 @@ func newCLIFixture(t *testing.T, profiles string) *cliFixture {
 		},
 		build: buildinfo.Info{Version: "test", Commit: "test", BuildTime: "test"},
 	}
+	t.Setenv("HOME", fixture.home)
 	return fixture
 }
 
 func (fixture *cliFixture) run(args ...string) (int, string, string) {
+	var stdout, stderr bytes.Buffer
+	code := Run(args, strings.NewReader(""), &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+func (fixture *cliFixture) runInjected(args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	env := fixture.env
 	env.stdout = &stdout
 	env.stderr = &stderr
 	code := run(args, env)
 	return code, stdout.String(), stderr.String()
+}
+
+func (fixture *cliFixture) runProcess(args ...string) (int, string, string) {
+	commandArgs := []string{"-test.run=^TestCLIHelperProcess$", "--"}
+	commandArgs = append(commandArgs, args...)
+	command := exec.Command(os.Args[0], commandArgs...)
+	command.Env = append(os.Environ(), "DOT_CLI_HELPER_PROCESS=1")
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if err == nil {
+		return exitOK, stdout.String(), stderr.String()
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), stdout.String(), stderr.String()
+	}
+	return -1, stdout.String(), stderr.String() + err.Error()
+}
+
+func TestCLIHelperProcess(t *testing.T) {
+	if os.Getenv("DOT_CLI_HELPER_PROCESS") != "1" {
+		return
+	}
+	separator := slicesIndex(os.Args, "--")
+	if separator < 0 {
+		os.Exit(exitUsage)
+	}
+	os.Exit(Run(os.Args[separator+1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+func slicesIndex(values []string, target string) int {
+	for index, value := range values {
+		if value == target {
+			return index
+		}
+	}
+	return -1
 }
 
 func (fixture *cliFixture) writeMachine(t *testing.T, profiles, extras []string) {

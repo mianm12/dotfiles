@@ -102,7 +102,27 @@ func newRootCommand(env environment) *cobra.Command {
 		newRemoveCommand(env),
 		newVersionCommand(env),
 	)
+	root.SetHelpCommand(newHelpCommand(root))
 	return root
+}
+
+func newHelpCommand(root *cobra.Command) *cobra.Command {
+	return &cobra.Command{
+		Use:   "help [COMMAND]",
+		Short: "Help about any command",
+		Args:  maximumArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			target := root
+			if len(args) == 1 {
+				found, remaining, err := root.Find(args)
+				if err != nil || len(remaining) != 0 || found == root {
+					return usagef("unknown help topic %q", args[0])
+				}
+				target = found
+			}
+			return target.Help()
+		},
+	}
 }
 
 func noArgs(command *cobra.Command, args []string) error {
