@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
@@ -314,7 +315,7 @@ func planOneStale(
 
 	current, err := resolveStateTarget(home, record.Target)
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
+		if !isSafeStaleResolutionDrift(err) {
 			return Action{}, "", fmt.Errorf(
 				"resolve stale link %s: %w",
 				placementLabel(key.moduleID, key.placementID),
@@ -353,6 +354,11 @@ func planOneStale(
 	if actual.kind == actualSymlink &&
 		actual.linkDestination == record.LinkDestination &&
 		current.Resolved() == record.ResolvedTarget {
+		if staleLinkContainsDesired(record, current, desired) {
+			base.Decision = DecisionConflict
+			base.Reason = "stale directory link contains an active desired target"
+			return base, "", nil
+		}
 		base.Decision = DecisionPrune
 		return base, "", nil
 	}
@@ -426,6 +432,26 @@ func targetUsedByDesired(
 	})
 }
 
+func staleLinkContainsDesired(
+	record state.Placement,
+	target corepaths.Target,
+	desired []desiredPlacement,
+) bool {
+	return slices.ContainsFunc(desired, func(placement desiredPlacement) bool {
+		return strictDescendant(target.Lexical(), placement.target.Lexical()) ||
+			strictDescendant(record.LinkDestination, placement.target.Resolved())
+	})
+}
+
+func strictDescendant(parent, candidate string) bool {
+	relative, err := filepath.Rel(parent, candidate)
+	return err == nil &&
+		relative != "." &&
+		relative != ".." &&
+		!filepath.IsAbs(relative) &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
 func resolveStateTarget(home, target string) (corepaths.Target, error) {
 	relative, err := filepath.Rel(home, target)
 	if err != nil ||
@@ -436,6 +462,19 @@ func resolveStateTarget(home, target string) (corepaths.Target, error) {
 		return corepaths.Target{}, fmt.Errorf("state target %q is outside HOME %q", target, home)
 	}
 	return corepaths.ResolveTarget(home, "~/"+filepath.ToSlash(relative))
+}
+
+func isSafeStaleResolutionDrift(err error) bool {
+	if errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, syscall.ENOTDIR) ||
+		errors.Is(err, syscall.ELOOP) {
+		return true
+	}
+	if !errors.Is(err, corepaths.ErrPathBlocked) {
+		return false
+	}
+	var pathError *fs.PathError
+	return !errors.As(err, &pathError)
 }
 
 func statePlacement(

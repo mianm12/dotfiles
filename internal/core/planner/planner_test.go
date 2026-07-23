@@ -433,3 +433,57 @@ func TestStaleDanglingAncestorWarnsAndForgets(t *testing.T) {
 		t.Fatalf("Build() warnings = %v, want dangling-ancestor warning", plan.Warnings)
 	}
 }
+
+func TestStaleDirectoryLinkContainingDesiredTargetIsConflict(t *testing.T) {
+	fixture := newFixture(t)
+	oldDirectory := fixture.dir(t, "repo-old/app")
+	parentTarget := fixture.target(".config/app")
+	fixture.symlink(t, oldDirectory, parentTarget)
+	oldResolved := fixture.resolved(t, parentTarget)
+	newSource := fixture.file(t, "repo/modules/app/new", "new")
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"config": linkRecord(parentTarget, oldResolved, oldDirectory),
+	})
+	module := linkModule("app", "config", newSource, "~/.config/app/child")
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, []config.Module{module}, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionConflict)
+	if !plan.HasConflicts() {
+		t.Fatal("Build() HasConflicts() = false, want unsafe parent prune conflict")
+	}
+	if plan.Actions[1].Reason == "" {
+		t.Fatal("stale parent conflict has empty reason")
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestStaleTargetBlockedByRegularAncestorWarnsAndForgets(t *testing.T) {
+	fixture := newFixture(t)
+	blockingAncestor := fixture.target(".config/app")
+	if err := os.MkdirAll(blockingAncestor, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(blocking ancestor) error = %v", err)
+	}
+	staleTarget := filepath.Join(blockingAncestor, "config")
+	staleResolved := fixture.resolved(t, staleTarget)
+	if err := os.Remove(blockingAncestor); err != nil {
+		t.Fatalf("os.Remove(blocking ancestor directory) error = %v", err)
+	}
+	fixture.fileAbsolute(t, blockingAncestor, "user")
+	oldSource := fixture.file(t, "repo/modules/app/old", "old")
+	newSource := fixture.file(t, "repo/modules/app/new", "new")
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"old": linkRecord(staleTarget, staleResolved, oldSource),
+	})
+	module := linkModule("app", "new", newSource, "~/.config/app-new")
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, []config.Module{module}, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionForget)
+	if plan.HasConflicts() || len(plan.Warnings) != 1 {
+		t.Fatalf("Build() = %#v, want non-blocking stale takeover warning", plan)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
