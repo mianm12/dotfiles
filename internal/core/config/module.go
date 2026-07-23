@@ -73,7 +73,12 @@ func loadModule(id string, file moduleFile, platform Platform) (Module, bool, er
 	if !applicable {
 		return Module{}, false, nil
 	}
-	links, locals, err := materializePlacements(id, selected.root, selected.placements)
+	links, locals, err := materializePlacements(
+		id,
+		file.root,
+		selected.root,
+		selected.placements,
+	)
 	if err != nil {
 		return Module{}, false, err
 	}
@@ -327,7 +332,7 @@ func cleanRelative(kind, value string) (string, error) {
 		)
 	}
 	cleaned := path.Clean(value)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return "", fmt.Errorf(
 			"%w: %s %q escapes its module root",
 			ErrInvalidConfiguration,
@@ -339,10 +344,38 @@ func cleanRelative(kind, value string) (string, error) {
 }
 
 func materializePlacements(
-	module, root string,
+	module, moduleRoot, root string,
 	placements placementSet,
 ) ([]Link, []Local, error) {
-	info, err := os.Stat(root)
+	resolvedModuleRoot, err := filepath.EvalSymlinks(moduleRoot)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"%w: module %q resolve module root %q: %w",
+			ErrInvalidConfiguration,
+			module,
+			moduleRoot,
+			err,
+		)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"%w: module %q resolve selected root %q: %w",
+			ErrInvalidConfiguration,
+			module,
+			root,
+			err,
+		)
+	}
+	if !pathWithin(resolvedModuleRoot, resolvedRoot) {
+		return nil, nil, fmt.Errorf(
+			"%w: module %q selected root %q escapes module root",
+			ErrInvalidConfiguration,
+			module,
+			root,
+		)
+	}
+	info, err := os.Stat(resolvedRoot)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"%w: module %q inspect selected root %q: %w",
@@ -364,7 +397,7 @@ func materializePlacements(
 	links := make([]Link, len(placements.links))
 	for index, declared := range placements.links {
 		sourcePath := filepath.Join(root, filepath.FromSlash(declared.Source))
-		mode, err := validateLinkSource(module, declared.ID, sourcePath)
+		mode, err := validateLinkSource(module, declared.ID, resolvedRoot, sourcePath)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -380,7 +413,7 @@ func materializePlacements(
 	locals := make([]Local, len(placements.locals))
 	for index, declared := range placements.locals {
 		examplePath := filepath.Join(root, filepath.FromSlash(declared.Example))
-		if err := validateLocalExample(module, declared.ID, examplePath); err != nil {
+		if err := validateLocalExample(module, declared.ID, resolvedRoot, examplePath); err != nil {
 			return nil, nil, err
 		}
 		locals[index] = Local{
@@ -393,7 +426,7 @@ func materializePlacements(
 	return links, locals, nil
 }
 
-func validateLinkSource(module, placement, source string) (fs.FileMode, error) {
+func validateLinkSource(module, placement, root, source string) (fs.FileMode, error) {
 	info, err := os.Lstat(source)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -423,10 +456,30 @@ func validateLinkSource(module, placement, source string) (fs.FileMode, error) {
 			source,
 		)
 	}
+	resolvedSource, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"%w: module %q link %q resolve source %q: %w",
+			ErrInvalidConfiguration,
+			module,
+			placement,
+			source,
+			err,
+		)
+	}
+	if !pathWithin(root, resolvedSource) {
+		return 0, fmt.Errorf(
+			"%w: module %q link %q source %q escapes selected root",
+			ErrInvalidConfiguration,
+			module,
+			placement,
+			source,
+		)
+	}
 	return info.Mode(), nil
 }
 
-func validateLocalExample(module, placement, example string) error {
+func validateLocalExample(module, placement, root, example string) error {
 	info, err := os.Lstat(example)
 	if err != nil {
 		return fmt.Errorf(
@@ -447,7 +500,36 @@ func validateLocalExample(module, placement, example string) error {
 			example,
 		)
 	}
+	resolvedExample, err := filepath.EvalSymlinks(example)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: module %q local %q resolve example %q: %w",
+			ErrInvalidConfiguration,
+			module,
+			placement,
+			example,
+			err,
+		)
+	}
+	if !pathWithin(root, resolvedExample) {
+		return fmt.Errorf(
+			"%w: module %q local %q example %q escapes selected root",
+			ErrInvalidConfiguration,
+			module,
+			placement,
+			example,
+		)
+	}
 	return nil
+}
+
+func pathWithin(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	return relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func sortedKeys[Value any](values map[string]Value) []string {

@@ -283,6 +283,10 @@ target = "~/.config/app/config"
 id = "directory"
 source = "tree"
 target = "~/.config/app/tree"
+[[links]]
+id = "root"
+source = "."
+target = "~/.config/app/root"
 [[locals]]
 id = "local"
 example = "config.local.example"
@@ -307,11 +311,48 @@ target = "~/.config/app/config.local"
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	if len(resolution.Modules) != 1 ||
-		len(resolution.Modules[0].Links) != 2 ||
+		len(resolution.Modules[0].Links) != 3 ||
 		len(resolution.Modules[0].Locals) != 1 {
 		t.Fatalf("resolution = %#v", resolution)
 	}
 	if !resolution.Modules[0].Links[1].SourceMode.IsDir() {
 		t.Fatalf("directory link mode = %v, want directory", resolution.Modules[0].Links[1].SourceMode)
+	}
+	if rootLink := resolution.Modules[0].Links[2]; rootLink.SourcePath != moduleRoot ||
+		!rootLink.SourceMode.IsDir() {
+		t.Fatalf("root directory link = %#v, want source path %q", rootLink, moduleRoot)
+	}
+}
+
+func TestResolve_RejectsVariantRootSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	repository := writeRepository(t, root, `
+version = 1
+[profiles]
+base = ["app"]
+`)
+	moduleRoot := writeModule(t, repository, "app", `
+[variants.linux]
+root = "external"
+[variants.linux.match]
+os = ["linux"]
+`)
+	outside := filepath.Join(root, "outside")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(outside) error = %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(moduleRoot, "external")); err != nil {
+		t.Fatalf("os.Symlink(external root) error = %v", err)
+	}
+
+	loaded, err := coreconfig.OpenRepository(repository)
+	if err != nil {
+		t.Fatalf("OpenRepository() error = %v", err)
+	}
+	if _, err := loaded.Resolve(
+		coreconfig.Scope{Profiles: []string{"base"}},
+		coreconfig.Platform{OS: "linux"},
+	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
+		t.Fatalf("Resolve() error = %v, want ErrInvalidConfiguration", err)
 	}
 }

@@ -27,11 +27,12 @@ type moduleFile struct {
 // Repository is a strictly loaded root manifest plus lazily discovered module
 // manifest paths. Module contents are not decoded until Resolve selects them.
 type Repository struct {
-	valid    bool
-	root     string
-	profiles map[string][]string
-	modules  map[string]moduleFile
-	ids      []string
+	valid        bool
+	root         string
+	profiles     map[string][]string
+	modules      map[string]moduleFile
+	moduleErrors map[string]error
+	ids          []string
 }
 
 // OpenRepository loads dot.toml and discovers only recognized module entries.
@@ -60,16 +61,17 @@ func OpenRepository(root string) (Repository, error) {
 	if err != nil {
 		return Repository{}, err
 	}
-	modules, ids, err := discoverModules(filepath.Join(root, "modules"))
+	modules, moduleErrors, ids, err := discoverModules(filepath.Join(root, "modules"))
 	if err != nil {
 		return Repository{}, err
 	}
 	return Repository{
-		valid:    true,
-		root:     root,
-		profiles: profiles,
-		modules:  modules,
-		ids:      ids,
+		valid:        true,
+		root:         root,
+		profiles:     profiles,
+		modules:      modules,
+		moduleErrors: moduleErrors,
+		ids:          ids,
 	}, nil
 }
 
@@ -87,6 +89,21 @@ func (repository Repository) ModuleIDs() []string {
 func (repository Repository) HasModule(id string) bool {
 	_, exists := repository.modules[id]
 	return repository.valid && exists
+}
+
+func (repository Repository) inspectModule(id string) (bool, error) {
+	if repository.HasModule(id) {
+		return true, nil
+	}
+	if err, exists := repository.moduleErrors[id]; exists {
+		return false, fmt.Errorf(
+			"%w: inspect module %q: %w",
+			ErrInvalidConfiguration,
+			id,
+			err,
+		)
+	}
+	return false, nil
 }
 
 func validateRootDocument(path string, document rootDocument) (map[string][]string, error) {
@@ -117,16 +134,17 @@ func validateRootDocument(path string, document rootDocument) (map[string][]stri
 	return profiles, nil
 }
 
-func discoverModules(root string) (map[string]moduleFile, []string, error) {
+func discoverModules(root string) (map[string]moduleFile, map[string]error, []string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return map[string]moduleFile{}, nil, nil
+			return map[string]moduleFile{}, map[string]error{}, nil, nil
 		}
-		return nil, nil, fmt.Errorf("read modules directory %q: %w", root, err)
+		return nil, nil, nil, fmt.Errorf("read modules directory %q: %w", root, err)
 	}
 
 	modules := make(map[string]moduleFile)
+	moduleErrors := make(map[string]error)
 	ids := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		id := entry.Name()
@@ -139,11 +157,12 @@ func discoverModules(root string) (map[string]moduleFile, []string, error) {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
-			return nil, nil, fmt.Errorf("inspect module manifest %q: %w", manifest, err)
+			moduleErrors[id] = fmt.Errorf("inspect module manifest %q: %w", manifest, err)
+			continue
 		}
 		modules[id] = moduleFile{root: moduleRoot, manifest: manifest}
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	return modules, ids, nil
+	return modules, moduleErrors, ids, nil
 }

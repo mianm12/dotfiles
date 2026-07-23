@@ -121,6 +121,51 @@ target = "~/.config/good/config"
 	assertTreeUnchanged(t, root, before)
 }
 
+func TestAcceptance17_ScopedResolutionDefersOutOfScopeDiscoveryError(t *testing.T) {
+	root := t.TempDir()
+	repository := writeRepository(t, root, `
+version = 1
+
+[profiles]
+base = ["good"]
+`)
+	writeModule(t, repository, "good", "")
+	badRoot := writeModule(t, repository, "bad", "")
+	if err := os.Chmod(badRoot, 0); err != nil {
+		t.Fatalf("os.Chmod(bad module) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(badRoot, 0o700)
+	})
+	manifest := filepath.Join(badRoot, "module.toml")
+	if _, err := os.Lstat(manifest); !errors.Is(err, fs.ErrPermission) {
+		t.Skipf("filesystem does not enforce directory traversal permissions: %v", err)
+	}
+
+	loaded, err := coreconfig.OpenRepository(repository)
+	if err != nil {
+		t.Fatalf("OpenRepository() error = %v", err)
+	}
+	resolution, err := loaded.Resolve(
+		coreconfig.Scope{Profiles: []string{"base"}},
+		coreconfig.Platform{OS: "linux"},
+	)
+	if err != nil {
+		t.Fatalf("Resolve(good scope) error = %v", err)
+	}
+	if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"good"}) {
+		t.Fatalf("resolved modules = %v, want [good]", got)
+	}
+
+	if _, err := loaded.Resolve(
+		coreconfig.Scope{RequiredModules: []string{"bad"}},
+		coreconfig.Platform{OS: "linux"},
+	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) ||
+		!errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("Resolve(bad scope) error = %v, want invalid configuration with permission error", err)
+	}
+}
+
 func TestAcceptance18_InvalidSourceOrExampleFailsReadOnly(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -148,6 +193,22 @@ target = "~/.config/example/config"
 				writeFile(t, filepath.Join(moduleRoot, "real"), "content")
 				if err := os.Symlink("real", filepath.Join(moduleRoot, "alias")); err != nil {
 					t.Fatalf("os.Symlink(alias) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "link source ancestor escapes selected root",
+			manifest: `
+[[links]]
+id = "config"
+source = "alias/config"
+target = "~/.config/example/config"
+`,
+			setup: func(t *testing.T, moduleRoot string) {
+				outside := filepath.Join(moduleRoot, "..", "..", "outside")
+				writeFile(t, filepath.Join(outside, "config"), "content")
+				if err := os.Symlink(outside, filepath.Join(moduleRoot, "alias")); err != nil {
+					t.Fatalf("os.Symlink(alias ancestor) error = %v", err)
 				}
 			},
 		},

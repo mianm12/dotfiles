@@ -31,7 +31,11 @@ func (repository Repository) Resolve(scope Scope, platform Platform) (Resolution
 			)
 		}
 		for _, module := range members {
-			if !repository.HasModule(module) {
+			exists, err := repository.inspectModule(module)
+			if err != nil {
+				return Resolution{}, err
+			}
+			if !exists {
 				return Resolution{}, fmt.Errorf(
 					"%w: active profile %q references missing module %q",
 					ErrInvalidConfiguration,
@@ -48,7 +52,11 @@ func (repository Repository) Resolve(scope Scope, platform Platform) (Resolution
 		append([]string(nil), scope.ExtraModules...),
 		scope.RequiredModules...,
 	) {
-		if !repository.HasModule(module) {
+		exists, err := repository.inspectModule(module)
+		if err != nil {
+			return Resolution{}, err
+		}
+		if !exists {
 			return Resolution{}, fmt.Errorf(
 				"%w: required module %q does not exist",
 				ErrInvalidConfiguration,
