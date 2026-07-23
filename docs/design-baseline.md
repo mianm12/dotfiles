@@ -508,9 +508,15 @@ acquire mutation lock
 
 ## 14. 实现边界
 
-MVP 使用 Go。优先使用标准库和窄职责依赖；计划采用 Cobra、`go-toml/v2`、`gofrs/flock`，
-并在实现 state/config 原子发布时评估 `renameio/v2`。不引入 Viper、虚拟文件系统、DI、事务、
-workflow、state-machine、日志或通用 dotfiles framework。
+MVP 使用 Go。优先使用标准库和窄职责依赖。运行时依赖收口为四个：Cobra、`go-toml/v2`
+（配置解析用 `DisallowUnknownFields` 落实严格加载）、`gofrs/flock`，以及 `renameio/v2`——
+仅用于 state 与机器配置的原子覆盖发布。Local 与新文件的不可覆盖发布不用 rename：先写 `0600`
+临时文件，再 `os.Link` 到 target（已存在时得到 `EEXIST`），同时满足完整、不可覆盖、原子出现，
+全为标准库。测试专用依赖限 `google/go-cmp` 与 `stretchr/testify`。
+
+不引入 Viper、虚拟文件系统、DI、事务、workflow、state-machine、日志或通用 dotfiles
+framework。distro 检测解析 `/etc/os-release`（标准库）、HOME 使用 `os.UserHomeDir`、state
+编解码使用标准库 `encoding/json` + `DisallowUnknownFields`，均不引入依赖；不加 color/TUI 库。
 
 以下内容由实现与测试决定，不属于产品契约：
 
