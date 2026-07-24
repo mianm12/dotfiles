@@ -331,10 +331,14 @@ target = "~/.old"
 [[links]]
 id = "config"
 source = "config"
-target = "~/.new"
+target = "~/.blocked/new"
 `)
 	oldTarget := filepath.Join(failure.home, ".old")
-	newTarget := filepath.Join(failure.home, ".new")
+	blockedParent := filepath.Join(failure.home, ".blocked")
+	if err := os.Mkdir(blockedParent, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(blocked parent) error = %v", err)
+	}
+	newTarget := filepath.Join(blockedParent, "new")
 	beforeControl := snapshotC1Paths(
 		t,
 		failure.config,
@@ -343,12 +347,17 @@ target = "~/.new"
 		oldTarget,
 	)
 	failure.env.beforeExecution = func() {
-		writeCLIFile(t, newTarget, "user")
+		if err := os.Chmod(blockedParent, 0o500); err != nil {
+			t.Fatalf("os.Chmod(blocked parent) error = %v", err)
+		}
 	}
 
 	code, stdout, stderr := failure.runC1Injected("apply")
-	if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
-		t.Fatalf("ordered failure apply = (%d, %q, %q), want create failure", code, stdout, stderr)
+	if err := os.Chmod(blockedParent, 0o700); err != nil {
+		t.Fatalf("os.Chmod(restore parent) error = %v", err)
+	}
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "create symlink") {
+		t.Fatalf("ordered failure apply = (%d, %q, %q), want execution-time create failure", code, stdout, stderr)
 	}
 	assertC1SnapshotUnchanged(t, beforeControl)
 	assertCLILink(
@@ -356,9 +365,7 @@ target = "~/.new"
 		oldTarget,
 		filepath.Join(failure.repository, "modules", "app", "config"),
 	)
-	if data, err := os.ReadFile(newTarget); err != nil || string(data) != "user" {
-		t.Fatalf("new target = (%q, %v), want injected user file", data, err)
-	}
+	assertCLIMissing(t, newTarget)
 }
 
 func TestAcceptance07_ExplicitApplyActivatesExtraAndRepeatsThroughCLI(t *testing.T) {
@@ -821,6 +828,183 @@ target = "~/tree/child"
 			assertCLIMissing(t, fixture.lock)
 		})
 	}
+}
+
+func TestAcceptance12_InitRejectsControlPathAncestorsBeforeMutationThroughCLI(t *testing.T) {
+	tests := []struct {
+		name         string
+		target       string
+		existingLink bool
+		repository   func(*testing.T, *c1Fixture) string
+	}{
+		{name: "missing machine-config ancestor", target: "~/.config"},
+		{name: "missing state-and-lock ancestor", target: "~/.local"},
+		{
+			name:         "existing managed machine-config ancestor",
+			target:       "~/.config",
+			existingLink: true,
+		},
+		{
+			name:   "repository inside target",
+			target: "~/managed",
+			repository: func(_ *testing.T, fixture *c1Fixture) string {
+				return filepath.Join(fixture.home, "managed", "repository")
+			},
+		},
+		{
+			name:   "repository inside resolved target",
+			target: "~/alias/managed",
+			repository: func(t *testing.T, fixture *c1Fixture) string {
+				actual := filepath.Join(fixture.root, "actual")
+				if err := os.Mkdir(actual, 0o700); err != nil {
+					t.Fatalf("os.Mkdir(actual) error = %v", err)
+				}
+				if err := os.Symlink(actual, filepath.Join(fixture.home, "alias")); err != nil {
+					t.Fatalf("os.Symlink(alias) error = %v", err)
+				}
+				return filepath.Join(actual, "managed", "repository")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newC1Fixture(t, `base = ["app"]`)
+			if test.repository != nil {
+				fixture.repository = test.repository(t, fixture)
+				writeCLIFile(
+					t,
+					filepath.Join(fixture.repository, "dot.toml"),
+					"version = 1\n[profiles]\nbase = [\"app\"]\n",
+				)
+			}
+			fixture.writeModule(t, "app", `
+[[links]]
+id = "root"
+source = "root"
+target = "`+test.target+`"
+`, nil)
+			source := filepath.Join(fixture.repository, "modules", "app", "root")
+			if err := os.Mkdir(source, 0o700); err != nil {
+				t.Fatalf("os.Mkdir(source) error = %v", err)
+			}
+			if test.existingLink {
+				target := filepath.Join(
+					fixture.home,
+					filepath.FromSlash(strings.TrimPrefix(test.target, "~/")),
+				)
+				if err := os.Symlink(source, target); err != nil {
+					t.Fatalf("os.Symlink(existing target) error = %v", err)
+				}
+			}
+			before := snapshotC1Tree(t, fixture.root)
+
+			code, stdout, stderr := fixture.runC1(
+				"init",
+				fixture.repository,
+				"--profile",
+				"base",
+			)
+
+			if code != exitError ||
+				stdout != "" ||
+				!strings.Contains(stderr, "control path") {
+				t.Fatalf(
+					"init = (%d, %q, %q), want preflight control-boundary failure",
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertC1SnapshotUnchanged(t, before)
+			assertCLIMissing(t, fixture.config)
+			assertCLIMissing(t, fixture.state)
+			assertCLIMissing(t, fixture.lock)
+		})
+	}
+}
+
+func TestAcceptance12_StaleStateTargetContainingControlPathIsReadOnlyThroughCLI(t *testing.T) {
+	for _, kind := range []state.Kind{state.KindLink, state.KindLocal} {
+		t.Run(string(kind), func(t *testing.T) {
+			fixture := newC1Fixture(t, `base = []`)
+			fixture.writeMachine(t, []string{"base"}, nil)
+			target := filepath.Join(fixture.home, ".local")
+			record := state.Placement{
+				Kind:   kind,
+				Target: target,
+			}
+			if kind == state.KindLink {
+				record.ResolvedTarget = target
+				record.LinkDestination = filepath.Join(fixture.repository, "removed")
+			}
+			fixture.writeState(t, state.Snapshot{
+				Home: fixture.home,
+				Modules: map[string]state.Module{
+					"old": {Placements: map[string]state.Placement{
+						"stale": record,
+					}},
+				},
+			})
+			before := snapshotC1Tree(t, fixture.root)
+
+			code, stdout, stderr := fixture.runC1("apply")
+
+			if code != exitError ||
+				stdout != "" ||
+				!strings.Contains(stderr, "control path") {
+				t.Fatalf(
+					"apply = (%d, %q, %q), want preflight control-boundary failure",
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertC1SnapshotUnchanged(t, before)
+			assertCLIMissing(t, fixture.lock)
+		})
+	}
+}
+
+func TestAcceptance12_StatusReportsPathConflictThroughCLI(t *testing.T) {
+	fixture := newC1Fixture(t, `base = ["first", "second", "pending"]`)
+	fixture.writeModule(t, "first", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.same"
+`, map[string]string{"config": "first"})
+	fixture.writeModule(t, "second", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.same"
+`, map[string]string{"config": "second"})
+	fixture.writeModule(t, "pending", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.pending"
+`, map[string]string{"config": "pending"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	before := snapshotC1Tree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runC1("status")
+	if code != exitOK ||
+		!strings.Contains(stdout, "first  conflict") ||
+		!strings.Contains(stdout, "second  conflict") ||
+		!strings.Contains(stdout, "pending  pending") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf(
+			"status = (%d, %q, %q), want conflict plus independent pending status",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertC1SnapshotUnchanged(t, before)
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, fixture.lock)
 }
 
 func TestAcceptance13_InterruptedFactsConvergeAndRepeatThroughCLI(t *testing.T) {

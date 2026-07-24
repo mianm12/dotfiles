@@ -243,6 +243,27 @@ func TestStaleLocalWarnsAndForgetsWithoutInspectingContent(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
+func TestStaleLocalBlockedAncestorWarnsAndForgets(t *testing.T) {
+	fixture := newFixture(t)
+	blocked := fixture.fileAbsolute(t, fixture.target(".blocked"), "user")
+	target := filepath.Join(blocked, "config.local")
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"local": {
+			Kind:   state.KindLocal,
+			Target: target,
+		},
+	})
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, nil, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionForget)
+	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "local") {
+		t.Fatalf("Build() warnings = %v, want local provenance warning", plan.Warnings)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
 func TestStaleNonSymlinkWarnsAndForgets(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.file(t, "repo/modules/app/old", "old")

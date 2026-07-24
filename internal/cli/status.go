@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
+	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/spf13/cobra"
@@ -64,17 +66,14 @@ func runStatus(command *cobra.Command, moduleID *string, env environment) error 
 	if err != nil {
 		return err
 	}
-	var scope []string
-	if moduleID != nil {
-		scope = []string{*moduleID}
-	}
-	plan, err := planner.Build(planner.Request{
-		Home:     context.home,
-		Controls: context.controls(machine.Repository),
-		Modules:  resolution.Modules,
-		Scope:    scope,
-		State:    loaded.Snapshot,
-	})
+	ids := statusModuleIDs(moduleID, repository, machine, loaded.Snapshot)
+	plan, err := buildStatusPlan(
+		context,
+		machine,
+		resolution,
+		loaded.Snapshot,
+		ids,
+	)
 	if err != nil {
 		return err
 	}
@@ -95,7 +94,6 @@ func runStatus(command *cobra.Command, moduleID *string, env environment) error 
 		variants[module.ID] = module.Variant
 	}
 
-	ids := statusModuleIDs(moduleID, repository, machine, loaded.Snapshot)
 	statuses := make([]moduleStatus, 0, len(ids))
 	for _, id := range ids {
 		statuses = append(statuses, statusForModule(
@@ -111,6 +109,43 @@ func runStatus(command *cobra.Command, moduleID *string, env environment) error 
 		loaded.Warning,
 		plan.Warnings,
 	))
+}
+
+func buildStatusPlan(
+	context commandContext,
+	machine config.Machine,
+	resolution config.Resolution,
+	snapshot state.Snapshot,
+	moduleIDs []string,
+) (planner.Plan, error) {
+	plan := planner.Plan{
+		Actions:  make([]planner.Action, 0),
+		Warnings: make([]string, 0),
+	}
+	for _, moduleID := range moduleIDs {
+		scoped, err := planner.Build(planner.Request{
+			Home:     context.home,
+			Controls: context.controls(machine.Repository),
+			Modules:  resolution.Modules,
+			Scope:    []string{moduleID},
+			State:    snapshot,
+		})
+		if err != nil {
+			if !errors.Is(err, corepaths.ErrTargetConflict) &&
+				!errors.Is(err, corepaths.ErrControlBoundary) {
+				return planner.Plan{}, err
+			}
+			plan.Actions = append(plan.Actions, planner.Action{
+				ModuleID: moduleID,
+				Decision: planner.DecisionConflict,
+				Reason:   err.Error(),
+			})
+			continue
+		}
+		plan.Actions = append(plan.Actions, scoped.Actions...)
+		plan.Warnings = append(plan.Warnings, scoped.Warnings...)
+	}
+	return plan, nil
 }
 
 func statusModuleIDs(

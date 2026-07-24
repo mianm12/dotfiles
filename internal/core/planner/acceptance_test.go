@@ -149,6 +149,92 @@ func TestAcceptance05_StaleLinkInsideControlPathIsRejected(t *testing.T) {
 	}
 }
 
+func TestAcceptance05_StaleLinkContainingControlPathIsRejected(t *testing.T) {
+	for _, controlName := range []string{"repository", "config", "state", "lock"} {
+		t.Run(controlName, func(t *testing.T) {
+			fixture := newFixture(t)
+			controls := fixture.controls
+			target := fixture.target("managed")
+			switch controlName {
+			case "repository":
+				controls.Repository = filepath.Join(target, "repository")
+			case "config":
+				controls.Config = filepath.Join(target, "dot", "config.toml")
+			case "state":
+				controls.State = filepath.Join(target, "dot", "state.json")
+			case "lock":
+				controls.Lock = filepath.Join(target, "dot", "lock")
+			}
+
+			source := fixture.file(t, "old-repo/source", "old")
+			snapshot := fixture.snapshot(map[string]state.Placement{
+				"stale": linkRecord(
+					target,
+					fixture.resolved(t, target),
+					source,
+				),
+			})
+			before := snapshotTree(t, fixture.root)
+
+			plan, err := planner.Build(planner.Request{
+				Home:     fixture.home,
+				Controls: controls,
+				State:    snapshot,
+			})
+
+			if !errors.Is(err, corepaths.ErrControlBoundary) {
+				t.Fatalf("Build() = (%#v, %v), want control boundary error", plan, err)
+			}
+			if plan.Actions != nil || plan.Warnings != nil {
+				t.Fatalf("Build() returned partial plan %#v", plan)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
+		})
+	}
+}
+
+func TestAcceptance05_StaleLocalContainingControlPathIsRejected(t *testing.T) {
+	for _, controlName := range []string{"repository", "config", "state", "lock"} {
+		t.Run(controlName, func(t *testing.T) {
+			fixture := newFixture(t)
+			controls := fixture.controls
+			target := fixture.target("managed")
+			switch controlName {
+			case "repository":
+				controls.Repository = filepath.Join(target, "repository")
+			case "config":
+				controls.Config = filepath.Join(target, "dot", "config.toml")
+			case "state":
+				controls.State = filepath.Join(target, "dot", "state.json")
+			case "lock":
+				controls.Lock = filepath.Join(target, "dot", "lock")
+			}
+
+			snapshot := fixture.snapshot(map[string]state.Placement{
+				"stale": {
+					Kind:   state.KindLocal,
+					Target: target,
+				},
+			})
+			before := snapshotTree(t, fixture.root)
+
+			plan, err := planner.Build(planner.Request{
+				Home:     fixture.home,
+				Controls: controls,
+				State:    snapshot,
+			})
+
+			if !errors.Is(err, corepaths.ErrControlBoundary) {
+				t.Fatalf("Build() = (%#v, %v), want control boundary error", plan, err)
+			}
+			if plan.Actions != nil || plan.Warnings != nil {
+				t.Fatalf("Build() returned partial plan %#v", plan)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
+		})
+	}
+}
+
 func TestAcceptance05_DriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
 	fixture := newFixture(t)
 	newSource := fixture.file(t, "repo/modules/app/new", "new")

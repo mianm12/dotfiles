@@ -322,6 +322,14 @@ func planOneStale(
 	}
 
 	if record.Kind == state.KindLocal {
+		if _, err := resolveStateTarget(home, controls, record.Target); err != nil &&
+			!isSafeStaleResolutionDrift(err) {
+			return Action{}, "", fmt.Errorf(
+				"resolve stale local %s: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
 		base.Decision = DecisionForget
 		warning := fmt.Sprintf(
 			"local %s left desired; keeping target and forgetting provenance",

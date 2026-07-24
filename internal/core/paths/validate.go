@@ -10,7 +10,7 @@ var (
 	// ErrTargetConflict reports duplicate targets or a directory-link target
 	// containing another placement.
 	ErrTargetConflict = errors.New("target paths conflict")
-	// ErrControlBoundary reports a target equal to or below a protected path.
+	// ErrControlBoundary reports a target overlapping a protected path.
 	ErrControlBoundary = errors.New("target overlaps a control path")
 )
 
@@ -199,7 +199,7 @@ func validateControlBoundaries(
 		for _, control := range controls {
 			if overlapsControl(control, placement.Target) {
 				return fmt.Errorf(
-					"%w: placement %q target %q is inside %s path %q",
+					"%w: placement %q target %q overlaps %s path %q",
 					ErrControlBoundary,
 					placement.Label,
 					placement.Target.lexical,
@@ -229,7 +229,8 @@ func overlapsControl(control resolvedControl, target Target) bool {
 	targets := [...]string{target.lexical, target.resolved}
 	for _, controlPath := range controls {
 		for _, targetPath := range targets {
-			if sameOrDescendant(controlPath, targetPath) {
+			if sameOrDescendant(controlPath, targetPath) ||
+				sameOrDescendant(targetPath, controlPath) {
 				return true
 			}
 		}

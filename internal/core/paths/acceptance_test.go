@@ -208,6 +208,86 @@ func TestAcceptance12_RejectsTargetAndControlConflictsBeforeMutation(t *testing.
 	}
 }
 
+func TestAcceptance12_RejectsControlPathsContainedByTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    string
+		configure func(*testing.T, string, string, *corepaths.Controls)
+	}{
+		{
+			name:   "repository",
+			target: "~/managed",
+			configure: func(_ *testing.T, _, home string, controls *corepaths.Controls) {
+				controls.Repository = filepath.Join(home, "managed", "repository")
+			},
+		},
+		{
+			name:   "machine config",
+			target: "~/.config",
+			configure: func(_ *testing.T, _, home string, controls *corepaths.Controls) {
+				controls.Config = filepath.Join(home, ".config", "dot", "config.toml")
+			},
+		},
+		{
+			name:   "state",
+			target: "~/.local",
+			configure: func(_ *testing.T, _, home string, controls *corepaths.Controls) {
+				controls.State = filepath.Join(home, ".local", "state", "dot", "state.json")
+			},
+		},
+		{
+			name:   "lock",
+			target: "~/.local",
+			configure: func(_ *testing.T, _, home string, controls *corepaths.Controls) {
+				controls.Lock = filepath.Join(home, ".local", "state", "dot", "lock")
+			},
+		},
+		{
+			name:   "repository by resolved path",
+			target: "~/alias/managed",
+			configure: func(t *testing.T, root, home string, controls *corepaths.Controls) {
+				actual := filepath.Join(root, "actual")
+				if err := os.MkdirAll(actual, 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(actual) error = %v", err)
+				}
+				if err := os.Symlink(actual, filepath.Join(home, "alias")); err != nil {
+					t.Fatalf("os.Symlink(alias) error = %v", err)
+				}
+				controls.Repository = filepath.Join(actual, "managed", "repository")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, "home")
+			if err := os.MkdirAll(home, 0o700); err != nil {
+				t.Fatalf("os.MkdirAll(home) error = %v", err)
+			}
+			controls := controlsOutsideHome(root)
+			test.configure(t, root, home, &controls)
+			before := snapshotTree(t, root)
+
+			resolved, err := corepaths.Validate(
+				home,
+				controls,
+				[]corepaths.Placement{{Label: "container", Target: test.target}},
+			)
+
+			if !errors.Is(err, corepaths.ErrControlBoundary) {
+				t.Fatalf("Validate() = (%#v, %v), want control boundary error", resolved, err)
+			}
+			if resolved != nil {
+				t.Fatalf("Validate() returned partial result: %#v", resolved)
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("Validate() mutated fixture\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
 func controlsOutsideHome(root string) corepaths.Controls {
 	controlRoot := filepath.Join(root, "control")
 	return corepaths.Controls{
