@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dot Checkpoint"
+  short_description: "Run checkpoints or orchestrate the full cutover goal"
+  default_prompt: "Use $dot-checkpoint to execute one refactor checkpoint or orchestrate the full cutover goal safely."

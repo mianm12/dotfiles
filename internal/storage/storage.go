@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	// PrivateDirectoryMode 是 state 与 backup 等私有目录的规范权限。
+	// PrivateDirectoryMode 是 state 等私有目录的规范权限。
 	PrivateDirectoryMode fs.FileMode = 0o700
 	// PrivateFileMode 是 state、lock 等私有控制文件的规范权限。
 	PrivateFileMode fs.FileMode = 0o600

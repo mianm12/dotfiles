@@ -28,7 +28,7 @@
 /go.work.sum
 
 # ── 本机配置与敏感内容 ──
-## 仅忽略以 .local 结尾的文件；*.local.template 是应当入库的 scaffold
+## 仅忽略以 .local 结尾的文件；*.local.example 是应当入库的 scaffold
 *.local
 .env
 .env.*
