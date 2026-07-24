@@ -101,6 +101,11 @@ func runRemove(
 			}
 			return runErr
 		}
-		return printResult(command, result, selectionChanged)
+		return printMutationResult(
+			command,
+			result,
+			selectionChanged,
+			fmt.Sprintf("dot remove %s", moduleID),
+		)
 	})
 }

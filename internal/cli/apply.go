@@ -14,9 +14,9 @@ func newApplyCommand(env environment) *cobra.Command {
 		Short: "Converge all effective modules or one module",
 		Args:  maximumArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			moduleID := ""
+			var moduleID *string
 			if len(args) == 1 {
-				moduleID = args[0]
+				moduleID = &args[0]
 			}
 			return runApply(command, moduleID, dryRun, env)
 		},
@@ -27,7 +27,7 @@ func newApplyCommand(env environment) *cobra.Command {
 
 func runApply(
 	command *cobra.Command,
-	moduleID string,
+	moduleID *string,
 	dryRun bool,
 	env environment,
 ) error {
@@ -94,6 +94,6 @@ func runApply(
 			}
 			return runErr
 		}
-		return printResult(command, result, selectionChanged)
+		return printMutationResult(command, result, selectionChanged, "dot apply")
 	})
 }

@@ -110,7 +110,7 @@ func runInit(
 			}
 			return runErr
 		}
-		return printResult(command, result, selectionChanged)
+		return printMutationResult(command, result, selectionChanged, "dot apply")
 	})
 }
 

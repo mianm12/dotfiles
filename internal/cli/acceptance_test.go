@@ -694,6 +694,126 @@ target = "~/.app"
 	}
 }
 
+func TestB6EmptyOptionalModuleIsRejectedWithoutMutation(t *testing.T) {
+	for _, args := range [][]string{
+		{"apply", ""},
+		{"apply", "", "--dry-run"},
+		{"status", ""},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			fixture := newCLIFixture(t, "base = [\"app\"]")
+			fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "portable"})
+			fixture.writeMachine(t, []string{"base"}, nil)
+			before := snapshotCLITree(t, fixture.root)
+
+			code, stdout, stderr := fixture.run(args...)
+			if code != exitError ||
+				stdout != "" ||
+				!strings.Contains(stderr, "invalid") ||
+				!strings.Contains(stderr, "module ID") {
+				t.Fatalf(
+					"run(%q) = (%d, %q, %q), want stderr-only invalid module failure",
+					args,
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertCLITreeUnchanged(t, before)
+			assertCLIMissing(t, fixture.state)
+			assertCLIMissing(t, fixture.lock)
+			assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+		})
+	}
+}
+
+func TestB6MutationOutputFailureAdvisesRerun(t *testing.T) {
+	t.Run("init", func(t *testing.T) {
+		fixture := newCLIFixture(t, "base = [\"app\"]")
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "portable"})
+
+		stderr := runCLIWithFailedStdout(
+			t,
+			[]string{"init", fixture.repository, "--profile", "base"},
+		)
+		assertCLIOutputFailure(t, stderr, "dot apply")
+		target := filepath.Join(fixture.home, ".app")
+		assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "app", "config"))
+
+		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitOK || stderr != "" {
+			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
+		}
+		assertCLINoMutationResult(t, stdout)
+		assertCLIPathsUnchanged(t, before)
+	})
+
+	t.Run("apply", func(t *testing.T) {
+		fixture := newCLIFixture(t, "base = [\"app\"]")
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "portable"})
+		fixture.writeMachine(t, []string{"base"}, nil)
+
+		stderr := runCLIWithFailedStdout(t, []string{"apply"})
+		assertCLIOutputFailure(t, stderr, "dot apply")
+		target := filepath.Join(fixture.home, ".app")
+		assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "app", "config"))
+
+		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitOK || stderr != "" {
+			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
+		}
+		assertCLINoMutationResult(t, stdout)
+		assertCLIPathsUnchanged(t, before)
+	})
+
+	t.Run("remove", func(t *testing.T) {
+		fixture := newCLIFixture(t, "base = []")
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "portable"})
+		fixture.writeMachine(t, []string{"base"}, []string{"app"})
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("initial apply = (%d, %q)", code, stderr)
+		}
+
+		stderr = runCLIWithFailedStdout(t, []string{"remove", "app"})
+		assertCLIOutputFailure(t, stderr, "dot remove app")
+		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+			t.Fatalf("extra_modules = %v, want empty", extras)
+		}
+
+		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock)
+		code, stdout, stderr := fixture.run("remove", "app")
+		if code != exitOK || stderr != "" {
+			t.Fatalf("recovery remove = (%d, %q, %q)", code, stdout, stderr)
+		}
+		assertCLINoMutationResult(t, stdout)
+		assertCLIPathsUnchanged(t, before)
+	})
+}
+
 func TestB6HelpListsOnlyPublicCommands(t *testing.T) {
 	fixture := newCLIFixture(t, "")
 	code, stdout, stderr := fixture.run("help")
@@ -910,6 +1030,32 @@ func assertCLIMissing(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("path %q error = %v, want missing", path, err)
+	}
+}
+
+type cliFailedWriter struct{}
+
+func (cliFailedWriter) Write([]byte) (int, error) {
+	return 0, errors.New("synthetic stdout failure")
+}
+
+func runCLIWithFailedStdout(t *testing.T, args []string) string {
+	t.Helper()
+	var stderr bytes.Buffer
+	code := Run(args, strings.NewReader(""), cliFailedWriter{}, &stderr)
+	if code != exitError {
+		t.Fatalf("Run(%q) = %d, want %d", args, code, exitError)
+	}
+	return stderr.String()
+}
+
+func assertCLIOutputFailure(t *testing.T, stderr, rerun string) {
+	t.Helper()
+	if !strings.Contains(stderr, "may be partially complete") ||
+		!strings.Contains(stderr, "result output failed") ||
+		!strings.Contains(stderr, "synthetic stdout failure") ||
+		!strings.Contains(stderr, "rerun "+rerun) {
+		t.Fatalf("stderr = %q, want partial-completion advice for %q", stderr, rerun)
 	}
 }
 

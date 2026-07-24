@@ -77,7 +77,7 @@ func prepareInit(
 func prepareApply(
 	context commandContext,
 	machine config.Machine,
-	moduleID string,
+	moduleID *string,
 ) (prepared preparedPlan, selectionChanged bool, err error) {
 	repository, err := config.OpenRepository(machine.Repository)
 	if err != nil {
@@ -85,19 +85,20 @@ func prepareApply(
 	}
 	scope := machine.Scope()
 	var plannerScope []string
-	if moduleID != "" {
+	if moduleID != nil {
+		requested := *moduleID
 		profileModules, err := repository.ProfileModules(machine.Profiles)
 		if err != nil {
 			return preparedPlan{}, false, err
 		}
-		if !slices.Contains(profileModules, moduleID) &&
-			!slices.Contains(machine.ExtraModules, moduleID) {
-			machine.ExtraModules = append(machine.ExtraModules, moduleID)
+		if !slices.Contains(profileModules, requested) &&
+			!slices.Contains(machine.ExtraModules, requested) {
+			machine.ExtraModules = append(machine.ExtraModules, requested)
 			slices.Sort(machine.ExtraModules)
 			selectionChanged = true
 		}
-		scope = machine.Scope(moduleID)
-		plannerScope = []string{moduleID}
+		scope = machine.Scope(requested)
+		plannerScope = []string{requested}
 	}
 	resolution, err := repository.Resolve(scope, context.platform)
 	if err != nil {

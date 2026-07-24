@@ -66,6 +66,24 @@ func printResult(
 	return nil
 }
 
+func printMutationResult(
+	command *cobra.Command,
+	result executor.Result,
+	selectionChanged bool,
+	rerun string,
+) error {
+	err := printResult(command, result, selectionChanged)
+	if err == nil ||
+		(!selectionChanged && !result.TargetsChanged && !result.StateChanged) {
+		return err
+	}
+	return fmt.Errorf(
+		"mutation may be partially complete after result output failed: %w; rerun %s",
+		err,
+		rerun,
+	)
+}
+
 type moduleStatus struct {
 	id      string
 	variant string
