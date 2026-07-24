@@ -98,8 +98,7 @@ func statusForModule(
 			status = "conflict"
 			continue
 		case planner.DecisionKeep:
-			if action.Kind != state.KindLocal ||
-				localProvenanceRecorded(snapshot, action) {
+			if keepStateRecorded(snapshot, action) {
 				continue
 			}
 		}
@@ -116,15 +115,22 @@ func statusForModule(
 	}
 }
 
-func localProvenanceRecorded(snapshot state.Snapshot, action planner.Action) bool {
+func keepStateRecorded(snapshot state.Snapshot, action planner.Action) bool {
 	module, exists := snapshot.Modules[action.ModuleID]
 	if !exists {
 		return false
 	}
 	placement, exists := module.Placements[action.PlacementID]
-	return exists &&
-		placement.Kind == state.KindLocal &&
-		placement.Target == action.Target
+	if !exists ||
+		placement.Kind != action.Kind ||
+		placement.Target != action.Target {
+		return false
+	}
+	if action.Kind == state.KindLink {
+		return placement.ResolvedTarget == action.ResolvedTarget &&
+			placement.LinkDestination == action.LinkDestination
+	}
+	return true
 }
 
 func printStatus(command *cobra.Command, statuses []moduleStatus, warnings []string) error {

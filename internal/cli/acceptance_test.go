@@ -31,9 +31,9 @@ target = "~/.config/app/config"
 	writeCLIFile(t, target, "personal")
 	before := snapshotCLIPaths(t, target)
 
-	code, _, stderr := fixture.run("init", fixture.repository, "--profile", "base")
-	if code != exitError || !strings.Contains(stderr, "plan conflict") {
-		t.Fatalf("init = (%d, %q), want runtime conflict", code, stderr)
+	code, stdout, stderr := fixture.run("init", fixture.repository, "--profile", "base")
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		t.Fatalf("init = (%d, %q, %q), want stderr-only runtime conflict", code, stdout, stderr)
 	}
 	assertCLIPathsUnchanged(t, before)
 	assertCLIMissing(t, fixture.config)
@@ -70,10 +70,11 @@ target = "~/.app"
 	}
 	assertCLIPathsUnchanged(t, before)
 
-	code, _, stderr = fixture.run("apply")
+	code, stdout, stderr = fixture.run("apply")
 	if code != exitOK || stderr != "" {
 		t.Fatalf("apply after init = (%d, %q), want clean success", code, stderr)
 	}
+	assertCLINoMutationResult(t, stdout)
 	assertCLIPathsUnchanged(t, before)
 }
 
@@ -117,10 +118,97 @@ target = "~/.app.local"
 	}
 	assertCLIPathsUnchanged(t, beforeRepeat)
 
-	code, _, stderr = fixture.run("apply")
+	code, stdout, stderr = fixture.run("apply")
 	if code != exitOK || stderr != "" {
 		t.Fatalf("repeated apply = (%d, %q), want zero mutation", code, stderr)
 	}
+	assertCLINoMutationResult(t, stdout)
+	assertCLIPathsUnchanged(t, beforeRepeat)
+}
+
+func TestB6StatusLinkKeepWithStateRefreshIsPending(t *testing.T) {
+	fixture := newCLIFixture(t, "base = [\"app\"]")
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/current/config"
+`, map[string]string{"config": "portable"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	physicalA := filepath.Join(fixture.home, "physical-a")
+	physicalB := filepath.Join(fixture.home, "physical-b")
+	for _, directory := range []string{physicalA, physicalB} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
+		}
+	}
+	parent := filepath.Join(fixture.home, "current")
+	if err := os.Symlink(physicalA, parent); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", physicalA, parent, err)
+	}
+
+	code, _, stderr := fixture.run("apply")
+	if code != exitOK {
+		t.Fatalf("initial apply = (%d, %q)", code, stderr)
+	}
+	destination := filepath.Join(fixture.repository, "modules", "app", "config")
+	oldTarget := filepath.Join(physicalA, "config")
+	assertCLILink(t, oldTarget, destination)
+
+	if err := os.Remove(parent); err != nil {
+		t.Fatalf("os.Remove(%q) error = %v", parent, err)
+	}
+	if err := os.Symlink(physicalB, parent); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", physicalB, parent, err)
+	}
+	newTarget := filepath.Join(physicalB, "config")
+	if err := os.Symlink(destination, newTarget); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", destination, newTarget, err)
+	}
+
+	beforeStatus := snapshotCLIPaths(
+		t,
+		fixture.config,
+		fixture.state,
+		fixture.lock,
+		parent,
+		oldTarget,
+		newTarget,
+	)
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  pending") {
+		t.Fatalf("status before state refresh = (%d, %q, %q), want pending", code, stdout, stderr)
+	}
+	assertCLIPathsUnchanged(t, beforeStatus)
+
+	code, stdout, stderr = fixture.run("apply")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "targets_changed=false state_changed=true") {
+		t.Fatalf("state refresh apply = (%d, %q, %q)", code, stdout, stderr)
+	}
+
+	beforeRepeat := snapshotCLIPaths(
+		t,
+		fixture.config,
+		fixture.state,
+		fixture.lock,
+		parent,
+		oldTarget,
+		newTarget,
+	)
+	code, stdout, stderr = fixture.run("status")
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  converged") {
+		t.Fatalf("status after state refresh = (%d, %q, %q), want converged", code, stdout, stderr)
+	}
+	assertCLIPathsUnchanged(t, beforeRepeat)
+
+	code, stdout, stderr = fixture.run("apply")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("repeated apply after state refresh = (%d, %q, %q)", code, stdout, stderr)
+	}
+	assertCLINoMutationResult(t, stdout)
 	assertCLIPathsUnchanged(t, beforeRepeat)
 }
 
@@ -167,9 +255,14 @@ target = "~/.other-platform"
 	fixture.writeMachine(t, []string{"base"}, nil)
 	before := snapshotCLIPaths(t, fixture.config)
 
-	code, _, stderr := fixture.run("apply", "other-platform")
-	if code != exitError || !strings.Contains(stderr, "not applicable") {
-		t.Fatalf("apply other-platform = (%d, %q), want not-applicable failure", code, stderr)
+	code, stdout, stderr := fixture.run("apply", "other-platform")
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "not applicable") {
+		t.Fatalf(
+			"apply other-platform = (%d, %q, %q), want stderr-only not-applicable failure",
+			code,
+			stdout,
+			stderr,
+		)
 	}
 	assertCLIPathsUnchanged(t, before)
 	assertCLIMissing(t, fixture.state)
@@ -201,10 +294,11 @@ target = "~/.extra"
 	}
 
 	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
-	code, _, stderr = fixture.run("apply", "extra")
+	code, stdout, stderr := fixture.run("apply", "extra")
 	if code != exitOK || stderr != "" {
 		t.Fatalf("repeated apply extra = (%d, %q), want clean success", code, stderr)
 	}
+	assertCLINoMutationResult(t, stdout)
 	assertCLIPathsUnchanged(t, before)
 }
 
@@ -280,21 +374,23 @@ target = "~/.extra.local"
 	}
 
 	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, localTarget, profileTarget)
-	code, _, stderr = fixture.run("apply")
+	code, stdout, stderr = fixture.run("apply")
 	if code != exitOK || stderr != "" {
 		t.Fatalf("apply after remove = (%d, %q), want zero mutation", code, stderr)
 	}
+	assertCLINoMutationResult(t, stdout)
 	assertCLIPathsUnchanged(t, before)
 
-	code, _, stderr = fixture.run("remove", "extra")
+	code, stdout, stderr = fixture.run("remove", "extra")
 	if code != exitOK {
 		t.Fatalf("repeated remove known inactive module = (%d, %q)", code, stderr)
 	}
+	assertCLINoMutationResult(t, stdout)
 	assertCLIPathsUnchanged(t, before)
 
-	code, _, stderr = fixture.run("remove", "profiled")
-	if code != exitError || !strings.Contains(stderr, "active profile") {
-		t.Fatalf("remove profiled = (%d, %q), want refusal", code, stderr)
+	code, stdout, stderr = fixture.run("remove", "profiled")
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "active profile") {
+		t.Fatalf("remove profiled = (%d, %q, %q), want stderr-only refusal", code, stdout, stderr)
 	}
 	assertCLIPathsUnchanged(t, before)
 }
@@ -345,9 +441,14 @@ target = "~/.extra"
 	fixture.env.afterSelectionPublish = func() error {
 		return errors.New("injected interruption")
 	}
-	code, _, stderr := fixture.runInjected("apply", "extra")
-	if code != exitError || !strings.Contains(stderr, "selection was saved") {
-		t.Fatalf("interrupted apply = (%d, %q), want persisted-selection failure", code, stderr)
+	code, stdout, stderr := fixture.runInjected("apply", "extra")
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "selection was saved") {
+		t.Fatalf(
+			"interrupted apply = (%d, %q, %q), want stderr-only persisted-selection failure",
+			code,
+			stdout,
+			stderr,
+		)
 	}
 	if extras := fixture.loadMachine(t).ExtraModules; !reflect.DeepEqual(extras, []string{"extra"}) {
 		t.Fatalf("extra_modules after interruption = %v, want [extra]", extras)
@@ -363,10 +464,11 @@ target = "~/.extra"
 	target := filepath.Join(fixture.home, ".extra")
 	assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "extra", "config"))
 	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
-	code, _, stderr = fixture.run("apply")
+	code, stdout, stderr = fixture.run("apply")
 	if code != exitOK || stderr != "" {
 		t.Fatalf("repeated recovery apply = (%d, %q)", code, stderr)
 	}
+	assertCLINoMutationResult(t, stdout)
 	assertCLIPathsUnchanged(t, before)
 }
 
@@ -384,9 +486,9 @@ func TestAcceptance15_LockBusyAndReadOnlyCommandsNeverCreateLock(t *testing.T) {
 			}
 		}()
 
-		code, _, stderr := fixture.runProcess("apply")
-		if code != exitError || !strings.Contains(stderr, "another dot process") {
-			t.Fatalf("locked apply = (%d, %q), want busy failure", code, stderr)
+		code, stdout, stderr := fixture.runProcess("apply")
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "another dot process") {
+			t.Fatalf("locked apply = (%d, %q, %q), want stderr-only busy failure", code, stdout, stderr)
 		}
 	})
 
@@ -425,9 +527,14 @@ func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *tes
 		fixture.writeMachine(t, []string{"base"}, nil)
 		before := snapshotCLIPaths(t, fixture.config)
 
-		code, _, stderr := fixture.run("apply")
-		if code != exitError || !strings.Contains(stderr, "references missing module") {
-			t.Fatalf("apply = (%d, %q), want missing profile module failure", code, stderr)
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "references missing module") {
+			t.Fatalf(
+				"apply = (%d, %q, %q), want stderr-only missing profile module failure",
+				code,
+				stdout,
+				stderr,
+			)
 		}
 		assertCLIPathsUnchanged(t, before)
 		assertCLIMissing(t, fixture.state)
@@ -476,10 +583,11 @@ func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *tes
 			t.Fatalf("state still contains gone: %#v", loaded.Snapshot)
 		}
 		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock)
-		code, _, stderr = fixture.run("apply")
+		code, stdout, stderr := fixture.run("apply")
 		if code != exitOK || stderr != "" {
 			t.Fatalf("apply after deleted-module cleanup = (%d, %q)", code, stderr)
 		}
+		assertCLINoMutationResult(t, stdout)
 		assertCLIPathsUnchanged(t, before)
 		assertCLIMissing(t, target)
 	})
@@ -511,10 +619,11 @@ target = "~/.extra"
 	)
 
 	before := snapshotCLIPaths(t, fixture.config, fixture.state, filepath.Join(fixture.home, ".extra"))
-	code, _, stderr = fixture.run("apply", "broken")
+	code, stdout, stderr := fixture.run("apply", "broken")
 	if code != exitError ||
+		stdout != "" ||
 		!strings.Contains(stderr, `invalid configuration: module "broken"`) {
-		t.Fatalf("apply broken = (%d, %q), want strict target error", code, stderr)
+		t.Fatalf("apply broken = (%d, %q, %q), want stderr-only strict target error", code, stdout, stderr)
 	}
 	assertCLIPathsUnchanged(t, before)
 
@@ -525,9 +634,14 @@ source = "missing"
 target = "~/.missing-source"
 `, nil)
 	before = snapshotCLIPaths(t, fixture.config, fixture.state, filepath.Join(fixture.home, ".extra"))
-	code, _, stderr = fixture.run("apply", "missing-source")
-	if code != exitError || !strings.Contains(stderr, "inspect source") {
-		t.Fatalf("apply missing-source = (%d, %q), want source error", code, stderr)
+	code, stdout, stderr = fixture.run("apply", "missing-source")
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "inspect source") {
+		t.Fatalf(
+			"apply missing-source = (%d, %q, %q), want stderr-only source error",
+			code,
+			stdout,
+			stderr,
+		)
 	}
 	assertCLIPathsUnchanged(t, before)
 	assertCLIMissing(t, filepath.Join(fixture.home, ".missing-source"))
@@ -554,16 +668,27 @@ target = "~/.app"
 		{"help", "apply", "extra"},
 		{"unknown"},
 	} {
-		code, _, _ := fixture.run(args...)
-		if code != exitUsage {
-			t.Fatalf("run(%v) code = %d, want %d", args, code, exitUsage)
+		code, stdout, stderr := fixture.run(args...)
+		if code != exitUsage || stdout != "" || stderr == "" {
+			t.Fatalf(
+				"run(%v) = (%d, %q, %q), want stderr-only usage error",
+				args,
+				code,
+				stdout,
+				stderr,
+			)
 		}
 	}
-	code, _, _ := fixture.run("apply", "missing")
-	if code != exitError {
-		t.Fatalf("apply missing code = %d, want %d", code, exitError)
+	code, stdout, stderr := fixture.run("apply", "missing")
+	if code != exitError || stdout != "" || stderr == "" {
+		t.Fatalf(
+			"apply missing = (%d, %q, %q), want stderr-only runtime error",
+			code,
+			stdout,
+			stderr,
+		)
 	}
-	code, stdout, stderr := fixture.run("status")
+	code, stdout, stderr = fixture.run("status")
 	if code != exitOK || !strings.Contains(stdout, "conflict") || stderr == "" {
 		t.Fatalf("status conflict = (%d, %q, %q), want successful status", code, stdout, stderr)
 	}
@@ -617,6 +742,7 @@ target = "~/.app"
 	if code != exitOK || stderr.String() != "" {
 		t.Fatalf("Run(apply) = %d, stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
+	assertCLINoMutationResult(t, stdout.String())
 	assertCLIPathsUnchanged(t, before)
 }
 
@@ -788,13 +914,32 @@ func assertCLIMissing(t *testing.T, path string) {
 }
 
 type cliPathSnapshot struct {
-	path string
-	mode fs.FileMode
-	data string
-	link string
+	path     string
+	info     fs.FileInfo
+	mode     fs.FileMode
+	data     string
+	link     string
+	modified int64
+	size     int64
 }
 
 func snapshotCLIPaths(t *testing.T, paths ...string) []cliPathSnapshot {
+	t.Helper()
+	expanded := make([]string, 0, len(paths)*2)
+	seen := make(map[string]bool, len(paths)*2)
+	for _, path := range paths {
+		for _, candidate := range []string{path, filepath.Dir(path)} {
+			if seen[candidate] {
+				continue
+			}
+			seen[candidate] = true
+			expanded = append(expanded, candidate)
+		}
+	}
+	return snapshotCLIExactPaths(t, expanded...)
+}
+
+func snapshotCLIExactPaths(t *testing.T, paths ...string) []cliPathSnapshot {
 	t.Helper()
 	result := make([]cliPathSnapshot, 0, len(paths))
 	for _, path := range paths {
@@ -802,7 +947,13 @@ func snapshotCLIPaths(t *testing.T, paths ...string) []cliPathSnapshot {
 		if err != nil {
 			t.Fatalf("os.Lstat(%q) error = %v", path, err)
 		}
-		entry := cliPathSnapshot{path: path, mode: info.Mode()}
+		entry := cliPathSnapshot{
+			path:     path,
+			info:     info,
+			mode:     info.Mode(),
+			modified: info.ModTime().UnixNano(),
+			size:     info.Size(),
+		}
 		switch {
 		case info.Mode()&fs.ModeSymlink != 0:
 			entry.link, err = os.Readlink(path)
@@ -825,8 +976,33 @@ func assertCLIPathsUnchanged(t *testing.T, before []cliPathSnapshot) {
 	for index := range before {
 		paths[index] = before[index].path
 	}
-	after := snapshotCLIPaths(t, paths...)
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("paths changed\nbefore=%#v\nafter=%#v", before, after)
+	after := snapshotCLIExactPaths(t, paths...)
+	if len(after) != len(before) {
+		t.Fatalf("snapshot length changed: before=%d after=%d", len(before), len(after))
+	}
+	for index := range before {
+		beforePath := before[index]
+		afterPath := after[index]
+		if beforePath.path != afterPath.path ||
+			beforePath.mode != afterPath.mode ||
+			beforePath.data != afterPath.data ||
+			beforePath.link != afterPath.link ||
+			beforePath.modified != afterPath.modified ||
+			beforePath.size != afterPath.size ||
+			!os.SameFile(beforePath.info, afterPath.info) {
+			t.Fatalf(
+				"path changed\nbefore=%#v\nafter=%#v",
+				beforePath,
+				afterPath,
+			)
+		}
+	}
+}
+
+func assertCLINoMutationResult(t *testing.T, stdout string) {
+	t.Helper()
+	const noMutation = "selection_changed=false targets_changed=false state_changed=false"
+	if !strings.Contains(stdout, noMutation) {
+		t.Fatalf("stdout = %q, want %q", stdout, noMutation)
 	}
 }
