@@ -270,8 +270,8 @@ target = "~/.config/example/config.local"
 - 对现存 ancestor symlink，解析到其实际父路径；missing suffix 按原名称追加。
 - 两个 placements 的规范化 target 或解析后 target 相同时拒绝。
 - Directory link 与其他 placement 的后代 target 互斥。
-- Target 不得等于或位于 repository、machine config、state 或 lock 路径内部；这些检查只使用
-  规范化路径和上述 ancestor 解析，不建设通用控制面身份系统。
+- Target 与 repository、machine config、state 或 lock 的规范化路径和解析后路径不得相等或
+  互为祖先、后代；这些检查只使用规范化路径和上述 ancestor 解析，不建设通用控制面身份系统。
 - Parent symlink 合法。Link state 保存其上次 resolved target；该值改变时拒绝 update/prune。
 
 不额外探测 case sensitivity、Unicode alias、filesystem type 或 hard-link identity。
@@ -493,7 +493,8 @@ acquire mutation lock
 10. 正确未知 symlink adopt；state-owned symlink 被改指后 conflict；placement 同 ID 改变
     kind 后 conflict。
 11. Parent symlink 改变 resolved target 后 update/prune 被拒绝。
-12. 精确 target 或解析后 target 冲突在 preflight 阶段零 mutation。
+12. 精确 target、解析后 target 冲突，或 target 与 control path 任一方向重叠时，在 preflight
+    阶段零 mutation。
 13. Selection、local create、link create/update、prune 和 state commit 中断后可重跑收敛。
 14. State missing 可以警告并继续；state corrupt、v1 或 too-new 时拒绝 mutation。
 15. 第二个 mutation process 失败；status/dry-run 不创建 lock，且 dry-run 严格零写入。
