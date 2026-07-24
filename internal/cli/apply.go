@@ -81,6 +81,9 @@ func runApply(
 				err,
 			)
 		}
+		if env.beforeExecution != nil {
+			env.beforeExecution()
+		}
 		result, runErr := executePrepared(context, prepared, owner.ownership())
 		if runErr != nil {
 			if warningErr := printWarnings(command, result.Warnings); warningErr != nil {

@@ -38,6 +38,7 @@ type environment struct {
 	getwd                 func() (string, error)
 	platform              func() config.Platform
 	afterSelectionPublish func() error
+	beforeExecution       func()
 	build                 buildinfo.Info
 }
 
