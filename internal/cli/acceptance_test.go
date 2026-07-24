@@ -29,13 +29,13 @@ target = "~/.config/app/config"
 `, map[string]string{"config": "portable"})
 	target := filepath.Join(fixture.home, ".config", "app", "config")
 	writeCLIFile(t, target, "personal")
-	before := snapshotCLIPaths(t, target)
+	before := snapshotCLITree(t, fixture.root)
 
 	code, stdout, stderr := fixture.run("init", fixture.repository, "--profile", "base")
 	if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
 		t.Fatalf("init = (%d, %q, %q), want stderr-only runtime conflict", code, stdout, stderr)
 	}
-	assertCLIPathsUnchanged(t, before)
+	assertCLITreeUnchanged(t, before)
 	assertCLIMissing(t, fixture.config)
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
@@ -501,7 +501,7 @@ source = "config"
 target = "~/.extra"
 `, map[string]string{"config": "extra"})
 		fixture.writeMachine(t, []string{"base"}, nil)
-		before := snapshotCLIPaths(t, fixture.config)
+		before := snapshotCLITree(t, fixture.root)
 
 		code, _, stderr := fixture.run("status")
 		if code != exitOK || stderr == "" {
@@ -511,7 +511,7 @@ target = "~/.extra"
 		if code != exitOK || !strings.Contains(stdout, "create-link") || stderr == "" {
 			t.Fatalf("dry-run = (%d, %q, %q)", code, stdout, stderr)
 		}
-		assertCLIPathsUnchanged(t, before)
+		assertCLITreeUnchanged(t, before)
 		assertCLIMissing(t, fixture.lock)
 		assertCLIMissing(t, fixture.state)
 		assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
@@ -525,7 +525,7 @@ func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *tes
 	t.Run("active profile references missing module", func(t *testing.T) {
 		fixture := newCLIFixture(t, "base = [\"gone\"]")
 		fixture.writeMachine(t, []string{"base"}, nil)
-		before := snapshotCLIPaths(t, fixture.config)
+		before := snapshotCLITree(t, fixture.root)
 
 		code, stdout, stderr := fixture.run("apply")
 		if code != exitError || stdout != "" || !strings.Contains(stderr, "references missing module") {
@@ -536,7 +536,7 @@ func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *tes
 				stderr,
 			)
 		}
-		assertCLIPathsUnchanged(t, before)
+		assertCLITreeUnchanged(t, before)
 		assertCLIMissing(t, fixture.state)
 		assertCLIMissing(t, fixture.lock)
 	})
@@ -923,6 +923,31 @@ type cliPathSnapshot struct {
 	size     int64
 }
 
+type cliTreeSnapshot struct {
+	root    string
+	entries []cliPathSnapshot
+}
+
+func snapshotCLITree(t *testing.T, root string) cliTreeSnapshot {
+	t.Helper()
+	// The full entry set catches retained artifacts; directory identity and mtime
+	// also expose temporary entries that were created and removed between snapshots.
+	var paths []string
+	if err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		paths = append(paths, path)
+		return nil
+	}); err != nil {
+		t.Fatalf("filepath.WalkDir(%q) error = %v", root, err)
+	}
+	return cliTreeSnapshot{
+		root:    root,
+		entries: snapshotCLIExactPaths(t, paths...),
+	}
+}
+
 func snapshotCLIPaths(t *testing.T, paths ...string) []cliPathSnapshot {
 	t.Helper()
 	expanded := make([]string, 0, len(paths)*2)
@@ -977,8 +1002,19 @@ func assertCLIPathsUnchanged(t *testing.T, before []cliPathSnapshot) {
 		paths[index] = before[index].path
 	}
 	after := snapshotCLIExactPaths(t, paths...)
+	assertCLIPathSnapshotsEqual(t, before, after)
+}
+
+func assertCLITreeUnchanged(t *testing.T, before cliTreeSnapshot) {
+	t.Helper()
+	after := snapshotCLITree(t, before.root)
+	assertCLIPathSnapshotsEqual(t, before.entries, after.entries)
+}
+
+func assertCLIPathSnapshotsEqual(t *testing.T, before, after []cliPathSnapshot) {
+	t.Helper()
 	if len(after) != len(before) {
-		t.Fatalf("snapshot length changed: before=%d after=%d", len(before), len(after))
+		t.Fatalf("filesystem entry count changed: before=%d after=%d", len(before), len(after))
 	}
 	for index := range before {
 		beforePath := before[index]
