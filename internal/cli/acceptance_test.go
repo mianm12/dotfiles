@@ -41,6 +41,40 @@ target = "~/.config/app/config"
 	assertCLIMissing(t, fixture.lock)
 }
 
+func TestB6ExplicitEmptyInitRepositoryIsRejectedWithoutMutation(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		name := "mutation"
+		if dryRun {
+			name = "dry-run"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newCLIFixture(t, "base = []")
+			before := snapshotCLITree(t, fixture.root)
+			args := []string{"init", "", "--profile", "base"}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+
+			code, stdout, stderr := fixture.runProcessAt(fixture.repository, args...)
+			if code != exitError ||
+				stdout != "" ||
+				!strings.Contains(stderr, "repository") ||
+				!strings.Contains(stderr, "non-empty") {
+				t.Fatalf(
+					"init empty repository = (%d, %q, %q), want stderr-only runtime failure",
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertCLITreeUnchanged(t, before)
+			assertCLIMissing(t, fixture.config)
+			assertCLIMissing(t, fixture.state)
+			assertCLIMissing(t, fixture.lock)
+		})
+	}
+}
+
 func TestAcceptance01_InitProfilesThenApplyIsNoop(t *testing.T) {
 	fixture := newCLIFixture(t, "base = [\"app\"]")
 	fixture.writeModule(t, "app", `
@@ -591,6 +625,169 @@ func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *tes
 		assertCLIPathsUnchanged(t, before)
 		assertCLIMissing(t, target)
 	})
+
+	t.Run("multiple deleted extras can be removed one by one", func(t *testing.T) {
+		fixture := newCLIFixture(t, "base = []")
+		fixture.writeModule(t, "kept", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.kept"
+`, map[string]string{"config": "kept"})
+		fixture.writeMachine(t, []string{"base"}, []string{"gone-one", "gone-two", "kept"})
+		targets := map[string]string{
+			"gone-one": filepath.Join(fixture.home, ".gone-one"),
+			"gone-two": filepath.Join(fixture.home, ".gone-two"),
+		}
+		modules := make(map[string]state.Module, len(targets))
+		for moduleID, target := range targets {
+			destination := filepath.Join(
+				fixture.repository,
+				"modules",
+				moduleID,
+				"removed",
+			)
+			if err := os.Symlink(destination, target); err != nil {
+				t.Fatalf("os.Symlink() error = %v", err)
+			}
+			resolved, err := corepaths.ResolveTarget(fixture.home, "~/"+filepath.Base(target))
+			if err != nil {
+				t.Fatalf("ResolveTarget() error = %v", err)
+			}
+			modules[moduleID] = state.Module{Placements: map[string]state.Placement{
+				"config": {
+					Kind:            state.KindLink,
+					Target:          target,
+					ResolvedTarget:  resolved.Resolved(),
+					LinkDestination: destination,
+				},
+			}}
+		}
+		keptTarget := filepath.Join(fixture.home, ".kept")
+		keptDestination := filepath.Join(fixture.repository, "modules", "kept", "config")
+		if err := os.Symlink(keptDestination, keptTarget); err != nil {
+			t.Fatalf("os.Symlink() error = %v", err)
+		}
+		keptResolved, err := corepaths.ResolveTarget(fixture.home, "~/.kept")
+		if err != nil {
+			t.Fatalf("ResolveTarget() error = %v", err)
+		}
+		modules["kept"] = state.Module{Placements: map[string]state.Placement{
+			"config": {
+				Kind:            state.KindLink,
+				Target:          keptTarget,
+				ResolvedTarget:  keptResolved.Resolved(),
+				LinkDestination: keptDestination,
+			},
+		}}
+		fixture.writeState(t, state.Snapshot{Home: fixture.home, Modules: modules})
+
+		code, _, stderr := fixture.run("remove", "gone-one")
+		if code != exitOK {
+			t.Fatalf("remove gone-one = (%d, %q)", code, stderr)
+		}
+		assertCLIMissing(t, targets["gone-one"])
+		assertCLILink(
+			t,
+			targets["gone-two"],
+			filepath.Join(fixture.repository, "modules", "gone-two", "removed"),
+		)
+		if extras := fixture.loadMachine(t).ExtraModules; !reflect.DeepEqual(
+			extras,
+			[]string{"gone-two", "kept"},
+		) {
+			t.Fatalf("extra_modules after first remove = %v, want [gone-two kept]", extras)
+		}
+		loaded, err := state.Load(fixture.state, fixture.home)
+		if err != nil {
+			t.Fatalf("state.Load() error = %v", err)
+		}
+		if _, exists := loaded.Snapshot.Modules["gone-one"]; exists {
+			t.Fatalf("state still contains gone-one: %#v", loaded.Snapshot)
+		}
+		if _, exists := loaded.Snapshot.Modules["gone-two"]; !exists {
+			t.Fatalf("state lost gone-two: %#v", loaded.Snapshot)
+		}
+		if _, exists := loaded.Snapshot.Modules["kept"]; !exists {
+			t.Fatalf("state lost kept: %#v", loaded.Snapshot)
+		}
+		assertCLILink(t, keptTarget, keptDestination)
+
+		code, _, stderr = fixture.run("remove", "gone-two")
+		if code != exitOK {
+			t.Fatalf("remove gone-two = (%d, %q)", code, stderr)
+		}
+		assertCLIMissing(t, targets["gone-two"])
+		if extras := fixture.loadMachine(t).ExtraModules; !reflect.DeepEqual(
+			extras,
+			[]string{"kept"},
+		) {
+			t.Fatalf("extra_modules after second remove = %v, want [kept]", extras)
+		}
+		loaded, err = state.Load(fixture.state, fixture.home)
+		if err != nil {
+			t.Fatalf("state.Load() error = %v", err)
+		}
+		if _, exists := loaded.Snapshot.Modules["kept"]; !exists ||
+			len(loaded.Snapshot.Modules) != 1 {
+			t.Fatalf("state modules after cleanup = %#v, want only kept", loaded.Snapshot.Modules)
+		}
+		assertCLILink(t, keptTarget, keptDestination)
+
+		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, keptTarget)
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitOK || stderr != "" {
+			t.Fatalf("apply after multi-module cleanup = (%d, %q)", code, stderr)
+		}
+		assertCLINoMutationResult(t, stdout)
+		assertCLIPathsUnchanged(t, before)
+	})
+
+	t.Run("remaining malformed extra still blocks deleted cleanup", func(t *testing.T) {
+		fixture := newCLIFixture(t, "base = []")
+		fixture.writeMachine(t, []string{"base"}, []string{"broken", "gone"})
+		writeCLIFile(
+			t,
+			filepath.Join(fixture.repository, "modules", "broken", "module.toml"),
+			"unknown = true\n",
+		)
+		target := filepath.Join(fixture.home, ".gone")
+		destination := filepath.Join(fixture.repository, "modules", "gone", "removed")
+		if err := os.Symlink(destination, target); err != nil {
+			t.Fatalf("os.Symlink() error = %v", err)
+		}
+		resolved, err := corepaths.ResolveTarget(fixture.home, "~/.gone")
+		if err != nil {
+			t.Fatalf("ResolveTarget() error = %v", err)
+		}
+		fixture.writeState(t, state.Snapshot{
+			Home: fixture.home,
+			Modules: map[string]state.Module{
+				"gone": {Placements: map[string]state.Placement{
+					"config": {
+						Kind:            state.KindLink,
+						Target:          target,
+						ResolvedTarget:  resolved.Resolved(),
+						LinkDestination: destination,
+					},
+				}},
+			},
+		})
+		before := snapshotCLITree(t, fixture.root)
+
+		code, stdout, stderr := fixture.run("remove", "gone")
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "broken") {
+			t.Fatalf(
+				"remove gone with broken extra = (%d, %q, %q), want strict loading failure",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertCLITreeUnchanged(t, before)
+	})
 }
 
 func TestAcceptance17And18_ScopedLoadingIgnoresUnrelatedBrokenModuleButRejectsTarget(t *testing.T) {
@@ -924,9 +1121,17 @@ func (fixture *cliFixture) runInjected(args ...string) (int, string, string) {
 }
 
 func (fixture *cliFixture) runProcess(args ...string) (int, string, string) {
+	return fixture.runProcessAt("", args...)
+}
+
+func (fixture *cliFixture) runProcessAt(
+	directory string,
+	args ...string,
+) (int, string, string) {
 	commandArgs := []string{"-test.run=^TestCLIHelperProcess$", "--"}
 	commandArgs = append(commandArgs, args...)
 	command := exec.Command(os.Args[0], commandArgs...)
+	command.Dir = directory
 	command.Env = append(os.Environ(), "DOT_CLI_HELPER_PROCESS=1")
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout

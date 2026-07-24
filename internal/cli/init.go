@@ -128,6 +128,9 @@ func initRepository(args []string, env environment) (string, error) {
 	} else {
 		repository = args[0]
 	}
+	if repository == "" {
+		return "", fmt.Errorf("repository must be a non-empty path")
+	}
 	absolute, err := filepath.Abs(repository)
 	if err != nil {
 		return "", fmt.Errorf("resolve repository %q: %w", repository, err)

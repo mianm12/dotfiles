@@ -149,7 +149,11 @@ func prepareRemove(
 		)
 		selectionChanged = true
 	}
-	resolution, err := repository.Resolve(machine.Scope(), context.platform)
+	scope, err := removeResolutionScope(repository, machine, context.platform)
+	if err != nil {
+		return preparedPlan{}, false, err
+	}
+	resolution, err := repository.Resolve(scope, context.platform)
 	if err != nil {
 		return preparedPlan{}, false, err
 	}
@@ -170,6 +174,25 @@ func prepareRemove(
 		loaded:     loaded,
 		plan:       plan,
 	}, selectionChanged, nil
+}
+
+func removeResolutionScope(
+	repository config.Repository,
+	machine config.Machine,
+	platform config.Platform,
+) (config.Scope, error) {
+	scope := machine.Scope()
+	scope.ExtraModules = make([]string, 0, len(machine.ExtraModules))
+	for _, moduleID := range machine.ExtraModules {
+		_, exists, _, err := repository.InspectModule(moduleID, platform)
+		if err != nil {
+			return config.Scope{}, err
+		}
+		if exists {
+			scope.ExtraModules = append(scope.ExtraModules, moduleID)
+		}
+	}
+	return scope, nil
 }
 
 func executePrepared(
