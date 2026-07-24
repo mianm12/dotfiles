@@ -1,0 +1,7 @@
+[match]
+os = ["macos", "linux"]
+
+[[links]]
+id = "config"
+source = "starship.toml"
+target = "~/.config/starship.toml"
