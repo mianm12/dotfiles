@@ -14,7 +14,7 @@ import (
 	coreconfig "github.com/mianm12/dotfiles/internal/core/config"
 )
 
-func TestAcceptance03_ProfileVariantSkipsButExplicitModuleFails(t *testing.T) {
+func TestResolveProfileVariantSkipsButExplicitModuleFails(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -75,7 +75,7 @@ extra_modules = []
 	assertTreeUnchanged(t, root, before)
 }
 
-func TestAcceptance17_ScopedResolutionIgnoresDamagedOutOfScopeModule(t *testing.T) {
+func TestResolveScopedResolutionIgnoresDamagedOutOfScopeModule(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -121,7 +121,7 @@ target = "~/.config/good/config"
 	assertTreeUnchanged(t, root, before)
 }
 
-func TestAcceptance17_ScopedResolutionDefersOutOfScopeDiscoveryError(t *testing.T) {
+func TestResolveScopedResolutionDefersOutOfScopeDiscoveryError(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -166,7 +166,7 @@ base = ["good"]
 	}
 }
 
-func TestAcceptance18_InvalidSourceOrExampleFailsReadOnly(t *testing.T) {
+func TestResolveInvalidSourceOrExampleFailsReadOnly(t *testing.T) {
 	tests := []struct {
 		name     string
 		manifest string
@@ -282,7 +282,7 @@ base = ["app"]
 	}
 }
 
-func TestAcceptance19_UnknownPlatformSkipsGatedVariantAndRejectsInvalidOS(t *testing.T) {
+func TestResolveUnknownPlatformSkipsGatedVariantAndRejectsInvalidOS(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1

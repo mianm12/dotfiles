@@ -15,7 +15,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/lock"
 )
 
-func TestAcceptance01_ExecutorRepeatApplyDoesNotMutate(t *testing.T) {
+func TestExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	fixture := newFixture(t)
 	linkSource := fixture.writeRepositoryFile(t, "modules/base/config", "portable")
 	localSource := fixture.writeRepositoryFile(t, "modules/base/local.example", "local")
@@ -59,7 +59,7 @@ func TestAcceptance01_ExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	assertFilesUnchanged(t, before)
 }
 
-func TestAcceptance01_EmptySelectionCommitsStateOnce(t *testing.T) {
+func TestEmptySelectionCommitsStateOnce(t *testing.T) {
 	fixture := newFixture(t)
 	request := fixture.request(nil)
 
@@ -171,7 +171,7 @@ func TestExecutorDoesNotUpdateUntilAllCreatesSucceed(t *testing.T) {
 	}
 }
 
-func TestAcceptance06_ExecutorMovesTargetBeforePruning(t *testing.T) {
+func TestExecutorMovesTargetBeforePruning(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.writeRepositoryFile(t, "modules/base/file", "file")
 	oldTarget := filepath.Join(fixture.home, ".old")
@@ -281,7 +281,7 @@ func TestExecutorRejectsConflictBeforeArtifactOrStateMutation(t *testing.T) {
 	}
 }
 
-func TestAcceptance11_ExecutorRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
+func TestExecutorRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
 	t.Run("raw destination", func(t *testing.T) {
 		fixture := newFixture(t)
 		target := filepath.Join(fixture.home, ".owned")
@@ -337,7 +337,7 @@ func TestAcceptance11_ExecutorRechecksRawAndResolvedFactsBeforeDelete(t *testing
 	})
 }
 
-func TestAcceptance13_InterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
+func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 	tests := []struct {
 		name    string
 		prepare func(*testing.T, fixture) Request
@@ -420,7 +420,7 @@ func TestAcceptance13_InterruptedFactsConvergeAndThenRemainUnchanged(t *testing.
 	}
 }
 
-func TestAcceptance13_StateCommitFailureLeavesSafeArtifactForRerun(t *testing.T) {
+func TestStateCommitFailureLeavesSafeArtifactForRerun(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.writeRepositoryFile(t, "modules/base/file", "file")
 	request := fixture.linkRequest(source, "~/.file")
@@ -454,7 +454,7 @@ func TestAcceptance13_StateCommitFailureLeavesSafeArtifactForRerun(t *testing.T)
 	assertFilesUnchanged(t, before)
 }
 
-func TestAcceptance13_LocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
+func TestLocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.writeRepositoryFile(t, "modules/base/local.example", "example")
 	target := filepath.Join(fixture.home, ".local")
@@ -501,7 +501,7 @@ func TestAcceptance13_LocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T
 	assertFilesUnchanged(t, before)
 }
 
-func TestAcceptance07_ScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
+func TestScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	fixture := newFixture(t)
 	baseSource := fixture.writeRepositoryFile(t, "modules/base/file", "base")
 	extraSource := fixture.writeRepositoryFile(t, "modules/extra/file", "extra")

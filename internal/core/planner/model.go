@@ -9,8 +9,8 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-// Decision is the result of applying the ordered rules from design baseline
-// section 9 to one desired or stale placement.
+// Decision is the result of applying the ordered planning rules to one desired
+// or stale placement.
 type Decision string
 
 // Planner decisions cover active convergence, stale cleanup, and conflicts.

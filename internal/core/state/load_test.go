@@ -12,7 +12,7 @@ import (
 	corestate "github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestAcceptance14_StateMissingWarnsAndContinues(t *testing.T) {
+func TestLoadStateMissingWarnsAndContinues(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	if err := os.Mkdir(home, 0o700); err != nil {
@@ -34,7 +34,7 @@ func TestAcceptance14_StateMissingWarnsAndContinues(t *testing.T) {
 	assertTreeUnchanged(t, root, before)
 }
 
-func TestAcceptance14_InvalidLegacyAndTooNewStateRejectReadOnly(t *testing.T) {
+func TestLoadInvalidLegacyAndTooNewStateRejectReadOnly(t *testing.T) {
 	tests := []struct {
 		name     string
 		document func(string) string
