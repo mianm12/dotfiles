@@ -27,8 +27,9 @@
 - Acceptance：`make test-acceptance` 验证 AC 编号完整性和跨层产品契约。
 - Full gate：`make check` 验证 tidy、format、lint 和全量 race tests。
 - Fuzz：`make fuzz` 持续攻击 state decoder 与 target expression 安全边界。
-- Vulnerability：`make vuln` 使用固定版本的 `govulncheck` 扫描可达漏洞，作为独立安全验证，
-  不加入本地离线 `make check`。
+- Vulnerability：`make vuln` 使用固定版本的 `govulncheck` 扫描可达漏洞，不加入本地离线
+  `make check`；仓库 workflow 在 PR、`main` push、每周计划和手动触发时运行它。将该状态设为
+  required check 属于合入后的独立 operational 授权。
 - 双平台 CI：macOS 与 Ubuntu 运行同一 `make check`。
 
 ## 架构约束
