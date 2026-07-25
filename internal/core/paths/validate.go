@@ -14,7 +14,7 @@ var (
 	ErrControlBoundary = errors.New("target overlaps a control path")
 )
 
-// Controls contains the protected paths named by design baseline section 7.3.
+// Controls contains the protected paths named by the placement specification.
 type Controls struct {
 	Repository string
 	Config     string

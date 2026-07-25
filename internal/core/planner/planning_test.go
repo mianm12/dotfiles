@@ -15,7 +15,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestAcceptance04_SourceContentChangeIsNoOp(t *testing.T) {
+func TestPlanSourceContentChangeIsNoOp(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.file(t, "repo/modules/app/config", "before")
 	target := fixture.target(".config/app/config")
@@ -40,7 +40,7 @@ func TestAcceptance04_SourceContentChangeIsNoOp(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance05_AddAndSafeStalePruneAreOrdered(t *testing.T) {
+func TestPlanAddAndSafeStalePruneAreOrdered(t *testing.T) {
 	fixture := newFixture(t)
 	newSource := fixture.file(t, "repo/modules/app/new", "new")
 	oldSource := fixture.file(t, "repo/modules/app/old", "old")
@@ -65,7 +65,7 @@ func TestAcceptance05_AddAndSafeStalePruneAreOrdered(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance05_IndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testing.T) {
+func TestPlanIndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testing.T) {
 	fixture := newFixture(t)
 	oldDestination := fixture.dir(t, "old-repo/app")
 	oldDestination, err := filepath.EvalSymlinks(oldDestination)
@@ -97,7 +97,7 @@ func TestAcceptance05_IndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testi
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance05_StaleLinkInsideControlPathIsRejected(t *testing.T) {
+func TestPlanStaleLinkInsideControlPathIsRejected(t *testing.T) {
 	for _, controlName := range []string{"repository", "config", "state", "lock"} {
 		t.Run(controlName, func(t *testing.T) {
 			fixture := newFixture(t)
@@ -149,7 +149,7 @@ func TestAcceptance05_StaleLinkInsideControlPathIsRejected(t *testing.T) {
 	}
 }
 
-func TestAcceptance05_StaleLinkContainingControlPathIsRejected(t *testing.T) {
+func TestPlanStaleLinkContainingControlPathIsRejected(t *testing.T) {
 	for _, controlName := range []string{"repository", "config", "state", "lock"} {
 		t.Run(controlName, func(t *testing.T) {
 			fixture := newFixture(t)
@@ -193,7 +193,7 @@ func TestAcceptance05_StaleLinkContainingControlPathIsRejected(t *testing.T) {
 	}
 }
 
-func TestAcceptance05_StaleLocalContainingControlPathIsRejected(t *testing.T) {
+func TestPlanStaleLocalContainingControlPathIsRejected(t *testing.T) {
 	for _, controlName := range []string{"repository", "config", "state", "lock"} {
 		t.Run(controlName, func(t *testing.T) {
 			fixture := newFixture(t)
@@ -235,7 +235,7 @@ func TestAcceptance05_StaleLocalContainingControlPathIsRejected(t *testing.T) {
 	}
 }
 
-func TestAcceptance05_DriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
+func TestPlanDriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
 	fixture := newFixture(t)
 	newSource := fixture.file(t, "repo/modules/app/new", "new")
 	oldSource := fixture.file(t, "repo/modules/app/old", "old")
@@ -260,7 +260,7 @@ func TestAcceptance05_DriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance06_TargetChangeCreatesBeforePrune(t *testing.T) {
+func TestPlanTargetChangeCreatesBeforePrune(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.file(t, "repo/modules/app/config", "config")
 	oldTarget := fixture.target(".old/app")
@@ -281,7 +281,7 @@ func TestAcceptance06_TargetChangeCreatesBeforePrune(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance09_LocalAbsentCreatesAndEveryExistingEntryKeeps(t *testing.T) {
+func TestPlanLocalAbsentCreatesAndEveryExistingEntryKeeps(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(*testing.T, *fixture, string)
@@ -343,7 +343,7 @@ func TestAcceptance09_LocalAbsentCreatesAndEveryExistingEntryKeeps(t *testing.T)
 	}
 }
 
-func TestAcceptance09_ExampleUpdateDoesNotOverwriteLocal(t *testing.T) {
+func TestPlanExampleUpdateDoesNotOverwriteLocal(t *testing.T) {
 	fixture := newFixture(t)
 	example := fixture.file(t, "repo/modules/app/config.local.example", "before")
 	target := fixture.target(".config/app/config.local")
@@ -366,7 +366,7 @@ func TestAcceptance09_ExampleUpdateDoesNotOverwriteLocal(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance09_CrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
+func TestPlanCrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(*testing.T, *fixture, string, string)
@@ -429,7 +429,7 @@ func TestAcceptance09_CrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
 	}
 }
 
-func TestAcceptance10_UnknownCorrectSymlinkAdopts(t *testing.T) {
+func TestPlanUnknownCorrectSymlinkAdopts(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.file(t, "repo/modules/app/config", "config")
 	target := fixture.target(".config/app/config")
@@ -443,7 +443,7 @@ func TestAcceptance10_UnknownCorrectSymlinkAdopts(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance10_StateOwnedSymlinkDriftIsConflict(t *testing.T) {
+func TestPlanStateOwnedSymlinkDriftIsConflict(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.file(t, "repo/modules/app/config", "config")
 	userSource := fixture.file(t, "user/config", "user")
@@ -464,7 +464,7 @@ func TestAcceptance10_StateOwnedSymlinkDriftIsConflict(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance10_PlacementKindChangeIsConflict(t *testing.T) {
+func TestPlanPlacementKindChangeIsConflict(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.file(t, "repo/modules/app/config", "config")
 	target := fixture.target(".config/app/config")
@@ -483,7 +483,7 @@ func TestAcceptance10_PlacementKindChangeIsConflict(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance11_ParentSymlinkDriftRejectsUpdate(t *testing.T) {
+func TestPlanParentSymlinkDriftRejectsUpdate(t *testing.T) {
 	fixture := newFixture(t)
 	oldParent := fixture.dir(t, "parents/old")
 	newParent := fixture.dir(t, "parents/new")
@@ -513,7 +513,7 @@ func TestAcceptance11_ParentSymlinkDriftRejectsUpdate(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance11_ParentSymlinkDriftRejectsPruneButContinues(t *testing.T) {
+func TestPlanParentSymlinkDriftRejectsPruneButContinues(t *testing.T) {
 	fixture := newFixture(t)
 	oldParent := fixture.dir(t, "parents/old")
 	newParent := fixture.dir(t, "parents/new")
@@ -546,7 +546,7 @@ func TestAcceptance11_ParentSymlinkDriftRejectsPruneButContinues(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestAcceptance11_ParentSymlinkDriftWithAbsentNewLeafStillWarns(t *testing.T) {
+func TestPlanParentSymlinkDriftWithAbsentNewLeafStillWarns(t *testing.T) {
 	fixture := newFixture(t)
 	oldParent := fixture.dir(t, "parents/old")
 	newParent := fixture.dir(t, "parents/new")

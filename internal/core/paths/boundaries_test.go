@@ -11,7 +11,7 @@ import (
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 )
 
-func TestAcceptance11_ParentSymlinkResolutionChangeIsDetected(t *testing.T) {
+func TestResolveTargetParentSymlinkResolutionChangeIsDetected(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	firstParent := filepath.Join(root, "first")
@@ -68,7 +68,7 @@ func TestAcceptance11_ParentSymlinkResolutionChangeIsDetected(t *testing.T) {
 	}
 }
 
-func TestAcceptance12_RejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
+func TestValidateRejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
 	tests := []struct {
 		name    string
 		setup   func(*testing.T, string, string) (corepaths.Controls, []corepaths.Placement)
@@ -208,7 +208,7 @@ func TestAcceptance12_RejectsTargetAndControlConflictsBeforeMutation(t *testing.
 	}
 }
 
-func TestAcceptance12_RejectsControlPathsContainedByTarget(t *testing.T) {
+func TestValidateRejectsControlPathsContainedByTarget(t *testing.T) {
 	tests := []struct {
 		name      string
 		target    string

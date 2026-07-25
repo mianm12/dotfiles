@@ -78,7 +78,7 @@ func Decode(data []byte, expectedHome string) (Snapshot, error) {
 		)
 	case version.Cmp(big.NewInt(1)) == 0:
 		return Snapshot{}, fmt.Errorf(
-			"%w: version 1 is unsupported; archive the old state and retry",
+			"%w: version 1 is unsupported; archive or remove the old state and retry",
 			ErrLegacyVersion,
 		)
 	case version.Cmp(big.NewInt(Version)) != 0:

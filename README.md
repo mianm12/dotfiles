@@ -34,10 +34,14 @@ target。`dot` 不负责安装软件，也不提供自动导入、backup 或 rol
 
 ```sh
 make check
+make test-acceptance
+make fuzz
+make vuln
 ```
 
-该入口执行依赖整洁度、格式、静态分析和 race tests；CI 在 macOS 与 Linux 上运行同一入口。
-变更风险分级和证据要求见[贡献约定](CONTRIBUTING.md)。
+`make check` 执行依赖整洁度、格式、静态分析和 race tests；CI 在 macOS 与 Linux 上运行同一
+入口。其余目标分别验证跨层 AC、两个安全边界 fuzz 和可达漏洞。变更风险分级和证据要求见
+[贡献约定](CONTRIBUTING.md)。
 
 ## 文档
 

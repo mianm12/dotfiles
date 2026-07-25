@@ -1,26 +1,108 @@
 package cli
 
 import (
-	"bytes"
-	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
-	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/mianm12/dotfiles/internal/lock"
 )
 
-func TestAcceptance02_InitConflictLeavesSelectionArtifactsAndStateUntouched(t *testing.T) {
-	fixture := newCLIFixture(t, "base = [\"app\"]")
+func TestAcceptanceContractCoverage(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() did not return the acceptance test filename")
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse acceptance suite: %v", err)
+	}
+
+	counts := make(map[int]int)
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || !strings.HasPrefix(function.Name.Name, "TestAC") {
+			continue
+		}
+		name := function.Name.Name
+		if len(name) < len("TestAC00_") || name[8] != '_' {
+			t.Fatalf("acceptance test %q must use TestACNN_ naming", name)
+		}
+		number, convertErr := strconv.Atoi(name[6:8])
+		if convertErr != nil || number < 1 || number > 19 {
+			t.Fatalf("acceptance test %q has an invalid contract number", name)
+		}
+		counts[number]++
+	}
+	for number := 1; number <= 19; number++ {
+		if counts[number] == 0 {
+			t.Errorf("acceptance contract AC-%02d has no CLI test", number)
+		}
+	}
+}
+
+func TestAC01_InitProfilesOnMacOSAndLinuxThroughCLI(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform config.Platform
+	}{
+		{
+			name:     "macos",
+			platform: config.Platform{OS: "macos", Arch: "aarch64"},
+		},
+		{
+			name: "linux",
+			platform: config.Platform{
+				OS:     "linux",
+				Distro: "ubuntu",
+				Arch:   "x86_64",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCLITestEnv(t, `base = ["app"]`)
+			fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "portable"})
+			fixture.env.platform = func() config.Platform { return test.platform }
+
+			code, _, stderr := fixture.runInjected(
+				"init",
+				fixture.repository,
+				"--profile",
+				"base",
+			)
+			if code != exitOK || stderr == "" {
+				t.Fatalf("init = (%d, %q), want success with missing-state warning", code, stderr)
+			}
+			assertCLILink(
+				t,
+				filepath.Join(fixture.home, ".app"),
+				filepath.Join(fixture.repository, "modules", "app", "config"),
+			)
+			assertApplyNoMutation(t, fixture, fixture.runInjected)
+		})
+	}
+}
+
+func TestAC02_InitConflictIsStrictlyReadOnlyThroughCLI(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `
 [[links]]
 id = "config"
@@ -29,285 +111,299 @@ target = "~/.config/app/config"
 `, map[string]string{"config": "portable"})
 	target := filepath.Join(fixture.home, ".config", "app", "config")
 	writeCLIFile(t, target, "personal")
-	before := snapshotCLITree(t, fixture.root)
-
-	code, stdout, stderr := fixture.run("init", fixture.repository, "--profile", "base")
-	if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
-		t.Fatalf("init = (%d, %q, %q), want stderr-only runtime conflict", code, stdout, stderr)
-	}
-	assertCLITreeUnchanged(t, before)
-	assertCLIMissing(t, fixture.config)
-	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
-}
-
-func TestB6ExplicitEmptyInitRepositoryIsRejectedWithoutMutation(t *testing.T) {
-	for _, dryRun := range []bool{false, true} {
-		name := "mutation"
-		if dryRun {
-			name = "dry-run"
-		}
-		t.Run(name, func(t *testing.T) {
-			fixture := newCLIFixture(t, "base = []")
-			before := snapshotCLITree(t, fixture.root)
-			args := []string{"init", "", "--profile", "base"}
-			if dryRun {
-				args = append(args, "--dry-run")
-			}
-
-			code, stdout, stderr := fixture.runProcessAt(fixture.repository, args...)
-			if code != exitError ||
-				stdout != "" ||
-				!strings.Contains(stderr, "repository") ||
-				!strings.Contains(stderr, "non-empty") {
-				t.Fatalf(
-					"init empty repository = (%d, %q, %q), want stderr-only runtime failure",
-					code,
-					stdout,
-					stderr,
-				)
-			}
-			assertCLITreeUnchanged(t, before)
-			assertCLIMissing(t, fixture.config)
-			assertCLIMissing(t, fixture.state)
-			assertCLIMissing(t, fixture.lock)
-		})
-	}
-}
-
-func TestAcceptance01_InitProfilesThenApplyIsNoop(t *testing.T) {
-	fixture := newCLIFixture(t, "base = [\"app\"]")
-	fixture.writeModule(t, "app", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.app"
-`, map[string]string{"config": "portable"})
-
-	code, _, stderr := fixture.run("init", fixture.repository, "--profile", "base")
-	if code != exitOK || stderr == "" {
-		t.Fatalf("init = (%d, %q), want success with missing-state warning", code, stderr)
-	}
-	machine := fixture.loadMachine(t)
-	if machine.Repository != fixture.repository ||
-		!reflect.DeepEqual(machine.Profiles, []string{"base"}) ||
-		len(machine.ExtraModules) != 0 {
-		t.Fatalf("machine = %#v, want initialized base selection", machine)
-	}
-	target := filepath.Join(fixture.home, ".app")
-	assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "app", "config"))
-
-	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
-	code, stdout, stderr := fixture.run("status")
-	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  converged") {
-		t.Fatalf("status after init = (%d, %q, %q), want converged", code, stdout, stderr)
-	}
-	assertCLIPathsUnchanged(t, before)
-
-	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("apply after init = (%d, %q), want clean success", code, stderr)
-	}
-	assertCLINoMutationResult(t, stdout)
-	assertCLIPathsUnchanged(t, before)
-}
-
-func TestB6StatusLocalWithoutProvenanceIsPending(t *testing.T) {
-	fixture := newCLIFixture(t, "base = [\"app\"]")
-	fixture.writeModule(t, "app", `
-[[locals]]
-id = "local"
-example = "local.example"
-target = "~/.app.local"
-`, map[string]string{"local.example": "example"})
-	fixture.writeMachine(t, []string{"base"}, nil)
-	target := filepath.Join(fixture.home, ".app.local")
-	writeCLIFile(t, target, "personal")
-
-	beforeStatus := snapshotCLIPaths(t, fixture.config, target)
-	code, stdout, stderr := fixture.run("status")
-	if code != exitOK ||
-		!strings.Contains(stdout, "app  pending") ||
-		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("status before provenance = (%d, %q, %q), want pending", code, stdout, stderr)
-	}
-	assertCLIPathsUnchanged(t, beforeStatus)
-	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
-
-	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK ||
-		!strings.Contains(stdout, "state_changed=true") ||
-		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("apply local provenance = (%d, %q, %q), want state-only mutation", code, stdout, stderr)
-	}
-	if data, err := os.ReadFile(target); err != nil || string(data) != "personal" {
-		t.Fatalf("local after apply = (%q, %v), want preserved", data, err)
-	}
-
-	beforeRepeat := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
-	code, stdout, stderr = fixture.run("status")
-	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  converged") {
-		t.Fatalf("status after provenance = (%d, %q, %q), want converged", code, stdout, stderr)
-	}
-	assertCLIPathsUnchanged(t, beforeRepeat)
-
-	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("repeated apply = (%d, %q), want zero mutation", code, stderr)
-	}
-	assertCLINoMutationResult(t, stdout)
-	assertCLIPathsUnchanged(t, beforeRepeat)
-}
-
-func TestB6StatusLinkKeepWithStateRefreshIsPending(t *testing.T) {
-	fixture := newCLIFixture(t, "base = [\"app\"]")
-	fixture.writeModule(t, "app", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/current/config"
-`, map[string]string{"config": "portable"})
-	fixture.writeMachine(t, []string{"base"}, nil)
-
-	physicalA := filepath.Join(fixture.home, "physical-a")
-	physicalB := filepath.Join(fixture.home, "physical-b")
-	for _, directory := range []string{physicalA, physicalB} {
-		if err := os.Mkdir(directory, 0o700); err != nil {
-			t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
-		}
-	}
-	parent := filepath.Join(fixture.home, "current")
-	if err := os.Symlink(physicalA, parent); err != nil {
-		t.Fatalf("os.Symlink(%q, %q) error = %v", physicalA, parent, err)
-	}
-
-	code, _, stderr := fixture.run("apply")
-	if code != exitOK {
-		t.Fatalf("initial apply = (%d, %q)", code, stderr)
-	}
-	destination := filepath.Join(fixture.repository, "modules", "app", "config")
-	oldTarget := filepath.Join(physicalA, "config")
-	assertCLILink(t, oldTarget, destination)
-
-	if err := os.Remove(parent); err != nil {
-		t.Fatalf("os.Remove(%q) error = %v", parent, err)
-	}
-	if err := os.Symlink(physicalB, parent); err != nil {
-		t.Fatalf("os.Symlink(%q, %q) error = %v", physicalB, parent, err)
-	}
-	newTarget := filepath.Join(physicalB, "config")
-	if err := os.Symlink(destination, newTarget); err != nil {
-		t.Fatalf("os.Symlink(%q, %q) error = %v", destination, newTarget, err)
-	}
-
-	beforeStatus := snapshotCLIPaths(
-		t,
-		fixture.config,
-		fixture.state,
-		fixture.lock,
-		parent,
-		oldTarget,
-		newTarget,
-	)
-	code, stdout, stderr := fixture.run("status")
-	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  pending") {
-		t.Fatalf("status before state refresh = (%d, %q, %q), want pending", code, stdout, stderr)
-	}
-	assertCLIPathsUnchanged(t, beforeStatus)
-
-	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK ||
-		stderr != "" ||
-		!strings.Contains(stdout, "targets_changed=false state_changed=true") {
-		t.Fatalf("state refresh apply = (%d, %q, %q)", code, stdout, stderr)
-	}
-
-	beforeRepeat := snapshotCLIPaths(
-		t,
-		fixture.config,
-		fixture.state,
-		fixture.lock,
-		parent,
-		oldTarget,
-		newTarget,
-	)
-	code, stdout, stderr = fixture.run("status")
-	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  converged") {
-		t.Fatalf("status after state refresh = (%d, %q, %q), want converged", code, stdout, stderr)
-	}
-	assertCLIPathsUnchanged(t, beforeRepeat)
-
-	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("repeated apply after state refresh = (%d, %q, %q)", code, stdout, stderr)
-	}
-	assertCLINoMutationResult(t, stdout)
-	assertCLIPathsUnchanged(t, beforeRepeat)
-}
-
-func TestB6InitDryRunIsStrictlyReadOnly(t *testing.T) {
-	fixture := newCLIFixture(t, "base = [\"app\"]")
-	fixture.writeModule(t, "app", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.app"
-`, map[string]string{"config": "portable"})
+	before := snapshotTree(t, fixture.root)
 
 	code, stdout, stderr := fixture.run(
 		"init",
 		fixture.repository,
 		"--profile",
 		"base",
-		"--dry-run",
 	)
-	if code != exitOK || !strings.Contains(stdout, "create-link") || stderr == "" {
-		t.Fatalf("init dry-run = (%d, %q, %q)", code, stdout, stderr)
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		t.Fatalf("init = (%d, %q, %q), want stderr-only conflict", code, stdout, stderr)
 	}
+	assertSnapshotUnchanged(t, before)
 	assertCLIMissing(t, fixture.config)
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
-	assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
 }
 
-func TestAcceptance03_ExplicitNotApplicableDoesNotChangeSelection(t *testing.T) {
-	fixture := newCLIFixture(t, "base = []")
-	otherOS := "macos"
-	if runtime.GOOS == "darwin" {
-		otherOS = "linux"
-	}
-	fixture.writeModule(t, "other-platform", `
+func TestAC03_ProfileNotApplicableSkipsAndRepeatsThroughCLI(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["portable", "gated"]`)
+	fixture.writeModule(t, "portable", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.portable"
+`, map[string]string{"config": "portable"})
+	fixture.writeModule(t, "gated", `
 [match]
-os = ["`+otherOS+`"]
+os = ["macos"]
 
 [[links]]
 id = "config"
 source = "config"
-target = "~/.other-platform"
-`, map[string]string{"config": "other"})
+target = "~/.gated"
+`, map[string]string{"config": "gated"})
 	fixture.writeMachine(t, []string{"base"}, nil)
-	before := snapshotCLIPaths(t, fixture.config)
 
-	code, stdout, stderr := fixture.run("apply", "other-platform")
-	if code != exitError || stdout != "" || !strings.Contains(stderr, "not applicable") {
-		t.Fatalf(
-			"apply other-platform = (%d, %q, %q), want stderr-only not-applicable failure",
-			code,
-			stdout,
-			stderr,
-		)
+	code, _, stderr := fixture.runInjected("apply")
+	if code != exitOK || stderr == "" {
+		t.Fatalf("apply = (%d, %q), want success with missing-state warning", code, stderr)
 	}
-	assertCLIPathsUnchanged(t, before)
-	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, filepath.Join(fixture.home, ".other-platform"))
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules = %v, want unchanged", extras)
+	assertCLILink(
+		t,
+		filepath.Join(fixture.home, ".portable"),
+		filepath.Join(fixture.repository, "modules", "portable", "config"),
+	)
+	assertCLIMissing(t, filepath.Join(fixture.home, ".gated"))
+
+	code, stdout, stderr := fixture.runInjected("status")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "portable  converged") ||
+		!strings.Contains(stdout, "gated  not-applicable") {
+		t.Fatalf("status = (%d, %q, %q), want converged portable and skipped gated", code, stdout, stderr)
+	}
+	assertApplyNoMutation(t, fixture, fixture.runInjected)
+
+	explicit := newCLITestEnv(t, `base = []`)
+	explicit.writeModule(t, "gated", `
+[match]
+os = ["macos"]
+
+[[links]]
+id = "config"
+source = "config"
+target = "~/.gated"
+`, map[string]string{"config": "gated"})
+	explicit.writeMachine(t, []string{"base"}, nil)
+	before := snapshotTree(t, explicit.root)
+
+	code, stdout, stderr = explicit.runInjected("apply", "gated")
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "not applicable") {
+		t.Fatalf("explicit apply = (%d, %q, %q), want not-applicable failure", code, stdout, stderr)
+	}
+	assertSnapshotUnchanged(t, before)
+	if extras := explicit.loadMachine(t).ExtraModules; len(extras) != 0 {
+		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
 	}
 }
 
-func TestAcceptance07_ApplyActivatesExtraAndRepeatsWithoutMutation(t *testing.T) {
-	fixture := newCLIFixture(t, "base = []")
+func TestAC04_SourceContentChangeIsNoopThroughCLI(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "before"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	code, _, stderr := fixture.run("apply")
+	if code != exitOK {
+		t.Fatalf("initial apply = (%d, %q)", code, stderr)
+	}
+	assertApplyNoMutation(t, fixture, fixture.run)
+
+	source := filepath.Join(fixture.repository, "modules", "app", "config")
+	if err := os.WriteFile(source, []byte("after"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(source) error = %v", err)
+	}
+	target := filepath.Join(fixture.home, ".app")
+	before := snapshotPaths(t, fixture.config, fixture.state, fixture.lock, target)
+
+	code, stdout, stderr := fixture.run("apply")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("apply after source content change = (%d, %q, %q)", code, stdout, stderr)
+	}
+	assertCLINoMutationResult(t, stdout)
+	assertSnapshotUnchanged(t, before)
+	assertCLILink(t, target, source)
+}
+
+func TestAC05_PlacementChangesPruneOnlySafeLinksThroughCLI(t *testing.T) {
+	t.Run("add and safe prune", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "old"
+source = "old"
+target = "~/.app-old"
+`, map[string]string{
+			"old": "old",
+			"new": "new",
+		})
+		fixture.writeMachine(t, []string{"base"}, nil)
+
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("initial apply = (%d, %q)", code, stderr)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+
+		writeModuleManifest(t, fixture, "app", `
+[[links]]
+id = "new"
+source = "new"
+target = "~/.app-new"
+`)
+		code, _, stderr = fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("apply changed placements = (%d, %q)", code, stderr)
+		}
+		assertCLIMissing(t, filepath.Join(fixture.home, ".app-old"))
+		assertCLILink(
+			t,
+			filepath.Join(fixture.home, ".app-new"),
+			filepath.Join(fixture.repository, "modules", "app", "new"),
+		)
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+
+	t.Run("drifted stale link warns and forgets", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "old"
+source = "old"
+target = "~/.app-old"
+`, map[string]string{
+			"old": "old",
+			"new": "new",
+		})
+		fixture.writeMachine(t, []string{"base"}, nil)
+
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("initial apply = (%d, %q)", code, stderr)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+
+		oldTarget := filepath.Join(fixture.home, ".app-old")
+		if err := os.Remove(oldTarget); err != nil {
+			t.Fatalf("os.Remove(old target) error = %v", err)
+		}
+		userDestination := filepath.Join(fixture.root, "user-owned")
+		writeCLIFile(t, userDestination, "user")
+		if err := os.Symlink(userDestination, oldTarget); err != nil {
+			t.Fatalf("os.Symlink(user destination) error = %v", err)
+		}
+		writeModuleManifest(t, fixture, "app", `
+[[links]]
+id = "new"
+source = "new"
+target = "~/.app-new"
+`)
+
+		code, _, stderr = fixture.run("apply")
+		if code != exitOK || !strings.Contains(stderr, "warning") {
+			t.Fatalf("apply with drifted stale link = (%d, %q), want warning success", code, stderr)
+		}
+		assertCLILink(t, oldTarget, userDestination)
+		assertCLILink(
+			t,
+			filepath.Join(fixture.home, ".app-new"),
+			filepath.Join(fixture.repository, "modules", "app", "new"),
+		)
+		loaded := loadTestState(t, fixture)
+		if placements := loaded.Modules["app"].Placements; len(placements) != 1 {
+			t.Fatalf("state placements = %#v, want only new placement", placements)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+}
+
+func TestAC06_TargetChangeConvergesAndRepeatsThroughCLI(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app-old"
+`, map[string]string{"config": "config"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	code, _, stderr := fixture.run("apply")
+	if code != exitOK {
+		t.Fatalf("initial apply = (%d, %q)", code, stderr)
+	}
+	assertApplyNoMutation(t, fixture, fixture.run)
+
+	writeModuleManifest(t, fixture, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app-new"
+`)
+	code, _, stderr = fixture.run("apply")
+	if code != exitOK {
+		t.Fatalf("apply target change = (%d, %q)", code, stderr)
+	}
+	assertCLIMissing(t, filepath.Join(fixture.home, ".app-old"))
+	assertCLILink(
+		t,
+		filepath.Join(fixture.home, ".app-new"),
+		filepath.Join(fixture.repository, "modules", "app", "config"),
+	)
+	assertApplyNoMutation(t, fixture, fixture.run)
+
+	failure := newCLITestEnv(t, `base = ["app"]`)
+	failure.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.old"
+`, map[string]string{"config": "config"})
+	failure.writeMachine(t, []string{"base"}, nil)
+	code, _, stderr = failure.run("apply")
+	if code != exitOK {
+		t.Fatalf("initial ordering apply = (%d, %q)", code, stderr)
+	}
+	assertApplyNoMutation(t, failure, failure.run)
+	writeModuleManifest(t, failure, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.blocked/new"
+`)
+	oldTarget := filepath.Join(failure.home, ".old")
+	blockedParent := filepath.Join(failure.home, ".blocked")
+	if err := os.Mkdir(blockedParent, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(blocked parent) error = %v", err)
+	}
+	newTarget := filepath.Join(blockedParent, "new")
+	beforeControl := snapshotPaths(
+		t,
+		failure.config,
+		failure.state,
+		failure.lock,
+		oldTarget,
+	)
+	failure.env.beforeExecution = func() {
+		if err := os.Chmod(blockedParent, 0o500); err != nil {
+			t.Fatalf("os.Chmod(blocked parent) error = %v", err)
+		}
+	}
+
+	code, stdout, stderr := failure.runInjected("apply")
+	if err := os.Chmod(blockedParent, 0o700); err != nil {
+		t.Fatalf("os.Chmod(restore parent) error = %v", err)
+	}
+	if code != exitError || stdout != "" || !strings.Contains(stderr, "create symlink") {
+		t.Fatalf("ordered failure apply = (%d, %q, %q), want execution-time create failure", code, stdout, stderr)
+	}
+	assertSnapshotUnchanged(t, beforeControl)
+	assertCLILink(
+		t,
+		oldTarget,
+		filepath.Join(failure.repository, "modules", "app", "config"),
+	)
+	assertCLIMissing(t, newTarget)
+}
+
+func TestAC07_ExplicitApplyActivatesExtraAndRepeatsThroughCLI(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "extra", `
 [[links]]
 id = "config"
@@ -320,24 +416,19 @@ target = "~/.extra"
 	if code != exitOK || stderr == "" {
 		t.Fatalf("apply extra = (%d, %q), want success with missing-state warning", code, stderr)
 	}
-	target := filepath.Join(fixture.home, ".extra")
-	assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "extra", "config"))
-	machine := fixture.loadMachine(t)
-	if !reflect.DeepEqual(machine.ExtraModules, []string{"extra"}) {
-		t.Fatalf("extra_modules = %v, want [extra]", machine.ExtraModules)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "extra" {
+		t.Fatalf("extra_modules = %v, want [extra]", extras)
 	}
-
-	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
-	code, stdout, stderr := fixture.run("apply", "extra")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("repeated apply extra = (%d, %q), want clean success", code, stderr)
-	}
-	assertCLINoMutationResult(t, stdout)
-	assertCLIPathsUnchanged(t, before)
+	assertCLILink(
+		t,
+		filepath.Join(fixture.home, ".extra"),
+		filepath.Join(fixture.repository, "modules", "extra", "config"),
+	)
+	assertApplyNoMutation(t, fixture, fixture.run, "extra")
 }
 
-func TestAcceptance08_RemoveExtraKeepsLocalAndRejectsProfileModule(t *testing.T) {
-	fixture := newCLIFixture(t, "base = [\"profiled\"]")
+func TestAC08_RemoveExtraAndRejectProfileModuleThroughCLI(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["profiled"]`)
 	fixture.writeModule(t, "profiled", `
 [[links]]
 id = "config"
@@ -364,151 +455,789 @@ target = "~/.extra.local"
 	if code != exitOK {
 		t.Fatalf("initial apply = (%d, %q)", code, stderr)
 	}
-	extraTarget := filepath.Join(fixture.home, ".extra")
-	localTarget := filepath.Join(fixture.home, ".extra.local")
-	profileTarget := filepath.Join(fixture.home, ".profiled")
-	code, stdout, stderr := fixture.run("status")
-	if code != exitOK ||
-		stderr != "" ||
-		!strings.Contains(stdout, "profiled  converged") ||
-		!strings.Contains(stdout, "extra  converged") {
-		t.Fatalf("status after apply = (%d, %q, %q), want converged modules", code, stdout, stderr)
-	}
-
-	beforeDryRun := snapshotCLIPaths(
-		t,
-		fixture.config,
-		fixture.state,
-		fixture.lock,
-		extraTarget,
-		localTarget,
-		profileTarget,
-	)
-	code, _, stderr = fixture.run("remove", "extra", "--dry-run")
-	if code != exitOK {
-		t.Fatalf("remove extra dry-run = (%d, %q)", code, stderr)
-	}
-	assertCLIPathsUnchanged(t, beforeDryRun)
+	assertApplyNoMutation(t, fixture, fixture.run)
 
 	code, _, stderr = fixture.run("remove", "extra")
-	if code != exitOK || stderr == "" {
+	if code != exitOK {
 		t.Fatalf("remove extra = (%d, %q)", code, stderr)
 	}
-	assertCLIMissing(t, extraTarget)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+		t.Fatalf("extra_modules = %v, want empty", extras)
+	}
+	assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
+	localTarget := filepath.Join(fixture.home, ".extra.local")
 	if data, err := os.ReadFile(localTarget); err != nil || string(data) != "local" {
 		t.Fatalf("local after remove = (%q, %v), want preserved", data, err)
 	}
 	assertCLILink(
 		t,
-		profileTarget,
+		filepath.Join(fixture.home, ".profiled"),
 		filepath.Join(fixture.repository, "modules", "profiled", "config"),
 	)
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules after remove = %v, want empty", extras)
-	}
+	assertApplyNoMutation(t, fixture, fixture.run)
 
-	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, localTarget, profileTarget)
-	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("apply after remove = (%d, %q), want zero mutation", code, stderr)
-	}
-	assertCLINoMutationResult(t, stdout)
-	assertCLIPathsUnchanged(t, before)
-
-	code, stdout, stderr = fixture.run("remove", "extra")
-	if code != exitOK {
-		t.Fatalf("repeated remove known inactive module = (%d, %q)", code, stderr)
-	}
-	assertCLINoMutationResult(t, stdout)
-	assertCLIPathsUnchanged(t, before)
-
-	code, stdout, stderr = fixture.run("remove", "profiled")
+	before := snapshotTree(t, fixture.root)
+	code, stdout, stderr := fixture.run("remove", "profiled")
 	if code != exitError || stdout != "" || !strings.Contains(stderr, "active profile") {
-		t.Fatalf("remove profiled = (%d, %q, %q), want stderr-only refusal", code, stdout, stderr)
+		t.Fatalf("remove profiled = (%d, %q, %q), want refusal", code, stdout, stderr)
 	}
-	assertCLIPathsUnchanged(t, before)
+	assertSnapshotUnchanged(t, before)
 }
 
-func TestAcceptance08_InactiveKnownModuleWithoutStateIsNoop(t *testing.T) {
-	fixture := newCLIFixture(t, "base = []")
-	fixture.writeModule(t, "idle", `
+func TestAC09_LocalCreateKeepAndExampleUpdateThroughCLI(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *cliTestEnv, string)
+	}{
+		{name: "absent"},
+		{
+			name: "regular file",
+			setup: func(t *testing.T, _ *cliTestEnv, target string) {
+				writeCLIFile(t, target, "user")
+			},
+		},
+		{
+			name: "directory",
+			setup: func(t *testing.T, _ *cliTestEnv, target string) {
+				if err := os.Mkdir(target, 0o700); err != nil {
+					t.Fatalf("os.Mkdir(target) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, fixture *cliTestEnv, target string) {
+				source := filepath.Join(fixture.root, "user-local")
+				writeCLIFile(t, source, "user")
+				if err := os.Symlink(source, target); err != nil {
+					t.Fatalf("os.Symlink(target) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "dangling symlink",
+			setup: func(t *testing.T, fixture *cliTestEnv, target string) {
+				if err := os.Symlink(filepath.Join(fixture.root, "missing"), target); err != nil {
+					t.Fatalf("os.Symlink(dangling target) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "special file",
+			setup: func(t *testing.T, _ *cliTestEnv, target string) {
+				if err := syscall.Mkfifo(target, 0o600); err != nil {
+					t.Fatalf("syscall.Mkfifo(target) error = %v", err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCLITestEnv(t, `base = ["app"]`)
+			fixture.writeModule(t, "app", `
+[[locals]]
+id = "local"
+example = "local.example"
+target = "~/.app.local"
+`, map[string]string{"local.example": "example"})
+			fixture.writeMachine(t, []string{"base"}, nil)
+			target := filepath.Join(fixture.home, ".app.local")
+			var beforeTarget filesystemSnapshot
+			if test.setup != nil {
+				test.setup(t, fixture, target)
+				beforeTarget = snapshotPaths(t, target)
+			}
+
+			code, _, stderr := fixture.run("apply")
+			if code != exitOK {
+				t.Fatalf("initial apply = (%d, %q)", code, stderr)
+			}
+			if test.setup == nil {
+				info, err := os.Lstat(target)
+				if err != nil {
+					t.Fatalf("os.Lstat(local) error = %v", err)
+				}
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != "example" || info.Mode().Perm() != fs.FileMode(0o600) {
+					t.Fatalf(
+						"created local = (%q, %v, %v), want example mode 0600",
+						data,
+						info.Mode().Perm(),
+						err,
+					)
+				}
+			} else {
+				assertSnapshotUnchanged(t, beforeTarget)
+			}
+			assertApplyNoMutation(t, fixture, fixture.run)
+
+			example := filepath.Join(
+				fixture.repository,
+				"modules",
+				"app",
+				"local.example",
+			)
+			if err := os.WriteFile(example, []byte("updated"), 0o600); err != nil {
+				t.Fatalf("os.WriteFile(example) error = %v", err)
+			}
+			beforeTarget = snapshotPaths(t, target)
+			code, stdout, stderr := fixture.run("apply")
+			if code != exitOK || stderr != "" {
+				t.Fatalf("apply after example update = (%d, %q, %q)", code, stdout, stderr)
+			}
+			assertCLINoMutationResult(t, stdout)
+			assertSnapshotUnchanged(t, beforeTarget)
+			if test.setup == nil {
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != "example" {
+					t.Fatalf("local after example update = (%q, %v), want original", data, err)
+				}
+			}
+		})
+	}
+}
+
+func TestAC10_AdoptDriftAndKindChangeThroughCLI(t *testing.T) {
+	t.Run("adopt then reject drift", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
 [[links]]
 id = "config"
 source = "config"
-target = "~/.idle"
-`, map[string]string{"config": "idle"})
-	fixture.writeMachine(t, []string{"base"}, nil)
-	target := filepath.Join(fixture.home, ".idle")
-	before := snapshotCLIPaths(t, fixture.config)
+target = "~/.app"
+`, map[string]string{"config": "config"})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target := filepath.Join(fixture.home, ".app")
+		destination := filepath.Join(fixture.repository, "modules", "app", "config")
+		if err := os.Symlink(destination, target); err != nil {
+			t.Fatalf("os.Symlink(desired) error = %v", err)
+		}
+		beforeTarget := snapshotPaths(t, target)
 
-	code, stdout, stderr := fixture.run("remove", "idle")
-	if code != exitOK ||
-		!strings.Contains(stdout, "state_changed=false") ||
-		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("remove inactive module = (%d, %q, %q), want no-op", code, stdout, stderr)
-	}
-	assertCLIPathsUnchanged(t, before)
-	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, target)
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitOK ||
+			!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
+			stderr == "" {
+			t.Fatalf("adopt apply = (%d, %q, %q)", code, stdout, stderr)
+		}
+		assertSnapshotUnchanged(t, beforeTarget)
+		assertApplyNoMutation(t, fixture, fixture.run)
 
-	code, stdout, stderr = fixture.run("remove", "idle")
-	if code != exitOK ||
-		!strings.Contains(stdout, "state_changed=false") ||
-		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("repeated remove inactive module = (%d, %q, %q), want no-op", code, stdout, stderr)
-	}
-	assertCLIPathsUnchanged(t, before)
-	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, target)
+		if err := os.Remove(target); err != nil {
+			t.Fatalf("os.Remove(target) error = %v", err)
+		}
+		userDestination := filepath.Join(fixture.root, "user-config")
+		writeCLIFile(t, userDestination, "user")
+		if err := os.Symlink(userDestination, target); err != nil {
+			t.Fatalf("os.Symlink(user destination) error = %v", err)
+		}
+		before := snapshotTree(t, fixture.root)
+		code, stdout, stderr = fixture.run("apply")
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+			t.Fatalf("apply after drift = (%d, %q, %q), want conflict", code, stdout, stderr)
+		}
+		assertSnapshotUnchanged(t, before)
+	})
+
+	t.Run("kind change conflicts", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[locals]]
+id = "shared"
+example = "local.example"
+target = "~/.shared"
+`, map[string]string{
+			"config":        "config",
+			"local.example": "local",
+		})
+		fixture.writeMachine(t, []string{"base"}, nil)
+
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("initial local apply = (%d, %q)", code, stderr)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+		writeModuleManifest(t, fixture, "app", `
+[[links]]
+id = "shared"
+source = "config"
+target = "~/.shared"
+`)
+		before := snapshotTree(t, fixture.root)
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+			t.Fatalf("apply after kind change = (%d, %q, %q), want conflict", code, stdout, stderr)
+		}
+		assertSnapshotUnchanged(t, before)
+	})
 }
 
-func TestAcceptance13_SelectionInterruptionConvergesOnRerun(t *testing.T) {
-	fixture := newCLIFixture(t, "base = []")
-	fixture.writeModule(t, "extra", `
+func TestAC11_ParentSymlinkDriftThroughCLI(t *testing.T) {
+	t.Run("active update is rejected", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "old"
+target = "~/alias/config"
+`, map[string]string{
+			"old": "old",
+			"new": "new",
+		})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		firstParent, secondParent, alias := makeParentAlias(t, fixture)
+
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("initial apply = (%d, %q)", code, stderr)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+		moveParentAlias(t, alias, secondParent)
+		oldDestination := filepath.Join(fixture.repository, "modules", "app", "old")
+		if err := os.Symlink(oldDestination, filepath.Join(secondParent, "config")); err != nil {
+			t.Fatalf("os.Symlink(second target) error = %v", err)
+		}
+		writeModuleManifest(t, fixture, "app", `
+[[links]]
+id = "config"
+source = "new"
+target = "~/alias/config"
+`)
+		before := snapshotTree(t, fixture.root)
+
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+			t.Fatalf("apply after parent drift = (%d, %q, %q), want conflict", code, stdout, stderr)
+		}
+		assertSnapshotUnchanged(t, before)
+		assertCLILink(t, filepath.Join(firstParent, "config"), oldDestination)
+		assertCLILink(t, filepath.Join(secondParent, "config"), oldDestination)
+	})
+
+	t.Run("stale prune warns and forgets", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
 [[links]]
 id = "config"
 source = "config"
-target = "~/.extra"
-`, map[string]string{"config": "extra"})
-	fixture.writeMachine(t, []string{"base"}, nil)
+target = "~/alias/config"
+`, map[string]string{"config": "config"})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		firstParent, secondParent, alias := makeParentAlias(t, fixture)
 
-	fixture.env.afterSelectionPublish = func() error {
-		return errors.New("injected interruption")
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("initial apply = (%d, %q)", code, stderr)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+		moveParentAlias(t, alias, secondParent)
+		destination := filepath.Join(fixture.repository, "modules", "app", "config")
+		if err := os.Symlink(destination, filepath.Join(secondParent, "config")); err != nil {
+			t.Fatalf("os.Symlink(second target) error = %v", err)
+		}
+		writeModuleManifest(t, fixture, "app", "")
+
+		code, _, stderr = fixture.run("apply")
+		if code != exitOK || !strings.Contains(stderr, "warning") {
+			t.Fatalf("apply stale parent drift = (%d, %q), want warning success", code, stderr)
+		}
+		assertCLILink(t, filepath.Join(firstParent, "config"), destination)
+		assertCLILink(t, filepath.Join(secondParent, "config"), destination)
+		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+			t.Fatalf("state modules = %#v, want stale ownership forgotten", modules)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+}
+
+func TestAC12_TargetConflictsFailBeforeMutationThroughCLI(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+		setup    func(*testing.T, *cliTestEnv)
+		want     string
+	}{
+		{
+			name: "lexically equal targets",
+			manifest: `
+[[links]]
+id = "first"
+source = "first"
+target = "~/.same"
+
+[[links]]
+id = "second"
+source = "second"
+target = "~/.config/../.same"
+`,
+		},
+		{
+			name: "resolved targets equal",
+			manifest: `
+[[links]]
+id = "first"
+source = "first"
+target = "~/real/config"
+
+[[links]]
+id = "second"
+source = "second"
+target = "~/alias/config"
+`,
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				if err := os.Mkdir(filepath.Join(fixture.home, "real"), 0o700); err != nil {
+					t.Fatalf("os.Mkdir(real) error = %v", err)
+				}
+				if err := os.Symlink("real", filepath.Join(fixture.home, "alias")); err != nil {
+					t.Fatalf("os.Symlink(alias) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "dangling ancestor aliases missing directory",
+			manifest: `
+[[links]]
+id = "first"
+source = "first"
+target = "~/alias/config"
+
+[[links]]
+id = "second"
+source = "second"
+target = "~/missing/config"
+`,
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				if err := os.Symlink("missing", filepath.Join(fixture.home, "alias")); err != nil {
+					t.Fatalf("os.Symlink(dangling ancestor) error = %v", err)
+				}
+			},
+			want: "path is blocked",
+		},
+		{
+			name: "directory link owns descendant target",
+			manifest: `
+[[links]]
+id = "first"
+source = "directory"
+target = "~/tree"
+
+[[links]]
+id = "second"
+source = "second"
+target = "~/tree/child"
+`,
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				root := filepath.Join(fixture.repository, "modules", "app")
+				if err := os.Mkdir(filepath.Join(root, "directory"), 0o700); err != nil {
+					t.Fatalf("os.Mkdir(directory source) error = %v", err)
+				}
+			},
+		},
 	}
-	code, stdout, stderr := fixture.runInjected("apply", "extra")
-	if code != exitError || stdout != "" || !strings.Contains(stderr, "selection was saved") {
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCLITestEnv(t, `base = ["app"]`)
+			fixture.writeModule(t, "app", test.manifest, map[string]string{
+				"first":  "first",
+				"second": "second",
+			})
+			fixture.writeMachine(t, []string{"base"}, nil)
+			if test.setup != nil {
+				test.setup(t, fixture)
+			}
+			before := snapshotTree(t, fixture.root)
+
+			code, stdout, stderr := fixture.run("apply")
+			want := test.want
+			if want == "" {
+				want = "conflict"
+			}
+			if code != exitError || stdout != "" || !strings.Contains(stderr, want) {
+				t.Fatalf("apply = (%d, %q, %q), want preflight %q failure", code, stdout, stderr, want)
+			}
+			assertSnapshotUnchanged(t, before)
+			assertCLIMissing(t, fixture.state)
+			assertCLIMissing(t, fixture.lock)
+		})
+	}
+}
+
+func TestAC12_InitRejectsControlPathAncestorsBeforeMutationThroughCLI(t *testing.T) {
+	tests := []struct {
+		name         string
+		target       string
+		existingLink bool
+		repository   func(*testing.T, *cliTestEnv) string
+	}{
+		{name: "missing machine-config ancestor", target: "~/.config"},
+		{name: "missing state-and-lock ancestor", target: "~/.local"},
+		{
+			name:         "existing managed machine-config ancestor",
+			target:       "~/.config",
+			existingLink: true,
+		},
+		{
+			name:   "repository inside target",
+			target: "~/managed",
+			repository: func(_ *testing.T, fixture *cliTestEnv) string {
+				return filepath.Join(fixture.home, "managed", "repository")
+			},
+		},
+		{
+			name:   "repository inside resolved target",
+			target: "~/alias/managed",
+			repository: func(t *testing.T, fixture *cliTestEnv) string {
+				actual := filepath.Join(fixture.root, "actual")
+				if err := os.Mkdir(actual, 0o700); err != nil {
+					t.Fatalf("os.Mkdir(actual) error = %v", err)
+				}
+				if err := os.Symlink(actual, filepath.Join(fixture.home, "alias")); err != nil {
+					t.Fatalf("os.Symlink(alias) error = %v", err)
+				}
+				return filepath.Join(actual, "managed", "repository")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCLITestEnv(t, `base = ["app"]`)
+			if test.repository != nil {
+				fixture.repository = test.repository(t, fixture)
+				writeCLIFile(
+					t,
+					filepath.Join(fixture.repository, "dot.toml"),
+					"version = 1\n[profiles]\nbase = [\"app\"]\n",
+				)
+			}
+			fixture.writeModule(t, "app", `
+[[links]]
+id = "root"
+source = "root"
+target = "`+test.target+`"
+`, nil)
+			source := filepath.Join(fixture.repository, "modules", "app", "root")
+			if err := os.Mkdir(source, 0o700); err != nil {
+				t.Fatalf("os.Mkdir(source) error = %v", err)
+			}
+			if test.existingLink {
+				target := filepath.Join(
+					fixture.home,
+					filepath.FromSlash(strings.TrimPrefix(test.target, "~/")),
+				)
+				if err := os.Symlink(source, target); err != nil {
+					t.Fatalf("os.Symlink(existing target) error = %v", err)
+				}
+			}
+			before := snapshotTree(t, fixture.root)
+
+			code, stdout, stderr := fixture.run(
+				"init",
+				fixture.repository,
+				"--profile",
+				"base",
+			)
+
+			if code != exitError ||
+				stdout != "" ||
+				!strings.Contains(stderr, "control path") {
+				t.Fatalf(
+					"init = (%d, %q, %q), want preflight control-boundary failure",
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertSnapshotUnchanged(t, before)
+			assertCLIMissing(t, fixture.config)
+			assertCLIMissing(t, fixture.state)
+			assertCLIMissing(t, fixture.lock)
+		})
+	}
+}
+
+func TestAC12_StaleStateTargetContainingControlPathIsReadOnlyThroughCLI(t *testing.T) {
+	for _, kind := range []state.Kind{state.KindLink, state.KindLocal} {
+		t.Run(string(kind), func(t *testing.T) {
+			fixture := newCLITestEnv(t, `base = []`)
+			fixture.writeMachine(t, []string{"base"}, nil)
+			target := filepath.Join(fixture.home, ".local")
+			record := state.Placement{
+				Kind:   kind,
+				Target: target,
+			}
+			if kind == state.KindLink {
+				record.ResolvedTarget = target
+				record.LinkDestination = filepath.Join(fixture.repository, "removed")
+			}
+			fixture.writeState(t, state.Snapshot{
+				Home: fixture.home,
+				Modules: map[string]state.Module{
+					"old": {Placements: map[string]state.Placement{
+						"stale": record,
+					}},
+				},
+			})
+			before := snapshotTree(t, fixture.root)
+
+			code, stdout, stderr := fixture.run("apply")
+
+			if code != exitError ||
+				stdout != "" ||
+				!strings.Contains(stderr, "control path") {
+				t.Fatalf(
+					"apply = (%d, %q, %q), want preflight control-boundary failure",
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertSnapshotUnchanged(t, before)
+			assertCLIMissing(t, fixture.lock)
+		})
+	}
+}
+
+func TestAC12_StatusReportsPathConflictThroughCLI(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["first", "second", "pending"]`)
+	fixture.writeModule(t, "first", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.same"
+`, map[string]string{"config": "first"})
+	fixture.writeModule(t, "second", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.same"
+`, map[string]string{"config": "second"})
+	fixture.writeModule(t, "pending", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.pending"
+`, map[string]string{"config": "pending"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK ||
+		!strings.Contains(stdout, "first  conflict") ||
+		!strings.Contains(stdout, "second  conflict") ||
+		!strings.Contains(stdout, "pending  pending") ||
+		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
-			"interrupted apply = (%d, %q, %q), want stderr-only persisted-selection failure",
+			"status = (%d, %q, %q), want conflict plus independent pending status",
 			code,
 			stdout,
 			stderr,
 		)
 	}
-	if extras := fixture.loadMachine(t).ExtraModules; !reflect.DeepEqual(extras, []string{"extra"}) {
-		t.Fatalf("extra_modules after interruption = %v, want [extra]", extras)
-	}
-	assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
+	assertSnapshotUnchanged(t, before)
 	assertCLIMissing(t, fixture.state)
-
-	fixture.env.afterSelectionPublish = nil
-	code, _, stderr = fixture.run("apply")
-	if code != exitOK {
-		t.Fatalf("recovery apply = (%d, %q)", code, stderr)
-	}
-	target := filepath.Join(fixture.home, ".extra")
-	assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "extra", "config"))
-	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
-	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("repeated recovery apply = (%d, %q)", code, stderr)
-	}
-	assertCLINoMutationResult(t, stdout)
-	assertCLIPathsUnchanged(t, before)
+	assertCLIMissing(t, fixture.lock)
 }
 
-func TestAcceptance15_LockBusyAndReadOnlyCommandsNeverCreateLock(t *testing.T) {
-	t.Run("second mutation fails", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = []")
+func TestAC13_InterruptedFactsConvergeAndRepeatThroughCLI(t *testing.T) {
+	t.Run("selection persisted before artifacts", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = []`)
+		fixture.writeModule(t, "extra", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.extra"
+`, map[string]string{"config": "extra"})
+		fixture.writeMachine(t, []string{"base"}, []string{"extra"})
+
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK || stderr == "" {
+			t.Fatalf("recovery apply = (%d, %q)", code, stderr)
+		}
+		assertCLILink(
+			t,
+			filepath.Join(fixture.home, ".extra"),
+			filepath.Join(fixture.repository, "modules", "extra", "config"),
+		)
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+
+	t.Run("link created before state commit", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "config"})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target := filepath.Join(fixture.home, ".app")
+		destination := filepath.Join(fixture.repository, "modules", "app", "config")
+		if err := os.Symlink(destination, target); err != nil {
+			t.Fatalf("os.Symlink(interrupted link) error = %v", err)
+		}
+
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitOK ||
+			!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
+			stderr == "" {
+			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
+		}
+		assertCLILink(t, target, destination)
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+
+	t.Run("local published before state commit", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[locals]]
+id = "local"
+example = "local.example"
+target = "~/.app.local"
+`, map[string]string{"local.example": "example"})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target := filepath.Join(fixture.home, ".app.local")
+		writeCLIFile(t, target, "personal")
+
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitOK ||
+			!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
+			stderr == "" {
+			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
+		}
+		if record := loadTestState(t, fixture).Modules["app"].Placements["local"]; record.Kind != state.KindLocal {
+			t.Fatalf("local state record = %#v, want local provenance", record)
+		}
+		if data, err := os.ReadFile(target); err != nil || string(data) != "personal" {
+			t.Fatalf("local = (%q, %v), want preserved personal bytes", data, err)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+
+	t.Run("updated link before state commit", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "new"
+target = "~/.app"
+`, map[string]string{
+			"old": "old",
+			"new": "new",
+		})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target := filepath.Join(fixture.home, ".app")
+		oldDestination := filepath.Join(fixture.repository, "modules", "app", "old")
+		newDestination := filepath.Join(fixture.repository, "modules", "app", "new")
+		if err := os.Symlink(newDestination, target); err != nil {
+			t.Fatalf("os.Symlink(updated link) error = %v", err)
+		}
+		writeLinkState(t, fixture, target, oldDestination)
+
+		code, stdout, stderr := fixture.run("apply")
+		if code != exitOK ||
+			!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
+			stderr != "" {
+			t.Fatalf("repair-state apply = (%d, %q, %q)", code, stdout, stderr)
+		}
+		record := loadTestState(t, fixture).Modules["app"].Placements["config"]
+		if record.LinkDestination != newDestination {
+			t.Fatalf("state destination = %q, want %q", record.LinkDestination, newDestination)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+
+	t.Run("old link deleted during update", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "new"
+target = "~/.app"
+`, map[string]string{
+			"old": "old",
+			"new": "new",
+		})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target := filepath.Join(fixture.home, ".app")
+		oldDestination := filepath.Join(fixture.repository, "modules", "app", "old")
+		writeLinkState(t, fixture, target, oldDestination)
+
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("recovery apply = (%d, %q)", code, stderr)
+		}
+		assertCLILink(
+			t,
+			target,
+			filepath.Join(fixture.repository, "modules", "app", "new"),
+		)
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+
+	t.Run("prune completed before state commit", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", "", map[string]string{"old": "old"})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target := filepath.Join(fixture.home, ".old")
+		oldDestination := filepath.Join(fixture.repository, "modules", "app", "old")
+		writeLinkState(t, fixture, target, oldDestination)
+
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("recovery apply = (%d, %q)", code, stderr)
+		}
+		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+			t.Fatalf("state modules = %#v, want stale record forgotten", modules)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+}
+
+func TestAC14_InvalidStateRejectsMutationThroughCLI(t *testing.T) {
+	tests := []struct {
+		name     string
+		document string
+		want     string
+	}{
+		{name: "corrupt", document: "{", want: "invalid state"},
+		{
+			name:     "legacy v1",
+			document: `{"version":1,"entries":{},"run_once":{}}`,
+			want:     "legacy state version",
+		},
+		{name: "too new", document: `{"version":3}`, want: "state version is newer"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCLITestEnv(t, `base = ["app"]`)
+			fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "config"})
+			fixture.writeMachine(t, []string{"base"}, nil)
+			writeCLIFile(t, fixture.state, test.document)
+			before := snapshotTree(t, fixture.root)
+
+			code, stdout, stderr := fixture.run("apply")
+			if code != exitError || stdout != "" || !strings.Contains(stderr, test.want) {
+				t.Fatalf("apply = (%d, %q, %q), want %q failure", code, stdout, stderr, test.want)
+			}
+			assertSnapshotUnchanged(t, before)
+			assertCLIMissing(t, fixture.lock)
+			assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+		})
+	}
+}
+
+func TestAC15_LockAndReadOnlyCommandsThroughCLI(t *testing.T) {
+	t.Run("second process fails on held mutation lock", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = []`)
 		fixture.writeMachine(t, []string{"base"}, nil)
 		owner, err := lock.Acquire(filepath.Dir(fixture.lock), fixture.lock)
 		if err != nil {
@@ -521,13 +1250,15 @@ func TestAcceptance15_LockBusyAndReadOnlyCommandsNeverCreateLock(t *testing.T) {
 		}()
 
 		code, stdout, stderr := fixture.runProcess("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "another dot process") {
-			t.Fatalf("locked apply = (%d, %q, %q), want stderr-only busy failure", code, stdout, stderr)
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "another dot process") {
+			t.Fatalf("locked apply = (%d, %q, %q), want lock failure", code, stdout, stderr)
 		}
 	})
 
 	t.Run("status and dry-run are strictly read-only", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = []")
+		fixture := newCLITestEnv(t, `base = []`)
 		fixture.writeModule(t, "extra", `
 [[links]]
 id = "config"
@@ -535,57 +1266,56 @@ source = "config"
 target = "~/.extra"
 `, map[string]string{"config": "extra"})
 		fixture.writeMachine(t, []string{"base"}, nil)
-		before := snapshotCLITree(t, fixture.root)
+		before := snapshotTree(t, fixture.root)
 
 		code, _, stderr := fixture.run("status")
 		if code != exitOK || stderr == "" {
 			t.Fatalf("status = (%d, %q)", code, stderr)
 		}
 		code, stdout, stderr := fixture.run("apply", "extra", "--dry-run")
-		if code != exitOK || !strings.Contains(stdout, "create-link") || stderr == "" {
+		if code != exitOK ||
+			!strings.Contains(stdout, "create-link") ||
+			stderr == "" {
 			t.Fatalf("dry-run = (%d, %q, %q)", code, stdout, stderr)
 		}
-		assertCLITreeUnchanged(t, before)
+		assertSnapshotUnchanged(t, before)
 		assertCLIMissing(t, fixture.lock)
 		assertCLIMissing(t, fixture.state)
 		assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
 		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-			t.Fatalf("dry-run extra_modules = %v, want unchanged", extras)
+			t.Fatalf("extra_modules = %v, want unchanged", extras)
 		}
 	})
 }
 
-func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *testing.T) {
-	t.Run("active profile references missing module", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = [\"gone\"]")
+func TestAC16_DeletedProfileFailsAndDeletedExtraCleansThroughCLI(t *testing.T) {
+	t.Run("active profile references deleted module", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["gone"]`)
 		fixture.writeMachine(t, []string{"base"}, nil)
-		before := snapshotCLITree(t, fixture.root)
+		before := snapshotTree(t, fixture.root)
 
 		code, stdout, stderr := fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "references missing module") {
-			t.Fatalf(
-				"apply = (%d, %q, %q), want stderr-only missing profile module failure",
-				code,
-				stdout,
-				stderr,
-			)
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "references missing module") {
+			t.Fatalf("apply = (%d, %q, %q), want missing profile failure", code, stdout, stderr)
 		}
-		assertCLITreeUnchanged(t, before)
+		assertSnapshotUnchanged(t, before)
 		assertCLIMissing(t, fixture.state)
 		assertCLIMissing(t, fixture.lock)
 	})
 
-	t.Run("deleted manifest with extra and state cleans safely", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = []")
+	t.Run("deleted extra and state are removable", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = []`)
 		fixture.writeMachine(t, []string{"base"}, []string{"gone"})
 		target := filepath.Join(fixture.home, ".gone")
 		destination := filepath.Join(fixture.repository, "modules", "gone", "removed")
 		if err := os.Symlink(destination, target); err != nil {
-			t.Fatalf("os.Symlink() error = %v", err)
+			t.Fatalf("os.Symlink(stale target) error = %v", err)
 		}
 		resolved, err := corepaths.ResolveTarget(fixture.home, "~/.gone")
 		if err != nil {
-			t.Fatalf("ResolveTarget() error = %v", err)
+			t.Fatalf("ResolveTarget(stale target) error = %v", err)
 		}
 		fixture.writeState(t, state.Snapshot{
 			Home: fixture.home,
@@ -609,787 +1339,294 @@ func TestAcceptance16_ProfileMissingFailsAndDeletedExtraStateCanBeRemoved(t *tes
 		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 			t.Fatalf("extra_modules = %v, want empty", extras)
 		}
-		loaded, err := state.Load(fixture.state, fixture.home)
-		if err != nil {
-			t.Fatalf("state.Load() error = %v", err)
+		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+			t.Fatalf("state modules = %#v, want empty", modules)
 		}
-		if _, exists := loaded.Snapshot.Modules["gone"]; exists {
-			t.Fatalf("state still contains gone: %#v", loaded.Snapshot)
-		}
-		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock)
-		code, stdout, stderr := fixture.run("apply")
-		if code != exitOK || stderr != "" {
-			t.Fatalf("apply after deleted-module cleanup = (%d, %q)", code, stderr)
-		}
-		assertCLINoMutationResult(t, stdout)
-		assertCLIPathsUnchanged(t, before)
-		assertCLIMissing(t, target)
-	})
-
-	t.Run("multiple deleted extras can be removed one by one", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = []")
-		fixture.writeModule(t, "kept", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.kept"
-`, map[string]string{"config": "kept"})
-		fixture.writeMachine(t, []string{"base"}, []string{"gone-one", "gone-two", "kept"})
-		targets := map[string]string{
-			"gone-one": filepath.Join(fixture.home, ".gone-one"),
-			"gone-two": filepath.Join(fixture.home, ".gone-two"),
-		}
-		modules := make(map[string]state.Module, len(targets))
-		for moduleID, target := range targets {
-			destination := filepath.Join(
-				fixture.repository,
-				"modules",
-				moduleID,
-				"removed",
-			)
-			if err := os.Symlink(destination, target); err != nil {
-				t.Fatalf("os.Symlink() error = %v", err)
-			}
-			resolved, err := corepaths.ResolveTarget(fixture.home, "~/"+filepath.Base(target))
-			if err != nil {
-				t.Fatalf("ResolveTarget() error = %v", err)
-			}
-			modules[moduleID] = state.Module{Placements: map[string]state.Placement{
-				"config": {
-					Kind:            state.KindLink,
-					Target:          target,
-					ResolvedTarget:  resolved.Resolved(),
-					LinkDestination: destination,
-				},
-			}}
-		}
-		keptTarget := filepath.Join(fixture.home, ".kept")
-		keptDestination := filepath.Join(fixture.repository, "modules", "kept", "config")
-		if err := os.Symlink(keptDestination, keptTarget); err != nil {
-			t.Fatalf("os.Symlink() error = %v", err)
-		}
-		keptResolved, err := corepaths.ResolveTarget(fixture.home, "~/.kept")
-		if err != nil {
-			t.Fatalf("ResolveTarget() error = %v", err)
-		}
-		modules["kept"] = state.Module{Placements: map[string]state.Placement{
-			"config": {
-				Kind:            state.KindLink,
-				Target:          keptTarget,
-				ResolvedTarget:  keptResolved.Resolved(),
-				LinkDestination: keptDestination,
-			},
-		}}
-		fixture.writeState(t, state.Snapshot{Home: fixture.home, Modules: modules})
-
-		code, _, stderr := fixture.run("remove", "gone-one")
-		if code != exitOK {
-			t.Fatalf("remove gone-one = (%d, %q)", code, stderr)
-		}
-		assertCLIMissing(t, targets["gone-one"])
-		assertCLILink(
-			t,
-			targets["gone-two"],
-			filepath.Join(fixture.repository, "modules", "gone-two", "removed"),
-		)
-		if extras := fixture.loadMachine(t).ExtraModules; !reflect.DeepEqual(
-			extras,
-			[]string{"gone-two", "kept"},
-		) {
-			t.Fatalf("extra_modules after first remove = %v, want [gone-two kept]", extras)
-		}
-		loaded, err := state.Load(fixture.state, fixture.home)
-		if err != nil {
-			t.Fatalf("state.Load() error = %v", err)
-		}
-		if _, exists := loaded.Snapshot.Modules["gone-one"]; exists {
-			t.Fatalf("state still contains gone-one: %#v", loaded.Snapshot)
-		}
-		if _, exists := loaded.Snapshot.Modules["gone-two"]; !exists {
-			t.Fatalf("state lost gone-two: %#v", loaded.Snapshot)
-		}
-		if _, exists := loaded.Snapshot.Modules["kept"]; !exists {
-			t.Fatalf("state lost kept: %#v", loaded.Snapshot)
-		}
-		assertCLILink(t, keptTarget, keptDestination)
-
-		code, _, stderr = fixture.run("remove", "gone-two")
-		if code != exitOK {
-			t.Fatalf("remove gone-two = (%d, %q)", code, stderr)
-		}
-		assertCLIMissing(t, targets["gone-two"])
-		if extras := fixture.loadMachine(t).ExtraModules; !reflect.DeepEqual(
-			extras,
-			[]string{"kept"},
-		) {
-			t.Fatalf("extra_modules after second remove = %v, want [kept]", extras)
-		}
-		loaded, err = state.Load(fixture.state, fixture.home)
-		if err != nil {
-			t.Fatalf("state.Load() error = %v", err)
-		}
-		if _, exists := loaded.Snapshot.Modules["kept"]; !exists ||
-			len(loaded.Snapshot.Modules) != 1 {
-			t.Fatalf("state modules after cleanup = %#v, want only kept", loaded.Snapshot.Modules)
-		}
-		assertCLILink(t, keptTarget, keptDestination)
-
-		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, keptTarget)
-		code, stdout, stderr := fixture.run("apply")
-		if code != exitOK || stderr != "" {
-			t.Fatalf("apply after multi-module cleanup = (%d, %q)", code, stderr)
-		}
-		assertCLINoMutationResult(t, stdout)
-		assertCLIPathsUnchanged(t, before)
-	})
-
-	t.Run("remaining malformed extra still blocks deleted cleanup", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = []")
-		fixture.writeMachine(t, []string{"base"}, []string{"broken", "gone"})
-		writeCLIFile(
-			t,
-			filepath.Join(fixture.repository, "modules", "broken", "module.toml"),
-			"unknown = true\n",
-		)
-		target := filepath.Join(fixture.home, ".gone")
-		destination := filepath.Join(fixture.repository, "modules", "gone", "removed")
-		if err := os.Symlink(destination, target); err != nil {
-			t.Fatalf("os.Symlink() error = %v", err)
-		}
-		resolved, err := corepaths.ResolveTarget(fixture.home, "~/.gone")
-		if err != nil {
-			t.Fatalf("ResolveTarget() error = %v", err)
-		}
-		fixture.writeState(t, state.Snapshot{
-			Home: fixture.home,
-			Modules: map[string]state.Module{
-				"gone": {Placements: map[string]state.Placement{
-					"config": {
-						Kind:            state.KindLink,
-						Target:          target,
-						ResolvedTarget:  resolved.Resolved(),
-						LinkDestination: destination,
-					},
-				}},
-			},
-		})
-		before := snapshotCLITree(t, fixture.root)
-
-		code, stdout, stderr := fixture.run("remove", "gone")
-		if code != exitError ||
-			stdout != "" ||
-			!strings.Contains(stderr, "broken") {
-			t.Fatalf(
-				"remove gone with broken extra = (%d, %q, %q), want strict loading failure",
-				code,
-				stdout,
-				stderr,
-			)
-		}
-		assertCLITreeUnchanged(t, before)
+		assertApplyNoMutation(t, fixture, fixture.run)
 	})
 }
 
-func TestAcceptance17And18_ScopedLoadingIgnoresUnrelatedBrokenModuleButRejectsTarget(t *testing.T) {
-	fixture := newCLIFixture(t, "base = []")
-	fixture.writeModule(t, "extra", `
+func TestAC17_ScopedApplyAndRemoveIgnoreBrokenOutOfScopeModule(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	fixture.writeModule(t, "apply-good", `
 [[links]]
 id = "config"
 source = "config"
-target = "~/.extra"
-`, map[string]string{"config": "extra"})
+target = "~/.apply-good"
+`, map[string]string{"config": "apply-good"})
+	fixture.writeModule(t, "remove-good", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.remove-good"
+`, map[string]string{"config": "remove-good"})
 	writeCLIFile(
 		t,
 		filepath.Join(fixture.repository, "modules", "broken", "module.toml"),
 		"unknown = true\n",
 	)
-	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeMachine(t, []string{"base"}, []string{"remove-good"})
 
-	code, _, stderr := fixture.run("apply", "extra")
+	code, _, stderr := fixture.run("apply", "apply-good")
 	if code != exitOK {
-		t.Fatalf("apply extra with unrelated broken module = (%d, %q)", code, stderr)
+		t.Fatalf("scoped apply with broken out-of-scope module = (%d, %q)", code, stderr)
 	}
 	assertCLILink(
 		t,
-		filepath.Join(fixture.home, ".extra"),
-		filepath.Join(fixture.repository, "modules", "extra", "config"),
+		filepath.Join(fixture.home, ".apply-good"),
+		filepath.Join(fixture.repository, "modules", "apply-good", "config"),
 	)
+	assertApplyNoMutation(t, fixture, fixture.run, "apply-good")
 
-	before := snapshotCLIPaths(t, fixture.config, fixture.state, filepath.Join(fixture.home, ".extra"))
+	code, _, stderr = fixture.run("apply", "remove-good")
+	if code != exitOK {
+		t.Fatalf("scoped apply remove-good = (%d, %q)", code, stderr)
+	}
+	assertApplyNoMutation(t, fixture, fixture.run, "remove-good")
+
+	code, _, stderr = fixture.run("remove", "remove-good")
+	if code != exitOK {
+		t.Fatalf("remove with broken out-of-scope module = (%d, %q)", code, stderr)
+	}
+	assertCLIMissing(t, filepath.Join(fixture.home, ".remove-good"))
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
+		extras[0] != "apply-good" {
+		t.Fatalf("extra_modules = %v, want [apply-good]", extras)
+	}
+	assertApplyNoMutation(t, fixture, fixture.run)
+
+	before := snapshotTree(t, fixture.root)
 	code, stdout, stderr := fixture.run("apply", "broken")
 	if code != exitError ||
 		stdout != "" ||
-		!strings.Contains(stderr, `invalid configuration: module "broken"`) {
-		t.Fatalf("apply broken = (%d, %q, %q), want stderr-only strict target error", code, stdout, stderr)
+		!strings.Contains(stderr, `module "broken"`) {
+		t.Fatalf("explicit broken apply = (%d, %q, %q), want strict failure", code, stdout, stderr)
 	}
-	assertCLIPathsUnchanged(t, before)
+	assertSnapshotUnchanged(t, before)
+}
 
-	fixture.writeModule(t, "missing-source", `
+func TestAC18_InvalidSourcesAndExamplesRejectMutationThroughCLI(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+		files    map[string]string
+		setup    func(*testing.T, *cliTestEnv)
+	}{
+		{
+			name: "missing link source",
+			manifest: `
 [[links]]
 id = "config"
 source = "missing"
-target = "~/.missing-source"
-`, nil)
-	before = snapshotCLIPaths(t, fixture.config, fixture.state, filepath.Join(fixture.home, ".extra"))
-	code, stdout, stderr = fixture.run("apply", "missing-source")
-	if code != exitError || stdout != "" || !strings.Contains(stderr, "inspect source") {
-		t.Fatalf(
-			"apply missing-source = (%d, %q, %q), want stderr-only source error",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertCLIPathsUnchanged(t, before)
-	assertCLIMissing(t, filepath.Join(fixture.home, ".missing-source"))
-}
-
-func TestB6ExitCodesAndStatusConflict(t *testing.T) {
-	fixture := newCLIFixture(t, "base = [\"app\"]")
-	fixture.writeModule(t, "app", `
+target = "~/.invalid"
+`,
+		},
+		{
+			name: "link source is symlink",
+			manifest: `
 [[links]]
 id = "config"
-source = "config"
-target = "~/.app"
-`, map[string]string{"config": "portable"})
-	fixture.writeMachine(t, []string{"base"}, nil)
-	writeCLIFile(t, filepath.Join(fixture.home, ".app"), "personal")
-
-	for _, args := range [][]string{
-		{"apply", "one", "two"},
-		{"remove"},
-		{"apply", "--unknown"},
-		{"init", fixture.repository},
-		{"version", "extra"},
-		{"help", "does-not-exist"},
-		{"help", "apply", "extra"},
-		{"unknown"},
-	} {
-		code, stdout, stderr := fixture.run(args...)
-		if code != exitUsage || stdout != "" || stderr == "" {
-			t.Fatalf(
-				"run(%v) = (%d, %q, %q), want stderr-only usage error",
-				args,
-				code,
-				stdout,
-				stderr,
-			)
-		}
-	}
-	code, stdout, stderr := fixture.run("apply", "missing")
-	if code != exitError || stdout != "" || stderr == "" {
-		t.Fatalf(
-			"apply missing = (%d, %q, %q), want stderr-only runtime error",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	code, stdout, stderr = fixture.run("status")
-	if code != exitOK || !strings.Contains(stdout, "conflict") || stderr == "" {
-		t.Fatalf("status conflict = (%d, %q, %q), want successful status", code, stdout, stderr)
-	}
-}
-
-func TestB6EmptyOptionalModuleIsRejectedWithoutMutation(t *testing.T) {
-	for _, args := range [][]string{
-		{"apply", ""},
-		{"apply", "", "--dry-run"},
-		{"status", ""},
-	} {
-		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			fixture := newCLIFixture(t, "base = [\"app\"]")
-			fixture.writeModule(t, "app", `
+source = "alias"
+target = "~/.invalid"
+`,
+			files: map[string]string{"real": "real"},
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				root := filepath.Join(fixture.repository, "modules", "app")
+				if err := os.Symlink("real", filepath.Join(root, "alias")); err != nil {
+					t.Fatalf("os.Symlink(source alias) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "link source is special",
+			manifest: `
 [[links]]
 id = "config"
-source = "config"
-target = "~/.app"
-`, map[string]string{"config": "portable"})
+source = "fifo"
+target = "~/.invalid"
+`,
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				root := filepath.Join(fixture.repository, "modules", "app")
+				if err := syscall.Mkfifo(filepath.Join(root, "fifo"), 0o600); err != nil {
+					t.Fatalf("syscall.Mkfifo(link source) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "missing local example",
+			manifest: `
+[[locals]]
+id = "local"
+example = "missing.example"
+target = "~/.invalid"
+`,
+		},
+		{
+			name: "local example is directory",
+			manifest: `
+[[locals]]
+id = "local"
+example = "example"
+target = "~/.invalid"
+`,
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				root := filepath.Join(fixture.repository, "modules", "app")
+				if err := os.Mkdir(filepath.Join(root, "example"), 0o700); err != nil {
+					t.Fatalf("os.Mkdir(example) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "local example is symlink",
+			manifest: `
+[[locals]]
+id = "local"
+example = "alias.example"
+target = "~/.invalid"
+`,
+			files: map[string]string{"real.example": "real"},
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				root := filepath.Join(fixture.repository, "modules", "app")
+				if err := os.Symlink(
+					"real.example",
+					filepath.Join(root, "alias.example"),
+				); err != nil {
+					t.Fatalf("os.Symlink(example alias) error = %v", err)
+				}
+			},
+		},
+		{
+			name: "local example is special",
+			manifest: `
+[[locals]]
+id = "local"
+example = "fifo.example"
+target = "~/.invalid"
+`,
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				root := filepath.Join(fixture.repository, "modules", "app")
+				if err := syscall.Mkfifo(
+					filepath.Join(root, "fifo.example"),
+					0o600,
+				); err != nil {
+					t.Fatalf("syscall.Mkfifo(local example) error = %v", err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCLITestEnv(t, `base = ["app"]`)
+			fixture.writeModule(t, "app", test.manifest, test.files)
 			fixture.writeMachine(t, []string{"base"}, nil)
-			before := snapshotCLITree(t, fixture.root)
+			if test.setup != nil {
+				test.setup(t, fixture)
+			}
+			before := snapshotTree(t, fixture.root)
 
-			code, stdout, stderr := fixture.run(args...)
+			code, stdout, stderr := fixture.run("apply")
 			if code != exitError ||
 				stdout != "" ||
-				!strings.Contains(stderr, "invalid") ||
-				!strings.Contains(stderr, "module ID") {
-				t.Fatalf(
-					"run(%q) = (%d, %q, %q), want stderr-only invalid module failure",
-					args,
-					code,
-					stdout,
-					stderr,
-				)
+				(!strings.Contains(stderr, "source") &&
+					!strings.Contains(stderr, "example")) {
+				t.Fatalf("apply = (%d, %q, %q), want strict source/example failure", code, stdout, stderr)
 			}
-			assertCLITreeUnchanged(t, before)
+			assertSnapshotUnchanged(t, before)
 			assertCLIMissing(t, fixture.state)
 			assertCLIMissing(t, fixture.lock)
-			assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+			assertCLIMissing(t, filepath.Join(fixture.home, ".invalid"))
 		})
 	}
 }
 
-func TestB6MutationOutputFailureAdvisesRerun(t *testing.T) {
-	t.Run("init", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = [\"app\"]")
-		fixture.writeModule(t, "app", `
+func TestAC19_UnknownPlatformAndInvalidOSThroughCLI(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["portable", "gated"]`)
+	fixture.writeModule(t, "portable", `
 [[links]]
 id = "config"
 source = "config"
-target = "~/.app"
+target = "~/.portable"
 `, map[string]string{"config": "portable"})
+	fixture.writeModule(t, "gated", `
+[variants.ubuntu]
+root = "."
 
-		stderr := runCLIWithFailedStdout(
-			t,
-			[]string{"init", fixture.repository, "--profile", "base"},
-		)
-		assertCLIOutputFailure(t, stderr, "dot apply")
-		target := filepath.Join(fixture.home, ".app")
-		assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "app", "config"))
+[variants.ubuntu.match]
+os = ["linux"]
+distro = ["ubuntu"]
 
-		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
-		code, stdout, stderr := fixture.run("apply")
-		if code != exitOK || stderr != "" {
-			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
-		}
-		assertCLINoMutationResult(t, stdout)
-		assertCLIPathsUnchanged(t, before)
-	})
-
-	t.Run("apply", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = [\"app\"]")
-		fixture.writeModule(t, "app", `
-[[links]]
+[[variants.ubuntu.links]]
 id = "config"
 source = "config"
-target = "~/.app"
-`, map[string]string{"config": "portable"})
-		fixture.writeMachine(t, []string{"base"}, nil)
-
-		stderr := runCLIWithFailedStdout(t, []string{"apply"})
-		assertCLIOutputFailure(t, stderr, "dot apply")
-		target := filepath.Join(fixture.home, ".app")
-		assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "app", "config"))
-
-		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
-		code, stdout, stderr := fixture.run("apply")
-		if code != exitOK || stderr != "" {
-			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
-		}
-		assertCLINoMutationResult(t, stdout)
-		assertCLIPathsUnchanged(t, before)
-	})
-
-	t.Run("remove", func(t *testing.T) {
-		fixture := newCLIFixture(t, "base = []")
-		fixture.writeModule(t, "app", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.app"
-`, map[string]string{"config": "portable"})
-		fixture.writeMachine(t, []string{"base"}, []string{"app"})
-		code, _, stderr := fixture.run("apply")
-		if code != exitOK {
-			t.Fatalf("initial apply = (%d, %q)", code, stderr)
-		}
-
-		stderr = runCLIWithFailedStdout(t, []string{"remove", "app"})
-		assertCLIOutputFailure(t, stderr, "dot remove app")
-		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
-		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-			t.Fatalf("extra_modules = %v, want empty", extras)
-		}
-
-		before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock)
-		code, stdout, stderr := fixture.run("remove", "app")
-		if code != exitOK || stderr != "" {
-			t.Fatalf("recovery remove = (%d, %q, %q)", code, stdout, stderr)
-		}
-		assertCLINoMutationResult(t, stdout)
-		assertCLIPathsUnchanged(t, before)
-	})
-}
-
-func TestB6HelpListsOnlyPublicCommands(t *testing.T) {
-	fixture := newCLIFixture(t, "")
-	code, stdout, stderr := fixture.run("help")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("help = (%d, %q)", code, stderr)
+target = "~/.gated"
+`, map[string]string{"config": "gated"})
+	fixture.writeModule(t, "invalid-os", `
+[match]
+os = ["freebsd"]
+`, nil)
+	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.env.platform = func() config.Platform {
+		return config.Platform{OS: "linux", Distro: "gentoo", Arch: "riscv64"}
 	}
-	for _, command := range []string{"init", "status", "apply", "remove", "version"} {
-		if !strings.Contains(stdout, command) {
-			t.Fatalf("help missing %q:\n%s", command, stdout)
-		}
-	}
-	for _, removed := range []string{"add", "doctor", "diff"} {
-		if strings.Contains(stdout, "\n  "+removed+" ") {
-			t.Fatalf("help still lists %q:\n%s", removed, stdout)
-		}
-	}
-}
 
-func TestB6PublicRunBlackBoxUsesSyntheticHome(t *testing.T) {
-	fixture := newCLIFixture(t, "base = [\"app\"]")
-	fixture.writeModule(t, "app", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.app"
-`, map[string]string{"config": "portable"})
-	t.Setenv("HOME", fixture.home)
-
-	var stdout, stderr bytes.Buffer
-	code := Run(
-		[]string{"init", fixture.repository, "--profile", "base"},
-		strings.NewReader(""),
-		&stdout,
-		&stderr,
+	code, _, stderr := fixture.runInjected("apply")
+	if code != exitOK || stderr == "" {
+		t.Fatalf("unknown-platform apply = (%d, %q)", code, stderr)
+	}
+	assertCLILink(
+		t,
+		filepath.Join(fixture.home, ".portable"),
+		filepath.Join(fixture.repository, "modules", "portable", "config"),
 	)
-	if code != exitOK {
-		t.Fatalf("Run(init) = %d, stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	assertCLIMissing(t, filepath.Join(fixture.home, ".gated"))
+	code, stdout, stderr := fixture.runInjected("status")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "portable  converged") ||
+		!strings.Contains(stdout, "gated  not-applicable") {
+		t.Fatalf("unknown-platform status = (%d, %q, %q)", code, stdout, stderr)
 	}
-	target := filepath.Join(fixture.home, ".app")
-	assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "app", "config"))
-	before := snapshotCLIPaths(t, fixture.config, fixture.state, fixture.lock, target)
+	assertApplyNoMutation(t, fixture, fixture.runInjected)
 
-	stdout.Reset()
-	stderr.Reset()
-	code = Run([]string{"apply"}, strings.NewReader(""), &stdout, &stderr)
-	if code != exitOK || stderr.String() != "" {
-		t.Fatalf("Run(apply) = %d, stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	before := snapshotTree(t, fixture.root)
+	code, stdout, stderr = fixture.runInjected("apply", "invalid-os")
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(stderr, "unsupported os token") {
+		t.Fatalf("invalid-os apply = (%d, %q, %q), want strict config failure", code, stdout, stderr)
 	}
-	assertCLINoMutationResult(t, stdout.String())
-	assertCLIPathsUnchanged(t, before)
-}
-
-type cliFixture struct {
-	root       string
-	home       string
-	repository string
-	config     string
-	state      string
-	lock       string
-	env        environment
-}
-
-func newCLIFixture(t *testing.T, profiles string) *cliFixture {
-	t.Helper()
-	root := t.TempDir()
-	fixture := &cliFixture{
-		root:       root,
-		home:       filepath.Join(root, "home"),
-		repository: filepath.Join(root, "repository"),
-	}
-	fixture.config = filepath.Join(fixture.home, ".config", "dot", "config.toml")
-	fixture.state = filepath.Join(fixture.home, ".local", "state", "dot", "state.json")
-	fixture.lock = filepath.Join(fixture.home, ".local", "state", "dot", "lock")
-	for _, directory := range []string{fixture.home, fixture.repository} {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
-		}
-	}
-	writeCLIFile(t, filepath.Join(fixture.repository, "dot.toml"), "version = 1\n[profiles]\n"+profiles+"\n")
-	fixture.env = environment{
-		stdin: strings.NewReader(""),
-		getwd: func() (string, error) { return fixture.repository, nil },
-		userHomeDir: func() (string, error) {
-			return fixture.home, nil
-		},
-		platform: func() config.Platform {
-			return config.Platform{OS: "linux", Distro: "ubuntu", Arch: "x86_64"}
-		},
-		build: buildinfo.Info{Version: "test", Commit: "test", BuildTime: "test"},
-	}
-	t.Setenv("HOME", fixture.home)
-	return fixture
-}
-
-func (fixture *cliFixture) run(args ...string) (int, string, string) {
-	var stdout, stderr bytes.Buffer
-	code := Run(args, strings.NewReader(""), &stdout, &stderr)
-	return code, stdout.String(), stderr.String()
-}
-
-func (fixture *cliFixture) runInjected(args ...string) (int, string, string) {
-	var stdout, stderr bytes.Buffer
-	env := fixture.env
-	env.stdout = &stdout
-	env.stderr = &stderr
-	code := run(args, env)
-	return code, stdout.String(), stderr.String()
-}
-
-func (fixture *cliFixture) runProcess(args ...string) (int, string, string) {
-	return fixture.runProcessAt("", args...)
-}
-
-func (fixture *cliFixture) runProcessAt(
-	directory string,
-	args ...string,
-) (int, string, string) {
-	commandArgs := []string{"-test.run=^TestCLIHelperProcess$", "--"}
-	commandArgs = append(commandArgs, args...)
-	command := exec.Command(os.Args[0], commandArgs...)
-	command.Dir = directory
-	command.Env = append(os.Environ(), "DOT_CLI_HELPER_PROCESS=1")
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err := command.Run()
-	if err == nil {
-		return exitOK, stdout.String(), stderr.String()
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode(), stdout.String(), stderr.String()
-	}
-	return -1, stdout.String(), stderr.String() + err.Error()
-}
-
-func TestCLIHelperProcess(t *testing.T) {
-	if os.Getenv("DOT_CLI_HELPER_PROCESS") != "1" {
-		return
-	}
-	separator := slicesIndex(os.Args, "--")
-	if separator < 0 {
-		os.Exit(exitUsage)
-	}
-	os.Exit(Run(os.Args[separator+1:], os.Stdin, os.Stdout, os.Stderr))
-}
-
-func slicesIndex(values []string, target string) int {
-	for index, value := range values {
-		if value == target {
-			return index
-		}
-	}
-	return -1
-}
-
-func (fixture *cliFixture) writeMachine(t *testing.T, profiles, extras []string) {
-	t.Helper()
-	if _, err := config.PublishMachine(fixture.config, config.Machine{
-		Version:      1,
-		Repository:   fixture.repository,
-		Profiles:     append([]string(nil), profiles...),
-		ExtraModules: append([]string(nil), extras...),
-	}); err != nil {
-		t.Fatalf("PublishMachine() error = %v", err)
+	assertSnapshotUnchanged(t, before)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
 	}
 }
 
-func (fixture *cliFixture) loadMachine(t *testing.T) config.Machine {
-	t.Helper()
-	machine, exists, err := config.LoadMachine(fixture.config)
-	if err != nil || !exists {
-		t.Fatalf("LoadMachine() = (%#v, %t, %v)", machine, exists, err)
-	}
-	return machine
-}
-
-func (fixture *cliFixture) writeModule(
+func makeParentAlias(
 	t *testing.T,
-	id, manifest string,
-	files map[string]string,
-) {
+	fixture *cliTestEnv,
+) (firstParent, secondParent, alias string) {
 	t.Helper()
-	root := filepath.Join(fixture.repository, "modules", id)
-	writeCLIFile(t, filepath.Join(root, "module.toml"), strings.TrimSpace(manifest)+"\n")
-	for relative, content := range files {
-		writeCLIFile(t, filepath.Join(root, filepath.FromSlash(relative)), content)
-	}
-}
-
-func (fixture *cliFixture) writeState(t *testing.T, snapshot state.Snapshot) {
-	t.Helper()
-	data, err := state.Marshal(snapshot)
-	if err != nil {
-		t.Fatalf("state.Marshal() error = %v", err)
-	}
-	writeCLIFile(t, fixture.state, string(data))
-}
-
-func writeCLIFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(%q) error = %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
-	}
-}
-
-func assertCLILink(t *testing.T, target, destination string) {
-	t.Helper()
-	actual, err := os.Readlink(target)
-	if err != nil {
-		t.Fatalf("os.Readlink(%q) error = %v", target, err)
-	}
-	if actual != destination {
-		t.Fatalf("link %q = %q, want %q", target, actual, destination)
-	}
-}
-
-func assertCLIMissing(t *testing.T, path string) {
-	t.Helper()
-	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("path %q error = %v, want missing", path, err)
-	}
-}
-
-type cliFailedWriter struct{}
-
-func (cliFailedWriter) Write([]byte) (int, error) {
-	return 0, errors.New("synthetic stdout failure")
-}
-
-func runCLIWithFailedStdout(t *testing.T, args []string) string {
-	t.Helper()
-	var stderr bytes.Buffer
-	code := Run(args, strings.NewReader(""), cliFailedWriter{}, &stderr)
-	if code != exitError {
-		t.Fatalf("Run(%q) = %d, want %d", args, code, exitError)
-	}
-	return stderr.String()
-}
-
-func assertCLIOutputFailure(t *testing.T, stderr, rerun string) {
-	t.Helper()
-	if !strings.Contains(stderr, "may be partially complete") ||
-		!strings.Contains(stderr, "result output failed") ||
-		!strings.Contains(stderr, "synthetic stdout failure") ||
-		!strings.Contains(stderr, "rerun "+rerun) {
-		t.Fatalf("stderr = %q, want partial-completion advice for %q", stderr, rerun)
-	}
-}
-
-type cliPathSnapshot struct {
-	path     string
-	info     fs.FileInfo
-	mode     fs.FileMode
-	data     string
-	link     string
-	modified int64
-	size     int64
-}
-
-type cliTreeSnapshot struct {
-	root    string
-	entries []cliPathSnapshot
-}
-
-func snapshotCLITree(t *testing.T, root string) cliTreeSnapshot {
-	t.Helper()
-	// The full entry set catches retained artifacts; directory identity and mtime
-	// also expose temporary entries that were created and removed between snapshots.
-	var paths []string
-	if err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		paths = append(paths, path)
-		return nil
-	}); err != nil {
-		t.Fatalf("filepath.WalkDir(%q) error = %v", root, err)
-	}
-	return cliTreeSnapshot{
-		root:    root,
-		entries: snapshotCLIExactPaths(t, paths...),
-	}
-}
-
-func snapshotCLIPaths(t *testing.T, paths ...string) []cliPathSnapshot {
-	t.Helper()
-	expanded := make([]string, 0, len(paths)*2)
-	seen := make(map[string]bool, len(paths)*2)
-	for _, path := range paths {
-		for _, candidate := range []string{path, filepath.Dir(path)} {
-			if seen[candidate] {
-				continue
-			}
-			seen[candidate] = true
-			expanded = append(expanded, candidate)
+	firstParent = filepath.Join(fixture.root, "first-parent")
+	secondParent = filepath.Join(fixture.root, "second-parent")
+	for _, directory := range []string{firstParent, secondParent} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
 		}
 	}
-	return snapshotCLIExactPaths(t, expanded...)
-}
-
-func snapshotCLIExactPaths(t *testing.T, paths ...string) []cliPathSnapshot {
-	t.Helper()
-	result := make([]cliPathSnapshot, 0, len(paths))
-	for _, path := range paths {
-		info, err := os.Lstat(path)
-		if err != nil {
-			t.Fatalf("os.Lstat(%q) error = %v", path, err)
-		}
-		entry := cliPathSnapshot{
-			path:     path,
-			info:     info,
-			mode:     info.Mode(),
-			modified: info.ModTime().UnixNano(),
-			size:     info.Size(),
-		}
-		switch {
-		case info.Mode()&fs.ModeSymlink != 0:
-			entry.link, err = os.Readlink(path)
-		case info.Mode().IsRegular():
-			var data []byte
-			data, err = os.ReadFile(path)
-			entry.data = string(data)
-		}
-		if err != nil {
-			t.Fatalf("snapshot %q error = %v", path, err)
-		}
-		result = append(result, entry)
+	alias = filepath.Join(fixture.home, "alias")
+	if err := os.Symlink(firstParent, alias); err != nil {
+		t.Fatalf("os.Symlink(first parent) error = %v", err)
 	}
-	return result
+	return firstParent, secondParent, alias
 }
 
-func assertCLIPathsUnchanged(t *testing.T, before []cliPathSnapshot) {
+func moveParentAlias(t *testing.T, alias, destination string) {
 	t.Helper()
-	paths := make([]string, len(before))
-	for index := range before {
-		paths[index] = before[index].path
+	if err := os.Remove(alias); err != nil {
+		t.Fatalf("os.Remove(alias) error = %v", err)
 	}
-	after := snapshotCLIExactPaths(t, paths...)
-	assertCLIPathSnapshotsEqual(t, before, after)
-}
-
-func assertCLITreeUnchanged(t *testing.T, before cliTreeSnapshot) {
-	t.Helper()
-	after := snapshotCLITree(t, before.root)
-	assertCLIPathSnapshotsEqual(t, before.entries, after.entries)
-}
-
-func assertCLIPathSnapshotsEqual(t *testing.T, before, after []cliPathSnapshot) {
-	t.Helper()
-	if len(after) != len(before) {
-		t.Fatalf("filesystem entry count changed: before=%d after=%d", len(before), len(after))
-	}
-	for index := range before {
-		beforePath := before[index]
-		afterPath := after[index]
-		if beforePath.path != afterPath.path ||
-			beforePath.mode != afterPath.mode ||
-			beforePath.data != afterPath.data ||
-			beforePath.link != afterPath.link ||
-			beforePath.modified != afterPath.modified ||
-			beforePath.size != afterPath.size ||
-			!os.SameFile(beforePath.info, afterPath.info) {
-			t.Fatalf(
-				"path changed\nbefore=%#v\nafter=%#v",
-				beforePath,
-				afterPath,
-			)
-		}
-	}
-}
-
-func assertCLINoMutationResult(t *testing.T, stdout string) {
-	t.Helper()
-	const noMutation = "selection_changed=false targets_changed=false state_changed=false"
-	if !strings.Contains(stdout, noMutation) {
-		t.Fatalf("stdout = %q, want %q", stdout, noMutation)
+	if err := os.Symlink(destination, alias); err != nil {
+		t.Fatalf("os.Symlink(moved alias) error = %v", err)
 	}
 }

@@ -8,7 +8,7 @@ local 内容、秘密或环境变量。
 ## 版本与结构
 
 State version 为 `2`，用于区别不兼容的旧 state v1。旧版本不受支持；遇到 v1 时拒绝
-mutation，并提示用户人工归档旧 state 后重试。
+mutation，并提示用户归档或移除旧 state 后重试。
 
 `dot.toml`、machine config 与 state 使用相互独立的 version，当前分别为 `1`、`1`、`2`；
 三者互不关联，state 取 `2` 仅为与旧不兼容 state 区分，不代表配置版本升级。

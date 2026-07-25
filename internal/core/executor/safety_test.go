@@ -14,28 +14,28 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestC1ExecutionCreationNeverClobbersChangedTargets(t *testing.T) {
+func TestExecutorCreationNeverClobbersChangedTargets(t *testing.T) {
 	t.Run("link", func(t *testing.T) {
-		root, home := newC1ExecutionRoot(t)
+		root, home := newExecutorRoot(t)
 		target := filepath.Join(home, ".link")
-		writeC1ExecutionFile(t, target, "user")
-		before := snapshotC1ExecutionPath(t, target)
+		writeExecutorFile(t, target, "user")
+		before := snapshotExecutorPath(t, target)
 
 		run := mutationRun{home: home}
 		err := run.createLink(filepath.Join(root, "desired"), target)
 		if err == nil || !strings.Contains(err.Error(), "create symlink") {
 			t.Fatalf("createLink() error = %v, want no-clobber failure", err)
 		}
-		assertC1ExecutionPathUnchanged(t, before)
+		assertExecutorPathUnchanged(t, before)
 	})
 
 	t.Run("local", func(t *testing.T) {
-		root, home := newC1ExecutionRoot(t)
+		root, home := newExecutorRoot(t)
 		source := filepath.Join(root, "example")
 		target := filepath.Join(home, ".local")
-		writeC1ExecutionFile(t, source, "example")
-		writeC1ExecutionFile(t, target, "user")
-		before := snapshotC1ExecutionPath(t, target)
+		writeExecutorFile(t, source, "example")
+		writeExecutorFile(t, target, "user")
+		before := snapshotExecutorPath(t, target)
 		beforeEntries := c1ExecutionEntries(t, home)
 
 		run := mutationRun{home: home}
@@ -43,7 +43,7 @@ func TestC1ExecutionCreationNeverClobbersChangedTargets(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "without overwrite") {
 			t.Fatalf("createLocal() error = %v, want no-clobber failure", err)
 		}
-		assertC1ExecutionPathUnchanged(t, before)
+		assertExecutorPathUnchanged(t, before)
 		afterEntries := c1ExecutionEntries(t, home)
 		if strings.Join(beforeEntries, "\n") != strings.Join(afterEntries, "\n") {
 			t.Fatalf(
@@ -55,13 +55,13 @@ func TestC1ExecutionCreationNeverClobbersChangedTargets(t *testing.T) {
 	})
 }
 
-func TestC1ExecutionUpdateAndPruneRecheckRawDestination(t *testing.T) {
+func TestExecutorUpdateAndPruneRecheckRawDestination(t *testing.T) {
 	for _, decision := range []planner.Decision{
 		planner.DecisionUpdate,
 		planner.DecisionPrune,
 	} {
 		t.Run(string(decision), func(t *testing.T) {
-			root, home := newC1ExecutionRoot(t)
+			root, home := newExecutorRoot(t)
 			target := filepath.Join(home, ".owned")
 			expected := filepath.Join(root, "expected")
 			changed := filepath.Join(root, "changed")
@@ -72,7 +72,7 @@ func TestC1ExecutionUpdateAndPruneRecheckRawDestination(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveTarget() error = %v", err)
 			}
-			before := snapshotC1ExecutionPath(t, target)
+			before := snapshotExecutorPath(t, target)
 
 			run := mutationRun{home: home}
 			err = run.removeOwnedLink(planner.Action{
@@ -84,13 +84,13 @@ func TestC1ExecutionUpdateAndPruneRecheckRawDestination(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "destination changed") {
 				t.Fatalf("removeOwnedLink() error = %v, want raw-destination drift", err)
 			}
-			assertC1ExecutionPathUnchanged(t, before)
+			assertExecutorPathUnchanged(t, before)
 		})
 	}
 }
 
-func TestC1ExecutionUpdateRechecksResolvedParent(t *testing.T) {
-	root, home := newC1ExecutionRoot(t)
+func TestExecutorUpdateRechecksResolvedParent(t *testing.T) {
+	root, home := newExecutorRoot(t)
 	first := filepath.Join(root, "first")
 	second := filepath.Join(root, "second")
 	for _, directory := range []string{first, second} {
@@ -120,8 +120,8 @@ func TestC1ExecutionUpdateRechecksResolvedParent(t *testing.T) {
 	if err := os.Symlink(destination, filepath.Join(second, "owned")); err != nil {
 		t.Fatalf("os.Symlink(second target) error = %v", err)
 	}
-	firstBefore := snapshotC1ExecutionPath(t, filepath.Join(first, "owned"))
-	secondBefore := snapshotC1ExecutionPath(t, filepath.Join(second, "owned"))
+	firstBefore := snapshotExecutorPath(t, filepath.Join(first, "owned"))
+	secondBefore := snapshotExecutorPath(t, filepath.Join(second, "owned"))
 
 	run := mutationRun{home: home}
 	err = run.removeOwnedLink(planner.Action{
@@ -133,15 +133,15 @@ func TestC1ExecutionUpdateRechecksResolvedParent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "resolved target changed") {
 		t.Fatalf("removeOwnedLink() error = %v, want resolved-parent drift", err)
 	}
-	assertC1ExecutionPathUnchanged(t, firstBefore)
-	assertC1ExecutionPathUnchanged(t, secondBefore)
+	assertExecutorPathUnchanged(t, firstBefore)
+	assertExecutorPathUnchanged(t, secondBefore)
 }
 
-func TestC1StateCommitFailureLeavesRecoverableFacts(t *testing.T) {
-	root, home := newC1ExecutionRoot(t)
+func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
+	root, home := newExecutorRoot(t)
 	repository := filepath.Join(root, "repository")
 	source := filepath.Join(repository, "modules", "app", "config")
-	writeC1ExecutionFile(t, source, "config")
+	writeExecutorFile(t, source, "config")
 	target := filepath.Join(home, ".app")
 	request := Request{
 		Home: home,
@@ -172,7 +172,7 @@ func TestC1StateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 		first.StateChanged {
 		t.Fatalf("runLocked(failing commit) = (%#v, %v), want recoverable partial failure", first, err)
 	}
-	assertC1ExecutionLink(t, target, source)
+	assertExecutorLink(t, target, source)
 	if _, err := os.Lstat(request.Controls.State); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("state after failed commit error = %v, want missing", err)
 	}
@@ -183,19 +183,19 @@ func TestC1StateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 		!second.StateChanged {
 		t.Fatalf("runLocked(recovery) = (%#v, %v), want state-only recovery", second, err)
 	}
-	assertC1ExecutionLink(t, target, source)
-	beforeTarget := snapshotC1ExecutionPath(t, target)
-	beforeState := snapshotC1ExecutionPath(t, request.Controls.State)
+	assertExecutorLink(t, target, source)
+	beforeTarget := snapshotExecutorPath(t, target)
+	beforeState := snapshotExecutorPath(t, request.Controls.State)
 
 	third, err := runLocked(request, commitState)
 	if err != nil || third.TargetsChanged || third.StateChanged {
 		t.Fatalf("runLocked(repeat) = (%#v, %v), want zero mutation", third, err)
 	}
-	assertC1ExecutionPathUnchanged(t, beforeTarget)
-	assertC1ExecutionPathUnchanged(t, beforeState)
+	assertExecutorPathUnchanged(t, beforeTarget)
+	assertExecutorPathUnchanged(t, beforeState)
 }
 
-type c1ExecutionSnapshot struct {
+type executionSnapshot struct {
 	path string
 	info fs.FileInfo
 	mode fs.FileMode
@@ -203,7 +203,7 @@ type c1ExecutionSnapshot struct {
 	link string
 }
 
-func newC1ExecutionRoot(t *testing.T) (string, string) {
+func newExecutorRoot(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -216,7 +216,7 @@ func newC1ExecutionRoot(t *testing.T) (string, string) {
 	return root, home
 }
 
-func writeC1ExecutionFile(t *testing.T, path, content string) {
+func writeExecutorFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(%q) error = %v", filepath.Dir(path), err)
@@ -226,13 +226,13 @@ func writeC1ExecutionFile(t *testing.T, path, content string) {
 	}
 }
 
-func snapshotC1ExecutionPath(t *testing.T, path string) c1ExecutionSnapshot {
+func snapshotExecutorPath(t *testing.T, path string) executionSnapshot {
 	t.Helper()
 	info, err := os.Lstat(path)
 	if err != nil {
 		t.Fatalf("os.Lstat(%q) error = %v", path, err)
 	}
-	snapshot := c1ExecutionSnapshot{path: path, info: info, mode: info.Mode()}
+	snapshot := executionSnapshot{path: path, info: info, mode: info.Mode()}
 	switch {
 	case info.Mode()&fs.ModeSymlink != 0:
 		snapshot.link, err = os.Readlink(path)
@@ -247,9 +247,9 @@ func snapshotC1ExecutionPath(t *testing.T, path string) c1ExecutionSnapshot {
 	return snapshot
 }
 
-func assertC1ExecutionPathUnchanged(t *testing.T, before c1ExecutionSnapshot) {
+func assertExecutorPathUnchanged(t *testing.T, before executionSnapshot) {
 	t.Helper()
-	after := snapshotC1ExecutionPath(t, before.path)
+	after := snapshotExecutorPath(t, before.path)
 	if before.mode != after.mode ||
 		before.data != after.data ||
 		before.link != after.link ||
@@ -258,7 +258,7 @@ func assertC1ExecutionPathUnchanged(t *testing.T, before c1ExecutionSnapshot) {
 	}
 }
 
-func assertC1ExecutionLink(t *testing.T, target, destination string) {
+func assertExecutorLink(t *testing.T, target, destination string) {
 	t.Helper()
 	actual, err := os.Readlink(target)
 	if err != nil {
