@@ -1,6 +1,6 @@
 module github.com/mianm12/dotfiles
 
-go 1.25.0
+go 1.25.12
 
 require (
 	github.com/gofrs/flock v0.13.0
