@@ -1,8 +1,8 @@
-// Package paths resolves target locations for the replacement core.
+// Package paths resolves target locations for dot.
 //
-// It intentionally models only the path rules from the design baseline: lexical
-// normalization, existing ancestor symlinks, target-set uniqueness, and control
-// path boundaries. It does not infer filesystem name aliases or inode identity.
+// It intentionally models only the specified lexical normalization, existing
+// ancestor symlinks, target-set uniqueness, and control path boundaries. It
+// does not infer filesystem name aliases or inode identity.
 package paths
 
 import (

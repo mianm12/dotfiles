@@ -1,5 +1,5 @@
-// Package executor applies replacement-core plans through the linear mutation
-// pipeline defined by the design baseline.
+// Package executor applies plans through the linear mutation pipeline defined
+// by the product specification.
 package executor
 
 import (
@@ -17,7 +17,7 @@ import (
 
 // Request contains validated, in-memory desired inputs and the stable control
 // paths used for one mutation. Configuration loading and selection persistence
-// are owned by the CLI layer introduced at B6.
+// are owned by the CLI layer.
 type Request struct {
 	Home     string
 	Controls corepaths.Controls
@@ -59,8 +59,9 @@ func Run(request Request) (result Result, err error) {
 }
 
 // RunWithLock applies a request while reusing an outer owner bound to the same
-// stable lock. B6 uses this after prospective selection preflight and machine
-// config publication so the entire mutation pipeline remains under one lock.
+// stable lock. The CLI uses this after prospective selection preflight and
+// machine config publication so the entire mutation pipeline remains under one
+// lock.
 func RunWithLock(
 	request Request,
 	owner *lock.Ownership,
