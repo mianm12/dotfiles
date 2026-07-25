@@ -81,6 +81,7 @@ Pull Request 使用仓库模板，至少说明：
 - 未验证项；
 - 回滚或前向修复方式。
 
-`make check` 是 Go 变更的本地统一入口，CI 在 macOS 与 Linux 上运行同一入口。新增远程检查
-时，先让 workflow 在 `main` 上产生稳定状态，再单独授权把它设为 required check。任何一种
-Git 或外部系统授权都不会自动扩大为 merge、release 或真实机器 mutation 的权限。
+`make check` 是 Go 变更的本地统一入口，CI 在 macOS 与 Linux 上运行同一入口。`make vuln`
+使用固定版本的 `govulncheck`，对应独立远程 workflow，但不加入本地离线 `make check`。该
+状态在 `main` 上稳定出现后，再单独授权把它设为 required check。任何一种 Git 或外部系统
+授权都不会自动扩大为 merge、release 或真实机器 mutation 的权限。
