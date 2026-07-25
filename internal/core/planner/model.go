@@ -1,4 +1,4 @@
-// Package planner builds read-only convergence plans for the replacement core.
+// Package planner builds read-only convergence plans for dot.
 package planner
 
 import (
@@ -41,8 +41,8 @@ type Request struct {
 
 // Action describes one ordered planner decision. LinkDestination is the
 // desired raw destination. ExpectedResolvedTarget and
-// ExpectedLinkDestination preserve the state facts that B5 must recheck before
-// update or prune.
+// ExpectedLinkDestination preserve the state facts that the executor must
+// recheck before update or prune.
 type Action struct {
 	ModuleID                string
 	PlacementID             string

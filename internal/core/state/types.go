@@ -1,11 +1,11 @@
-// Package state defines the replacement ownership state model and its strict
-// version 2 persistence format.
+// Package state defines the ownership state model and its strict version 2
+// persistence format.
 package state
 
 import "errors"
 
 const (
-	// Version is the only state format version supported by the replacement core.
+	// Version is the only supported state format version.
 	Version = 2
 	// MissingWarning explains the recovery limitation when no state file exists.
 	MissingWarning = "state is missing; links removed from desired configuration cannot be discovered"

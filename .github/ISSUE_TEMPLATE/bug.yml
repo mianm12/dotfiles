@@ -1,0 +1,70 @@
+name: Bug report
+description: 提交可脱敏复现的 dot 缺陷
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请勿上传真实 HOME、私人 modules、machine config、state、lock、密钥或其他敏感内容。
+        优先提供能在临时目录中复现问题的最小合成输入。
+  - type: input
+    id: platform
+    attributes:
+      label: 平台
+      description: 操作系统、架构和 shell，例如 macOS 15 arm64 / zsh。
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: dot 版本
+      description: "`dot version` 输出或 commit SHA。"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: 执行命令
+      description: 使用占位符替换私人绝对路径和名称。
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 包含退出码和脱敏后的错误输出。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 脱敏最小复现
+      description: |
+        提供合成目录结构、最小配置和复现步骤。不要粘贴真实 HOME 或私人配置。
+    validations:
+      required: true
+  - type: dropdown
+    id: mutation
+    attributes:
+      label: 是否发生文件系统 mutation
+      options:
+        - "否"
+        - "是，且符合预期"
+        - "是，且不符合预期"
+        - "不确定"
+    validations:
+      required: true
+  - type: textarea
+    id: mutation_details
+    attributes:
+      label: Mutation 详情
+      description: 若发生 mutation，说明合成路径中的变化；不要上传私人文件内容。

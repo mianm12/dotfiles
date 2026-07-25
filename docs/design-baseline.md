@@ -279,7 +279,7 @@ target = "~/.config/example/config.local"
 ## 8. State 与 Ownership
 
 重设计使用 state version `2`，用于明确区别当前旧实现已经使用但结构不兼容的 state v1。
-MVP 不自动迁移旧 state；遇到 v1 时拒绝 mutation，并提示用户在 cutover 时人工归档旧 state。
+MVP 不自动迁移旧 state；遇到 v1 时拒绝 mutation，并提示用户人工归档旧 state 后重试。
 `dot.toml`、machine config 与 state 使用相互独立的 version，当前分别为 `1`、`1`、`2`；三者互不关联，
 state 取 `2` 仅为与旧不兼容 state 区分，不代表配置版本升级。
 

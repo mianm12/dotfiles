@@ -1,5 +1,4 @@
-// Package config strictly loads the replacement repository and machine
-// configuration model.
+// Package config strictly loads the repository and machine configuration model.
 package config
 
 import (
