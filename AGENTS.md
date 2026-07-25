@@ -8,8 +8,9 @@
 
 ## 仓库地图
 
-- `docs/design-baseline.md`：当前唯一产品与行为规范。
-- `docs/README.md`：文档入口和权威边界。
+- `docs/spec/README.md`：产品规范索引和规则 owner；`docs/spec/**` 整体是唯一产品契约。
+- `docs/architecture/`：内部结构、依赖方向和测试所有权。
+- `docs/decisions/`：只记录难以逆转且需要保留理由的 ADR。
 - `README.md`：用户入口与当前已实现能力。
 - `CONTRIBUTING.md`：变更分级、开发流程、Git 与交付约定。
 - `Makefile` 与 `make help`：开发命令的事实来源。
@@ -17,7 +18,7 @@
 - `docs/archive/README.md`：历史恢复指针，没有规范性。
 
 实现与规范冲突时修复实现和测试。需要改变公开行为、持久格式、ownership、清理语义或接受
-风险时，先更新规范；内部 package、类型和算法由最简单的实际实现决定。
+风险时，先更新对应规范 owner；内部 package、类型和算法由最简单的实际实现决定。
 
 ## 开发原则
 
@@ -55,6 +56,6 @@
 - 按 `CONTRIBUTING.md` 判断变更类型并满足对应门禁。
 - 任意仓库改动都检查完整 diff、相关 untracked 和 `git diff --check`。
 - Go、依赖、构建或 CI 改动运行 `make check`。
-- mutation 验证只使用合成绝对路径；分别报告本机、交叉平台和远程 CI 的真实证据。
+- Mutation 验证只使用合成绝对路径；分别报告本机、交叉平台和远程 CI 的真实证据。
 - 无法执行的验证必须列为未验证项，不以推测或旧结果代替。
 - 二进制只能写入已忽略的 `bin/`、`dist/` 或仓库外临时目录。

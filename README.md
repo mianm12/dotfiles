@@ -9,7 +9,7 @@
 placements、dry-run、ownership state 和单进程 mutation lock。
 
 公开命令为 `init`、`status`、`apply`、`remove`、`version` 和 `help`。完整行为和安全边界以
-[产品与行为规范](docs/design-baseline.md)为准，当前实现证据以代码、测试和 CI 为准。
+[产品规范集合](docs/spec/README.md)为准，当前实现证据以代码、测试和 CI 为准。
 
 ## 快速开始
 
@@ -41,7 +41,9 @@ make check
 
 ## 文档
 
-- [当前产品与行为规范](docs/design-baseline.md)
+- [产品规范索引](docs/spec/README.md)
+- [架构概览](docs/architecture/overview.md)
+- [测试架构](docs/architecture/testing.md)
 - [文档索引](docs/README.md)
 - [历史恢复指针](docs/archive/README.md)
 - [贡献与 Git 约定](CONTRIBUTING.md)
