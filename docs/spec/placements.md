@@ -16,6 +16,8 @@ target = "~/.config/example/config"
 - Source 必须存在，其顶层对象只能是普通文件或目录，不得是 symlink 或 special；否则为配置
   错误、零 mutation。该约束针对 desired source，与 dangling actual 链的规划规则正交。
 - Source 目录内部不递归检查，内部 symlink 由用户负责。
+- Link desired identity 由 source 路径决定，不比较 source 内容；仅发生同一路径下内容变化时
+  不要求重建 symlink 或更新 state。
 - 文件与目录都作为一个完整 symlink placement，不递归生成单文件 links。
 - Target 必须以 `~/` 开头，不支持绝对路径、环境变量、glob 或命令替换。
 - Target 规范化后必须位于逻辑 HOME 下。
