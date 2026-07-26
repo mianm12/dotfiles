@@ -17,7 +17,6 @@
 | [`planning.md`](planning.md) | 实际文件系统观察、conflict、create/update/prune/keep/forget 决策 | selection、placements、state |
 | [`mutation-and-recovery.md`](mutation-and-recovery.md) | mutation 顺序、锁、提交和中断恢复 | planning、state |
 | [`cli.md`](cli.md) | 公开命令、scope、输出和退出码 | selection、planning、mutation |
-| [`acceptance.md`](acceptance.md) | 跨层 AC-01 至 AC-19 | 全部产品规范 |
 
 内部 package、依赖方向和测试组织不属于产品契约，见 [`../architecture/`](../architecture/)。
 难以逆转且需要长期保留理由的工程选择使用 [`../decisions/`](../decisions/) 中的 ADR。
@@ -25,7 +24,7 @@
 ## 修改规则
 
 - Behavioral 及以上变更先修改对应 owner，再修改实现和测试。
-- PR 引用具体规范文件、标题；跨层行为同时引用稳定的 `AC-*`。
+- PR 引用具体规范文件和标题。
 - 不给普通段落和句子分配永久编号。
 - 术语或示例可以在 owner 中解释一次；其他文件用链接导航。
 - 规范描述目标行为，代码和测试仍是“当前是否已经实现”的证据。

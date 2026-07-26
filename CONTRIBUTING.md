@@ -10,7 +10,7 @@
 | 类型 | 适用范围 | 必须门禁 |
 | --- | --- | --- |
 | Internal | 不改变用户可观察行为的实现、重构、文档或测试整理 | focused tests；Go 变更运行 `make check`；自审完整 diff |
-| Behavioral | 公开命令、配置、输出、退出码、持久格式或 ownership 行为变化 | 先改对应规范；增加行为或验收测试；`make check`；独立契约审查 |
+| Behavioral | 公开命令、配置、输出、退出码、持久格式或 ownership 行为变化 | 先改对应规范；增加对应层级的行为或跨层回归测试；`make check`；独立契约审查 |
 | Safety-critical | 路径边界、计划、mutation、清理、状态、锁和数据完整性变化 | 失败模式清单；完全隔离的合成环境；重复 apply 零 mutation；相关 fuzz；独立缺陷审查；双平台 CI |
 | Operational | 对真实机器、真实配置或发布/仓库治理产生影响 | 上述全部；影响报告；回滚方式；用户对该外部操作的单独明确授权 |
 

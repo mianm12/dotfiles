@@ -25,7 +25,7 @@ LDFLAGS = -X '$(BUILDINFO_PACKAGE).Version=$(VERSION)' \
 	-X '$(BUILDINFO_PACKAGE).BuildTime=$(BUILD_TIME)'
 
 .PHONY: help build run version fmt fmt-check tidy tidy-check lint test \
-	test-acceptance test-race fuzz vuln check
+	test-race fuzz vuln check
 
 help:
 	@printf '%s\n' \
@@ -36,7 +36,6 @@ help:
 		'make tidy               整理 Go 模块依赖' \
 		'make lint               运行静态分析' \
 		'make test               运行快速测试' \
-		'make test-acceptance    运行 AC-01 至 AC-19 跨层验收' \
 		'make fuzz               对 state 与 target 安全边界各 fuzz 30 秒' \
 		'make vuln               使用固定版本 govulncheck 扫描可达漏洞' \
 		'make check              运行当前平台的完整门禁（CI 在 macOS/Linux 分别执行）'
@@ -69,9 +68,6 @@ lint:
 
 test:
 	$(GO) test ./...
-
-test-acceptance:
-	$(GO) test ./internal/cli -run '^Test(AC(0[1-9]|1[0-9])_|AcceptanceContractCoverage$$)'
 
 test-race:
 	$(GO) test -race ./...
