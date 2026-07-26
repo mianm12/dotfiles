@@ -47,15 +47,22 @@
 
 - 删除、移动、重命名、批量改写和其他可能丢失内容的操作，范围不明确时先确认。
 - 不覆盖、回滚或清理用户已有改动，除非用户明确授权。
-- Branch、stage、commit、push、Pull Request、merge 和 release 是彼此独立的权限。
-- Agent 的默认交付终点是准备好供人工审阅的 PR，不自行 merge。
+- Repo-tracked 修改实行 branch-first。处于干净且已确认与远端一致的 `main` 时，实现请求默认
+  授权创建并切换 `codex/<slug>`；若 `main` dirty、ahead、behind 或 diverged，停止并报告，
+  不自动同步或改写。
+- Git 操作按三阶段授权：实现包含创建或切换本地任务分支、编辑和测试；提交包含只暂存当前
+  任务文件并 commit；发布或开 PR 包含 push 当前任务分支并创建 Draft PR。
+- Ready、启用 auto-merge、立即 merge、release、真实机器 mutation、本地 `main` 同步和
+  非自动分支清理仍分别授权。
+- Agent 的默认交付终点是等待 CI 和人工审阅的 Draft PR，不自行 merge。
 - 真实机器 mutation 属于独立的 operational 授权，代码修改授权不包含它。
 
 ## 验证与交付
 
 - 按 `CONTRIBUTING.md` 判断变更类型并满足对应门禁。
 - 任意仓库改动都检查完整 diff、相关 untracked 和 `git diff --check`。
-- Go、依赖、构建或 CI 改动运行 `make check`。
+- 开发中运行 focused tests 或 `make test`；Go、依赖、构建或 CI 改动在发布前完整运行一次
+  `make check`。
 - Mutation 验证只使用合成绝对路径；分别报告本机、交叉平台和远程 CI 的真实证据。
 - 无法执行的验证必须列为未验证项，不以推测或旧结果代替。
 - 二进制只能写入已忽略的 `bin/`、`dist/` 或仓库外临时目录。

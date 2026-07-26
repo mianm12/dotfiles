@@ -2,9 +2,12 @@ name: Vulnerability scan
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
+    paths:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - Makefile
+      - .github/workflows/security.yml
   schedule:
     - cron: "23 3 * * 1"
   workflow_dispatch:
