@@ -1,16 +1,16 @@
 # 测试架构
 
-本文规定测试所有权和验证层次。跨层产品结果以
-[`../spec/acceptance.md`](../spec/acceptance.md) 为准。
+本文规定测试所有权和验证层次。产品结果由对应的 [`../spec/`](../spec/) 规则 owner 定义，
+测试提供当前实现证据。
 
 ## 所有权
 
-- `internal/cli/acceptance_test.go` 是 AC-01 至 AC-19 的唯一跨层验收套件，并机械验证编号集合
-  完整。
-- CLI 的命令语法、错误映射和输出格式使用独立、按行为命名的测试。
-- Config、paths、state、planner 和 executor 在各自 package 覆盖局部模型与失败边界，不复用
-  AC 编号。
-- `cmd/dot` 只保留最小进程级 smoke；完整公开行为通过 `cli.Run` 验收。
+- `internal/cli` 的跨层测试按 init、apply、remove、status、placement、safety、recovery 和
+  scope 等用户行为域组织。
+- CLI 的命令语法、错误映射和输出格式由 `commands_test.go` 覆盖。
+- Config、paths、state、planner 和 executor 在各自 package 覆盖局部模型与失败边界，并以
+  具体行为命名。
+- `cmd/dot` 只保留最小进程级 smoke；完整公开行为通过 `cli.Run` 测试。
 - CLI 合成环境集中在 `internal/cli/testenv_test.go`，不创建跨 package 通用测试框架。
 
 ## 合成环境
@@ -24,7 +24,7 @@
 ## 验证层次
 
 - Focused tests：开发期间快速验证变更 package 和直接消费者。
-- Acceptance：`make test-acceptance` 验证 AC 编号完整性和跨层产品契约。
+- Fast tests：`make test` 快速运行全部 Go 测试。
 - Full gate：`make check` 验证 tidy、format、lint 和全量 race tests。
 - Fuzz：`make fuzz` 持续攻击 state decoder 与 target expression 安全边界。
 - Vulnerability：`make vuln` 使用固定版本的 `govulncheck` 扫描可达漏洞，不加入本地离线
