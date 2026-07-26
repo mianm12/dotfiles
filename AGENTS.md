@@ -48,8 +48,8 @@
 - 删除、移动、重命名、批量改写和其他可能丢失内容的操作，范围不明确时先确认。
 - 不覆盖、回滚或清理用户已有改动，除非用户明确授权。
 - Repo-tracked 修改实行 branch-first。处于干净且已确认与远端一致的 `main` 时，实现请求默认
-  授权创建并切换 `codex/<slug>`；若 `main` dirty、ahead、behind 或 diverged，停止并报告，
-  不自动同步或改写。
+  授权按 `CONTRIBUTING.md` 的统一规则创建并切换 `<type>/<slug>`；若 `main` dirty、ahead、
+  behind 或 diverged，停止并报告，不自动同步或改写。
 - Git 操作按三阶段授权：实现包含创建或切换本地任务分支、编辑和测试；提交包含只暂存当前
   任务文件并 commit；发布或开 PR 包含 push 当前任务分支并创建 Draft PR。
 - Ready、启用 auto-merge、立即 merge、release、真实机器 mutation、本地 `main` 同步和

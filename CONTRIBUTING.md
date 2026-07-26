@@ -21,7 +21,8 @@ Safety-critical 必须由另一位评审者或单独的审查任务主动寻找�
 
 1. 从 `docs/README.md` 定位本次规则的唯一 owner，判断风险等级和失败边界。
 2. Repo-tracked 修改从短生命周期分支开始；Agent 在干净且已确认与远端一致的 `main` 上默认
-   创建 `codex/<slug>`。若 `main` dirty、ahead、behind 或 diverged，停止并报告。
+   按“分支与提交”的统一规则创建 `<type>/<slug>`。若 `main` dirty、ahead、behind 或
+   diverged，停止并报告。
 3. 修复缺陷时先构造脱敏的最小合成复现，再实现满足当前目标的最小变化并补充对应测试。
 4. 开发中运行 focused tests 或 `make test`；发布前运行风险等级要求的完整门禁并检查 diff、
    untracked 和未验证项。
@@ -55,11 +56,23 @@ completed plans。
 ## 分支与提交
 
 - `main` 是唯一长期分支，保持可构建、可测试且不直接 push；所有集成通过 Pull Request。
-- Agent 分支使用 `codex/<slug>`；人工分支可使用 `feat/`、`fix/`、`docs/`、`refactor/`、
-  `test/`、`ci/` 或 `chore/`。
+- 人工和 Agent 短期分支统一使用 `<type>/<slug>`。`type` 为 `feat`、`fix`、`docs`、
+  `refactor`、`test`、`ci`、`chore` 或 `deps`；`slug` 使用简短的小写 kebab-case，
+  表达分支的主要变更意图。
+- 分支必须包含 `slug`，不创建 `feat`、`fix`、`docs` 等裸父级分支。`type` 只表示分支的
+  主要意图，不要求与其中每个提交的类型完全一致。
+- Dependabot 等机器人按平台规则生成的分支不受上述命名约束。
 - 只使用 squash merge，不使用 merge commit 或 rebase merge。
 - GitHub 合入后自动删除远端短期分支；本地分支另行清理。
 - 当前不建立版本分支；只有出现并行维护的已发布版本时再引入。
+
+示例：
+
+```text
+fix/control-path-overlap
+docs/branch-naming
+deps/go-minor-update
+```
 
 Git 操作按三阶段授权：实现包含创建或切换本地任务分支、编辑和测试；提交包含只暂存当前任务
 文件并 commit；发布或开 PR 包含 push 当前任务分支并创建 Draft PR。Ready、auto-merge、
