@@ -1,7 +1,7 @@
 # 贡献约定
 
-这是个人项目，但开发过程按可审阅、可回退、持续可验证的方式组织。Agent 的完成状态是
-“Pull Request 已准备好供人工审阅”，不是自行合入。
+这是个人项目，但开发过程按可审阅、可回退、持续可验证的方式组织。Agent 的默认交付状态是
+“Draft Pull Request 已准备好等待 CI 和人工审阅”，不是自行合入。
 
 ## 变更分级
 
@@ -9,21 +9,24 @@
 
 | 类型 | 适用范围 | 必须门禁 |
 | --- | --- | --- |
-| Internal | 不改变用户可观察行为的实现、重构、文档或测试整理 | focused tests；Go 变更运行 `make check`；自审完整 diff |
-| Behavioral | 公开命令、配置、输出、退出码、持久格式或 ownership 行为变化 | 先改对应规范；增加对应层级的行为或跨层回归测试；`make check`；独立契约审查 |
+| Routine | 文档、测试、内部重构和普通行为变化 | focused tests；Go 或 CI 变更发布前运行 `make check`；行为变化先改规范并增加对应回归测试；自审完整 diff |
 | Safety-critical | 路径边界、计划、mutation、清理、状态、锁和数据完整性变化 | 失败模式清单；完全隔离的合成环境；重复 apply 零 mutation；相关 fuzz；独立缺陷审查；双平台 CI |
 | Operational | 对真实机器、真实配置或发布/仓库治理产生影响 | 上述全部；影响报告；回滚方式；用户对该外部操作的单独明确授权 |
 
-独立审查是与实现视角分开的复核，可以由另一位评审者或单独的审查任务完成。Behavioral
-审查对照规范；Safety-critical 审查主动寻找反例、越界 mutation 和错误恢复缺陷。
+Routine 由实现者完成 diff 自审；跨多个规范域或影响面较大的行为变化建议增加独立契约审查。
+Safety-critical 必须由另一位评审者或单独的审查任务主动寻找反例、越界 mutation 和错误
+恢复缺陷。
 
 ## 日常开发流程
 
-1. 从 `docs/README.md` 定位本次规则的唯一 owner，判断变更类型和失败边界。
-2. 修复缺陷时先构造脱敏的最小合成复现，再修改实现。
-3. 只实现满足当前目标的最小变化，并补充相应层级的测试。
-4. 运行风险等级要求的本地验证，检查完整 diff 和未验证项。
-5. 创建短生命周期 Pull Request，等待 CI 与人工审阅。
+1. 从 `docs/README.md` 定位本次规则的唯一 owner，判断风险等级和失败边界。
+2. Repo-tracked 修改从短生命周期分支开始；Agent 在干净且已确认与远端一致的 `main` 上默认
+   创建 `codex/<slug>`。若 `main` dirty、ahead、behind 或 diverged，停止并报告。
+3. 修复缺陷时先构造脱敏的最小合成复现，再实现满足当前目标的最小变化并补充对应测试。
+4. 开发中运行 focused tests 或 `make test`；发布前运行风险等级要求的完整门禁并检查 diff、
+   untracked 和未验证项。
+5. Push 短期分支并创建 Draft Pull Request；所有进入 `main` 的变更，包括纯文档，都通过 PR。
+   Ready、auto-merge 和立即 merge 需要用户分别明确授权。
 
 普通修复、功能和重构不创建常驻 Goal。只有任务预计跨会话、至少包含三个相互依赖的
 里程碑、存在重大未知，或涉及真实迁移时，才使用 `/plan` 或 `/goal`。复杂计划保存在
@@ -51,13 +54,16 @@ completed plans。
 
 ## 分支与提交
 
-- `main` 是唯一长期分支，保持可构建、可测试。
-- 每项工作使用短生命周期分支：`feat/`、`fix/`、`docs/`、`refactor/`、`test/`、`ci/` 或
-  `chore/`。
-- 默认使用 squash merge；需要保留重大、多提交迁移的历史时，在 Pull Request 中说明后可用
-  merge commit。
-- 不使用 rebase merge。合入后删除已完成分支。
+- `main` 是唯一长期分支，保持可构建、可测试且不直接 push；所有集成通过 Pull Request。
+- Agent 分支使用 `codex/<slug>`；人工分支可使用 `feat/`、`fix/`、`docs/`、`refactor/`、
+  `test/`、`ci/` 或 `chore/`。
+- 只使用 squash merge，不使用 merge commit 或 rebase merge。
+- GitHub 合入后自动删除远端短期分支；本地分支另行清理。
 - 当前不建立版本分支；只有出现并行维护的已发布版本时再引入。
+
+Git 操作按三阶段授权：实现包含创建或切换本地任务分支、编辑和测试；提交包含只暂存当前任务
+文件并 commit；发布或开 PR 包含 push 当前任务分支并创建 Draft PR。Ready、auto-merge、
+立即 merge、release、本地 `main` 同步和非自动分支清理不由上述授权推导。
 
 提交标题使用 `type(scope): 中文简短摘要`，例如：
 
@@ -72,16 +78,11 @@ test(apply): 覆盖未收敛时延迟清理
 
 ## Pull Request 证据
 
-Pull Request 使用仓库模板，至少说明：
-
-- 目标和非目标；
-- 风险等级与失败模式；
-- 用户行为和规范影响；
-- 已运行的测试及其环境；
-- 未验证项；
-- 回滚或前向修复方式。
+Pull Request 使用仓库模板，至少说明摘要、风险等级、行为或规范影响和实际验证。Routine
+没有额外说明时可以删除 Notes；Safety-critical 和 Operational 必须在 Notes 中列出失败模式、
+未验证项和回滚或前向修复方式。
 
 `make check` 是 Go 变更的本地统一入口，CI 在 macOS 与 Linux 上运行同一入口。`make vuln`
-使用固定版本的 `govulncheck`，对应独立远程 workflow，但不加入本地离线 `make check`。该
-状态在 `main` 上稳定出现后，再单独授权把它设为 required check。任何一种 Git 或外部系统
-授权都不会自动扩大为 merge、release 或真实机器 mutation 的权限。
+使用固定版本的 `govulncheck`，对应相关 Go Pull Request、每周计划和手动触发的非 required
+远程 workflow，但不加入本地离线 `make check`。任何一种 Git 或外部系统授权都不会自动扩大
+为 merge、release 或真实机器 mutation 的权限。

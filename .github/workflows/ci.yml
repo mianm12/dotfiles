@@ -1,11 +1,8 @@
 name: CI
 
-# Pull Request 提前反馈，main 上的 push 验证最终集成结果。
+# 所有 main 集成都经过 Pull Request；required checks 在合入前验证变更。
 on:
   pull_request:
-  push:
-    branches:
-      - main
 
 # 门禁只读取仓库内容，不授予写入权限。
 permissions:
