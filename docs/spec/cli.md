@@ -57,18 +57,45 @@ dot help
 - 严格加载 `dot.toml`，但只对命令 scope 内的 `module.toml` 做最终类型检查、读取和解析；
   scope 外 module manifest 的异常类型、不可读、dangling symlink 或 malformed TOML 不影响
   本命令。
-- Status 与 dry-run 使用对应 mutation 命令的相同 scope。
+- Mutation dry-run 使用 prospective selection 对应的 scope。`status [MODULE]` 始终观察当前
+  machine selection；指定 `MODULE` 只缩小 inventory 并允许检查该 module manifest，不模拟
+  `add-extra`。
+- 无参数 status 继续延迟加载 inactive repository module manifest；未加载的 applicability 与
+  variant 显示为 `-`。
 
 ## Status 与 dry-run
 
-- Status 只读，显示 module activation、variant 和 `converged`、`pending`、`conflict`、
-  `not-applicable`、`inactive` 或 `stale`。
-- 默认 status 即使发现 pending/conflict 仍返回成功；没有 `--check`。
+- CLI 对 status、dry-run 和 mutation preflight 建立同一种只读 operation analysis。它包含
+  prospective machine selection、selection delta、module selection source、applicability、
+  variant、convergence、placement actions、reason、输入 warning 与 blocker。
+- Status 保留第二列的 `converged`、`pending`、`conflict`、`not-applicable`、`inactive` 或
+  `stale` 摘要，并固定追加：
+
+  ```text
+  selection=<none|profile|extra|profile+extra>
+  applicability=<applicable|not-applicable|->
+  convergence=<converged|pending|pending-cleanup|conflict|->
+  variant=<portable|VARIANT|->
+  reason=<-|QUOTED_REASON>
+  ```
+
+  `-` 表示当前分析未加载或不存在该维度，不是第三种平台状态。带空格或特殊字符的 reason
+  使用双引号和转义；conflict 或 module-specific blocker 的完整 reason 不得省略。Profile
+  module 已确定 not-applicable 但仍有旧 ownership action 时显示
+  `convergence=pending-cleanup`，reason 至少标出对应 cleanup decision。
+- Dry-run 在 placement actions 之前显示非空 selection delta：`create`、`add-extra` 或
+  `remove-extra`；`add-extra`/`remove-extra` 同时显示 module ID。完整分析中的 blocker 写
+  stdout 并包含 reason。输入 warning 仍写 stderr。
+- Status 与 dry-run 只要形成完整 analysis 就返回成功，即使其中有 pending、conflict 或
+  blocker；没有 `--check`。配置、manifest 或 state 无法解析、必要输入无法读取，或未分类的
+  文件系统观察失败时 analysis 不完整并返回失败。
 - Dry-run 使用与真实命令相同的解析、resolution 和 planner，但不写 config、state、target、
   parent directory、lock 或 temporary file。
 - Status 和 dry-run 可以在内存中删除兼容的空 state module，但不得因此重写 state。
 - Status 和 dry-run 不取锁；并发 mutation 时结果是 best-effort snapshot。
-- 真实命令总是重新规划，不执行保存的 dry-run plan。
+- 真实 mutation 在取锁前分析一次，并在锁内重新加载输入和建立新的 analysis；blocker 或
+  conflict 转为失败后才可发布 selection。Operation analysis 不是 executor 输入，锁前
+  analysis 永远不能直接执行。
 
 ## 输出与退出码
 
@@ -82,8 +109,11 @@ dot help
 | `1` | 配置、ownership、lock、文件系统或运行时失败 |
 | `2` | CLI 参数或用法错误 |
 
-未知或不适用的 module 属于配置/运行时条件，返回 `1`；`2` 仅用于 CLI 语法错误，例如未知
-flag 或 `remove` 缺少 `MODULE` 参数。
+真实 mutation 请求未知或不适用的 module 时返回 `1`。Status/dry-run 能把 request-specific
+未知、不适用、profile-selected remove、已初始化 init 或路径 conflict 表达为完整 blocker
+时返回 `0`；无效 module ID、active profile 引用缺失 module、malformed manifest 与 variant
+ambiguity 仍是配置失败并返回 `1`。`2` 仅用于 CLI 语法错误，例如未知 flag 或 `remove`
+缺少 `MODULE` 参数。
 
 运行时失败不要求维护完整的 completed/failed/not-attempted 结果协议。错误信息必须指出失败
 动作；已经发生 mutation 时提示本轮可能部分完成并建议重跑，不得把未执行动作显示为成功。

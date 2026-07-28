@@ -55,63 +55,68 @@ func runInit(
 	}
 
 	if dryRun {
-		if err := requireUninitialized(context); err != nil {
-			return err
-		}
-		prepared, err := prepareInit(context, machine)
+		analysis, err := analyzeInit(context, machine)
 		if err != nil {
 			return err
 		}
-		return printPlan(command, prepared.plan, preparedWarnings(prepared))
+		return printOperationAnalysis(command, analysis)
 	}
 
-	if err := requireUninitialized(context); err != nil {
-		return err
-	}
-	preflight, err := prepareInit(context, machine)
+	preflight, err := analyzeInit(context, machine)
 	if err != nil {
 		return err
 	}
-	if err := rejectConflicts(preflight.plan); err != nil {
+	if err := rejectAnalysis(preflight); err != nil {
 		return err
 	}
+	if env.afterPreflight != nil {
+		env.afterPreflight()
+	}
 
-	return withMutationLock(context.controls(preflight.machine.Repository), func(owner mutationOwner) error {
-		if err := requireUninitialized(context); err != nil {
-			return err
-		}
-		prepared, err := prepareInit(context, machine)
-		if err != nil {
-			return err
-		}
-		if err := rejectConflicts(prepared.plan); err != nil {
-			return err
-		}
-		selectionChanged, err := config.PublishMachine(context.configPath, machine)
-		if err != nil {
-			return err
-		}
-		if err := afterSelectionPublished(env, selectionChanged); err != nil {
-			return fmt.Errorf(
-				"machine selection was saved before convergence was interrupted: %w; rerun dot apply",
-				err,
-			)
-		}
-		result, runErr := executePrepared(context, prepared, owner.ownership())
-		if runErr != nil {
-			if warningErr := printWarnings(command, result.Warnings); warningErr != nil {
-				return errors.Join(runErr, warningErr)
+	return withMutationLock(
+		context.controls(preflight.ProspectiveMachine.Repository),
+		func(owner mutationOwner) error {
+			locked, err := analyzeInit(context, machine)
+			if err != nil {
+				return err
 			}
-			if selectionChanged {
+			if err := rejectAnalysis(locked); err != nil {
+				return err
+			}
+			selectionChanged, err := config.PublishMachine(
+				context.configPath,
+				locked.ProspectiveMachine,
+			)
+			if err != nil {
+				return err
+			}
+			if err := afterSelectionPublished(env, selectionChanged); err != nil {
 				return fmt.Errorf(
-					"machine selection was saved before convergence failed: %w; rerun dot apply",
-					runErr,
+					"machine selection was saved before convergence was interrupted: %w; rerun dot apply",
+					err,
 				)
 			}
-			return runErr
-		}
-		return printMutationResult(command, result, selectionChanged, "dot apply")
-	})
+			result, runErr := executeResolved(
+				context,
+				locked.ProspectiveMachine.Repository,
+				locked.resolution,
+				locked.scope,
+				owner.ownership(),
+			)
+			if runErr != nil {
+				if warningErr := printWarnings(command, result.Warnings); warningErr != nil {
+					return errors.Join(runErr, warningErr)
+				}
+				if selectionChanged {
+					return fmt.Errorf(
+						"machine selection was saved before convergence failed: %w; rerun dot apply",
+						runErr,
+					)
+				}
+				return runErr
+			}
+			return printMutationResult(command, result, selectionChanged, "dot apply")
+		})
 }
 
 func initRepository(args []string, env environment) (string, error) {
@@ -136,15 +141,4 @@ func initRepository(args []string, env environment) (string, error) {
 		return "", fmt.Errorf("resolve repository %q: %w", repository, err)
 	}
 	return filepath.Clean(absolute), nil
-}
-
-func requireUninitialized(context commandContext) error {
-	_, exists, err := config.LoadMachine(context.configPath)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return fmt.Errorf("machine is already initialized at %q", context.configPath)
-	}
-	return nil
 }

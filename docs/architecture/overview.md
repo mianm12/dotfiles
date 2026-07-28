@@ -7,15 +7,21 @@
 
 ```text
 repository desired + machine selection + state + actual filesystem
-  -> resolve
-  -> plan
+  -> CLI OperationAnalysis (selection delta + resolve + plan)
+  -> status / dry-run projection
+  -> mutation lock
+  -> rebuild OperationAnalysis
   -> execute
   -> verify changed targets
   -> commit state
 ```
 
 核心业务逻辑与 CLI、文件发布和进程退出分离。`cmd/dot` 只把进程 IO/环境交给 `cli.Run` 并以
-其结果退出。
+其结果退出。OperationAnalysis 是只读观察结果，不是 executor 输入；真实 mutation 在锁内
+重新分析后，只把 resolution、scope 和 controls 交给 executor，由 executor 再次加载 state
+并重新规划。Scoped mutation 的 module 投影只包含请求 scope 和具有 module-specific
+blocker 的 module；完整 prospective selection 仍保存在 machine 中，其他 effective modules
+继续通过 resolution 参与 target topology 校验。
 
 ## Package 职责
 
@@ -28,7 +34,7 @@ repository desired + machine selection + state + actual filesystem
 | `internal/lock` | mutation advisory lock |
 | `internal/core/planner` | desired、state 与 actual 的纯计划决策 |
 | `internal/core/executor` | mutation 顺序、复核和恢复语义 |
-| `internal/cli` | 命令、scope、输出和退出码 |
+| `internal/cli` | 命令、只读 operation analysis、scope、输出和退出码 |
 | `cmd/dot` | 进程入口 |
 
 允许的依赖总体从左向右推进：
