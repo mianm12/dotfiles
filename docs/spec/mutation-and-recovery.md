@@ -23,6 +23,9 @@ acquire mutation lock
 - 配置与 manifest 的严格加载及命令 scope 由
   [`cli.md`](cli.md#命令-scope-与加载) 定义。
 - Deterministic config、path 或 ownership conflict 在 mutation 前失败，选定 scope 零写入。
+- 机器配置与 state/lock 的私有根目录最终对象必须是真实目录；更高层的 ancestor symlink
+  合法。最终对象为 symlink 时 mutation 失败，不跟随、替换或 chmod 其目标。
+- 不防御同一用户权限的其他进程在检查与 mutation 之间并发替换私有控制根。
 - 不建立通用 action snapshot 或 precondition 系统。
 - Local 和新 link 使用不可覆盖创建语义；target 已出现时停止。
 - Update/prune 删除 symlink 前重新读取 resolved target 和 raw destination；与 state 不同则停止。

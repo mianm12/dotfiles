@@ -298,6 +298,46 @@ target = "~/.app"
 	}
 }
 
+func TestApplyRejectsFinalMachineConfigRootSymlinkBeforeArtifactMutation(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "config"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	configRoot := filepath.Dir(fixture.config)
+	externalRoot := filepath.Join(fixture.root, "external-config")
+	if err := os.Rename(configRoot, externalRoot); err != nil {
+		t.Fatalf("os.Rename(%q, %q) error = %v", configRoot, externalRoot, err)
+	}
+	if err := os.Chmod(externalRoot, 0o755); err != nil {
+		t.Fatalf("os.Chmod(%q) error = %v", externalRoot, err)
+	}
+	if err := os.Symlink(externalRoot, configRoot); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", externalRoot, configRoot, err)
+	}
+	before := snapshotPaths(t, configRoot, externalRoot, fixture.config)
+
+	code, stdout, stderr := fixture.run("apply")
+
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(stderr, "symbolic link") {
+		t.Fatalf(
+			"apply = (%d, %q, %q), want machine-config root symlink failure",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+	assertCLIMissing(t, fixture.state)
+}
+
 func TestMutationLockRejectsSecondProcess(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeMachine(t, []string{"base"}, nil)
