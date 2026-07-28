@@ -60,8 +60,9 @@ type OperationAnalysis struct {
 	SelectionDelta     SelectionDelta
 	Modules            []ModuleAnalysis
 	Actions            []planner.Action
-	Warnings           []string
-	Blockers           []AnalysisBlocker
+	// Warnings contains input diagnostics, never action outcomes.
+	Warnings []string
+	Blockers []AnalysisBlocker
 
 	resolution config.Resolution
 	scope      []string
@@ -370,7 +371,7 @@ func analyzeStatus(
 		}
 	}
 
-	actions, planWarnings, planned, err := buildStatusActions(
+	actions, inputWarnings, planned, err := buildStatusActions(
 		context,
 		current,
 		resolution,
@@ -390,7 +391,7 @@ func analyzeStatus(
 		sources,
 		observations,
 		actions,
-		appendWarning(inputs.loaded.Warning, planWarnings),
+		appendWarning(inputs.loaded.Warning, inputWarnings),
 		blockers,
 		ids,
 		planned,
@@ -536,7 +537,6 @@ func buildMutationAnalysis(
 	blockers []AnalysisBlocker,
 ) (OperationAnalysis, error) {
 	actions := make([]planner.Action, 0)
-	planWarnings := make([]string, 0)
 	planningComplete := false
 	if len(blockers) == 0 {
 		plan, err := planner.Build(planner.Request{
@@ -553,7 +553,6 @@ func buildMutationAnalysis(
 			blockers = append(blockers, AnalysisBlocker{Reason: err.Error()})
 		} else {
 			actions = append(actions, plan.Actions...)
-			planWarnings = append(planWarnings, plan.Warnings...)
 			planningComplete = true
 		}
 	}
@@ -579,7 +578,7 @@ func buildMutationAnalysis(
 		sources,
 		observations,
 		actions,
-		appendWarning(loaded.Warning, planWarnings),
+		appendWarning(loaded.Warning, nil),
 		blockers,
 		ids,
 		planned,
@@ -637,7 +636,6 @@ func buildStatusActions(
 			continue
 		}
 		actions = append(actions, scoped.Actions...)
-		warnings = append(warnings, scoped.Warnings...)
 		planned[moduleID] = true
 	}
 	return actions, warnings, planned, nil

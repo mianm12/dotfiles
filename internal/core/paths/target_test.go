@@ -2,8 +2,11 @@ package paths
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -50,8 +53,16 @@ func TestResolveTarget_RejectsUnsupportedOrEscapingExpressions(t *testing.T) {
 		"~/`command`",
 	} {
 		t.Run(expression, func(t *testing.T) {
-			if _, err := ResolveTarget(home, expression); !errors.Is(err, ErrInvalidPath) {
+			_, err := ResolveTarget(home, expression)
+			if !errors.Is(err, ErrInvalidPath) {
 				t.Fatalf("ResolveTarget(%q) error = %v, want ErrInvalidPath", expression, err)
+			}
+			if class, ok := ClassifyResolutionError(err); ok {
+				t.Fatalf(
+					"ClassifyResolutionError(%q) = (%v, true), want unclassified invalid input",
+					expression,
+					class,
+				)
 			}
 		})
 	}
@@ -86,11 +97,116 @@ func TestResolveTarget_RejectsBlockedAndDanglingAncestors(t *testing.T) {
 	if err := os.Symlink("missing", filepath.Join(home, "dangling")); err != nil {
 		t.Fatalf("os.Symlink(dangling) error = %v", err)
 	}
+	if err := os.Symlink("file", filepath.Join(home, "file-alias")); err != nil {
+		t.Fatalf("os.Symlink(file alias) error = %v", err)
+	}
+	if err := os.Symlink("loop", filepath.Join(home, "loop")); err != nil {
+		t.Fatalf("os.Symlink(loop) error = %v", err)
+	}
 
-	for _, expression := range []string{"~/file/child", "~/dangling/child"} {
+	for _, expression := range []string{
+		"~/file/child",
+		"~/file-alias/child",
+		"~/dangling/child",
+		"~/loop/child",
+	} {
 		t.Run(expression, func(t *testing.T) {
-			if _, err := ResolveTarget(home, expression); !errors.Is(err, ErrPathBlocked) {
+			_, err := ResolveTarget(home, expression)
+			if !errors.Is(err, ErrPathBlocked) {
 				t.Fatalf("ResolveTarget(%q) error = %v, want ErrPathBlocked", expression, err)
+			}
+			wrapped := fmt.Errorf("outer resolution context: %w", err)
+			class, ok := ClassifyResolutionError(wrapped)
+			if !ok || class != ResolutionObstructed {
+				t.Fatalf(
+					"ClassifyResolutionError(%q) = (%v, %t), want (%v, true)",
+					expression,
+					class,
+					ok,
+					ResolutionObstructed,
+				)
+			}
+		})
+	}
+}
+
+func TestResolveTarget_AllowsMissingSuffix(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(home) error = %v", err)
+	}
+
+	target, err := ResolveTarget(home, "~/missing/child/config")
+	if err != nil {
+		t.Fatalf("ResolveTarget(missing suffix) error = %v", err)
+	}
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("filepath.EvalSymlinks(home) error = %v", err)
+	}
+	if got, want := target.Resolved(), filepath.Join(resolvedHome, "missing", "child", "config"); got != want {
+		t.Fatalf("Resolved() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveTarget_ClassifiesUnavailableFilesystemObservation(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	blocked := filepath.Join(home, "blocked")
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(blocked) error = %v", err)
+	}
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Skipf("os.Chmod(blocked) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(blocked, 0o700); err != nil {
+			t.Errorf("restore blocked directory mode: %v", err)
+		}
+	})
+
+	_, err := ResolveTarget(home, "~/blocked/child/config")
+	if err == nil {
+		t.Skip("filesystem did not enforce directory search permission")
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("ResolveTarget(permission denied) error = %v, want fs.ErrPermission", err)
+	}
+	wrapped := fmt.Errorf("outer resolution context: %w", err)
+	class, ok := ClassifyResolutionError(wrapped)
+	if !ok || class != ResolutionUnavailable {
+		t.Fatalf(
+			"ClassifyResolutionError(permission denied) = (%v, %t), want (%v, true)",
+			class,
+			ok,
+			ResolutionUnavailable,
+		)
+	}
+}
+
+func TestFilesystemResolutionClass(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		class ResolutionClass
+	}{
+		{name: "missing", err: fs.ErrNotExist, class: ResolutionObstructed},
+		{name: "not a directory", err: syscall.ENOTDIR, class: ResolutionObstructed},
+		{name: "symlink loop", err: syscall.ELOOP, class: ResolutionObstructed},
+		{name: "permission", err: fs.ErrPermission, class: ResolutionUnavailable},
+		{name: "other I/O", err: errors.New("synthetic I/O error"), class: ResolutionUnavailable},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := filesystemResolutionClass(test.err); got != test.class {
+				t.Fatalf(
+					"filesystemResolutionClass(%v) = %v, want %v",
+					test.err,
+					got,
+					test.class,
+				)
 			}
 		})
 	}

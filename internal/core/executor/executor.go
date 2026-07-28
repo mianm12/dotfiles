@@ -23,7 +23,8 @@ type convergenceRequest struct {
 }
 
 // Result reports the plan that was applied and whether it changed artifacts or
-// ownership state. Advisory-lock bookkeeping is not counted as a mutation.
+// ownership state. Warnings contain input diagnostics only; action outcomes are
+// projected from Plan after the state commit succeeds.
 type Result struct {
 	Plan           planner.Plan
 	TargetsChanged bool
@@ -79,7 +80,7 @@ func runLocked(request convergenceRequest, commit stateCommitter) (Result, error
 		return Result{}, err
 	}
 	if plan.HasConflicts() {
-		return Result{Plan: plan, Warnings: warnings(loaded, plan)}, conflictError(plan)
+		return Result{Plan: plan, Warnings: warnings(loaded)}, conflictError(plan)
 	}
 
 	next := cloneSnapshot(loaded.Snapshot)
@@ -88,7 +89,7 @@ func runLocked(request convergenceRequest, commit stateCommitter) (Result, error
 		return Result{
 			Plan:           plan,
 			TargetsChanged: mutation.changed,
-			Warnings:       warnings(loaded, plan),
+			Warnings:       warnings(loaded),
 		}, mutation.wrapError(err)
 	}
 
@@ -98,17 +99,20 @@ func runLocked(request convergenceRequest, commit stateCommitter) (Result, error
 	if stateChanged {
 		if err := commit(request.Controls.State, next); err != nil {
 			return Result{
-				Plan:           plan,
-				TargetsChanged: mutation.changed,
-				Warnings:       warnings(loaded, plan),
-			}, mutation.wrapError(fmt.Errorf("commit state: %w", err))
+					Plan:           plan,
+					TargetsChanged: mutation.changed,
+					Warnings:       warnings(loaded),
+				}, mutation.wrapError(fmt.Errorf(
+					"commit state: %w; state was not committed, rerun to converge",
+					err,
+				))
 		}
 	}
 	return Result{
 		Plan:           plan,
 		TargetsChanged: mutation.changed,
 		StateChanged:   stateChanged,
-		Warnings:       warnings(loaded, plan),
+		Warnings:       warnings(loaded),
 	}, nil
 }
 
@@ -122,16 +126,11 @@ func validateRequest(request convergenceRequest) error {
 	return nil
 }
 
-func warnings(loaded state.Loaded, plan planner.Plan) []string {
-	size := len(plan.Warnings)
-	if loaded.Warning != "" {
-		size++
+func warnings(loaded state.Loaded) []string {
+	if loaded.Warning == "" {
+		return nil
 	}
-	result := make([]string, 0, size)
-	if loaded.Warning != "" {
-		result = append(result, loaded.Warning)
-	}
-	return append(result, plan.Warnings...)
+	return []string{loaded.Warning}
 }
 
 func conflictError(plan planner.Plan) error {

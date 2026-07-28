@@ -1,14 +1,9 @@
 package config
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 
-	"github.com/google/renameio/v2"
 	"github.com/mianm12/dotfiles/internal/storage"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -51,39 +46,11 @@ func PublishMachine(path string, machine Machine) (changed bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	current, readErr := os.ReadFile(path)
-	switch {
-	case readErr == nil && bytes.Equal(current, data):
-		return false, nil
-	case readErr != nil && !errors.Is(readErr, fs.ErrNotExist):
-		return false, fmt.Errorf("read existing machine config %q: %w", path, readErr)
-	}
-
-	if err := storage.EnsureRoot(filepath.Dir(path)); err != nil {
-		return false, err
-	}
-	pending, err := renameio.NewPendingFile(
-		path,
-		renameio.WithStaticPermissions(storage.PrivateFileMode),
-	)
+	changed, err = storage.PublishPrivateFile(path, data)
 	if err != nil {
-		return false, fmt.Errorf("create machine config temporary file: %w", err)
+		return changed, fmt.Errorf("publish machine config %q: %w", path, err)
 	}
-	defer func() {
-		if cleanupErr := pending.Cleanup(); cleanupErr != nil {
-			err = errors.Join(
-				err,
-				fmt.Errorf("clean up machine config temporary file: %w", cleanupErr),
-			)
-		}
-	}()
-	if _, err := pending.Write(data); err != nil {
-		return false, fmt.Errorf("write machine config temporary file: %w", err)
-	}
-	if err := pending.CloseAtomicallyReplace(); err != nil {
-		return false, fmt.Errorf("publish machine config %q: %w", path, err)
-	}
-	return true, nil
+	return changed, nil
 }
 
 func validateMachine(machine Machine) error {

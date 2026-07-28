@@ -23,18 +23,35 @@ func printPlan(command *cobra.Command, plan planner.Plan, warnings []string) err
 		return nil
 	}
 	for _, action := range plan.Actions {
-		if _, err := fmt.Fprintf(
-			command.OutOrStdout(),
-			"%-12s %s/%s %s\n",
-			action.Decision,
-			action.ModuleID,
-			action.PlacementID,
-			action.Target,
-		); err != nil {
+		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write plan: %w", err)
 		}
 	}
 	return nil
+}
+
+func printAction(command *cobra.Command, action planner.Action) error {
+	if _, err := fmt.Fprintf(
+		command.OutOrStdout(),
+		"%-12s %s/%s %s",
+		action.Decision,
+		action.ModuleID,
+		action.PlacementID,
+		action.Target,
+	); err != nil {
+		return err
+	}
+	if action.Reason != "" {
+		if _, err := fmt.Fprintf(
+			command.OutOrStdout(),
+			" reason=%s",
+			strconv.Quote(action.Reason),
+		); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintln(command.OutOrStdout())
+	return err
 }
 
 func printWarnings(command *cobra.Command, warnings []string) error {
@@ -77,26 +94,7 @@ func printOperationAnalysis(
 		printed = true
 	}
 	for _, action := range analysis.Actions {
-		if _, err := fmt.Fprintf(
-			command.OutOrStdout(),
-			"%-12s %s/%s %s",
-			action.Decision,
-			action.ModuleID,
-			action.PlacementID,
-			action.Target,
-		); err != nil {
-			return fmt.Errorf("write operation action: %w", err)
-		}
-		if action.Reason != "" {
-			if _, err := fmt.Fprintf(
-				command.OutOrStdout(),
-				" reason=%s",
-				strconv.Quote(action.Reason),
-			); err != nil {
-				return fmt.Errorf("write operation action: %w", err)
-			}
-		}
-		if _, err := fmt.Fprintln(command.OutOrStdout()); err != nil {
+		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write operation action: %w", err)
 		}
 		printed = true
@@ -139,6 +137,11 @@ func printResult(
 	if err := printPlan(command, result.Plan, result.Warnings); err != nil {
 		return err
 	}
+	if result.StateChanged {
+		if err := printForgotOwnership(command, result.Plan.Actions); err != nil {
+			return err
+		}
+	}
 	_, err := fmt.Fprintf(
 		command.OutOrStdout(),
 		"selection_changed=%t targets_changed=%t state_changed=%t\n",
@@ -148,6 +151,44 @@ func printResult(
 	)
 	if err != nil {
 		return fmt.Errorf("write mutation result: %w", err)
+	}
+	return nil
+}
+
+func printForgotOwnership(
+	command *cobra.Command,
+	actions []planner.Action,
+) error {
+	for _, action := range actions {
+		if action.Decision != planner.DecisionForget {
+			continue
+		}
+		evidence := "ownership"
+		if action.Kind == state.KindLocal {
+			evidence = "provenance"
+		}
+		if _, err := fmt.Fprintf(
+			command.ErrOrStderr(),
+			"warning: forgot %s for %s/%s %s",
+			evidence,
+			action.ModuleID,
+			action.PlacementID,
+			action.Target,
+		); err != nil {
+			return fmt.Errorf("write forgot ownership result: %w", err)
+		}
+		if action.Reason != "" {
+			if _, err := fmt.Fprintf(
+				command.ErrOrStderr(),
+				" reason=%s",
+				strconv.Quote(action.Reason),
+			); err != nil {
+				return fmt.Errorf("write forgot ownership result: %w", err)
+			}
+		}
+		if _, err := fmt.Fprintln(command.ErrOrStderr()); err != nil {
+			return fmt.Errorf("write forgot ownership result: %w", err)
+		}
 	}
 	return nil
 }
@@ -221,6 +262,14 @@ func printStatusAnalysis(
 	if len(modules) == 0 {
 		if _, err := fmt.Fprintln(command.OutOrStdout(), "no modules"); err != nil {
 			return fmt.Errorf("write status: %w", err)
+		}
+	}
+	for _, action := range analysis.Actions {
+		if action.Decision != planner.DecisionForget {
+			continue
+		}
+		if err := printAction(command, action); err != nil {
+			return fmt.Errorf("write status action: %w", err)
 		}
 	}
 	for _, blocker := range analysis.Blockers {

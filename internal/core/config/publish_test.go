@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -45,5 +46,30 @@ func TestPublishMachineRoundTripsPrivatelyAndSkipsIdenticalContent(t *testing.T)
 	changed, err = coreconfig.PublishMachine(path, machine)
 	if err != nil || changed {
 		t.Fatalf("PublishMachine(repeated) = (%t, %v), want no-op", changed, err)
+	}
+}
+
+func TestPublishMachineRejectsRelativePathWithoutWriting(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	machine := coreconfig.Machine{
+		Version:    1,
+		Repository: filepath.Join(root, "repository"),
+	}
+
+	changed, err := coreconfig.PublishMachine("config.toml", machine)
+	if changed || !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
+		t.Fatalf(
+			"PublishMachine(relative) = (%t, %v), want ErrInvalidConfiguration",
+			changed,
+			err,
+		)
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil {
+		t.Fatalf("os.ReadDir(root) error = %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("relative publish wrote entries: %v", entries)
 	}
 }

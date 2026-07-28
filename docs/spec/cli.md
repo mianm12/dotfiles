@@ -90,7 +90,8 @@ dot help
   decision。
 - Dry-run 在 placement actions 之前显示非空 selection delta：`create`、`add-extra` 或
   `remove-extra`；`add-extra`/`remove-extra` 同时显示 module ID。完整分析中的 blocker 写
-  stdout 并包含 reason。输入 warning 仍写 stderr。
+  stdout 并包含 reason。Dry-run 和 status 都显示计划执行的 forget action 及其结构化
+  reason；输入 warning 仍写 stderr。
 - Status 与 dry-run 只要形成完整 analysis 就返回成功，即使其中有 pending、conflict 或
   blocker；没有 `--check`。配置、manifest 或 state 无法解析、必要输入无法读取，或未分类的
   文件系统观察失败时 analysis 不完整并返回失败。
@@ -101,8 +102,10 @@ dot help
 - 真实 mutation 在取锁前分析一次，并在锁内重新加载输入和建立新的 analysis；blocker 或
   conflict 转为失败后才可发布 selection。Operation analysis 不是 executor 输入，锁前
   analysis 永远不能直接执行。
-- 正常 mutation 结果只在 lock 成功释放后写 stdout。Lock 释放失败返回 `1` 且不得先输出
-  成功摘要；若 selection、target 或 state 已提交，错误说明可能已经应用并提示重跑确认收敛。
+- 正常 mutation 结果只在 state commit 与 lock release 均成功后写 stdout。每个成功 forget
+  action 的过去式 ownership/provenance 提示都从该结构化 action 派生，不保存第二份字符串
+  结果。Lock 释放失败返回 `1` 且不得先输出成功摘要；若 selection、target 或 state 已提交，
+  错误说明可能已经应用并提示重跑确认收敛。
 
 ## 输出与退出码
 
@@ -123,4 +126,5 @@ Status/dry-run 能把 request-specific 未知、不适用、indeterminate、prof
 `1`。`2` 仅用于 CLI 语法错误，例如未知 flag 或 `remove` 缺少 `MODULE` 参数。
 
 运行时失败不要求维护完整的 completed/failed/not-attempted 结果协议。错误信息必须指出失败
-动作；已经发生 mutation 时提示本轮可能部分完成并建议重跑，不得把未执行动作显示为成功。
+动作；已经发生 mutation 时提示本轮可能部分完成并建议重跑，不得输出计划 action 或把未完成
+动作显示为成功，尤其不得声称已经 forget ownership。

@@ -18,10 +18,11 @@ State 中 placement 的 kind 与当前 desired 的 kind 不一致（同一 ID �
 
 Control topology 自身无效时整条规划失败，不能使用 stale 宽容规则绕过。Active target 与
 control family 重叠仍是 path conflict。仅当 state placement 已退出 desired，且其历史 target
-与当前 control family 重叠时，`dot` 生成 warning 与 `forget`：放弃 ownership/provenance，
-禁止 prune，不删除、替换或以其他 placement action 修改对应 target。该规则同时适用于
-stale link 与 stale local，只处理当前命令 scope 内的记录；损坏 state、HOME 不匹配和未知 kind
-等输入错误不得降级为 forget。
+与当前 control family 重叠时，`dot` 生成带结构化原因的 `forget`：放弃
+ownership/provenance，禁止 prune，不删除、替换或以其他 placement action 修改对应 target。
+该 action 是 ownership 放弃原因的唯一真相源，具体的只读预告与成功结果文案由
+[`cli.md`](cli.md#status-与-dry-run) 投影。该规则同时适用于 stale link 与 stale local，只处理
+当前命令 scope 内的记录；损坏 state、HOME 不匹配和未知 kind 等输入错误不得降级为 forget。
 
 ## Link
 
@@ -51,8 +52,8 @@ Stale link target 在规范化或解析后关系中严格包含 active desired t
 [`placements.md`](placements.md#路径身份与边界) 的同一 target 关系。
 
 Stale link 不满足该守卫时（target 已变成普通文件、目录或 special，raw destination 漂移，或
-resolved target 改变）不是 conflict：用户已接管该 target，`dot` 警告并 forget 对应 state
-记录、放弃 ownership，不阻塞本轮其余收敛。
+resolved target 改变）不是 conflict：用户已接管该 target，`dot` 生成说明事实原因的 forget
+action，放弃对应 state ownership，不阻塞本轮其余收敛。
 
 该宽容规则仅适用于 stale placement——`dot` 对它唯一想做的动作是删除，放弃删除不触碰任何
 用户数据；active placement 的漂移仍按上文判定为 conflict。
@@ -65,4 +66,5 @@ resolved target 改变）不是 conflict：用户已接管该 target，`dot` 警
 | 任意已存在目录项 | keep；不读取、不比较、不分类、不覆盖 |
 
 Example 更新不触发 local 更新；local 被用户删除后下一次 apply 重新创建。Local 退出 desired
-时永不删除；若 state 有记录则提示一次并忘记 provenance。Remove/prune 永不删除 local。
+时永不删除；若 state 有记录则生成带原因的 forget action，只忘记 provenance。Remove/prune
+永不删除 local。

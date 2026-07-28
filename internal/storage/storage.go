@@ -1,12 +1,15 @@
-// Package storage 维护 state 家族目录和文件的共同权限边界。
+// Package storage 维护私有控制目录和文件发布的共同权限边界。
 package storage
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/google/renameio/v2"
 )
 
 const (
@@ -22,6 +25,15 @@ type privateFile interface {
 }
 
 type privateFileOpener func(string, int, fs.FileMode) (privateFile, error)
+
+type pendingPrivateFile interface {
+	Write([]byte) (int, error)
+	Chmod(fs.FileMode) error
+	CloseAtomicallyReplace() error
+	Cleanup() error
+}
+
+type pendingPrivateFileFactory func(string) (pendingPrivateFile, error)
 
 // ValidateRoot 只读校验私有控制根目录。目录尚不存在时也通过，由 mutation
 // 在需要写入时调用 EnsureRoot 建立。
@@ -144,6 +156,74 @@ func ensurePrivateFile(cleanPath string, openFile privateFileOpener) error {
 		}
 		return nil
 	}
+}
+
+// PublishPrivateFile atomically publishes changed bytes through a private
+// regular file. Identical content is a strict no-op.
+func PublishPrivateFile(path string, data []byte) (changed bool, err error) {
+	cleanPath, err := cleanAbsolute(path)
+	if err != nil {
+		return false, fmt.Errorf("publish private file: %w", err)
+	}
+	return publishPrivateFile(cleanPath, data, func(path string) (pendingPrivateFile, error) {
+		return renameio.NewPendingFile(path)
+	})
+}
+
+func publishPrivateFile(
+	cleanPath string,
+	data []byte,
+	newPending pendingPrivateFileFactory,
+) (changed bool, err error) {
+	parent := filepath.Dir(cleanPath)
+	if err := ValidateRoot(parent); err != nil {
+		return false, err
+	}
+	if err := ValidatePrivateFile(cleanPath); err != nil {
+		return false, err
+	}
+
+	current, readErr := os.ReadFile(cleanPath)
+	switch {
+	case readErr == nil && bytes.Equal(current, data):
+		return false, nil
+	case readErr != nil && !errors.Is(readErr, fs.ErrNotExist):
+		return false, fmt.Errorf("read existing private file %q: %w", cleanPath, readErr)
+	}
+
+	if err := EnsureRoot(parent); err != nil {
+		return false, err
+	}
+	pending, err := newPending(cleanPath)
+	if err != nil {
+		return false, fmt.Errorf("create temporary private file for %q: %w", cleanPath, err)
+	}
+	defer func() {
+		if cleanupErr := pending.Cleanup(); cleanupErr != nil {
+			err = errors.Join(
+				err,
+				fmt.Errorf(
+					"clean up temporary private file for %q: %w",
+					cleanPath,
+					cleanupErr,
+				),
+			)
+		}
+	}()
+	if err := pending.Chmod(PrivateFileMode); err != nil {
+		return false, fmt.Errorf(
+			"set temporary private file permissions for %q: %w",
+			cleanPath,
+			err,
+		)
+	}
+	if _, err := pending.Write(data); err != nil {
+		return false, fmt.Errorf("write temporary private file for %q: %w", cleanPath, err)
+	}
+	if err := pending.CloseAtomicallyReplace(); err != nil {
+		return false, fmt.Errorf("publish private file %q: %w", cleanPath, err)
+	}
+	return true, nil
 }
 
 func cleanAbsolute(path string) (string, error) {
