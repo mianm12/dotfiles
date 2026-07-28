@@ -7,8 +7,7 @@ import (
 )
 
 var (
-	// ErrTargetConflict reports duplicate targets or a directory-link target
-	// containing another placement.
+	// ErrTargetConflict reports placement targets that are equal or nested.
 	ErrTargetConflict = errors.New("target paths conflict")
 	// ErrControlBoundary reports a target overlapping a protected path.
 	ErrControlBoundary = errors.New("target overlaps a control path")
@@ -25,18 +24,15 @@ type Controls struct {
 }
 
 // Placement is the path information needed before manifest/planner construction.
-// DirectoryLink is true only when a link placement's source is a directory.
 type Placement struct {
-	Label         string
-	Target        string
-	DirectoryLink bool
+	Label  string
+	Target string
 }
 
 // ResolvedPlacement is a validated placement with both path representations.
 type ResolvedPlacement struct {
-	Label         string
-	Target        Target
-	DirectoryLink bool
+	Label  string
+	Target Target
 }
 
 type pathIdentity struct {
@@ -124,9 +120,8 @@ func validate(
 			return nil, fmt.Errorf("resolve placement %q: %w", placement.Label, resolveErr)
 		}
 		resolved[index] = ResolvedPlacement{
-			Label:         placement.Label,
-			Target:        target,
-			DirectoryLink: placement.DirectoryLink,
+			Label:  placement.Label,
+			Target: target,
 		}
 	}
 
@@ -335,28 +330,34 @@ func validateTargetSet(
 			if !participates(selected, left.Label, right.Label) {
 				continue
 			}
-			if sameTarget(left.Target, right.Target) {
+			if TargetsEqual(left.Target, right.Target) {
 				return fmt.Errorf(
-					"%w: placements %q and %q resolve to the same target",
+					"%w: placements %q target %q and %q target %q resolve to the same target",
 					ErrTargetConflict,
 					left.Label,
+					left.Target.Lexical(),
 					right.Label,
+					right.Target.Lexical(),
 				)
 			}
-			if directoryContains(left, right) {
+			if TargetStrictlyContains(left.Target, right.Target) {
 				return fmt.Errorf(
-					"%w: directory link placement %q contains placement %q",
+					"%w: placement %q target %q contains placement %q target %q",
 					ErrTargetConflict,
 					left.Label,
+					left.Target.Lexical(),
 					right.Label,
+					right.Target.Lexical(),
 				)
 			}
-			if directoryContains(right, left) {
+			if TargetStrictlyContains(right.Target, left.Target) {
 				return fmt.Errorf(
-					"%w: directory link placement %q contains placement %q",
+					"%w: placement %q target %q contains placement %q target %q",
 					ErrTargetConflict,
 					right.Label,
+					right.Target.Lexical(),
 					left.Label,
+					left.Target.Lexical(),
 				)
 			}
 		}
@@ -364,14 +365,17 @@ func validateTargetSet(
 	return nil
 }
 
-func sameTarget(left, right Target) bool {
+// TargetsEqual reports equality in either the lexical or resolved target
+// representation.
+func TargetsEqual(left, right Target) bool {
 	return left.lexical == right.lexical || left.resolved == right.resolved
 }
 
-func directoryContains(parent, child ResolvedPlacement) bool {
-	return parent.DirectoryLink &&
-		(strictDescendant(parent.Target.lexical, child.Target.lexical) ||
-			strictDescendant(parent.Target.resolved, child.Target.resolved))
+// TargetStrictlyContains reports strict ancestry in either the lexical or
+// resolved target representation.
+func TargetStrictlyContains(parent, child Target) bool {
+	return strictDescendant(parent.lexical, child.lexical) ||
+		strictDescendant(parent.resolved, child.resolved)
 }
 
 func validateControlBoundaries(

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
+	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
@@ -323,6 +324,36 @@ func TestBuildRejectsStateBoundToDifferentHome(t *testing.T) {
 	}
 }
 
+func TestStaleTargetReuseDoesNotOverrideActiveOwnershipConflict(t *testing.T) {
+	fixture := newFixture(t)
+	oldSource := fixture.file(t, "repo/modules/old/config", "old")
+	newSource := fixture.file(t, "repo/modules/app/config", "new")
+	target := fixture.target(".config/app/config")
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"old": {
+				Placements: map[string]state.Placement{
+					"config": linkRecord(target, fixture.resolved(t, target), oldSource),
+				},
+			},
+		},
+	}
+	module := linkModule("app", "config", newSource, "~/.config/app/config")
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, []config.Module{module}, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionConflict, planner.DecisionForget)
+	if !plan.HasConflicts() {
+		t.Fatal("Build() HasConflicts() = false, want active ownership conflict")
+	}
+	if got := plan.Actions[1].Reason; got != "stale target is reused by desired configuration" {
+		t.Fatalf("stale reuse reason = %q", got)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
 func TestScopedPlanChecksOnlyRelationshipsInvolvingScope(t *testing.T) {
 	fixture := newFixture(t)
 	appSource := fixture.file(t, "repo/modules/app/config", "app")
@@ -331,7 +362,7 @@ func TestScopedPlanChecksOnlyRelationshipsInvolvingScope(t *testing.T) {
 	modules := []config.Module{
 		linkModule("app", "config", appSource, "~/.config/app"),
 		linkModule("first", "config", firstSource, "~/.config/shared"),
-		linkModule("second", "config", secondSource, "~/.config/shared"),
+		linkModule("second", "config", secondSource, "~/.config/shared/child"),
 	}
 
 	plan, err := planner.Build(planner.Request{
@@ -346,7 +377,18 @@ func TestScopedPlanChecksOnlyRelationshipsInvolvingScope(t *testing.T) {
 	}
 	assertDecisions(t, plan, planner.DecisionCreateLink)
 
-	modules[1].Links[0].Target = "~/.config/app"
+	_, err = planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules:  modules,
+		State:    fixture.snapshot(nil),
+	})
+	if !errors.Is(err, corepaths.ErrTargetConflict) {
+		t.Fatalf("Build(full unrelated nested targets) error = %v, want target conflict", err)
+	}
+
+	modules[1].Links[0].Target = "~/.config/app/child"
+	modules[2].Links[0].Target = "~/.config/second"
 	_, err = planner.Build(planner.Request{
 		Home:     fixture.home,
 		Controls: fixture.controls,
@@ -355,7 +397,94 @@ func TestScopedPlanChecksOnlyRelationshipsInvolvingScope(t *testing.T) {
 		State:    fixture.snapshot(nil),
 	})
 	if err == nil {
-		t.Fatal("Build(scoped target conflict) error = nil, want conflict with effective module")
+		t.Fatal("Build(scoped selected-parent conflict) error = nil")
+	}
+
+	modules[1].Links[0].Target = "~/.config"
+	_, err = planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules:  modules,
+		Scope:    []string{"app"},
+		State:    fixture.snapshot(nil),
+	})
+	if err == nil {
+		t.Fatal("Build(scoped selected-child conflict) error = nil")
+	}
+}
+
+func TestBuildRejectsNestedTargetsForEveryPlacementKindCombination(t *testing.T) {
+	combinations := []struct {
+		name           string
+		parentKind     state.Kind
+		descendantKind state.Kind
+	}{
+		{name: "link-link", parentKind: state.KindLink, descendantKind: state.KindLink},
+		{name: "link-local", parentKind: state.KindLink, descendantKind: state.KindLocal},
+		{name: "local-link", parentKind: state.KindLocal, descendantKind: state.KindLink},
+		{name: "local-local", parentKind: state.KindLocal, descendantKind: state.KindLocal},
+	}
+
+	for _, combination := range combinations {
+		t.Run(combination.name, func(t *testing.T) {
+			fixture := newFixture(t)
+			parentSource := fixture.file(t, "repo/modules/app/parent", "parent")
+			descendantSource := fixture.file(t, "repo/modules/app/descendant", "descendant")
+			module := config.Module{ID: "app"}
+			add := func(kind state.Kind, id, source, target string) {
+				t.Helper()
+				switch kind {
+				case state.KindLink:
+					module.Links = append(module.Links, config.Link{
+						ID:         id,
+						SourcePath: source,
+						Target:     target,
+					})
+				case state.KindLocal:
+					module.Locals = append(module.Locals, config.Local{
+						ID:          id,
+						ExamplePath: source,
+						Target:      target,
+					})
+				default:
+					t.Fatalf("unsupported test kind %q", kind)
+				}
+			}
+			add(combination.parentKind, "parent", parentSource, "~/.config/app")
+			add(
+				combination.descendantKind,
+				"descendant",
+				descendantSource,
+				"~/.config/app/child",
+			)
+			for _, operation := range []struct {
+				name  string
+				scope []string
+			}{
+				{name: "full"},
+				{name: "scoped", scope: []string{"app"}},
+			} {
+				t.Run(operation.name, func(t *testing.T) {
+					before := snapshotTree(t, fixture.root)
+
+					plan, err := planner.Build(planner.Request{
+						Home:     fixture.home,
+						Controls: fixture.controls,
+						Modules:  []config.Module{module},
+						Scope:    operation.scope,
+						State:    fixture.snapshot(nil),
+					})
+
+					if !errors.Is(err, corepaths.ErrTargetConflict) {
+						t.Fatalf("Build() = (%#v, %v), want target conflict", plan, err)
+					}
+					if plan.Actions != nil || plan.Warnings != nil {
+						t.Fatalf("Build() returned partial plan %#v", plan)
+					}
+					assertTreeUnchanged(t, fixture.root, before)
+				})
+			}
+		})
 	}
 }
 
@@ -455,7 +584,7 @@ func TestStaleDanglingAncestorWarnsAndForgets(t *testing.T) {
 	}
 }
 
-func TestStaleDirectoryLinkContainingDesiredTargetIsConflict(t *testing.T) {
+func TestStaleLinkTargetContainingDesiredTargetIsConflict(t *testing.T) {
 	fixture := newFixture(t)
 	oldDirectory := fixture.dir(t, "repo-old/app")
 	parentTarget := fixture.target(".config/app")
@@ -474,8 +603,8 @@ func TestStaleDirectoryLinkContainingDesiredTargetIsConflict(t *testing.T) {
 	if !plan.HasConflicts() {
 		t.Fatal("Build() HasConflicts() = false, want unsafe parent prune conflict")
 	}
-	if plan.Actions[1].Reason == "" {
-		t.Fatal("stale parent conflict has empty reason")
+	if got := plan.Actions[1].Reason; got != "stale link target contains an active desired target" {
+		t.Fatalf("stale parent conflict reason = %q", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }

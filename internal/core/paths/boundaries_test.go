@@ -102,11 +102,53 @@ func TestValidateRejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
 			wantErr: corepaths.ErrTargetConflict,
 		},
 		{
-			name: "directory link contains another placement",
+			name: "lexical parent target contains child target",
 			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
 				return controlsOutsideHome(root), []corepaths.Placement{
-					{Label: "directory", Target: "~/tree", DirectoryLink: true},
+					{Label: "parent", Target: "~/tree"},
 					{Label: "child", Target: "~/tree/child"},
+				}
+			},
+			wantErr: corepaths.ErrTargetConflict,
+		},
+		{
+			name: "lexical child target is contained by parent target",
+			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
+				return controlsOutsideHome(root), []corepaths.Placement{
+					{Label: "child", Target: "~/tree/child"},
+					{Label: "parent", Target: "~/tree"},
+				}
+			},
+			wantErr: corepaths.ErrTargetConflict,
+		},
+		{
+			name: "resolved parent alias contains child target",
+			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
+				if err := os.MkdirAll(filepath.Join(home, "real"), 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(real) error = %v", err)
+				}
+				if err := os.Symlink("real", filepath.Join(home, "alias")); err != nil {
+					t.Fatalf("os.Symlink(alias) error = %v", err)
+				}
+				return controlsOutsideHome(root), []corepaths.Placement{
+					{Label: "alias-parent", Target: "~/alias/tree"},
+					{Label: "real-child", Target: "~/real/tree/child"},
+				}
+			},
+			wantErr: corepaths.ErrTargetConflict,
+		},
+		{
+			name: "resolved child alias is contained by parent target",
+			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
+				if err := os.MkdirAll(filepath.Join(home, "real"), 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(real) error = %v", err)
+				}
+				if err := os.Symlink("real", filepath.Join(home, "alias")); err != nil {
+					t.Fatalf("os.Symlink(alias) error = %v", err)
+				}
+				return controlsOutsideHome(root), []corepaths.Placement{
+					{Label: "alias-child", Target: "~/alias/tree/child"},
+					{Label: "real-parent", Target: "~/real/tree"},
 				}
 			},
 			wantErr: corepaths.ErrTargetConflict,

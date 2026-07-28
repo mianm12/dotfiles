@@ -76,22 +76,80 @@ target = "~/missing/config"
 			want: "path is blocked",
 		},
 		{
-			name: "directory link owns descendant target",
+			name: "file link contains link target",
 			manifest: `
 [[links]]
-id = "first"
-source = "directory"
+id = "parent"
+source = "first"
 target = "~/tree"
 
 [[links]]
-id = "second"
+id = "child"
 source = "second"
 target = "~/tree/child"
 `,
+		},
+		{
+			name: "link contains local target",
+			manifest: `
+[[links]]
+id = "parent"
+source = "first"
+target = "~/tree"
+
+[[locals]]
+id = "child"
+example = "second"
+target = "~/tree/child"
+`,
+		},
+		{
+			name: "local contains link target",
+			manifest: `
+[[locals]]
+id = "parent"
+example = "first"
+target = "~/tree"
+
+[[links]]
+id = "child"
+source = "second"
+target = "~/tree/child"
+`,
+		},
+		{
+			name: "local contains local target",
+			manifest: `
+[[locals]]
+id = "parent"
+example = "first"
+target = "~/tree"
+
+[[locals]]
+id = "child"
+example = "second"
+target = "~/tree/child"
+`,
+		},
+		{
+			name: "resolved alias target contains descendant",
+			manifest: `
+[[links]]
+id = "parent"
+source = "first"
+target = "~/alias/tree"
+
+[[links]]
+id = "child"
+source = "second"
+target = "~/real/tree/child"
+`,
 			setup: func(t *testing.T, fixture *cliTestEnv) {
-				root := filepath.Join(fixture.repository, "modules", "app")
-				if err := os.Mkdir(filepath.Join(root, "directory"), 0o700); err != nil {
-					t.Fatalf("os.Mkdir(directory source) error = %v", err)
+				if err := os.Mkdir(filepath.Join(fixture.home, "real"), 0o700); err != nil {
+					t.Fatalf("os.Mkdir(real) error = %v", err)
+				}
+				if err := os.Symlink("real", filepath.Join(fixture.home, "alias")); err != nil {
+					t.Fatalf("os.Symlink(alias) error = %v", err)
 				}
 			},
 		},
