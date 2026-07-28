@@ -173,7 +173,7 @@ func TestValidateScopedIgnoresUnselectedOnlyConflictsAndBoundaries(t *testing.T)
 	placements := []Placement{
 		{Label: "selected", Target: "~/.config/selected"},
 		{Label: "outside-first", Target: "~/.config/shared"},
-		{Label: "outside-second", Target: "~/.config/shared"},
+		{Label: "outside-second", Target: "~/.config/shared/child"},
 		{Label: "outside-control", Target: "~/.control/machine.toml"},
 	}
 
@@ -190,7 +190,7 @@ func TestValidateScopedIgnoresUnselectedOnlyConflictsAndBoundaries(t *testing.T)
 		t.Fatalf("ValidateScoped() returned %d placements, want %d", len(resolved), len(placements))
 	}
 
-	placements[1].Target = "~/.config/selected"
+	placements[1].Target = "~/.config/selected/child"
 	resolved, err = ValidateScoped(
 		home,
 		controls,

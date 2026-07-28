@@ -44,6 +44,12 @@ stale link 与 stale local，只处理当前命令 scope 内的记录；损坏 s
 Stale link 只有在当前 target 仍是 symlink、resolved target 未改变且 raw destination 等于
 state 记录时才允许 prune。Dangling symlink 仍按 raw destination 应用同样规则。
 
+Stale link target 与 active desired target 相等时，stale cleanup action 为 forget 旧
+ownership；该 action 不覆盖 active placement 按上文规则独立产生的 ownership conflict。
+Stale link target 在规范化或解析后关系中严格包含 active desired target 时为 conflict，禁止
+删除可能承载 active target 的父 symlink。该判定复用
+[`placements.md`](placements.md#路径身份与边界) 的同一 target 关系。
+
 Stale link 不满足该守卫时（target 已变成普通文件、目录或 special，raw destination 漂移，或
 resolved target 改变）不是 conflict：用户已接管该 target，`dot` 警告并 forget 对应 state
 记录、放弃 ownership，不阻塞本轮其余收敛。

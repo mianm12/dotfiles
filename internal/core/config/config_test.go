@@ -315,11 +315,11 @@ target = "~/.config/app/config.local"
 		len(resolution.Modules[0].Locals) != 1 {
 		t.Fatalf("resolution = %#v", resolution)
 	}
-	if !resolution.Modules[0].Links[1].SourceMode.IsDir() {
-		t.Fatalf("directory link mode = %v, want directory", resolution.Modules[0].Links[1].SourceMode)
+	if directoryLink := resolution.Modules[0].Links[1]; directoryLink.SourcePath !=
+		filepath.Join(moduleRoot, "tree") {
+		t.Fatalf("directory link = %#v, want source path under module root", directoryLink)
 	}
-	if rootLink := resolution.Modules[0].Links[2]; rootLink.SourcePath != moduleRoot ||
-		!rootLink.SourceMode.IsDir() {
+	if rootLink := resolution.Modules[0].Links[2]; rootLink.SourcePath != moduleRoot {
 		t.Fatalf("root directory link = %#v, want source path %q", rootLink, moduleRoot)
 	}
 }

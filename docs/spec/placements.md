@@ -65,8 +65,13 @@ target = "~/.config/example/config.local"
 
 - Target 先展开 HOME 并做词法规范化。
 - 对现存 ancestor symlink，解析到其实际父路径；missing suffix 按原名称追加。
-- 两个 placements 的规范化 target 或解析后 target 相同时拒绝。
-- Directory link 与其他 placement 的后代 target 互斥。
+- 参与当前命令 path validation 的任意两个 active desired placements 必须构成 target
+  antichain：规范化 target 或解析后 target 相等、互为祖先或后代时拒绝。State-only stale
+  records 不进入该集合，其清理关系由 [`planning.md`](planning.md#通用决策规则) 定义。
+- 该不变量不区分 link/local、source 是文件还是目录，也不依赖 actual target 当前类型。
+- Full operation 检查全部 effective placements；scoped operation 检查 scope module 的
+  placements 与全部 effective placements 的关系，但两个完全不属于 scope 的 module 之间的
+  冲突不阻断。公开命令 scope 由 [`cli.md`](cli.md#命令-scope-与加载) 定义。
 - Parent symlink 合法。Link state 保存其上次 resolved target；该值改变时拒绝 update/prune。
 
 不额外探测 case sensitivity、Unicode alias、filesystem type 或 hard-link identity。

@@ -103,9 +103,8 @@ func resolveDesired(
 		for _, link := range module.Links {
 			label := placementLabel(module.ID, link.ID)
 			pathInputs = append(pathInputs, corepaths.Placement{
-				Label:         label,
-				Target:        link.Target,
-				DirectoryLink: link.SourceMode.IsDir(),
+				Label:  label,
+				Target: link.Target,
 			})
 			if scope.includes(module.ID) {
 				selectedLabels = append(selectedLabels, label)
@@ -418,7 +417,7 @@ func planOneStale(
 		current.Resolved() == record.ResolvedTarget {
 		if staleLinkContainsDesired(current, desired) {
 			base.Decision = DecisionConflict
-			base.Reason = "stale directory link contains an active desired target"
+			base.Reason = "stale link target contains an active desired target"
 			return base, "", nil
 		}
 		base.Decision = DecisionPrune
@@ -489,8 +488,7 @@ func targetUsedByDesired(
 	desired []desiredPlacement,
 ) bool {
 	return slices.ContainsFunc(desired, func(placement desiredPlacement) bool {
-		return target.Lexical() == placement.target.Lexical() ||
-			target.Resolved() == placement.target.Resolved()
+		return corepaths.TargetsEqual(target, placement.target)
 	})
 }
 
@@ -499,18 +497,8 @@ func staleLinkContainsDesired(
 	desired []desiredPlacement,
 ) bool {
 	return slices.ContainsFunc(desired, func(placement desiredPlacement) bool {
-		return strictDescendant(target.Lexical(), placement.target.Lexical()) ||
-			strictDescendant(target.Resolved(), placement.target.Resolved())
+		return corepaths.TargetStrictlyContains(target, placement.target)
 	})
-}
-
-func strictDescendant(parent, candidate string) bool {
-	relative, err := filepath.Rel(parent, candidate)
-	return err == nil &&
-		relative != "." &&
-		relative != ".." &&
-		!filepath.IsAbs(relative) &&
-		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func resolveStateTarget(

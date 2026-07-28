@@ -3,7 +3,6 @@ package config
 
 import (
 	"errors"
-	"io/fs"
 )
 
 var (
@@ -66,7 +65,6 @@ type Link struct {
 	Source     string
 	SourcePath string
 	Target     string
-	SourceMode fs.FileMode
 }
 
 // Local is one validated local-file placement.

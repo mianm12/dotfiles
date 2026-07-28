@@ -397,8 +397,7 @@ func materializePlacements(
 	links := make([]Link, len(placements.links))
 	for index, declared := range placements.links {
 		sourcePath := filepath.Join(root, filepath.FromSlash(declared.Source))
-		mode, err := validateLinkSource(module, declared.ID, resolvedRoot, sourcePath)
-		if err != nil {
+		if err := validateLinkSource(module, declared.ID, resolvedRoot, sourcePath); err != nil {
 			return nil, nil, err
 		}
 		links[index] = Link{
@@ -406,7 +405,6 @@ func materializePlacements(
 			Source:     declared.Source,
 			SourcePath: sourcePath,
 			Target:     declared.Target,
-			SourceMode: mode,
 		}
 	}
 
@@ -426,10 +424,10 @@ func materializePlacements(
 	return links, locals, nil
 }
 
-func validateLinkSource(module, placement, root, source string) (fs.FileMode, error) {
+func validateLinkSource(module, placement, root, source string) error {
 	info, err := os.Lstat(source)
 	if err != nil {
-		return 0, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: module %q link %q inspect source %q: %w",
 			ErrInvalidConfiguration,
 			module,
@@ -439,7 +437,7 @@ func validateLinkSource(module, placement, root, source string) (fs.FileMode, er
 		)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
-		return 0, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: module %q link %q source %q is a symlink",
 			ErrInvalidConfiguration,
 			module,
@@ -448,7 +446,7 @@ func validateLinkSource(module, placement, root, source string) (fs.FileMode, er
 		)
 	}
 	if !info.Mode().IsRegular() && !info.IsDir() {
-		return 0, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: module %q link %q source %q is special",
 			ErrInvalidConfiguration,
 			module,
@@ -458,7 +456,7 @@ func validateLinkSource(module, placement, root, source string) (fs.FileMode, er
 	}
 	resolvedSource, err := filepath.EvalSymlinks(source)
 	if err != nil {
-		return 0, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: module %q link %q resolve source %q: %w",
 			ErrInvalidConfiguration,
 			module,
@@ -468,7 +466,7 @@ func validateLinkSource(module, placement, root, source string) (fs.FileMode, er
 		)
 	}
 	if !pathWithin(root, resolvedSource) {
-		return 0, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: module %q link %q source %q escapes selected root",
 			ErrInvalidConfiguration,
 			module,
@@ -476,7 +474,7 @@ func validateLinkSource(module, placement, root, source string) (fs.FileMode, er
 			source,
 		)
 	}
-	return info.Mode(), nil
+	return nil
 }
 
 func validateLocalExample(module, placement, root, example string) error {

@@ -809,7 +809,6 @@ func linkModule(moduleID, placementID, source, target string) config.Module {
 			ID:         placementID,
 			SourcePath: source,
 			Target:     target,
-			SourceMode: 0o600,
 		}},
 	}
 }
