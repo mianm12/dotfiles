@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,13 @@ var allowedInternalImports = map[string]map[string]bool{
 	"internal/core/executor": allow("internal/core/config", "internal/core/paths", "internal/core/planner", "internal/core/state", "internal/lock", "internal/storage"),
 	"internal/cli":           allow("internal/buildinfo", "internal/core/config", "internal/core/executor", "internal/core/paths", "internal/core/planner", "internal/core/state"),
 	"cmd/dot":                allow("internal/cli"),
+}
+
+var allowedThirdPartyImports = map[string]map[string]bool{
+	"github.com/gofrs/flock":          allow("internal/lock"),
+	"github.com/google/renameio/v2":   allow("internal/storage"),
+	"github.com/pelletier/go-toml/v2": allow("internal/core/config"),
+	"github.com/spf13/cobra":          allow("internal/cli"),
 }
 
 func TestProductionPackageDependenciesMatchArchitecture(t *testing.T) {
@@ -56,40 +64,55 @@ func TestProductionPackageDependenciesMatchArchitecture(t *testing.T) {
 	}
 }
 
-func TestRenameioIsOwnedByStorage(t *testing.T) {
-	const renameioPath = "github.com/google/renameio/v2"
-
+func TestProductionThirdPartyDependenciesMatchArchitecture(t *testing.T) {
 	root := repositoryRoot(t)
+	actual := productionThirdPartyImports(t, root)
+
 	var failures []string
-	walkProductionGoFiles(t, root, func(filename, source string) {
-		file, err := parser.ParseFile(
-			token.NewFileSet(),
-			filename,
-			nil,
-			parser.ImportsOnly,
-		)
-		if err != nil {
-			t.Fatalf("parse production file %q: %v", filename, err)
+	for importPath, sources := range actual {
+		allowedSources, known := allowedThirdPartyImports[importPath]
+		if !known {
+			failures = append(
+				failures,
+				"production imports unlisted third-party package "+importPath,
+			)
+			continue
 		}
-		for _, importSpec := range file.Imports {
-			importPath, err := strconv.Unquote(importSpec.Path.Value)
-			if err != nil {
-				t.Fatalf("unquote import %s in %q: %v", importSpec.Path.Value, filename, err)
-			}
-			if importPath != renameioPath {
-				continue
-			}
-			if source != "internal/storage" {
+		for source := range sources {
+			if !allowedSources[source] {
 				failures = append(
 					failures,
-					filename+": renameio must be used only by internal/storage",
+					source+" imports forbidden third-party package "+importPath,
 				)
 			}
 		}
-	})
+	}
+	for importPath, allowedSources := range allowedThirdPartyImports {
+		sources, exists := actual[importPath]
+		if !exists {
+			failures = append(
+				failures,
+				"third-party architecture table contains unused package "+importPath,
+			)
+			continue
+		}
+		for source := range allowedSources {
+			if !sources[source] {
+				failures = append(
+					failures,
+					"third-party architecture table contains unused edge "+
+						importPath+" -> "+source,
+				)
+			}
+		}
+	}
+
 	sort.Strings(failures)
 	if len(failures) != 0 {
-		t.Fatalf("renameio ownership changed:\n%s", strings.Join(failures, "\n"))
+		t.Fatalf(
+			"production third-party dependency boundary changed:\n%s",
+			strings.Join(failures, "\n"),
+		)
 	}
 }
 
@@ -193,6 +216,73 @@ func TestCollectInternalImportsUsesRepositoryModulePath(t *testing.T) {
 	}
 }
 
+func TestCollectThirdPartyImportsExcludesStandardAndRepositoryPackages(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(root, "go.mod"),
+		[]byte("module example.com/dot\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write synthetic go.mod: %v", err)
+	}
+	source := filepath.Join(root, "sample.go")
+	if err := os.WriteFile(
+		source,
+		[]byte(
+			"package sample\n"+
+				"import (\n"+
+				"\t_ \"fmt\"\n"+
+				"\t_ \"example.com/dot/internal/core/paths\"\n"+
+				"\t_ \"example.net/dependency/pkg\"\n"+
+				")\n",
+		),
+		0o600,
+	); err != nil {
+		t.Fatalf("write synthetic Go source: %v", err)
+	}
+
+	imports := make(map[string]bool)
+	collectThirdPartyImports(t, source, repositoryModulePath(t, root), imports)
+	if len(imports) != 1 || !imports["example.net/dependency/pkg"] {
+		t.Fatalf("third-party imports = %v, want only example.net/dependency/pkg", imports)
+	}
+}
+
+func TestWalkProductionGoFilesSkipsIgnoredDirectories(t *testing.T) {
+	root := t.TempDir()
+	files := []string{
+		"cmd/dot/main.go",
+		"internal/example/example.go",
+		"internal/example/testdata/fixture.go",
+		"internal/example/vendor/dependency.go",
+		"internal/example/.hidden/fixture.go",
+		"internal/example/_fixture/fixture.go",
+	}
+	for _, filename := range files {
+		fullPath := filepath.Join(root, filename)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+			t.Fatalf("create synthetic directory for %q: %v", filename, err)
+		}
+		if err := os.WriteFile(fullPath, []byte("package synthetic\n"), 0o600); err != nil {
+			t.Fatalf("write synthetic Go file %q: %v", filename, err)
+		}
+	}
+
+	var visited []string
+	walkProductionGoFiles(t, root, func(filename, _ string) {
+		relative, err := filepath.Rel(root, filename)
+		if err != nil {
+			t.Fatalf("make visited filename relative: %v", err)
+		}
+		visited = append(visited, filepath.ToSlash(relative))
+	})
+	sort.Strings(visited)
+	want := []string{"cmd/dot/main.go", "internal/example/example.go"}
+	if !slices.Equal(visited, want) {
+		t.Fatalf("visited files = %v, want %v", visited, want)
+	}
+}
+
 func allow(packages ...string) map[string]bool {
 	result := make(map[string]bool, len(packages))
 	for _, pkg := range packages {
@@ -223,6 +313,23 @@ func productionInternalImports(t *testing.T, root string) map[string]map[string]
 	return result
 }
 
+func productionThirdPartyImports(t *testing.T, root string) map[string]map[string]bool {
+	t.Helper()
+	modulePath := repositoryModulePath(t, root)
+	result := make(map[string]map[string]bool)
+	walkProductionGoFiles(t, root, func(filename, source string) {
+		imports := make(map[string]bool)
+		collectThirdPartyImports(t, filename, modulePath, imports)
+		for importPath := range imports {
+			if result[importPath] == nil {
+				result[importPath] = make(map[string]bool)
+			}
+			result[importPath][source] = true
+		}
+	})
+	return result
+}
+
 func walkProductionGoFiles(
 	t *testing.T,
 	root string,
@@ -238,8 +345,13 @@ func walkProductionGoFiles(
 			if walkErr != nil {
 				return walkErr
 			}
-			if entry.IsDir() ||
-				!strings.HasSuffix(filename, ".go") ||
+			if entry.IsDir() {
+				if ignoredProductionDirectory(entry.Name()) && filename != filepath.Join(root, top) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(filename, ".go") ||
 				strings.HasSuffix(filename, "_test.go") {
 				return nil
 			}
@@ -250,6 +362,13 @@ func walkProductionGoFiles(
 			t.Fatalf("walk production packages under %q: %v", top, err)
 		}
 	}
+}
+
+func ignoredProductionDirectory(name string) bool {
+	return name == "testdata" ||
+		name == "vendor" ||
+		strings.HasPrefix(name, ".") ||
+		strings.HasPrefix(name, "_")
 }
 
 func packagePath(t *testing.T, root, directory string) string {
@@ -303,6 +422,34 @@ func collectInternalImports(
 			if strings.HasPrefix(path, prefix) {
 				imports[strings.TrimPrefix(path, prefix)] = true
 			}
+		}
+	}
+}
+
+func collectThirdPartyImports(
+	t *testing.T,
+	filename string,
+	modulePath string,
+	imports map[string]bool,
+) {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("parse imports from %q: %v", filename, err)
+	}
+	for _, importSpec := range file.Imports {
+		importPath, err := strconv.Unquote(importSpec.Path.Value)
+		if err != nil {
+			t.Fatalf("unquote import %s in %q: %v", importSpec.Path.Value, filename, err)
+		}
+		if importPath == "C" ||
+			importPath == modulePath ||
+			strings.HasPrefix(importPath, modulePath+"/") {
+			continue
+		}
+		firstElement, _, _ := strings.Cut(importPath, "/")
+		if strings.Contains(firstElement, ".") {
+			imports[importPath] = true
 		}
 	}
 }

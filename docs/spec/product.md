@@ -60,7 +60,8 @@ Desired repository + Machine selection + State + Actual filesystem -> Plan
 - 不提供断电事务或完整 durability 保证。原子文件发布用于避免暴露半写配置，不承诺跨多个
   target 的原子性。
 - OS 或文件系统在计划后返回错误时，命令可以部分完成并失败；恢复方式是停止并重跑。
-- State 丢失后可以恢复当前 desired，但无法发现已经从 manifest 删除的历史 link，只做警告。
+- State 丢失后可以恢复当前 desired，但无法发现已经从 manifest 删除的历史 link；对应公开
+  warning 由 [`cli.md`](cli.md#status-与-dry-run) 定义。
 - 仓库目录被移动或机器配置指向失效时，`dot` 不自动重新绑定；恢复方式是通过
   [`dot paths`](cli.md#paths) 定位并人工修正机器配置中的 `repository`，或删除机器配置后
   重新 `init`。

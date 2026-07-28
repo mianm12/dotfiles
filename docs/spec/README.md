@@ -11,12 +11,12 @@
 | 文件 | 唯一职责 | 主要依赖 |
 | --- | --- | --- |
 | [`product.md`](product.md) | 产品目标、范围、非目标和接受风险 | 无 |
-| [`selection.md`](selection.md) | 仓库 desired、机器选择、profile、platform 与 module resolution | product |
-| [`placements.md`](placements.md) | link/local 声明、source、target 与 control-path topology 边界 | product、selection |
+| [`selection.md`](selection.md) | 仓库 desired、机器选择、profile、platform applicability 与 module resolution | product |
+| [`placements.md`](placements.md) | link/local 声明、source、target、路径关系与 control-path topology | product、selection |
 | [`state-and-ownership.md`](state-and-ownership.md) | state schema、版本、安全字段和 ownership 证据 | product、placements |
-| [`planning.md`](planning.md) | 实际文件系统观察、conflict、create/update/prune/keep/forget 决策 | selection、placements、state |
-| [`mutation-and-recovery.md`](mutation-and-recovery.md) | mutation 顺序、锁、提交和中断恢复 | planning、state |
-| [`cli.md`](cli.md) | 公开命令、scope、输出和退出码 | selection、planning、mutation |
+| [`planning.md`](planning.md) | 实际文件系统观察与 create/update/prune/keep/forget action eligibility | selection、placements、state |
+| [`mutation-and-recovery.md`](mutation-and-recovery.md) | mutation 顺序、锁、完成边界、提交和中断恢复 | planning、state |
+| [`cli.md`](cli.md) | 公开命令、命令 scope、公开投影和退出码 | selection、planning、mutation |
 
 内部 package、依赖方向和测试组织不属于产品契约，见 [`../architecture/`](../architecture/)。
 难以逆转且需要长期保留理由的工程选择使用 [`../decisions/`](../decisions/) 中的 ADR。

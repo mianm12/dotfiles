@@ -61,9 +61,11 @@ ownership 或 provenance，内存删除后不进入 module inventory。
 - Link ownership 只依赖 target、resolved target 和 raw link destination。
 - Local state 只用于退出 desired 时提示，不提供修改或删除权限。
 - State 成功后的内容必须反映本轮已验证结果；内部使用重建或局部更新不属于契约。
-- State 只在选定 scope 的真实 mutation 成功后原子提交。删除 scope 外空 module 是整个文档的
-  canonical representation 整理，不是 scope 外 ownership action。
+- State 的提交时机由 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
+  删除 scope 外空 module 是整个文档的 canonical representation 整理，不是 scope 外
+  ownership action。
 - Unknown field、缺失安全字段、损坏结构或过新版本拒绝 mutation。安全字段指顶层 `version`、
   `home`，以及每个 placement 的 `kind`、`target`；link 另需 `resolved_target` 与
   `link_destination`。其余为可选诊断字段。
-- State missing 按空 state 继续，但警告无法发现已从 manifest 删除的历史 link。
+- State missing 按空账本继续，因此无法发现已从 manifest 删除的历史 link；对应 input
+  warning 的公开投影由 [`cli.md`](cli.md#status-与-dry-run) 定义。

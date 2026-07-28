@@ -9,8 +9,7 @@ Target 使用 `lstat` 区分 absent、symlink、regular file、directory 和 spe
 
 选定 scope 内任一 placement 在规划阶段落到 conflict 时，plan 不可执行。Status 的公开投影
 与退出码只由 [`cli.md`](cli.md#status-与-dry-run) 定义。执行前后的写入边界见
-[`mutation-and-recovery.md`](mutation-and-recovery.md)。执行阶段 update/prune 前的
-resolved/raw 复核失败属于 mutation 中途的安全停止。
+[`mutation-and-recovery.md`](mutation-and-recovery.md)。
 
 State 中 placement 的 kind 与当前 desired 的 kind 不一致（同一 ID 在 link 与 local 之间互换）
 是 conflict，不尝试自动收敛；恢复方式是改用新 placement ID，或先 `dot remove` 该 module 再
@@ -23,6 +22,11 @@ ownership/provenance，禁止 prune，不删除、替换或以其他 placement a
 该 action 是 ownership 放弃原因的唯一真相源，具体的只读预告与成功结果文案由
 [`cli.md`](cli.md#status-与-dry-run) 投影。该规则同时适用于 stale link 与 stale local，只处理
 当前命令 scope 内的记录；损坏 state、HOME 不匹配和未知 kind 等输入错误不得降级为 forget。
+
+Profile 选中的 module 已确定 not-applicable 时，其旧 state placements 视为退出 desired，
+继续按本文件的 stale prune/forget 规则规划 cleanup。Indeterminate module 不生成 placement
+或 cleanup action；其真实 mutation 阻断边界由
+[`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
 
 ## Link
 
@@ -62,7 +66,7 @@ action，放弃对应 state ownership，不阻塞本轮其余收敛。
 
 | Actual | 行为 |
 | --- | --- |
-| absent | 从 example 以 `0600`、完整且不可覆盖的方式 create |
+| absent | 从 example create |
 | 任意已存在目录项 | keep；不读取、不比较、不分类、不覆盖 |
 
 Example 更新不触发 local 更新；local 被用户删除后下一次 apply 重新创建。Local 退出 desired
