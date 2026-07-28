@@ -306,14 +306,23 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 	})
 
 	tests := []struct {
-		name   string
-		args   []string
-		extras []string
+		name             string
+		args             []string
+		extras           []string
+		readOnlyAnalysis bool
 	}{
 		{name: "apply", args: []string{"apply"}},
-		{name: "apply dry-run", args: []string{"apply", "--dry-run"}},
+		{
+			name:             "apply dry-run",
+			args:             []string{"apply", "--dry-run"},
+			readOnlyAnalysis: true,
+		},
 		{name: "remove before selection publish", args: []string{"remove", "app"}, extras: []string{"app"}},
-		{name: "status empty repository", args: []string{"status"}},
+		{
+			name:             "status empty repository",
+			args:             []string{"status"},
+			readOnlyAnalysis: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -332,13 +341,27 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 
 			code, stdout, stderr := fixture.run(test.args...)
 
-			assertCLIControlTopologyFailure(
-				t,
-				code,
-				stdout,
-				stderr,
-				fixture.repository,
-			)
+			if test.readOnlyAnalysis {
+				if code != exitOK ||
+					!strings.Contains(stdout, "blocked") ||
+					!strings.Contains(stdout, fixture.repository) ||
+					!strings.Contains(stdout, "run `dot paths`") {
+					t.Fatalf(
+						"analysis = (%d, %q, %q), want successful topology blocker",
+						code,
+						stdout,
+						stderr,
+					)
+				}
+			} else {
+				assertCLIControlTopologyFailure(
+					t,
+					code,
+					stdout,
+					stderr,
+					fixture.repository,
+				)
+			}
 			assertSnapshotUnchanged(t, before)
 			assertCLIMissing(t, fixture.state)
 			assertCLIMissing(t, fixture.lock)
@@ -430,13 +453,14 @@ target = "~/.config/dot/managed"
 	assertSnapshotUnchanged(t, before)
 
 	code, stdout, stderr = fixture.run("apply", "--dry-run")
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, target) ||
-		!strings.Contains(stderr, filepath.Dir(fixture.config)) ||
-		!strings.Contains(stderr, "run `dot paths`") {
+	if code != exitOK ||
+		!strings.Contains(stdout, "blocked") ||
+		!strings.Contains(stdout, target) ||
+		!strings.Contains(stdout, filepath.Dir(fixture.config)) ||
+		!strings.Contains(stdout, "run `dot paths`") ||
+		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
-			"apply --dry-run = (%d, %q, %q), want path conflict with recovery hint",
+			"apply --dry-run = (%d, %q, %q), want successful blocker analysis",
 			code,
 			stdout,
 			stderr,

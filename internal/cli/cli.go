@@ -37,6 +37,7 @@ type environment struct {
 	userHomeDir           func() (string, error)
 	getwd                 func() (string, error)
 	platform              func() config.Platform
+	afterPreflight        func()
 	afterSelectionPublish func() error
 	beforeExecution       func()
 	build                 buildinfo.Info

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/mianm12/dotfiles/internal/core/executor"
@@ -40,6 +41,91 @@ func printWarnings(command *cobra.Command, warnings []string) error {
 	for _, warning := range warnings {
 		if _, err := fmt.Fprintf(command.ErrOrStderr(), "warning: %s\n", warning); err != nil {
 			return fmt.Errorf("write warning: %w", err)
+		}
+	}
+	return nil
+}
+
+func printOperationAnalysis(
+	command *cobra.Command,
+	analysis OperationAnalysis,
+) error {
+	if err := printWarnings(command, analysis.Warnings); err != nil {
+		return err
+	}
+	printed := false
+	if analysis.SelectionDelta.Changes() {
+		if _, err := fmt.Fprintf(
+			command.OutOrStdout(),
+			"selection-delta %s",
+			analysis.SelectionDelta.Kind,
+		); err != nil {
+			return fmt.Errorf("write selection delta: %w", err)
+		}
+		if analysis.SelectionDelta.ModuleID != "" {
+			if _, err := fmt.Fprintf(
+				command.OutOrStdout(),
+				" module=%s",
+				analysis.SelectionDelta.ModuleID,
+			); err != nil {
+				return fmt.Errorf("write selection delta: %w", err)
+			}
+		}
+		if _, err := fmt.Fprintln(command.OutOrStdout()); err != nil {
+			return fmt.Errorf("write selection delta: %w", err)
+		}
+		printed = true
+	}
+	for _, action := range analysis.Actions {
+		if _, err := fmt.Fprintf(
+			command.OutOrStdout(),
+			"%-12s %s/%s %s",
+			action.Decision,
+			action.ModuleID,
+			action.PlacementID,
+			action.Target,
+		); err != nil {
+			return fmt.Errorf("write operation action: %w", err)
+		}
+		if action.Reason != "" {
+			if _, err := fmt.Fprintf(
+				command.OutOrStdout(),
+				" reason=%s",
+				strconv.Quote(action.Reason),
+			); err != nil {
+				return fmt.Errorf("write operation action: %w", err)
+			}
+		}
+		if _, err := fmt.Fprintln(command.OutOrStdout()); err != nil {
+			return fmt.Errorf("write operation action: %w", err)
+		}
+		printed = true
+	}
+	for _, blocker := range analysis.Blockers {
+		if _, err := fmt.Fprint(command.OutOrStdout(), "blocked"); err != nil {
+			return fmt.Errorf("write operation blocker: %w", err)
+		}
+		if blocker.ModuleID != "" {
+			if _, err := fmt.Fprintf(
+				command.OutOrStdout(),
+				" module=%s",
+				blocker.ModuleID,
+			); err != nil {
+				return fmt.Errorf("write operation blocker: %w", err)
+			}
+		}
+		if _, err := fmt.Fprintf(
+			command.OutOrStdout(),
+			" reason=%s\n",
+			strconv.Quote(blocker.Reason),
+		); err != nil {
+			return fmt.Errorf("write operation blocker: %w", err)
+		}
+		printed = true
+	}
+	if !printed {
+		if _, err := fmt.Fprintln(command.OutOrStdout(), "converged"); err != nil {
+			return fmt.Errorf("write operation analysis: %w", err)
 		}
 	}
 	return nil
@@ -84,55 +170,6 @@ func printMutationResult(
 	)
 }
 
-type moduleStatus struct {
-	id      string
-	variant string
-	status  string
-}
-
-func statusForModule(
-	moduleID string,
-	effective, notApplicable map[string]bool,
-	variants map[string]string,
-	snapshot state.Snapshot,
-	plan planner.Plan,
-) moduleStatus {
-	_, statePresent := snapshot.Modules[moduleID]
-	status := "inactive"
-	switch {
-	case notApplicable[moduleID]:
-		status = "not-applicable"
-	case effective[moduleID]:
-		status = "converged"
-	case statePresent:
-		status = "stale"
-	}
-	for _, action := range plan.Actions {
-		if action.ModuleID != moduleID {
-			continue
-		}
-		switch action.Decision {
-		case planner.DecisionConflict:
-			status = "conflict"
-			continue
-		case planner.DecisionKeep:
-			if keepStateRecorded(snapshot, action) {
-				continue
-			}
-		}
-		if status != "conflict" &&
-			effective[moduleID] &&
-			!notApplicable[moduleID] {
-			status = "pending"
-		}
-	}
-	return moduleStatus{
-		id:      moduleID,
-		variant: variants[moduleID],
-		status:  status,
-	}
-}
-
 func keepStateRecorded(snapshot state.Snapshot, action planner.Action) bool {
 	module, exists := snapshot.Modules[action.ModuleID]
 	if !exists {
@@ -151,33 +188,60 @@ func keepStateRecorded(snapshot state.Snapshot, action planner.Action) bool {
 	return true
 }
 
-func printStatus(command *cobra.Command, statuses []moduleStatus, warnings []string) error {
-	for _, warning := range warnings {
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "warning: %s\n", warning); err != nil {
-			return fmt.Errorf("write status warning: %w", err)
-		}
+func printStatusAnalysis(
+	command *cobra.Command,
+	analysis OperationAnalysis,
+) error {
+	if err := printWarnings(command, analysis.Warnings); err != nil {
+		return fmt.Errorf("write status warning: %w", err)
 	}
-	slices.SortFunc(statuses, func(left, right moduleStatus) int {
-		return strings.Compare(left.id, right.id)
+	modules := append([]ModuleAnalysis(nil), analysis.Modules...)
+	slices.SortFunc(modules, func(left, right ModuleAnalysis) int {
+		return strings.Compare(left.ID, right.ID)
 	})
-	for _, module := range statuses {
-		variant := ""
-		if module.variant != "" {
-			variant = " variant=" + module.variant
+	for _, module := range modules {
+		reason := "-"
+		if module.Reason != "" {
+			reason = strconv.Quote(module.Reason)
 		}
 		if _, err := fmt.Fprintf(
 			command.OutOrStdout(),
-			"%s  %s%s\n",
-			module.id,
-			module.status,
-			variant,
+			"%s  %s selection=%s applicability=%s convergence=%s variant=%s reason=%s\n",
+			module.ID,
+			module.Summary,
+			module.Selection,
+			module.Applicability,
+			module.Convergence,
+			module.Variant,
+			reason,
 		); err != nil {
 			return fmt.Errorf("write status: %w", err)
 		}
 	}
-	if len(statuses) == 0 {
+	if len(modules) == 0 {
 		if _, err := fmt.Fprintln(command.OutOrStdout(), "no modules"); err != nil {
 			return fmt.Errorf("write status: %w", err)
+		}
+	}
+	for _, blocker := range analysis.Blockers {
+		if _, err := fmt.Fprint(command.OutOrStdout(), "blocked"); err != nil {
+			return fmt.Errorf("write status blocker: %w", err)
+		}
+		if blocker.ModuleID != "" {
+			if _, err := fmt.Fprintf(
+				command.OutOrStdout(),
+				" module=%s",
+				blocker.ModuleID,
+			); err != nil {
+				return fmt.Errorf("write status blocker: %w", err)
+			}
+		}
+		if _, err := fmt.Fprintf(
+			command.OutOrStdout(),
+			" reason=%s\n",
+			strconv.Quote(blocker.Reason),
+		); err != nil {
+			return fmt.Errorf("write status blocker: %w", err)
 		}
 	}
 	return nil

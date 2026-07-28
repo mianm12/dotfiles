@@ -37,38 +37,45 @@ func runRemove(
 		if err != nil {
 			return err
 		}
-		prepared, _, err := prepareRemove(context, machine, moduleID)
+		analysis, err := analyzeRemove(context, machine, moduleID)
 		if err != nil {
 			return err
 		}
-		return printPlan(command, prepared.plan, preparedWarnings(prepared))
+		return printOperationAnalysis(command, analysis)
 	}
 
 	machine, err := loadRequiredMachine(context)
 	if err != nil {
 		return err
 	}
-	preflight, _, err := prepareRemove(context, machine, moduleID)
+	preflight, err := analyzeRemove(context, machine, moduleID)
 	if err != nil {
 		return err
 	}
-	if err := rejectConflicts(preflight.plan); err != nil {
+	if err := rejectAnalysis(preflight); err != nil {
 		return err
 	}
+	if env.afterPreflight != nil {
+		env.afterPreflight()
+	}
 
-	return withMutationLock(context.controls(preflight.machine.Repository), func(owner mutationOwner) error {
+	return withMutationLock(context.controls(preflight.ProspectiveMachine.Repository), func(owner mutationOwner) error {
 		machine, err := loadRequiredMachine(context)
 		if err != nil {
 			return err
 		}
-		prepared, selectionNeeded, err := prepareRemove(context, machine, moduleID)
+		locked, err := analyzeRemove(context, machine, moduleID)
 		if err != nil {
 			return err
 		}
-		if err := rejectConflicts(prepared.plan); err != nil {
+		if err := rejectAnalysis(locked); err != nil {
 			return err
 		}
-		selectionChanged, err := publishSelection(context, prepared.machine, selectionNeeded)
+		selectionChanged, err := publishSelection(
+			context,
+			locked.ProspectiveMachine,
+			locked.SelectionDelta.Changes(),
+		)
 		if err != nil {
 			return err
 		}
@@ -80,14 +87,19 @@ func runRemove(
 			)
 		}
 		if !selectionChanged &&
-			prepared.loaded.Missing &&
-			len(prepared.plan.Actions) == 0 {
+			locked.loaded.Missing &&
+			len(locked.Actions) == 0 {
 			return printResult(command, executor.Result{
-				Plan:     prepared.plan,
-				Warnings: preparedWarnings(prepared),
+				Warnings: locked.Warnings,
 			}, false)
 		}
-		result, runErr := executePrepared(context, prepared, owner.ownership())
+		result, runErr := executeResolved(
+			context,
+			locked.ProspectiveMachine.Repository,
+			locked.resolution,
+			locked.scope,
+			owner.ownership(),
+		)
 		if runErr != nil {
 			if warningErr := printWarnings(command, result.Warnings); warningErr != nil {
 				return errors.Join(runErr, warningErr)
