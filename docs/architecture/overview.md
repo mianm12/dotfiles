@@ -67,6 +67,19 @@ storage / paths / state
 实际允许边由架构测试中的显式表固定。生产 package 不得反向依赖，也不得为了省事越过该表；
 需要改变边界时，先说明职责变化并同步架构说明和机械约束。
 
+生产代码的直接第三方依赖同样由架构测试按精确 import path 固定：
+
+| 第三方 package | 唯一 owner |
+| --- | --- |
+| `github.com/google/renameio/v2` | `internal/storage` |
+| `github.com/gofrs/flock` | `internal/lock` |
+| `github.com/pelletier/go-toml/v2` | `internal/core/config` |
+| `github.com/spf13/cobra` | `internal/cli` |
+
+标准库、仓库内部 import、测试依赖、tool-only module 和间接 module 不进入该表。它只约束
+`cmd/`、`internal/` 中 production Go 文件实际存在的直接边；新增或移动第三方 import 必须先
+作为架构变化审查。
+
 ## 实现选择
 
 实现使用 Go，优先标准库和窄职责依赖。运行时依赖是：
@@ -77,6 +90,9 @@ storage / paths / state
 - `renameio/v2`：仅由 `internal/storage` 用于私有 control file 的原子覆盖发布。
 
 测试专用依赖限 `google/go-cmp` 与 `stretchr/testify`。
+
+`golangci-lint` 与 `govulncheck` 通过 `go.mod` 的 `tool` directive 固定版本，并由
+`go tool` 调用。它们进入 module graph，但不是生产代码第三方 import allowlist 的一部分。
 
 Local 与新文件的不可覆盖发布不使用 rename：先写 `0600` 临时文件，再以 `os.Link` 发布到
 target；已存在时得到 `EEXIST`，同时保证内容完整、不可覆盖和原子出现。

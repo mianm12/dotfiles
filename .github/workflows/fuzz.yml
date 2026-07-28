@@ -1,0 +1,44 @@
+name: Fuzz safety boundaries
+
+# Fuzz 具有随机性且耗时，只作为每周/手动的非 required 信号，不挂 Pull Request。
+on:
+  schedule:
+    - cron: "41 4 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: State and target fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Fuzz critical safety boundaries
+        run: make fuzz FUZZ_TIME=5m
+
+      - name: Upload failing fuzz inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            internal/core/state/testdata/fuzz/FuzzDecode
+            internal/core/paths/testdata/fuzz/FuzzTargetExpression
+          if-no-files-found: ignore
+          retention-days: 14

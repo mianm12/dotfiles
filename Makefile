@@ -3,10 +3,8 @@ SHELL := /bin/sh
 
 # 工具和输出路径允许调用方覆盖，CI 无需复制本地构建命令。
 GO ?= go
-GOLANGCI_LINT ?= golangci-lint
 BINARY ?= bin/dot
 FUZZ_TIME ?= 30s
-GOVULNCHECK_VERSION ?= v1.1.4
 
 # 未显式覆盖时，只有干净工作区中当前提交上的精确 tag 才作为版本；其他构建使用 dev。
 VERSION ?= $(shell status=$$(git status --porcelain --untracked-files=normal 2>/dev/null) \
@@ -24,8 +22,8 @@ LDFLAGS = -X '$(BUILDINFO_PACKAGE).Version=$(VERSION)' \
 	-X '$(BUILDINFO_PACKAGE).Commit=$(COMMIT)' \
 	-X '$(BUILDINFO_PACKAGE).BuildTime=$(BUILD_TIME)'
 
-.PHONY: help build run version fmt fmt-check tidy tidy-check lint test \
-	test-race fuzz vuln check
+.PHONY: help build run version fmt fmt-check tidy tidy-check mod-verify lint \
+	test test-race fuzz vuln check
 
 help:
 	@printf '%s\n' \
@@ -34,6 +32,7 @@ help:
 		'make version            构建并运行 dot version' \
 		'make fmt                格式化 Go 代码' \
 		'make tidy               整理 Go 模块依赖' \
+		'make mod-verify         校验已下载模块与 go.sum' \
 		'make lint               运行静态分析' \
 		'make test               运行快速测试' \
 		'make fuzz               对 state 与 target 安全边界各 fuzz 30 秒' \
@@ -52,10 +51,10 @@ version: build
 
 # fmt 和 tidy 会修改工作区；对应的 *-check 目标只验证，不产生修复性改动。
 fmt:
-	$(GOLANGCI_LINT) fmt
+	$(GO) tool golangci-lint fmt
 
 fmt-check:
-	$(GOLANGCI_LINT) fmt --diff
+	$(GO) tool golangci-lint fmt --diff
 
 tidy:
 	$(GO) mod tidy
@@ -63,8 +62,11 @@ tidy:
 tidy-check:
 	$(GO) mod tidy -diff
 
+mod-verify:
+	$(GO) mod verify
+
 lint:
-	$(GOLANGCI_LINT) run
+	$(GO) tool golangci-lint run
 
 test:
 	$(GO) test ./...
@@ -77,7 +79,7 @@ fuzz:
 	$(GO) test ./internal/core/paths -run '^$$' -fuzz '^FuzzTargetExpression$$' -fuzztime '$(FUZZ_TIME)'
 
 vuln:
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	$(GO) tool govulncheck ./...
 
 # 汇总当前平台的完整门禁，作为本地与 CI 的共同入口；任一失败都会立即停止。
-check: tidy-check fmt-check lint test-race
+check: mod-verify tidy-check fmt-check lint test-race

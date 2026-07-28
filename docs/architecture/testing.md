@@ -34,13 +34,18 @@
 
 - Focused tests：开发期间快速验证变更 package 和直接消费者。
 - Fast tests：`make test` 快速运行全部 Go 测试。
-- Full gate：`make check` 验证 tidy、format、lint 和全量 race tests。
-- Fuzz：`make fuzz` 持续攻击 state decoder 与 target expression 安全边界。
-- Vulnerability：`make vuln` 使用固定版本的 `govulncheck` 扫描可达漏洞，不加入本地离线
-  `make check`；仓库 workflow 在相关 Go Pull Request、每周计划和手动触发时运行它，但不
-  作为 required check。
+- Full gate：`make check` 验证 module checksum、tidy、format、lint 和全量 race tests。
+- Fuzz：`make fuzz` 持续攻击 state decoder 与 target expression 安全边界。独立 workflow
+  只在每周计划或手动触发时运行，不响应 Pull Request，也不作为 required check；Pull Request
+  继续只运行确定性门禁。Fuzz 失败时保留 Go 写出的最小失败输入，供本地回归。
+- Vulnerability：`make vuln` 使用 `go.mod` tool directive 固定的 `govulncheck` 扫描可达
+  漏洞，不加入本地离线 `make check`；仓库 workflow 在相关 Go Pull Request、每周计划和手动
+  触发时运行它，但不作为 required check。
 - 双平台 CI：macOS 与 Ubuntu 在 Pull Request 上运行同一 `make check`，并作为 `main` 的
   required checks。
+- Coverage：不设置简单的全局百分比阈值；永久门禁优先直接覆盖 control/placement topology、
+  platform indeterminate 零写入、state/input 类型、forget/prune、mutation 恢复与重复收敛等
+  关键安全行为。
 
 ## 架构约束
 
@@ -49,3 +54,7 @@
 CLI 不得依赖 lock 或直接发布 machine selection，lock acquisition 只属于 executor Session。
 新增反向依赖、越层依赖或第二个 mutation 入口必须先作为架构变更审查，不能靠测试白名单
 静默放行。
+
+同一测试还双向校验生产代码直接第三方依赖的精确 allowlist：`renameio→storage`、
+`flock→lock`、`go-toml→config`、`Cobra→CLI`。未列出的第三方 import、错误 owner 和已经
+不存在的陈旧白名单边都必须失败；tool、transitive 与测试依赖不属于该边表。

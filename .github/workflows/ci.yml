@@ -36,13 +36,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
-        with:
-          version: v2.12.2
-          # action 只负责安装；实际命令统一由 Makefile 定义。
-          install-only: true
-
       - name: Run project checks
         # Makefile 是本地与 CI 的唯一门禁入口；构建产物无需保留在工作区。
         run: make check BINARY="$RUNNER_TEMP/dot"

@@ -37,25 +37,26 @@ dot help
 - `dot apply <module>` 对 active module 做 scoped apply。
 - 未 active 的 module 在 preflight 成功后加入 `extra_modules` 再收敛。
 - Module 不存在、不适用或与其他 effective module/state target 冲突时，不修改 selection。
-- Scoped apply 只需检查目标 module 与其他 effective modules/state 的冲突，不要求无关 module
-  之间重新证明所有关系。
 
 ## Remove
 
 - Active profile 仍选择 module 时拒绝，不修改 selection 或文件系统。
 - 要移除 profile 选中的 module，先在仓库 profile 删除引用，再 `dot apply` 收敛 prune。
 - Extra module 先从 prospective selection 移除，通过 preflight 后写回配置。
-- 删除 state 证明、resolved target 未改变且 raw destination 未漂移的 module links。
-- 保留所有 local，并在 state 可用时提示。
+- 对目标 module 投影 [`planning.md`](planning.md) 产生的 prune/forget action；CLI 不另行定义
+  link 或 local cleanup eligibility。
 - Manifest 已删除但 extra/state 仍有 module 记录时允许清理。
 - Current selection 中仍是 extra 的 module，若 manifest 存在但已确定 not-applicable 或为
-  indeterminate，则 remove 拒绝 selection 写入和 prune；先修复平台检测或 manifest。
+  indeterminate，则按 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 的
+  selection 写入边界显示 blocker；先修复平台检测或 manifest。
 - 已 inactive 且无 state 时成功 no-op；完全未知的 module 失败。
 
 ## 命令 scope 与加载
 
 - `dot apply` 的 scope 是全部 effective modules。
-- Scoped apply/remove 的 scope 是目标 module 与其他 effective modules。
+- Scoped apply/remove 的 participating set 包含目标 module 与其他 effective modules；
+  placement topology 只检查目标 module 与所有 effective modules 的关系，两个都完全不属于
+  scope 的 module 之间的冲突不阻断。
 - 严格加载 `dot.toml`，但只对命令 scope 内的 `module.toml` 做最终类型检查、读取和解析；
   scope 外 module manifest 的异常类型、不可读、dangling symlink 或 malformed TOML 不影响
   本命令。
@@ -99,13 +100,12 @@ dot help
   parent directory、lock 或 temporary file。
 - Status 和 dry-run 可以在内存中删除兼容的空 state module，但不得因此重写 state。
 - Status 和 dry-run 不取锁；并发 mutation 时结果是 best-effort snapshot。
-- 真实 mutation 在取锁前分析一次，并在锁内重新加载输入和建立新的 analysis；blocker 或
-  conflict 转为失败后才可发布 selection。Operation analysis 不是 executor 输入，锁前
-  analysis 永远不能直接执行。
-- 正常 mutation 结果只在 state commit 与 lock release 均成功后写 stdout。每个成功 forget
-  action 的过去式 ownership/provenance 提示都从该结构化 action 派生，不保存第二份字符串
-  结果。Lock 释放失败返回 `1` 且不得先输出成功摘要；若 selection、target 或 state 已提交，
-  错误说明可能已经应用并提示重跑确认收敛。
+- 本节只定义 operation analysis 的公开投影；真实 mutation 的重新分析与执行只由
+  [`mutation-and-recovery.md`](mutation-and-recovery.md#执行顺序) 定义。
+- CLI 只投影 mutation owner 判定的最终 outcome。成功 outcome 中每个 forget action 的过去式
+  ownership/provenance 提示都从结构化 action 派生，不保存第二份字符串结果；失败 outcome
+  返回 `1`，不得先输出成功摘要或把未完成 action 显示为成功。若 outcome 表明可能已经部分
+  应用，错误提示重跑确认收敛。
 
 ## 输出与退出码
 

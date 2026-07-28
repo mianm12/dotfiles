@@ -105,11 +105,14 @@ arch = ["x86_64", "aarch64"]
   - 没有 known mismatch，但至少一个受约束字段 unknown 时，结果为 indeterminate。
   - 所有受约束字段都 known 且匹配时，结果为 applicable。
 - 不支持否定、正则、优先级、fallback 或 capability 表达式。
-- Profile 选中的 module 无匹配 variant 时是 not-applicable，不报错。
-- Extra module 或显式 `apply <module>` 无匹配 variant 时失败。
-- Profile module 已确定 not-applicable 时仍按 ownership 规则清理旧 placement。任意 effective
-  module 为 indeterminate 时，真实 mutation 整体失败且不得 prune；extra 或显式 module
-  已确定 not-applicable 时仍阻止 selection 发布。
+- Profile 选中的 module 无匹配 variant 时，resolution 结果是 not-applicable；这是合法的
+  非配置错误结果。Extra module 或显式 `apply <module>` 无匹配 variant 时得到相同
+  applicability 结果。
+- Profile not-applicable 的旧 ownership cleanup 只由
+  [`planning.md`](planning.md#通用决策规则) 定义；indeterminate 和 extra/explicit
+  not-applicable 的 mutation 边界只由
+  [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义；公开显示与退出码只由
+  [`cli.md`](cli.md#status-与-dry-run) 定义。
 
 Module 只能使用 portable 或 variants 其中一种模式，不得混用。
 
