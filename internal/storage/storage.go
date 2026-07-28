@@ -23,26 +23,61 @@ type privateFile interface {
 
 type privateFileOpener func(string, int, fs.FileMode) (privateFile, error)
 
-// EnsureRoot 建立私有 state 家族根目录，并把现存目录权限收敛为 0700。
+// ValidateRoot 只读校验私有控制根目录。目录尚不存在时也通过，由 mutation
+// 在需要写入时调用 EnsureRoot 建立。
+func ValidateRoot(path string) error {
+	cleanPath, err := cleanAbsolute(path)
+	if err != nil {
+		return fmt.Errorf("private root: %w", err)
+	}
+	_, err = inspectRoot(cleanPath)
+	return err
+}
+
+// EnsureRoot 建立私有控制根目录，并把现存目录权限收敛为 0700。
+// 最终对象必须是真实目录；更高层的 ancestor symlink 仍然合法。
 func EnsureRoot(path string) error {
 	cleanPath, err := cleanAbsolute(path)
 	if err != nil {
-		return fmt.Errorf("state root: %w", err)
+		return fmt.Errorf("private root: %w", err)
 	}
-	if err := os.MkdirAll(cleanPath, PrivateDirectoryMode); err != nil {
-		return fmt.Errorf("create state root %q: %w", cleanPath, err)
-	}
-	info, err := os.Stat(cleanPath)
+
+	exists, err := inspectRoot(cleanPath)
 	if err != nil {
-		return fmt.Errorf("inspect state root %q: %w", cleanPath, err)
+		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("state root %q is not a directory", cleanPath)
+	if !exists {
+		if err := os.MkdirAll(cleanPath, PrivateDirectoryMode); err != nil {
+			return fmt.Errorf("create private root %q: %w", cleanPath, err)
+		}
+		if _, err := inspectRoot(cleanPath); err != nil {
+			return err
+		}
 	}
 	if err := os.Chmod(cleanPath, PrivateDirectoryMode); err != nil {
-		return fmt.Errorf("set state root permissions %q: %w", cleanPath, err)
+		return fmt.Errorf("set private root permissions %q: %w", cleanPath, err)
 	}
 	return nil
+}
+
+func inspectRoot(cleanPath string) (bool, error) {
+	info, err := os.Lstat(cleanPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect private root %q: %w", cleanPath, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return false, fmt.Errorf(
+			"private root %q is a symbolic link; expected a directory",
+			cleanPath,
+		)
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("private root %q is not a directory", cleanPath)
+	}
+	return true, nil
 }
 
 // EnsurePrivateFile 建立私有普通文件，并把现存普通文件权限收敛为 0600。

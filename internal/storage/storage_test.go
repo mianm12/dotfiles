@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,113 @@ func TestEnsureRoot_RejectsNonDirectory(t *testing.T) {
 
 	if err := EnsureRoot(root); err == nil {
 		t.Fatal("EnsureRoot() error = nil, want non-directory error")
+	}
+}
+
+func TestEnsureRoot_RejectsFinalSymlinkWithoutChangingTarget(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "external")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", target, err)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatalf("os.Chmod(%q) error = %v", target, err)
+	}
+	root := filepath.Join(base, "state")
+	if err := os.Symlink(target, root); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", target, root, err)
+	}
+
+	err := EnsureRoot(root)
+	if err == nil {
+		t.Fatal("EnsureRoot() error = nil, want final symlink error")
+	}
+	if !strings.Contains(err.Error(), root) || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("EnsureRoot() error = %q, want path and symbolic-link detail", err)
+	}
+	info, inspectErr := os.Lstat(root)
+	if inspectErr != nil {
+		t.Fatalf("os.Lstat(%q) error = %v", root, inspectErr)
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		t.Fatalf("mode(%q) = %v, want symlink preserved", root, info.Mode())
+	}
+	assertMode(t, target, 0o755)
+}
+
+func TestEnsureRoot_RejectsDanglingFinalSymlink(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "missing")
+	root := filepath.Join(base, "state")
+	if err := os.Symlink(target, root); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", target, root, err)
+	}
+
+	err := EnsureRoot(root)
+	if err == nil {
+		t.Fatal("EnsureRoot() error = nil, want dangling final symlink error")
+	}
+	if !strings.Contains(err.Error(), root) || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("EnsureRoot() error = %q, want path and symbolic-link detail", err)
+	}
+	info, inspectErr := os.Lstat(root)
+	if inspectErr != nil {
+		t.Fatalf("os.Lstat(%q) error = %v", root, inspectErr)
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		t.Fatalf("mode(%q) = %v, want symlink preserved", root, info.Mode())
+	}
+	if _, inspectErr := os.Lstat(target); !errors.Is(inspectErr, fs.ErrNotExist) {
+		t.Fatalf("os.Lstat(%q) error = %v, want target to remain missing", target, inspectErr)
+	}
+}
+
+func TestEnsureRoot_AllowsParentSymlink(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "external")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", parent, err)
+	}
+	parentLink := filepath.Join(base, "state")
+	if err := os.Symlink(parent, parentLink); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", parent, parentLink, err)
+	}
+	root := filepath.Join(parentLink, "dot")
+
+	if err := EnsureRoot(root); err != nil {
+		t.Fatalf("EnsureRoot(%q) error = %v", root, err)
+	}
+	assertMode(t, filepath.Join(parent, "dot"), PrivateDirectoryMode)
+	info, err := os.Lstat(parentLink)
+	if err != nil {
+		t.Fatalf("os.Lstat(%q) error = %v", parentLink, err)
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		t.Fatalf("mode(%q) = %v, want parent symlink preserved", parentLink, info.Mode())
+	}
+}
+
+func TestValidateRoot_IsReadOnly(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "state")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", root, err)
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatalf("os.Chmod(%q) error = %v", root, err)
+	}
+
+	if err := ValidateRoot(root); err != nil {
+		t.Fatalf("ValidateRoot(%q) error = %v", root, err)
+	}
+	assertMode(t, root, 0o755)
+
+	missing := filepath.Join(base, "missing")
+	if err := ValidateRoot(missing); err != nil {
+		t.Fatalf("ValidateRoot(%q) error = %v", missing, err)
+	}
+	if _, err := os.Lstat(missing); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("os.Lstat(%q) error = %v, want missing path preserved", missing, err)
 	}
 }
 

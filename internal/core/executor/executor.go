@@ -13,6 +13,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/mianm12/dotfiles/internal/lock"
+	"github.com/mianm12/dotfiles/internal/storage"
 )
 
 // Request contains validated, in-memory desired inputs and the stable control
@@ -87,6 +88,10 @@ func RunWithLock(
 }
 
 func runLocked(request Request, commit stateCommitter) (Result, error) {
+	configRoot := filepath.Dir(filepath.Clean(request.Controls.Config))
+	if err := storage.ValidateRoot(configRoot); err != nil {
+		return Result{}, fmt.Errorf("validate machine config root: %w", err)
+	}
 	loaded, err := state.Load(request.Controls.State, request.Home)
 	if err != nil {
 		return Result{}, err
