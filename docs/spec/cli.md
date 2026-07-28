@@ -5,9 +5,21 @@ dot init [REPOSITORY] --profile NAME... [--dry-run]
 dot status [MODULE]
 dot apply [MODULE] [--dry-run]
 dot remove MODULE [--dry-run]
+dot paths
 dot version
 dot help
 ```
+
+## Paths
+
+- `dot paths` 显示当前 invocation 使用的 HOME、machine config、state 和 mutation lock 路径。
+- 输出固定为 `home`、`machine_config`、`state`、`lock` 四条 `key=<absolute path>` 记录，
+  路径经过词法规范化，但不解析现存 ancestor symlink。具体目录布局不是跨版本持久格式。
+- 命令不要求机器已经 init，不读取或解析 machine config、repository、state、lock 或 platform
+  信息，也不检查文件存在性、类型、权限、内容或控制路径拓扑。
+- 命令不创建目录、文件、lock 或 temporary file，不执行修复，也不输出 repository 或文件内容。
+- 命令不接受位置参数；参数错误返回 `2`。HOME 无法取得、为空或不是绝对路径时返回 `1` 且
+  stdout 为空；成功返回 `0`，正常结果只写 stdout。
 
 ## Init
 

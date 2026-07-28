@@ -8,36 +8,50 @@ import (
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 )
 
-type commandContext struct {
+type controlContext struct {
 	home       string
 	configPath string
 	statePath  string
 	lockPath   string
-	platform   config.Platform
 }
 
-func resolveContext(env environment) (commandContext, error) {
+type commandContext struct {
+	controlContext
+	platform config.Platform
+}
+
+func resolveControlContext(env environment) (controlContext, error) {
 	if env.userHomeDir == nil {
-		return commandContext{}, fmt.Errorf("HOME resolver is unavailable")
+		return controlContext{}, fmt.Errorf("HOME resolver is unavailable")
 	}
 	home, err := env.userHomeDir()
 	if err != nil {
-		return commandContext{}, fmt.Errorf("resolve current user HOME: %w", err)
+		return controlContext{}, fmt.Errorf("resolve current user HOME: %w", err)
 	}
 	if home == "" || !filepath.IsAbs(home) {
-		return commandContext{}, fmt.Errorf("current user HOME must be a non-empty absolute path")
-	}
-	if env.platform == nil {
-		return commandContext{}, fmt.Errorf("platform detector is unavailable")
+		return controlContext{}, fmt.Errorf("current user HOME must be a non-empty absolute path")
 	}
 	home = filepath.Clean(home)
 	stateRoot := filepath.Join(home, ".local", "state", "dot")
-	return commandContext{
+	return controlContext{
 		home:       home,
 		configPath: filepath.Join(home, ".config", "dot", "config.toml"),
 		statePath:  filepath.Join(stateRoot, "state.json"),
 		lockPath:   filepath.Join(stateRoot, "lock"),
-		platform:   env.platform(),
+	}, nil
+}
+
+func resolveContext(env environment) (commandContext, error) {
+	control, err := resolveControlContext(env)
+	if err != nil {
+		return commandContext{}, err
+	}
+	if env.platform == nil {
+		return commandContext{}, fmt.Errorf("platform detector is unavailable")
+	}
+	return commandContext{
+		controlContext: control,
+		platform:       env.platform(),
 	}, nil
 }
 

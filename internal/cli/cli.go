@@ -101,6 +101,7 @@ func newRootCommand(env environment) *cobra.Command {
 		newStatusCommand(env),
 		newApplyCommand(env),
 		newRemoveCommand(env),
+		newPathsCommand(env),
 		newVersionCommand(env),
 	)
 	root.SetHelpCommand(newHelpCommand(root))

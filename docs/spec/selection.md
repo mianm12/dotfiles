@@ -24,8 +24,9 @@ modules(active profiles) union extra_modules
 Profile 内容只在仓库中人工维护。`init` 写入 profiles；`apply <module>` 和
 `remove <module>` 可以确定性重写 `extra_modules`。CLI 重写机器配置时不承诺保留注释和空行。
 
-Init 之后调整 active profiles 的受支持方式是手工编辑机器配置再执行 `dot apply`；产品不提供
-修改 profiles 的命令。命令细节见 [`cli.md`](cli.md)。
+Init 之后调整 active profiles 的受支持方式是先通过
+[`dot paths`](cli.md#paths) 定位机器配置，手工编辑其中的 profiles，再执行 `dot apply`；
+产品不提供修改 profiles 的命令。命令细节见 [`cli.md`](cli.md)。
 
 ## 仓库布局与 Profile
 

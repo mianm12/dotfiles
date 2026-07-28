@@ -22,6 +22,7 @@ target = "~/.app"
 		{"remove"},
 		{"apply", "--unknown"},
 		{"init", fixture.repository},
+		{"paths", "extra"},
 		{"version", "extra"},
 		{"help", "does-not-exist"},
 		{"help", "apply", "extra"},
@@ -86,7 +87,7 @@ func TestHelpListsOnlyPublicCommands(t *testing.T) {
 	if code != exitOK || stderr != "" {
 		t.Fatalf("help = (%d, %q)", code, stderr)
 	}
-	for _, command := range []string{"init", "status", "apply", "remove", "version"} {
+	for _, command := range []string{"init", "status", "apply", "remove", "paths", "version"} {
 		if !strings.Contains(stdout, command) {
 			t.Fatalf("help missing %q:\n%s", command, stdout)
 		}
