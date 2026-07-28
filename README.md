@@ -8,8 +8,8 @@
 当前 Go 实现支持 macOS/Linux、profiles、portable 或 platform variants modules、link/local
 placements、dry-run、ownership state 和单进程 mutation lock。
 
-公开命令为 `init`、`status`、`apply`、`remove`、`version` 和 `help`。完整行为和安全边界以
-[产品规范集合](docs/spec/README.md)为准，当前实现证据以代码、测试和 CI 为准。
+公开命令为 `init`、`status`、`apply`、`remove`、`paths`、`version` 和 `help`。完整行为和
+安全边界以[产品规范集合](docs/spec/README.md)为准，当前实现证据以代码、测试和 CI 为准。
 
 ## 快速开始
 
@@ -18,6 +18,15 @@ make build
 bin/dot init /absolute/path/to/dotfiles --profile base
 bin/dot status
 ```
+
+需要调整 profiles、修正 repository 绑定或定位旧 state 时，先查看当前 binary 使用的本机
+文件位置：
+
+```sh
+bin/dot paths
+```
+
+该命令只显示路径，不读取或创建这些文件。
 
 当前仓库提供跨 macOS/Linux 的 `starship` module。它默认不在空 `base` profile 中，可按机器
 单独启用：

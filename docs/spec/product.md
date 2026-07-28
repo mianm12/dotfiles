@@ -28,7 +28,7 @@ Desired repository + Machine selection + State + Actual filesystem -> Plan
 - profiles、modules、platform variants 和多个 placements。
 - 文件或目录 symlink。
 - `*.local.example` 到本机 local 文件的一次性复制。
-- `init`、`status`、`apply`、`remove`、`version` 和 `help`。
+- `init`、`status`、`apply`、`remove`、`paths`、`version` 和 `help`。
 - mutation dry-run、最小 ownership state 和单进程锁。
 
 ## 非目标
@@ -61,8 +61,9 @@ Desired repository + Machine selection + State + Actual filesystem -> Plan
   target 的原子性。
 - OS 或文件系统在计划后返回错误时，命令可以部分完成并失败；恢复方式是停止并重跑。
 - State 丢失后可以恢复当前 desired，但无法发现已经从 manifest 删除的历史 link，只做警告。
-- 仓库目录被移动或机器配置指向失效时，`dot` 不自动重新绑定；恢复方式是人工修正机器配置的
-  `repository`，或删除机器配置后重新 `init`。
+- 仓库目录被移动或机器配置指向失效时，`dot` 不自动重新绑定；恢复方式是通过
+  [`dot paths`](cli.md#paths) 定位并人工修正机器配置中的 `repository`，或删除机器配置后
+  重新 `init`。
 
 ## 公共与内部边界
 
