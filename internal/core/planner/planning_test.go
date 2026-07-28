@@ -60,9 +60,6 @@ func TestPlanAddAndSafeStalePruneAreOrdered(t *testing.T) {
 	if plan.Actions[0].Target != newTarget || plan.Actions[1].Target != oldTarget {
 		t.Fatalf("Build() targets = %#v, want create %q then prune %q", plan.Actions, newTarget, oldTarget)
 	}
-	if len(plan.Warnings) != 0 {
-		t.Fatalf("Build() warnings = %v, want none", plan.Warnings)
-	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
@@ -147,9 +144,6 @@ func TestPlanStaleLinkInsideControlPathIsForgotten(t *testing.T) {
 			if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
 				t.Fatalf("forget reason = %q", got)
 			}
-			if len(plan.Warnings) != 1 {
-				t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
-			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
@@ -182,7 +176,7 @@ func TestPlanRejectsUnknownStaleKindBeforeControlOverlapFallback(t *testing.T) {
 	if !strings.Contains(err.Error(), `unsupported kind "unknown"`) {
 		t.Fatalf("Build() error = %q, want unsupported kind", err)
 	}
-	if len(plan.Actions) != 0 || len(plan.Warnings) != 0 {
+	if len(plan.Actions) != 0 {
 		t.Fatalf("Build() plan = %#v, want empty plan", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -229,9 +223,6 @@ func TestPlanStaleLinkContainingControlPathIsForgotten(t *testing.T) {
 			if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
 				t.Fatalf("forget reason = %q", got)
 			}
-			if len(plan.Warnings) != 1 {
-				t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
-			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
@@ -276,9 +267,6 @@ func TestPlanStaleLocalContainingControlPathIsForgotten(t *testing.T) {
 			if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
 				t.Fatalf("forget reason = %q", got)
 			}
-			if len(plan.Warnings) != 1 {
-				t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
-			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
@@ -310,9 +298,6 @@ func TestPlanStaleResolvedAliasOverlappingControlPathIsForgotten(t *testing.T) {
 	if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
 		t.Fatalf("forget reason = %q", got)
 	}
-	if len(plan.Warnings) != 1 {
-		t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
-	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
@@ -339,13 +324,13 @@ func TestPlanInvalidControlTopologyPrecedesStaleForget(t *testing.T) {
 	if !errors.Is(err, corepaths.ErrControlTopology) {
 		t.Fatalf("Build() = (%#v, %v), want control topology error", plan, err)
 	}
-	if plan.Actions != nil || plan.Warnings != nil {
+	if plan.Actions != nil {
 		t.Fatalf("Build() returned partial plan %#v", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanDriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
+func TestPlanDriftedStaleLinkForgetsAndDoesNotBlock(t *testing.T) {
 	fixture := newFixture(t)
 	newSource := fixture.file(t, "repo/modules/app/new", "new")
 	oldSource := fixture.file(t, "repo/modules/app/old", "old")
@@ -363,9 +348,6 @@ func TestPlanDriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
 	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionForget)
 	if plan.HasConflicts() {
 		t.Fatal("Build() has conflict, want drifted stale link to remain non-blocking")
-	}
-	if len(plan.Warnings) != 1 {
-		t.Fatalf("Build() warnings = %v, want one stale warning", plan.Warnings)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -531,8 +513,8 @@ func TestPlanCrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
 			plan := fixture.build(t, []config.Module{module}, snapshot)
 
 			assertDecisions(t, plan, test.want, planner.DecisionForget)
-			if plan.HasConflicts() || len(plan.Warnings) != 1 {
-				t.Fatalf("Build() = %#v, want local decision plus stale warning/forget", plan)
+			if plan.HasConflicts() {
+				t.Fatalf("Build() = %#v, want local decision plus stale forget", plan)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -650,13 +632,10 @@ func TestPlanParentSymlinkDriftRejectsPruneButContinues(t *testing.T) {
 	if plan.HasConflicts() {
 		t.Fatal("Build() has conflict, want stale drift to be non-blocking")
 	}
-	if len(plan.Warnings) != 1 {
-		t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
-	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanParentSymlinkDriftWithAbsentNewLeafStillWarns(t *testing.T) {
+func TestPlanParentSymlinkDriftWithAbsentNewLeafForgets(t *testing.T) {
 	fixture := newFixture(t)
 	oldParent := fixture.dir(t, "parents/old")
 	newParent := fixture.dir(t, "parents/new")
@@ -681,9 +660,6 @@ func TestPlanParentSymlinkDriftWithAbsentNewLeafStillWarns(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, planner.DecisionForget)
-	if len(plan.Warnings) != 1 {
-		t.Fatalf("Build() warnings = %v, want parent-drift warning", plan.Warnings)
-	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
@@ -838,6 +814,9 @@ func assertDecisions(t *testing.T, plan planner.Plan, want ...planner.Decision) 
 	got := make([]planner.Decision, len(plan.Actions))
 	for index, action := range plan.Actions {
 		got[index] = action.Decision
+		if action.Decision == planner.DecisionForget && action.Reason == "" {
+			t.Fatalf("Build() forget action has empty reason: %#v", action)
+		}
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("Build() decisions = %v, want %v; actions=%#v", got, want, plan.Actions)

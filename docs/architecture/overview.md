@@ -43,12 +43,12 @@ mutation。
 
 | Package | 职责 |
 | --- | --- |
-| `internal/storage` | 原子或不可覆盖的文件发布原语 |
-| `internal/core/paths` | HOME target、source 和控制路径边界 |
+| `internal/storage` | 私有控制目录边界，以及私有控制文件的唯一原子覆盖发布原语 |
+| `internal/core/paths` | HOME target、source、控制路径边界和路径解析结果分类 |
 | `internal/core/state` | ownership state 模型与编解码 |
 | `internal/core/config` | repository、machine 和 module 配置解析 |
 | `internal/lock` | mutation advisory lock |
-| `internal/core/planner` | desired、state 与 actual 的纯计划决策 |
+| `internal/core/planner` | desired、state 与 actual 的纯计划决策；action 保存结构化 forget 原因 |
 | `internal/core/executor` | Session、lock ownership、selection 发布调度、mutation 顺序、复核和恢复语义 |
 | `internal/cli` | 命令、只读 operation analysis、scope、输出和退出码 |
 | `cmd/dot` | 进程入口 |
@@ -74,12 +74,18 @@ storage / paths / state
 - Cobra：CLI 解析。
 - `go-toml/v2`：配置解析，并通过 `DisallowUnknownFields` 严格加载。
 - `gofrs/flock`：单进程 mutation lock。
-- `renameio/v2`：state 与机器配置的原子覆盖发布。
+- `renameio/v2`：仅由 `internal/storage` 用于私有 control file 的原子覆盖发布。
 
 测试专用依赖限 `google/go-cmp` 与 `stretchr/testify`。
 
 Local 与新文件的不可覆盖发布不使用 rename：先写 `0600` 临时文件，再以 `os.Link` 发布到
 target；已存在时得到 `EEXIST`，同时保证内容完整、不可覆盖和原子出现。
+
+机器配置与 state 各自负责编码和语义校验，再统一调用
+`storage.PublishPrivateFile(path, data)`；该函数在相同内容时执行零 metadata 写入的严格
+no-op，在实际发布时负责 `0700/0600` 权限、renameio 原子替换和 temporary file cleanup。
+Paths 在系统调用边界把解析失败分类为确定的 namespace 阻塞或不可确定的 I/O 失败，planner
+只消费 typed classification，不检查 `PathError` 包装或平台 errno。
 
 不引入 Viper、虚拟文件系统、DI、事务、workflow、state-machine、日志、color/TUI 或通用
 dotfiles framework。Distro 检测解析 `/etc/os-release`，HOME 使用 `os.UserHomeDir`，state

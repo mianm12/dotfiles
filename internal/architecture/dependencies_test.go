@@ -56,6 +56,43 @@ func TestProductionPackageDependenciesMatchArchitecture(t *testing.T) {
 	}
 }
 
+func TestRenameioIsOwnedByStorage(t *testing.T) {
+	const renameioPath = "github.com/google/renameio/v2"
+
+	root := repositoryRoot(t)
+	var failures []string
+	walkProductionGoFiles(t, root, func(filename, source string) {
+		file, err := parser.ParseFile(
+			token.NewFileSet(),
+			filename,
+			nil,
+			parser.ImportsOnly,
+		)
+		if err != nil {
+			t.Fatalf("parse production file %q: %v", filename, err)
+		}
+		for _, importSpec := range file.Imports {
+			importPath, err := strconv.Unquote(importSpec.Path.Value)
+			if err != nil {
+				t.Fatalf("unquote import %s in %q: %v", importSpec.Path.Value, filename, err)
+			}
+			if importPath != renameioPath {
+				continue
+			}
+			if source != "internal/storage" {
+				failures = append(
+					failures,
+					filename+": renameio must be used only by internal/storage",
+				)
+			}
+		}
+	})
+	sort.Strings(failures)
+	if len(failures) != 0 {
+		t.Fatalf("renameio ownership changed:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
 func TestProductionMutationLifecycleUsesSessionOnly(t *testing.T) {
 	root := repositoryRoot(t)
 	modulePath := repositoryModulePath(t, root)

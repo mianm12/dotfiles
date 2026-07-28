@@ -54,9 +54,12 @@ read-only preflight
 - Update/prune 删除 symlink 前重新读取 resolved target 和 raw destination；与 state 不同则停止。
 - 新 target 创建和 update 全部成功后才开始 prune。
 - Changed target 重新读取符合预期后才进入 state；不建设独立 postcondition framework。
-- State 最后原子提交；提交失败时命令失败。加载时若发现兼容的非 canonical 空 module，任意
-  成功真实 mutation 都提交 canonical state，即使 selection、target 和 ownership action 均为
-  no-op。Preflight、规划、mutation 或 state commit 失败时不得为 canonicalization 单独写盘。
+- State 最后原子提交；提交失败时命令失败。只有 state commit 和 lock release 均成功后，CLI
+  才能把 forget action 投影成过去式的“已忘记 ownership/provenance”；mutation 或 state
+  commit 失败时不得输出未完成 action 的结果。加载时若发现兼容的非 canonical 空 module，
+  任意成功真实 mutation 都提交 canonical state，即使 selection、target 和 ownership action
+  均为 no-op。Preflight、规划、mutation 或 state commit 失败时不得为 canonicalization 单独
+  写盘。
 - 不提供 rollback。失败时保留已经完成的安全动作，报告可能部分应用并要求用户重跑。
 - Mutation commands 使用同一把稳定 advisory file lock。Lock busy 作为普通运行时失败。
 

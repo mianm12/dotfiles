@@ -223,7 +223,7 @@ func TestUpdateAndPruneCarryStateRecheckFacts(t *testing.T) {
 	})
 }
 
-func TestStaleLocalWarnsAndForgetsWithoutInspectingContent(t *testing.T) {
+func TestStaleLocalForgetsWithoutInspectingContent(t *testing.T) {
 	fixture := newFixture(t)
 	target := fixture.target(".config/app/config.local")
 	fixture.fileAbsolute(t, target, "secret")
@@ -238,13 +238,13 @@ func TestStaleLocalWarnsAndForgetsWithoutInspectingContent(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, planner.DecisionForget)
-	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "local") {
-		t.Fatalf("Build() warnings = %v, want local provenance warning", plan.Warnings)
+	if got := plan.Actions[0].Reason; !strings.Contains(got, "local") {
+		t.Fatalf("forget reason = %q, want local retention reason", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestStaleLocalBlockedAncestorWarnsAndForgets(t *testing.T) {
+func TestStaleLocalBlockedAncestorForgets(t *testing.T) {
 	fixture := newFixture(t)
 	blocked := fixture.fileAbsolute(t, fixture.target(".blocked"), "user")
 	target := filepath.Join(blocked, "config.local")
@@ -259,13 +259,13 @@ func TestStaleLocalBlockedAncestorWarnsAndForgets(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, planner.DecisionForget)
-	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "local") {
-		t.Fatalf("Build() warnings = %v, want local provenance warning", plan.Warnings)
+	if got := plan.Actions[0].Reason; !strings.Contains(got, "local") {
+		t.Fatalf("forget reason = %q, want local retention reason", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestStaleNonSymlinkWarnsAndForgets(t *testing.T) {
+func TestStaleNonSymlinkForgets(t *testing.T) {
 	fixture := newFixture(t)
 	source := fixture.file(t, "repo/modules/app/old", "old")
 	target := fixture.target(".config/app/stale")
@@ -278,8 +278,8 @@ func TestStaleNonSymlinkWarnsAndForgets(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, planner.DecisionForget)
-	if plan.HasConflicts() || len(plan.Warnings) != 1 {
-		t.Fatalf("Build() = %#v, want non-blocking forget warning", plan)
+	if plan.HasConflicts() {
+		t.Fatalf("Build() = %#v, want non-blocking forget", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -478,7 +478,7 @@ func TestBuildRejectsNestedTargetsForEveryPlacementKindCombination(t *testing.T)
 					if !errors.Is(err, corepaths.ErrTargetConflict) {
 						t.Fatalf("Build() = (%#v, %v), want target conflict", plan, err)
 					}
-					if plan.Actions != nil || plan.Warnings != nil {
+					if plan.Actions != nil {
 						t.Fatalf("Build() returned partial plan %#v", plan)
 					}
 					assertTreeUnchanged(t, fixture.root, before)
@@ -555,12 +555,12 @@ func TestBuildPropagatesStaleFilesystemErrorWithoutPartialPlan(t *testing.T) {
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("Build() error = %v, want permission error", err)
 	}
-	if plan.Actions != nil || plan.Warnings != nil {
+	if plan.Actions != nil {
 		t.Fatalf("Build() returned partial plan %#v", plan)
 	}
 }
 
-func TestStaleDanglingAncestorWarnsAndForgets(t *testing.T) {
+func TestStaleDanglingAncestorForgets(t *testing.T) {
 	fixture := newFixture(t)
 	oldParent := fixture.dir(t, "parents/old")
 	parentLink := fixture.target("alias")
@@ -579,9 +579,35 @@ func TestStaleDanglingAncestorWarnsAndForgets(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, planner.DecisionForget)
-	if len(plan.Warnings) != 1 {
-		t.Fatalf("Build() warnings = %v, want dangling-ancestor warning", plan.Warnings)
+	if got := plan.Actions[0].Reason; got != "stale target cannot be resolved safely" {
+		t.Fatalf("forget reason = %q, want safe-resolution reason", got)
 	}
+}
+
+func TestStaleLoopedAncestorForgets(t *testing.T) {
+	fixture := newFixture(t)
+	oldParent := fixture.dir(t, "parents/old")
+	parentLink := fixture.target("alias")
+	fixture.symlink(t, oldParent, parentLink)
+	source := fixture.file(t, "repo/modules/app/config", "config")
+	target := parentLink + "/config"
+	fixture.symlink(t, source, filepath.Join(oldParent, "config"))
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"stale": linkRecord(target, fixture.resolved(t, target), source),
+	})
+	if err := os.Remove(parentLink); err != nil {
+		t.Fatalf("os.Remove(parent link) error = %v", err)
+	}
+	fixture.symlink(t, "alias", parentLink)
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, nil, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionForget)
+	if got := plan.Actions[0].Reason; got != "stale target cannot be resolved safely" {
+		t.Fatalf("forget reason = %q, want safe-resolution reason", got)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
 }
 
 func TestStaleLinkTargetContainingDesiredTargetIsConflict(t *testing.T) {
@@ -609,7 +635,7 @@ func TestStaleLinkTargetContainingDesiredTargetIsConflict(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestStaleTargetBlockedByRegularAncestorWarnsAndForgets(t *testing.T) {
+func TestStaleTargetBlockedByRegularAncestorForgets(t *testing.T) {
 	fixture := newFixture(t)
 	blockingAncestor := fixture.target(".config/app")
 	if err := os.MkdirAll(blockingAncestor, 0o700); err != nil {
@@ -632,8 +658,8 @@ func TestStaleTargetBlockedByRegularAncestorWarnsAndForgets(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionForget)
-	if plan.HasConflicts() || len(plan.Warnings) != 1 {
-		t.Fatalf("Build() = %#v, want non-blocking stale takeover warning", plan)
+	if plan.HasConflicts() {
+		t.Fatalf("Build() = %#v, want non-blocking stale takeover", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }

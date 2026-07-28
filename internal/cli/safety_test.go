@@ -585,6 +585,10 @@ func TestApplyForgetsStaleTargetContainingStateRootWithoutChangingEntry(t *testi
 func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 	for _, kind := range []state.Kind{state.KindLink, state.KindLocal} {
 		t.Run(string(kind), func(t *testing.T) {
+			completedForget := "forgot ownership"
+			if kind == state.KindLocal {
+				completedForget = "forgot provenance"
+			}
 			fixture := newCLITestEnv(t, `base = []`)
 			fixture.writeMachine(t, []string{"base"}, nil)
 			record := state.Placement{
@@ -616,9 +620,11 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 			code, stdout, stderr := fixture.run("status")
 			if code != exitOK ||
 				!strings.Contains(stdout, "old  stale") ||
-				!strings.Contains(stderr, "overlaps a protected control path") {
+				!strings.Contains(stdout, "forget") ||
+				!strings.Contains(stdout, "overlaps a protected control path") ||
+				stderr != "" {
 				t.Fatalf(
-					"status = (%d, %q, %q), want stale control-overlap warning",
+					"status = (%d, %q, %q), want structured stale forget",
 					code,
 					stdout,
 					stderr,
@@ -630,7 +636,8 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 			code, stdout, stderr = fixture.run("apply", "--dry-run")
 			if code != exitOK ||
 				!strings.Contains(stdout, "forget") ||
-				!strings.Contains(stderr, "overlaps a protected control path") {
+				!strings.Contains(stdout, "overlaps a protected control path") ||
+				stderr != "" {
 				t.Fatalf(
 					"apply --dry-run = (%d, %q, %q), want prospective forget",
 					code,
@@ -645,6 +652,7 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 			if code != exitOK ||
 				!strings.Contains(stdout, "forget") ||
 				!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
+				!strings.Contains(stderr, completedForget) ||
 				!strings.Contains(stderr, "overlaps a protected control path") {
 				t.Fatalf(
 					"apply = (%d, %q, %q), want state-only forget",

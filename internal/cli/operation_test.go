@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/core/executor"
+	"github.com/mianm12/dotfiles/internal/core/planner"
+	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/spf13/cobra"
 )
 
@@ -67,5 +69,165 @@ func TestRunMutationSessionClosesDuringPanic(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("runMutationSession(after panic) error = %v", err)
+	}
+}
+
+func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
+	forget := planner.Action{
+		ModuleID:    "old",
+		PlacementID: "config",
+		Kind:        state.KindLink,
+		Decision:    planner.DecisionForget,
+		Target:      "/tmp/home/.config",
+		Reason:      `stale destination "changed"`,
+	}
+	outcome := mutationOutcome{
+		result: executor.Result{
+			Plan:         planner.Plan{Actions: []planner.Action{forget}},
+			StateChanged: true,
+			Warnings:     []string{"synthetic input warning"},
+		},
+	}
+
+	t.Run("failure", func(t *testing.T) {
+		runErr := errors.New("synthetic state commit failure")
+		var stdout, stderr bytes.Buffer
+		command := &cobra.Command{}
+		command.SetOut(&stdout)
+		command.SetErr(&stderr)
+
+		err := finishMutation(command, outcome, runErr, "dot apply")
+
+		if !errors.Is(err, runErr) {
+			t.Fatalf("finishMutation() error = %v, want run error", err)
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf(
+				"finishMutation() stdout = %q, want no action result",
+				stdout.String(),
+			)
+		}
+		if !strings.Contains(stderr.String(), "synthetic input warning") ||
+			strings.Contains(stderr.String(), "forgot ownership") ||
+			strings.Contains(stderr.String(), forget.Reason) {
+			t.Fatalf(
+				"finishMutation() stderr = %q, want only input warning",
+				stderr.String(),
+			)
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		command := &cobra.Command{}
+		command.SetOut(&stdout)
+		command.SetErr(&stderr)
+
+		err := finishMutation(command, outcome, nil, "dot apply")
+		if err != nil {
+			t.Fatalf("finishMutation() error = %v", err)
+		}
+		quotedReason := `reason="stale destination \"changed\""`
+		if !strings.Contains(stdout.String(), "forget") ||
+			!strings.Contains(stdout.String(), "old/config") ||
+			!strings.Contains(stdout.String(), quotedReason) {
+			t.Fatalf(
+				"finishMutation() stdout = %q, want structured forget action",
+				stdout.String(),
+			)
+		}
+		if !strings.Contains(stderr.String(), "synthetic input warning") ||
+			!strings.Contains(stderr.String(), "forgot ownership") ||
+			!strings.Contains(stderr.String(), quotedReason) {
+			t.Fatalf(
+				"finishMutation() stderr = %q, want completed forget result",
+				stderr.String(),
+			)
+		}
+	})
+}
+
+func TestOperationAnalysisRendersEveryActionWithQuotedReason(t *testing.T) {
+	var stdout bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	analysis := OperationAnalysis{
+		Actions: []planner.Action{
+			{
+				ModuleID:    "app",
+				PlacementID: "new",
+				Decision:    planner.DecisionCreateLink,
+				Target:      "/tmp/home/.new",
+			},
+			{
+				ModuleID:    "old",
+				PlacementID: "stale",
+				Decision:    planner.DecisionForget,
+				Target:      "/tmp/home/.old",
+				Reason:      `actual target is "user-owned"`,
+			},
+		},
+	}
+
+	if err := printOperationAnalysis(command, analysis); err != nil {
+		t.Fatalf("printOperationAnalysis() error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "create-link") ||
+		!strings.Contains(output, "forget") ||
+		!strings.Contains(
+			output,
+			`reason="actual target is \"user-owned\""`,
+		) {
+		t.Fatalf(
+			"printOperationAnalysis() stdout = %q, want every structured action",
+			output,
+		)
+	}
+}
+
+func TestStatusAnalysisAppendsOnlyForgetActions(t *testing.T) {
+	var stdout bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	analysis := OperationAnalysis{
+		Modules: []ModuleAnalysis{{
+			ID:            "old",
+			Summary:       "stale",
+			Selection:     "none",
+			Applicability: "-",
+			Convergence:   "pending",
+			Variant:       "-",
+		}},
+		Actions: []planner.Action{
+			{
+				ModuleID:    "app",
+				PlacementID: "new",
+				Decision:    planner.DecisionCreateLink,
+				Target:      "/tmp/home/.new",
+			},
+			{
+				ModuleID:    "old",
+				PlacementID: "stale",
+				Decision:    planner.DecisionForget,
+				Target:      "/tmp/home/.old",
+				Reason:      "stale target is absent",
+			},
+		},
+	}
+
+	if err := printStatusAnalysis(command, analysis); err != nil {
+		t.Fatalf("printStatusAnalysis() error = %v", err)
+	}
+
+	output := stdout.String()
+	if strings.Contains(output, "create-link") ||
+		!strings.Contains(output, "forget") ||
+		!strings.Contains(output, `reason="stale target is absent"`) {
+		t.Fatalf(
+			"printStatusAnalysis() stdout = %q, want only appended forget action",
+			output,
+		)
 	}
 }

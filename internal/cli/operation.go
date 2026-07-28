@@ -57,6 +57,8 @@ func finishMutation(
 	rerun string,
 ) error {
 	if runErr != nil {
+		// Executor warnings are input diagnostics. Never project the plan or
+		// completed forget results from a failed mutation.
 		if warningErr := printWarnings(command, outcome.result.Warnings); warningErr != nil {
 			return errors.Join(runErr, warningErr)
 		}

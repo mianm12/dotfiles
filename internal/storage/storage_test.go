@@ -289,6 +289,218 @@ func TestEnsurePrivateFile_PostCreateFailurePreservesPublishedInode(t *testing.T
 	}
 }
 
+func TestPublishPrivateFileCreatesAndReplacesPrivately(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "control")
+	path := filepath.Join(root, "state.json")
+
+	changed, err := PublishPrivateFile(path, []byte("first"))
+	if err != nil || !changed {
+		t.Fatalf("PublishPrivateFile(first) = (%t, %v), want changed", changed, err)
+	}
+	assertMode(t, root, PrivateDirectoryMode)
+	assertMode(t, path, PrivateFileMode)
+	if data, err := os.ReadFile(path); err != nil || string(data) != "first" {
+		t.Fatalf("published data = (%q, %v), want first", data, err)
+	}
+
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatalf("os.Chmod(root) error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("os.Chmod(path) error = %v", err)
+	}
+	changed, err = PublishPrivateFile(path, []byte("second"))
+	if err != nil || !changed {
+		t.Fatalf("PublishPrivateFile(second) = (%t, %v), want changed", changed, err)
+	}
+	assertMode(t, root, PrivateDirectoryMode)
+	assertMode(t, path, PrivateFileMode)
+	if data, err := os.ReadFile(path); err != nil || string(data) != "second" {
+		t.Fatalf("published data = (%q, %v), want second", data, err)
+	}
+}
+
+func TestPublishPrivateFileIdenticalContentIsStrictNoOp(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "control")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("os.Mkdir(root) error = %v", err)
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatalf("os.Chmod(root) error = %v", err)
+	}
+	path := filepath.Join(root, "state.json")
+	if err := os.WriteFile(path, []byte("same"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(path) error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("os.Chmod(path) error = %v", err)
+	}
+	beforeRoot, err := os.Stat(root)
+	if err != nil {
+		t.Fatalf("os.Stat(root before) error = %v", err)
+	}
+	beforeFile, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat(path before) error = %v", err)
+	}
+
+	changed, err := publishPrivateFile(
+		path,
+		[]byte("same"),
+		func(string) (pendingPrivateFile, error) {
+			t.Fatal("identical content created a temporary file")
+			return nil, nil
+		},
+	)
+	if err != nil || changed {
+		t.Fatalf("publishPrivateFile(identical) = (%t, %v), want no-op", changed, err)
+	}
+
+	afterRoot, err := os.Stat(root)
+	if err != nil {
+		t.Fatalf("os.Stat(root after) error = %v", err)
+	}
+	afterFile, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat(path after) error = %v", err)
+	}
+	if !os.SameFile(beforeRoot, afterRoot) ||
+		beforeRoot.Mode() != afterRoot.Mode() ||
+		!beforeRoot.ModTime().Equal(afterRoot.ModTime()) {
+		t.Fatalf("identical publish changed root metadata: before=%v after=%v", beforeRoot, afterRoot)
+	}
+	if !os.SameFile(beforeFile, afterFile) ||
+		beforeFile.Mode() != afterFile.Mode() ||
+		!beforeFile.ModTime().Equal(afterFile.ModTime()) {
+		t.Fatalf("identical publish changed file metadata: before=%v after=%v", beforeFile, afterFile)
+	}
+}
+
+func TestPublishPrivateFileRejectsFinalSymlinkWithoutChangingTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "external")
+	if err := os.WriteFile(target, []byte("external"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(target) error = %v", err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatalf("os.Chmod(target) error = %v", err)
+	}
+	path := filepath.Join(root, "state.json")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("os.Symlink(target, path) error = %v", err)
+	}
+
+	changed, err := PublishPrivateFile(path, []byte("replacement"))
+	if err == nil || changed {
+		t.Fatalf("PublishPrivateFile(symlink) = (%t, %v), want unchanged error", changed, err)
+	}
+	info, inspectErr := os.Lstat(path)
+	if inspectErr != nil {
+		t.Fatalf("os.Lstat(path) error = %v", inspectErr)
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		t.Fatalf("mode(path) = %v, want symlink", info.Mode())
+	}
+	if data, readErr := os.ReadFile(target); readErr != nil || string(data) != "external" {
+		t.Fatalf("target data = (%q, %v), want external", data, readErr)
+	}
+	assertMode(t, target, 0o644)
+}
+
+func TestPublishPrivateFileFailureCleansUpAndPreservesExistingFile(t *testing.T) {
+	newPendingErr := errors.New("injected pending creation failure")
+	chmodErr := errors.New("injected chmod failure")
+	writeErr := errors.New("injected write failure")
+	publishErr := errors.New("injected atomic publish failure")
+	cleanupErr := errors.New("injected cleanup failure")
+	tests := []struct {
+		name        string
+		factoryErr  error
+		pending     failingPendingPrivateFile
+		wantPrimary error
+		wantCleanup bool
+	}{
+		{
+			name:        "create",
+			factoryErr:  newPendingErr,
+			wantPrimary: newPendingErr,
+		},
+		{
+			name:        "chmod",
+			pending:     failingPendingPrivateFile{chmodErr: chmodErr},
+			wantPrimary: chmodErr,
+			wantCleanup: true,
+		},
+		{
+			name:        "write",
+			pending:     failingPendingPrivateFile{writeErr: writeErr},
+			wantPrimary: writeErr,
+			wantCleanup: true,
+		},
+		{
+			name:        "publish",
+			pending:     failingPendingPrivateFile{publishErr: publishErr},
+			wantPrimary: publishErr,
+			wantCleanup: true,
+		},
+		{
+			name: "cleanup error is joined",
+			pending: failingPendingPrivateFile{
+				writeErr:   writeErr,
+				cleanupErr: cleanupErr,
+			},
+			wantPrimary: writeErr,
+			wantCleanup: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "control")
+			if err := os.Mkdir(root, 0o700); err != nil {
+				t.Fatalf("os.Mkdir(root) error = %v", err)
+			}
+			path := filepath.Join(root, "state.json")
+			if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+				t.Fatalf("os.WriteFile(path) error = %v", err)
+			}
+			pending := test.pending
+
+			changed, err := publishPrivateFile(
+				path,
+				[]byte("replacement"),
+				func(string) (pendingPrivateFile, error) {
+					if test.factoryErr != nil {
+						return nil, test.factoryErr
+					}
+					return &pending, nil
+				},
+			)
+			if changed || !errors.Is(err, test.wantPrimary) {
+				t.Fatalf(
+					"publishPrivateFile() = (%t, %v), want unchanged error containing %v",
+					changed,
+					err,
+					test.wantPrimary,
+				)
+			}
+			if pending.cleanupCalled != test.wantCleanup {
+				t.Fatalf(
+					"Cleanup called = %t, want %t",
+					pending.cleanupCalled,
+					test.wantCleanup,
+				)
+			}
+			if test.pending.cleanupErr != nil && !errors.Is(err, cleanupErr) {
+				t.Fatalf("publishPrivateFile() error = %v, want joined cleanup error", err)
+			}
+			if data, readErr := os.ReadFile(path); readErr != nil || string(data) != "original" {
+				t.Fatalf("existing data = (%q, %v), want original", data, readErr)
+			}
+		})
+	}
+}
+
 func TestEnsurePaths_RejectRelativePathsWithoutWriting(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)
@@ -298,6 +510,9 @@ func TestEnsurePaths_RejectRelativePathsWithoutWriting(t *testing.T) {
 	}
 	if err := EnsurePrivateFile("relative-lock"); err == nil {
 		t.Fatal("EnsurePrivateFile() error = nil, want relative path error")
+	}
+	if changed, err := PublishPrivateFile("relative-state", []byte("state")); err == nil || changed {
+		t.Fatalf("PublishPrivateFile(relative) = (%t, %v), want unchanged error", changed, err)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -338,4 +553,32 @@ func (file *failingPrivateFile) Close() error {
 		return file.closeErr
 	}
 	return err
+}
+
+type failingPendingPrivateFile struct {
+	chmodErr      error
+	writeErr      error
+	publishErr    error
+	cleanupErr    error
+	cleanupCalled bool
+}
+
+func (file *failingPendingPrivateFile) Chmod(fs.FileMode) error {
+	return file.chmodErr
+}
+
+func (file *failingPendingPrivateFile) Write(data []byte) (int, error) {
+	if file.writeErr != nil {
+		return 0, file.writeErr
+	}
+	return len(data), nil
+}
+
+func (file *failingPendingPrivateFile) CloseAtomicallyReplace() error {
+	return file.publishErr
+}
+
+func (file *failingPendingPrivateFile) Cleanup() error {
+	file.cleanupCalled = true
+	return file.cleanupErr
 }

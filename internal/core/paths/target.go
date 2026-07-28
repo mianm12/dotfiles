@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 var (
@@ -20,6 +21,43 @@ var (
 	// ErrPathBlocked reports an ancestor that cannot be resolved as a directory.
 	ErrPathBlocked = errors.New("path is blocked")
 )
+
+// ResolutionClass describes why filesystem path resolution failed.
+type ResolutionClass uint8
+
+const (
+	// ResolutionObstructed means the current namespace definitely cannot
+	// resolve the requested path, for example because an ancestor is not a
+	// directory, is dangling, or contains a symlink loop.
+	ResolutionObstructed ResolutionClass = iota + 1
+	// ResolutionUnavailable means filesystem observation failed without proving
+	// that the requested path is obstructed.
+	ResolutionUnavailable
+)
+
+type resolutionError struct {
+	class ResolutionClass
+	err   error
+}
+
+func (err *resolutionError) Error() string {
+	return err.err.Error()
+}
+
+func (err *resolutionError) Unwrap() error {
+	return err.err
+}
+
+// ClassifyResolutionError returns the paths-owned classification of a
+// filesystem resolution failure. Invalid path input and unrelated errors are
+// not classified.
+func ClassifyResolutionError(err error) (ResolutionClass, bool) {
+	var classified *resolutionError
+	if !errors.As(err, &classified) {
+		return 0, false
+	}
+	return classified.class, true
+}
 
 // Target is one target expression after HOME expansion and ancestor resolution.
 // Lexical is the cleaned logical-HOME path. Resolved follows existing ancestor
@@ -56,20 +94,21 @@ func ResolveTarget(home, expression string) (Target, error) {
 	}
 	info, err := os.Stat(filepath.Dir(resolved))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return Target{}, fmt.Errorf(
+		detail := fmt.Errorf(
 			"inspect target %q parent %q: %w",
 			expression,
 			filepath.Dir(resolved),
 			err,
 		)
+		return Target{}, classifyFilesystemResolutionError(err, detail)
 	}
 	if err == nil && !info.IsDir() {
-		return Target{}, fmt.Errorf(
+		return Target{}, obstructedResolutionError(fmt.Errorf(
 			"%w: target %q parent %q is not a directory",
 			ErrPathBlocked,
 			expression,
 			filepath.Dir(resolved),
-		)
+		))
 	}
 
 	return Target{
@@ -159,19 +198,36 @@ func resolvePath(path string) (string, error) {
 		if inspectErr == nil {
 			resolved, resolveErr := filepath.EvalSymlinks(current)
 			if resolveErr != nil {
-				return "", fmt.Errorf("%w: resolve existing path %q: %w", ErrPathBlocked, current, resolveErr)
+				detail := fmt.Errorf(
+					"%w: resolve existing path %q: %w",
+					ErrPathBlocked,
+					current,
+					resolveErr,
+				)
+				return "", classifySymlinkResolutionError(current, resolveErr, detail)
 			}
 			if len(missing) > 0 {
 				resolvedInfo, statErr := os.Stat(resolved)
 				if statErr != nil {
-					return "", fmt.Errorf("inspect resolved ancestor %q: %w", resolved, statErr)
+					detail := fmt.Errorf("inspect resolved ancestor %q: %w", resolved, statErr)
+					return "", classifyFilesystemResolutionError(statErr, detail)
 				}
 				if !resolvedInfo.IsDir() {
-					return "", fmt.Errorf("%w: ancestor %q is not a directory", ErrPathBlocked, current)
+					return "", obstructedResolutionError(fmt.Errorf(
+						"%w: ancestor %q is not a directory",
+						ErrPathBlocked,
+						current,
+					))
 				}
 			} else if info.Mode()&fs.ModeSymlink != 0 {
 				if _, statErr := os.Stat(resolved); statErr != nil {
-					return "", fmt.Errorf("%w: inspect symlink destination %q: %w", ErrPathBlocked, resolved, statErr)
+					detail := fmt.Errorf(
+						"%w: inspect symlink destination %q: %w",
+						ErrPathBlocked,
+						resolved,
+						statErr,
+					)
+					return "", classifyFilesystemResolutionError(statErr, detail)
 				}
 			}
 			for index := len(missing) - 1; index >= 0; index-- {
@@ -180,16 +236,64 @@ func resolvePath(path string) (string, error) {
 			return filepath.Clean(resolved), nil
 		}
 		if !errors.Is(inspectErr, fs.ErrNotExist) {
-			return "", fmt.Errorf("%w: inspect ancestor %q: %w", ErrPathBlocked, current, inspectErr)
+			detail := fmt.Errorf(
+				"%w: inspect ancestor %q: %w",
+				ErrPathBlocked,
+				current,
+				inspectErr,
+			)
+			return "", classifyFilesystemResolutionError(inspectErr, detail)
 		}
 
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", fmt.Errorf("%w: no existing ancestor for %q", ErrPathBlocked, cleanPath)
+			return "", obstructedResolutionError(fmt.Errorf(
+				"%w: no existing ancestor for %q",
+				ErrPathBlocked,
+				cleanPath,
+			))
 		}
 		missing = append(missing, filepath.Base(current))
 		current = parent
 	}
+}
+
+func obstructedResolutionError(err error) error {
+	return &resolutionError{
+		class: ResolutionObstructed,
+		err:   err,
+	}
+}
+
+func classifyFilesystemResolutionError(cause, detail error) error {
+	return &resolutionError{
+		class: filesystemResolutionClass(cause),
+		err:   detail,
+	}
+}
+
+func classifySymlinkResolutionError(path string, cause, detail error) error {
+	class := filesystemResolutionClass(cause)
+	if class == ResolutionUnavailable {
+		// EvalSymlinks reports its link-count limit as an opaque error. Stat
+		// recovers the OS classification without exposing that detail to callers.
+		if _, statErr := os.Stat(path); statErr != nil {
+			class = filesystemResolutionClass(statErr)
+		}
+	}
+	return &resolutionError{
+		class: class,
+		err:   detail,
+	}
+}
+
+func filesystemResolutionClass(cause error) ResolutionClass {
+	if errors.Is(cause, fs.ErrNotExist) ||
+		errors.Is(cause, syscall.ENOTDIR) ||
+		errors.Is(cause, syscall.ELOOP) {
+		return ResolutionObstructed
+	}
+	return ResolutionUnavailable
 }
 
 func strictDescendant(parent, candidate string) bool {

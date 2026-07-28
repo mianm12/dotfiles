@@ -218,7 +218,6 @@ func TestSessionConvergeRejectsActiveControlBoundary(t *testing.T) {
 		t.Fatalf("Session.Converge() error = %q, want conflicting path and recovery hint", err)
 	}
 	if len(result.Plan.Actions) != 0 ||
-		len(result.Plan.Warnings) != 0 ||
 		result.TargetsChanged ||
 		result.StateChanged ||
 		len(result.Warnings) != 0 {
@@ -347,6 +346,49 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 	third, err := runLocked(request, commitState)
 	if err != nil || third.TargetsChanged || third.StateChanged {
 		t.Fatalf("runLocked(repeat) = (%#v, %v), want zero mutation", third, err)
+	}
+	assertExecutorPathUnchanged(t, beforeTarget)
+	assertExecutorPathUnchanged(t, beforeState)
+}
+
+func TestForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.T) {
+	fixture := newFixture(t)
+	target := filepath.Join(fixture.home, ".config", "app.local")
+	writeExecutorFile(t, target, "personal")
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"app": {Placements: map[string]state.Placement{
+				"local": {
+					Kind:   state.KindLocal,
+					Target: target,
+				},
+			}},
+		},
+	})
+	beforeTarget := snapshotExecutorPath(t, target)
+	beforeState := snapshotExecutorPath(t, fixture.state)
+
+	result, err := runLocked(
+		fixture.request(nil),
+		func(string, state.Snapshot) error {
+			return errors.New("injected forget commit failure")
+		},
+	)
+
+	if err == nil ||
+		!strings.Contains(err.Error(), "injected forget commit failure") ||
+		!strings.Contains(err.Error(), "state was not committed") ||
+		!strings.Contains(err.Error(), "rerun to converge") {
+		t.Fatalf("runLocked(failing forget commit) error = %v, want retry guidance", err)
+	}
+	if result.TargetsChanged || result.StateChanged {
+		t.Fatalf("runLocked(failing forget commit) result = %#v, want no completed change", result)
+	}
+	if len(result.Plan.Actions) != 1 ||
+		result.Plan.Actions[0].Decision != planner.DecisionForget ||
+		result.Plan.Actions[0].Reason == "" {
+		t.Fatalf("runLocked(failing forget commit) plan = %#v, want structured forget", result.Plan)
 	}
 	assertExecutorPathUnchanged(t, beforeTarget)
 	assertExecutorPathUnchanged(t, beforeState)

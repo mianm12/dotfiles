@@ -1,13 +1,10 @@
 package planner
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
@@ -42,10 +39,7 @@ func Build(request Request) (Plan, error) {
 	}
 
 	usedState := make(map[placementKey]bool)
-	plan := Plan{
-		Actions:  make([]Action, 0, len(desired)),
-		Warnings: make([]string, 0),
-	}
+	plan := Plan{Actions: make([]Action, 0, len(desired))}
 	for _, placement := range desired {
 		if !scope.includes(placement.key.moduleID) {
 			continue
@@ -60,7 +54,7 @@ func Build(request Request) (Plan, error) {
 		plan.Actions = append(plan.Actions, action)
 	}
 
-	cleanup, warnings, err := planStale(
+	cleanup, err := planStale(
 		home,
 		request.Controls,
 		desired,
@@ -72,7 +66,6 @@ func Build(request Request) (Plan, error) {
 		return Plan{}, err
 	}
 	plan.Actions = append(plan.Actions, cleanup...)
-	plan.Warnings = append(plan.Warnings, warnings...)
 	return plan, nil
 }
 
@@ -275,16 +268,15 @@ func planStale(
 	snapshot state.Snapshot,
 	used map[placementKey]bool,
 	scope moduleScope,
-) ([]Action, []string, error) {
+) ([]Action, error) {
 	keys := stateKeys(snapshot)
 	actions := make([]Action, 0)
-	warnings := make([]string, 0)
 	for _, key := range keys {
 		if used[key] || !scope.includes(key.moduleID) {
 			continue
 		}
 		record, _ := statePlacement(snapshot, key)
-		action, warning, err := planOneStale(
+		action, err := planOneStale(
 			home,
 			controls,
 			desired,
@@ -292,14 +284,11 @@ func planStale(
 			record,
 		)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		actions = append(actions, action)
-		if warning != "" {
-			warnings = append(warnings, warning)
-		}
 	}
-	return actions, warnings, nil
+	return actions, nil
 }
 
 func planOneStale(
@@ -308,11 +297,11 @@ func planOneStale(
 	desired []desiredPlacement,
 	key placementKey,
 	record state.Placement,
-) (Action, string, error) {
+) (Action, error) {
 	switch record.Kind {
 	case state.KindLink, state.KindLocal:
 	default:
-		return Action{}, "", fmt.Errorf(
+		return Action{}, fmt.Errorf(
 			"%w: stale placement %s has unsupported kind %q",
 			state.ErrInvalid,
 			placementLabel(key.moduleID, key.placementID),
@@ -335,7 +324,7 @@ func planOneStale(
 		current, err := resolveStateTarget(home, record.Target)
 		if err != nil {
 			if !isSafeStaleResolutionDrift(err) {
-				return Action{}, "", fmt.Errorf(
+				return Action{}, fmt.Errorf(
 					"resolve stale local %s: %w",
 					placementLabel(key.moduleID, key.placementID),
 					err,
@@ -344,31 +333,23 @@ func planOneStale(
 		} else {
 			overlaps, overlapErr := corepaths.TargetOverlapsControls(controls, current)
 			if overlapErr != nil {
-				return Action{}, "", overlapErr
+				return Action{}, overlapErr
 			}
 			if overlaps {
 				base.Decision = DecisionForget
 				base.Reason = "stale target overlaps a protected control path"
-				warning := fmt.Sprintf(
-					"local %s left desired and overlaps a protected control path; "+
-						"keeping target and forgetting provenance",
-					placementLabel(key.moduleID, key.placementID),
-				)
-				return base, warning, nil
+				return base, nil
 			}
 		}
 		base.Decision = DecisionForget
-		warning := fmt.Sprintf(
-			"local %s left desired; keeping target and forgetting provenance",
-			placementLabel(key.moduleID, key.placementID),
-		)
-		return base, warning, nil
+		base.Reason = "local left desired; local targets are never pruned"
+		return base, nil
 	}
 
 	current, err := resolveStateTarget(home, record.Target)
 	if err != nil {
 		if !isSafeStaleResolutionDrift(err) {
-			return Action{}, "", fmt.Errorf(
+			return Action{}, fmt.Errorf(
 				"resolve stale link %s: %w",
 				placementLabel(key.moduleID, key.placementID),
 				err,
@@ -376,33 +357,33 @@ func planOneStale(
 		}
 		base.Decision = DecisionForget
 		base.Reason = "stale target cannot be resolved safely"
-		return base, staleWarning(key, base.Reason), nil
+		return base, nil
 	}
 	base.ResolvedTarget = current.Resolved()
 	overlaps, err := corepaths.TargetOverlapsControls(controls, current)
 	if err != nil {
-		return Action{}, "", err
+		return Action{}, err
 	}
 	if overlaps {
 		base.Decision = DecisionForget
 		base.Reason = "stale target overlaps a protected control path"
-		return base, staleWarning(key, base.Reason), nil
+		return base, nil
 	}
 
 	if targetUsedByDesired(current, desired) {
 		base.Decision = DecisionForget
 		base.Reason = "stale target is reused by desired configuration"
-		return base, staleWarning(key, base.Reason), nil
+		return base, nil
 	}
 	if current.Resolved() != record.ResolvedTarget {
 		base.Decision = DecisionForget
 		base.Reason = "stale resolved target changed"
-		return base, staleWarning(key, base.Reason), nil
+		return base, nil
 	}
 
 	actual, err := observeLink(current.Lexical())
 	if err != nil {
-		return Action{}, "", fmt.Errorf(
+		return Action{}, fmt.Errorf(
 			"inspect stale link %s: %w",
 			placementLabel(key.moduleID, key.placementID),
 			err,
@@ -410,7 +391,8 @@ func planOneStale(
 	}
 	if actual.kind == actualAbsent {
 		base.Decision = DecisionForget
-		return base, "", nil
+		base.Reason = "stale target is absent"
+		return base, nil
 	}
 	if actual.kind == actualSymlink &&
 		actual.linkDestination == record.LinkDestination &&
@@ -418,15 +400,15 @@ func planOneStale(
 		if staleLinkContainsDesired(current, desired) {
 			base.Decision = DecisionConflict
 			base.Reason = "stale link target contains an active desired target"
-			return base, "", nil
+			return base, nil
 		}
 		base.Decision = DecisionPrune
-		return base, "", nil
+		return base, nil
 	}
 
 	base.Decision = DecisionForget
 	base.Reason = staleDriftReason(actual, current.Resolved(), record)
-	return base, staleWarning(key, base.Reason), nil
+	return base, nil
 }
 
 func staleDriftReason(
@@ -524,16 +506,8 @@ func resolveStateTarget(
 }
 
 func isSafeStaleResolutionDrift(err error) bool {
-	if errors.Is(err, fs.ErrNotExist) ||
-		errors.Is(err, syscall.ENOTDIR) ||
-		errors.Is(err, syscall.ELOOP) {
-		return true
-	}
-	if !errors.Is(err, corepaths.ErrPathBlocked) {
-		return false
-	}
-	var pathError *fs.PathError
-	return !errors.As(err, &pathError)
+	class, classified := corepaths.ClassifyResolutionError(err)
+	return classified && class == corepaths.ResolutionObstructed
 }
 
 func statePlacement(
@@ -569,14 +543,6 @@ func stateKeys(snapshot state.Snapshot) []placementKey {
 
 func placementLabel(moduleID, placementID string) string {
 	return moduleID + "/" + placementID
-}
-
-func staleWarning(key placementKey, reason string) string {
-	return fmt.Sprintf(
-		"stale link %s is not safe to prune (%s); keeping target and forgetting ownership",
-		placementLabel(key.moduleID, key.placementID),
-		reason,
-	)
 }
 
 type moduleScope struct {

@@ -58,11 +58,10 @@ type Action struct {
 }
 
 // Plan contains active-placement decisions followed by stale cleanup
-// decisions. Warnings describe safe ownership abandonment and local
-// provenance removal.
+// decisions. Action.Reason is the single source of truth for why an action,
+// including ownership abandonment, was selected.
 type Plan struct {
-	Actions  []Action
-	Warnings []string
+	Actions []Action
 }
 
 // HasConflicts reports whether the plan is unsafe to execute.

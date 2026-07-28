@@ -10,11 +10,17 @@
 - CLI 的命令语法、错误映射和输出格式由 `commands_test.go` 覆盖。
 - Config、paths、state、planner 和 executor 在各自 package 覆盖局部模型与失败边界，并以
   具体行为命名。
+- Storage 覆盖私有文件首次发布、相同内容精确 no-op、替换、权限与异常目录项；config/state
+  只覆盖各自编码、语义校验及对统一发布原语的调用结果。
+- Paths 覆盖确定阻塞与不可确定 I/O 的 typed resolution classification；planner 测试只验证
+  分类对应的 prune/forget 策略，不依赖 errno 或 `PathError` 包装形状。
 - Executor 负责 Session 固定 controls、单次 lock ownership、selection publication、
   state reload/replan、Close 后拒绝调用等生命周期测试；lock package 只覆盖一次获取、一次
   释放、busy、崩溃恢复和 I/O 分类，不测试嵌套 guard 或引用计数。
 - `cmd/dot` 只保留最小进程级 smoke；完整公开行为通过 `cli.Run` 测试。
 - CLI 合成环境集中在 `internal/cli/testenv_test.go`，不创建跨 package 通用测试框架。
+- CLI 分别验证 status/dry-run 的 prospective forget、成功 state commit 后的过去式 forget
+  结果，以及 mutation/state commit/lock release 失败时不输出未完成 action。
 
 ## 合成环境
 
