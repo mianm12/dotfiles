@@ -55,10 +55,14 @@ type selectedModule struct {
 	placements placementSet
 }
 
-func loadModule(id string, file moduleFile, platform Platform) (Module, bool, error) {
+func loadModule(
+	id string,
+	file moduleFile,
+	platform Platform,
+) (Module, ModuleApplicability, error) {
 	var document moduleDocument
 	if err := decodeStrictManifest(file.manifest, &document); err != nil {
-		return Module{}, false, fmt.Errorf(
+		return Module{}, ModuleApplicability{}, fmt.Errorf(
 			"%w: module %q: %w",
 			ErrInvalidConfiguration,
 			id,
@@ -66,12 +70,12 @@ func loadModule(id string, file moduleFile, platform Platform) (Module, bool, er
 		)
 	}
 
-	selected, applicable, err := selectModule(id, file.root, document, platform)
+	selected, applicability, err := selectModule(id, file.root, document, platform)
 	if err != nil {
-		return Module{}, false, err
+		return Module{}, ModuleApplicability{}, err
 	}
-	if !applicable {
-		return Module{}, false, nil
+	if applicability.State != ApplicabilityApplicable {
+		return Module{}, applicability, nil
 	}
 	links, locals, err := materializePlacements(
 		id,
@@ -80,7 +84,7 @@ func loadModule(id string, file moduleFile, platform Platform) (Module, bool, er
 		selected.placements,
 	)
 	if err != nil {
-		return Module{}, false, err
+		return Module{}, ModuleApplicability{}, err
 	}
 	return Module{
 		ID:      id,
@@ -88,18 +92,18 @@ func loadModule(id string, file moduleFile, platform Platform) (Module, bool, er
 		Root:    selected.root,
 		Links:   links,
 		Locals:  locals,
-	}, true, nil
+	}, applicability, nil
 }
 
 func selectModule(
 	id, moduleRoot string,
 	document moduleDocument,
 	platform Platform,
-) (selectedModule, bool, error) {
+) (selectedModule, ModuleApplicability, error) {
 	portableDeclared := document.Match != nil || document.Links != nil || document.Locals != nil
 	variantsDeclared := document.Variants != nil
 	if portableDeclared && variantsDeclared {
-		return selectedModule{}, false, fmt.Errorf(
+		return selectedModule{}, ModuleApplicability{}, fmt.Errorf(
 			"%w: module %q mixes portable placements with variants",
 			ErrInvalidConfiguration,
 			id,
@@ -108,30 +112,39 @@ func selectModule(
 
 	if !variantsDeclared {
 		if err := validateMatch(id, "portable", document.Match); err != nil {
-			return selectedModule{}, false, err
+			return selectedModule{}, ModuleApplicability{}, err
 		}
 		placements, err := validatePlacements(id, "portable", document.Links, document.Locals)
 		if err != nil {
-			return selectedModule{}, false, err
+			return selectedModule{}, ModuleApplicability{}, err
 		}
-		if !matches(document.Match, platform) {
-			return selectedModule{}, false, nil
+		applicability := matches(document.Match, platform)
+		if applicability.State != ApplicabilityApplicable {
+			return selectedModule{}, applicability, nil
 		}
-		return selectedModule{root: moduleRoot, placements: placements}, true, nil
+		return selectedModule{
+			root:       moduleRoot,
+			placements: placements,
+		}, applicability, nil
 	}
 
 	var selected []selectedModule
+	type possibleVariant struct {
+		name       string
+		diagnostic string
+	}
+	var possible []possibleVariant
 	for _, name := range sortedKeys(document.Variants) {
 		if err := validateID("variant", name); err != nil {
-			return selectedModule{}, false, fmt.Errorf("module %q: %w", id, err)
+			return selectedModule{}, ModuleApplicability{}, fmt.Errorf("module %q: %w", id, err)
 		}
 		variant := document.Variants[name]
 		root, err := variantRoot(id, name, moduleRoot, variant.Root)
 		if err != nil {
-			return selectedModule{}, false, err
+			return selectedModule{}, ModuleApplicability{}, err
 		}
 		if err := validateMatch(id, "variant "+name, variant.Match); err != nil {
-			return selectedModule{}, false, err
+			return selectedModule{}, ModuleApplicability{}, err
 		}
 		placements, err := validatePlacements(
 			id,
@@ -140,32 +153,63 @@ func selectModule(
 			variant.Locals,
 		)
 		if err != nil {
-			return selectedModule{}, false, err
+			return selectedModule{}, ModuleApplicability{}, err
 		}
-		if matches(variant.Match, platform) {
+		applicability := matches(variant.Match, platform)
+		switch applicability.State {
+		case ApplicabilityApplicable:
 			selected = append(selected, selectedModule{
 				variant:    name,
 				root:       root,
 				placements: placements,
 			})
+		case ApplicabilityIndeterminate:
+			possible = append(possible, possibleVariant{
+				name:       name,
+				diagnostic: applicability.Diagnostic,
+			})
 		}
-	}
-	if len(selected) == 0 {
-		return selectedModule{}, false, nil
 	}
 	if len(selected) > 1 {
 		names := make([]string, len(selected))
 		for index := range selected {
 			names[index] = selected[index].variant
 		}
-		return selectedModule{}, false, fmt.Errorf(
+		return selectedModule{}, ModuleApplicability{}, fmt.Errorf(
 			"%w: module %q has multiple matching variants: %s",
 			ErrInvalidConfiguration,
 			id,
 			strings.Join(names, ", "),
 		)
 	}
-	return selected[0], true, nil
+	if len(possible) != 0 {
+		diagnostics := make([]string, 0, len(selected)+len(possible))
+		if len(selected) == 1 {
+			diagnostics = append(
+				diagnostics,
+				fmt.Sprintf("variant %q matches", selected[0].variant),
+			)
+		}
+		for _, candidate := range possible {
+			diagnostic := fmt.Sprintf("variant %q may match", candidate.name)
+			if candidate.diagnostic != "" {
+				diagnostic += ": " + candidate.diagnostic
+			}
+			diagnostics = append(diagnostics, diagnostic)
+		}
+		return selectedModule{}, ModuleApplicability{
+			State:      ApplicabilityIndeterminate,
+			Diagnostic: strings.Join(diagnostics, "; "),
+		}, nil
+	}
+	if len(selected) == 0 {
+		return selectedModule{}, ModuleApplicability{
+			State: ApplicabilityNotApplicable,
+		}, nil
+	}
+	return selected[0], ModuleApplicability{
+		State: ApplicabilityApplicable,
+	}, nil
 }
 
 func validateMatch(module, location string, match *matchDocument) error {
@@ -204,17 +248,64 @@ func validateMatch(module, location string, match *matchDocument) error {
 	return nil
 }
 
-func matches(match *matchDocument, platform Platform) bool {
+func matches(match *matchDocument, platform Platform) ModuleApplicability {
 	if match == nil {
-		return true
+		return ModuleApplicability{State: ApplicabilityApplicable}
 	}
-	return matchesField(match.OS, platform.OS) &&
-		matchesField(match.Distro, platform.Distro) &&
-		matchesField(match.Arch, platform.Arch)
+	fields := []struct {
+		name    string
+		allowed []string
+		actual  PlatformField
+	}{
+		{name: "os", allowed: match.OS, actual: platform.OS},
+		{name: "distro", allowed: match.Distro, actual: platform.Distro},
+		{name: "arch", allowed: match.Arch, actual: platform.Arch},
+	}
+	diagnostics := make([]string, 0, len(fields))
+	for _, field := range fields {
+		applicability := matchesField(field.name, field.allowed, field.actual)
+		if applicability.State == ApplicabilityNotApplicable {
+			return applicability
+		}
+		if applicability.State == ApplicabilityIndeterminate {
+			diagnostics = append(diagnostics, applicability.Diagnostic)
+		}
+	}
+	if len(diagnostics) != 0 {
+		return ModuleApplicability{
+			State:      ApplicabilityIndeterminate,
+			Diagnostic: strings.Join(diagnostics, "; "),
+		}
+	}
+	return ModuleApplicability{State: ApplicabilityApplicable}
 }
 
-func matchesField(allowed []string, actual string) bool {
-	return allowed == nil || slices.Contains(allowed, actual)
+func matchesField(
+	name string,
+	allowed []string,
+	actual PlatformField,
+) ModuleApplicability {
+	if allowed == nil {
+		return ModuleApplicability{State: ApplicabilityApplicable}
+	}
+	if actual.Known {
+		if slices.Contains(allowed, actual.Value) {
+			return ModuleApplicability{State: ApplicabilityApplicable}
+		}
+		return ModuleApplicability{State: ApplicabilityNotApplicable}
+	}
+	diagnostic := actual.Diagnostic
+	if diagnostic == "" {
+		diagnostic = "no detection diagnostic is available"
+	}
+	return ModuleApplicability{
+		State: ApplicabilityIndeterminate,
+		Diagnostic: fmt.Sprintf(
+			"platform %s is unknown: %s",
+			name,
+			diagnostic,
+		),
+	}
 }
 
 func variantRoot(module, variant, moduleRoot string, declared *string) (string, error) {

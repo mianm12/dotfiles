@@ -123,13 +123,13 @@ inactive = ["deleted"]
 	}
 	if _, err := loaded.Resolve(
 		coreconfig.Scope{Profiles: []string{"active"}},
-		coreconfig.Platform{OS: "linux"},
+		testPlatform("linux", "", ""),
 	); err != nil {
 		t.Fatalf("Resolve(active profile) error = %v", err)
 	}
 	if _, err := loaded.Resolve(
 		coreconfig.Scope{Profiles: []string{"inactive"}},
-		coreconfig.Platform{OS: "linux"},
+		testPlatform("linux", "", ""),
 	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
 		t.Fatalf("Resolve(inactive profile when selected) error = %v", err)
 	}
@@ -153,7 +153,7 @@ base = ["app"]
 			ExtraModules:    []string{"app", "app"},
 			RequiredModules: []string{"app", "app"},
 		},
-		coreconfig.Platform{OS: "linux"},
+		testPlatform("linux", "", ""),
 	)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -234,7 +234,7 @@ root = "."
 			}
 			if _, err := loaded.Resolve(
 				coreconfig.Scope{RequiredModules: []string{"app"}},
-				coreconfig.Platform{OS: "linux", Distro: "ubuntu", Arch: "aarch64"},
+				testPlatform("linux", "ubuntu", "aarch64"),
 			); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
 				t.Fatalf("Resolve() error = %v, want ErrInvalidConfiguration", err)
 			}
@@ -257,7 +257,7 @@ distro = ["ubuntu"]
 	}
 	resolution, err := loaded.Resolve(
 		coreconfig.Scope{Profiles: []string{"base"}},
-		coreconfig.Platform{OS: "linux", Distro: "ubuntu"},
+		testPlatform("linux", "ubuntu", ""),
 	)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -305,7 +305,7 @@ target = "~/.config/app/config.local"
 	}
 	resolution, err := loaded.Resolve(
 		coreconfig.Scope{Profiles: []string{"base"}},
-		coreconfig.Platform{OS: "macos", Arch: "aarch64"},
+		testPlatform("macos", "", "aarch64"),
 	)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -351,8 +351,23 @@ os = ["linux"]
 	}
 	if _, err := loaded.Resolve(
 		coreconfig.Scope{Profiles: []string{"base"}},
-		coreconfig.Platform{OS: "linux"},
+		testPlatform("linux", "", ""),
 	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
 		t.Fatalf("Resolve() error = %v, want ErrInvalidConfiguration", err)
 	}
+}
+
+func testPlatform(osName, distro, architecture string) coreconfig.Platform {
+	return coreconfig.Platform{
+		OS:     testPlatformField("os", osName),
+		Distro: testPlatformField("distro", distro),
+		Arch:   testPlatformField("arch", architecture),
+	}
+}
+
+func testPlatformField(name, value string) coreconfig.PlatformField {
+	if value != "" {
+		return coreconfig.KnownPlatformField(value)
+	}
+	return coreconfig.UnknownPlatformField(name + " is unavailable in test")
 }

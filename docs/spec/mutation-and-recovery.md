@@ -27,6 +27,10 @@ read-only preflight
 - 初次只读 preflight 的 deterministic config、control topology、私有 control root/lock
   目录项类型、path 或 ownership conflict 必须在获取 lock 前失败，零文件系统写入：不得创建
   或 chmod config/state/lock root、lock、temporary file、selection、state、parent 或 target。
+- 任意 prospective effective module 的 platform applicability 为 indeterminate 时属于同一
+  preflight 失败边界：整次真实 mutation 在获取 lock 前失败，不发布 selection，不生成或执行
+  prune，也不以 not-applicable cleanup 降级。Remove current extra 时，目标自身已确定
+  not-applicable 或 indeterminate 也属于该 selection 写入边界。
 - 只有只读 preflight 成功后才能获取 lock；锁内必须重新加载、验证和规划，不执行保存的
   preflight plan。锁内、首次发布 changed selection 之前的复核失败只可以留下 advisory-lock
   bookkeeping，不得写 selection、target 或 state；selection 已发布后的失败按下文中断恢复

@@ -15,15 +15,11 @@ func TestInitProfilesOnSupportedPlatformsConverges(t *testing.T) {
 	}{
 		{
 			name:     "macos",
-			platform: config.Platform{OS: "macos", Arch: "aarch64"},
+			platform: cliTestPlatform("macos", "", "aarch64"),
 		},
 		{
-			name: "linux",
-			platform: config.Platform{
-				OS:     "linux",
-				Distro: "ubuntu",
-				Arch:   "x86_64",
-			},
+			name:     "linux",
+			platform: cliTestPlatform("linux", "ubuntu", "x86_64"),
 		},
 	}
 

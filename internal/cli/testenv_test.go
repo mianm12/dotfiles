@@ -58,7 +58,7 @@ func newCLITestEnv(t *testing.T, profiles string) *cliTestEnv {
 			return fixture.home, nil
 		},
 		platform: func() config.Platform {
-			return config.Platform{OS: "linux", Distro: "ubuntu", Arch: "x86_64"}
+			return cliTestPlatform("linux", "ubuntu", "x86_64")
 		},
 		build: buildinfo.Info{Version: "test", Commit: "test", BuildTime: "test"},
 	}
@@ -83,6 +83,21 @@ func newCLITestEnv(t *testing.T, profiles string) *cliTestEnv {
 	}
 	t.Setenv("HOME", fixture.home)
 	return fixture
+}
+
+func cliTestPlatform(osName, distro, architecture string) config.Platform {
+	return config.Platform{
+		OS:     cliTestPlatformField("os", osName),
+		Distro: cliTestPlatformField("distro", distro),
+		Arch:   cliTestPlatformField("arch", architecture),
+	}
+}
+
+func cliTestPlatformField(name, value string) config.PlatformField {
+	if value != "" {
+		return config.KnownPlatformField(value)
+	}
+	return config.UnknownPlatformField(name + " is unavailable in test")
 }
 
 func (fixture *cliTestEnv) run(args ...string) (int, string, string) {

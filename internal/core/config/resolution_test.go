@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	coreconfig "github.com/mianm12/dotfiles/internal/core/config"
@@ -53,7 +54,10 @@ extra_modules = []
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
 	before := snapshotTree(t, root)
-	resolution, err := loaded.Resolve(machine.Scope(), coreconfig.Platform{OS: "macos", Arch: "aarch64"})
+	resolution, err := loaded.Resolve(
+		machine.Scope(),
+		testPlatform("macos", "", "aarch64"),
+	)
 	if err != nil {
 		t.Fatalf("Resolve(profile scope) error = %v", err)
 	}
@@ -64,7 +68,7 @@ extra_modules = []
 
 	explicit, err := loaded.Resolve(
 		machine.Scope("variant"),
-		coreconfig.Platform{OS: "macos", Arch: "aarch64"},
+		testPlatform("macos", "", "aarch64"),
 	)
 	if !errors.Is(err, coreconfig.ErrNotApplicable) {
 		t.Fatalf("Resolve(explicit variant) = (%#v, %v), want ErrNotApplicable", explicit, err)
@@ -99,7 +103,7 @@ target = "~/.config/good/config"
 	before := snapshotTree(t, root)
 	resolution, err := loaded.Resolve(
 		coreconfig.Scope{Profiles: []string{"base"}},
-		coreconfig.Platform{OS: "linux", Distro: "ubuntu", Arch: "x86_64"},
+		testPlatform("linux", "ubuntu", "x86_64"),
 	)
 	if err != nil {
 		t.Fatalf("Resolve(good scope) error = %v", err)
@@ -113,7 +117,7 @@ target = "~/.config/good/config"
 			Profiles:        []string{"base"},
 			RequiredModules: []string{"bad"},
 		},
-		coreconfig.Platform{OS: "linux", Distro: "ubuntu", Arch: "x86_64"},
+		testPlatform("linux", "ubuntu", "x86_64"),
 	)
 	if !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
 		t.Fatalf("Resolve(bad scope) = (%#v, %v), want ErrInvalidConfiguration", damaged, err)
@@ -148,7 +152,7 @@ base = ["good"]
 	}
 	resolution, err := loaded.Resolve(
 		coreconfig.Scope{Profiles: []string{"base"}},
-		coreconfig.Platform{OS: "linux"},
+		testPlatform("linux", "", ""),
 	)
 	if err != nil {
 		t.Fatalf("Resolve(good scope) error = %v", err)
@@ -159,7 +163,7 @@ base = ["good"]
 
 	if _, err := loaded.Resolve(
 		coreconfig.Scope{RequiredModules: []string{"bad"}},
-		coreconfig.Platform{OS: "linux"},
+		testPlatform("linux", "", ""),
 	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) ||
 		!errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("Resolve(bad scope) error = %v, want invalid configuration with permission error", err)
@@ -272,7 +276,7 @@ base = ["app"]
 			before := snapshotTree(t, root)
 			resolution, err := loaded.Resolve(
 				coreconfig.Scope{Profiles: []string{"base"}},
-				coreconfig.Platform{OS: "linux", Distro: "ubuntu", Arch: "x86_64"},
+				testPlatform("linux", "ubuntu", "x86_64"),
 			)
 			if !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
 				t.Fatalf("Resolve() = (%#v, %v), want ErrInvalidConfiguration", resolution, err)
@@ -282,7 +286,7 @@ base = ["app"]
 	}
 }
 
-func TestResolveUnknownPlatformSkipsGatedVariantAndRejectsInvalidOS(t *testing.T) {
+func TestResolveDistinguishesKnownMismatchFromIndeterminatePlatform(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -321,32 +325,36 @@ os = ["freebsd"]
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
 	before := snapshotTree(t, root)
-	for _, platform := range []coreconfig.Platform{
-		{OS: "linux", Distro: "gentoo", Arch: "riscv64"},
-		{OS: "unknown", Distro: "unknown", Arch: "unknown"},
-	} {
-		resolution, resolveErr := loaded.Resolve(
-			coreconfig.Scope{Profiles: []string{"base"}},
-			platform,
+	knownMismatch, err := loaded.Resolve(
+		coreconfig.Scope{Profiles: []string{"base"}},
+		testPlatform("linux", "gentoo", "riscv64"),
+	)
+	if err != nil {
+		t.Fatalf("Resolve(known mismatch) error = %v", err)
+	}
+	if got := moduleIDs(knownMismatch.Modules); !reflect.DeepEqual(got, []string{"portable"}) ||
+		!reflect.DeepEqual(knownMismatch.NotApplicable, []string{"gated"}) {
+		t.Fatalf(
+			"known-mismatch resolution = %#v, want portable plus gated not-applicable",
+			knownMismatch,
 		)
-		if resolveErr != nil {
-			t.Fatalf("Resolve(%#v) error = %v", platform, resolveErr)
-		}
-		if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"portable"}) {
-			t.Fatalf("Resolve(%#v) modules = %v, want [portable]", platform, got)
-		}
-		if !reflect.DeepEqual(resolution.NotApplicable, []string{"gated"}) {
-			t.Fatalf(
-				"Resolve(%#v) not-applicable = %v, want [gated]",
-				platform,
-				resolution.NotApplicable,
-			)
-		}
+	}
+
+	unknownDistro := testPlatform("linux", "", "x86_64")
+	unknownDistro.Distro = coreconfig.UnknownPlatformField(
+		"/etc/os-release is unreadable",
+	)
+	if _, err := loaded.Resolve(
+		coreconfig.Scope{Profiles: []string{"base"}},
+		unknownDistro,
+	); !errors.Is(err, coreconfig.ErrIndeterminate) ||
+		!strings.Contains(err.Error(), "platform distro is unknown") {
+		t.Fatalf("Resolve(unknown distro) error = %v, want ErrIndeterminate", err)
 	}
 
 	invalid, err := loaded.Resolve(
 		coreconfig.Scope{RequiredModules: []string{"invalid-os"}},
-		coreconfig.Platform{OS: "linux", Distro: "ubuntu", Arch: "x86_64"},
+		testPlatform("linux", "ubuntu", "x86_64"),
 	)
 	if !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
 		t.Fatalf("Resolve(invalid os) = (%#v, %v), want ErrInvalidConfiguration", invalid, err)

@@ -84,7 +84,8 @@ work = ["work-git"]
 
 ## Platform 与 Module
 
-Platform 是 resolver 的显式输入，测试必须能够注入合成值：
+Platform 是 resolver 的显式输入，测试必须能够注入合成值。每个字段同时保存 value、是否
+known 和 unknown 时的诊断原因；value 只有在 known 时参与匹配：
 
 ```toml
 os = ["macos", "linux"]
@@ -97,11 +98,18 @@ arch = ["x86_64", "aarch64"]
 - `os` 是封闭枚举 `{macos, linux}`，出现枚举外值为配置错误；`distro`、`arch` 是自由小写
   字符串，逐字比较，不维护发行版/架构注册表。
 - `distro` 只允许与 `os = ["linux"]` 一起声明。
-- 运行时检测不到或未知的 os/distro/arch 不是错误：它只是无法匹配任何约束了该字段的
-  variant，portable 模块仍适用。
+- 运行时检测不到 os/distro/arch 本身不是配置错误，但字段必须保留 unknown 诊断，不能用空
+  value 冒充已确定不匹配。
+- Match 结果为 `applicable`、`not-applicable` 或 `indeterminate`：
+  - 任一受约束字段 known 且不匹配时，结果确定为 not-applicable，即使其他字段 unknown。
+  - 没有 known mismatch，但至少一个受约束字段 unknown 时，结果为 indeterminate。
+  - 所有受约束字段都 known 且匹配时，结果为 applicable。
 - 不支持否定、正则、优先级、fallback 或 capability 表达式。
 - Profile 选中的 module 无匹配 variant 时是 not-applicable，不报错。
 - Extra module 或显式 `apply <module>` 无匹配 variant 时失败。
+- Profile module 已确定 not-applicable 时仍按 ownership 规则清理旧 placement。任意 effective
+  module 为 indeterminate 时，真实 mutation 整体失败且不得 prune；extra 或显式 module
+  已确定 not-applicable 时仍阻止 selection 发布。
 
 Module 只能使用 portable 或 variants 其中一种模式，不得混用。
 
@@ -158,5 +166,9 @@ Variant 规则：
 
 - `root` 必填；`.` 表示 module 根目录。
 - 其他 root 必须是 module 内相对目录，不得是绝对路径或包含 `..` 逃逸。
-- 零个匹配表示 not-applicable；多个匹配是配置错误。
+- 零个 applicable 且没有 indeterminate variant 表示 not-applicable；多个已确定 applicable
+  variant 是配置错误。
+- 一个已确定 applicable variant 与任意可能匹配的 indeterminate variant 同时存在时，不选择
+  variant，整个 module 为 indeterminate。没有已确定 applicable、但至少一个 variant
+  indeterminate 时同样为 indeterminate。
 - Variant 完整声明自己的 placements，不继承其他 variant 或顶层 placements。

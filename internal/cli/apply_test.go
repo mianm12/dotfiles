@@ -128,7 +128,7 @@ target = "~/.extra"
 	assertApplyNoMutation(t, fixture, fixture.run, "extra")
 }
 
-func TestApplyHandlesUnknownPlatformAndRejectsInvalidOS(t *testing.T) {
+func TestApplyHandlesKnownPlatformMismatchAndRejectsInvalidOS(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["portable", "gated"]`)
 	fixture.writeModule(t, "portable", `
 [[links]]
@@ -155,12 +155,12 @@ os = ["freebsd"]
 `, nil)
 	fixture.writeMachine(t, []string{"base"}, nil)
 	fixture.env.platform = func() config.Platform {
-		return config.Platform{OS: "linux", Distro: "gentoo", Arch: "riscv64"}
+		return cliTestPlatform("linux", "gentoo", "riscv64")
 	}
 
 	code, _, stderr := fixture.runInjected("apply")
 	if code != exitOK || stderr == "" {
-		t.Fatalf("unknown-platform apply = (%d, %q)", code, stderr)
+		t.Fatalf("known-mismatch apply = (%d, %q)", code, stderr)
 	}
 	assertCLILink(
 		t,
@@ -173,7 +173,7 @@ os = ["freebsd"]
 		stderr != "" ||
 		!strings.Contains(stdout, "portable  converged") ||
 		!strings.Contains(stdout, "gated  not-applicable") {
-		t.Fatalf("unknown-platform status = (%d, %q, %q)", code, stdout, stderr)
+		t.Fatalf("known-mismatch status = (%d, %q, %q)", code, stdout, stderr)
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)
 
