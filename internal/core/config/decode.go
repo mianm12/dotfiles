@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"regexp"
 	"strings"
@@ -23,6 +24,26 @@ func decodeStrict(path string, destination any) error {
 		return fmt.Errorf("decode %q: %w", path, err)
 	}
 	return nil
+}
+
+func decodeStrictManifest(path string, destination any) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect manifest %q: %w", path, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		info, err = os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("resolve manifest %q: %w", path, err)
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf(
+			"manifest %q must be a regular file or symlink to a regular file",
+			path,
+		)
+	}
+	return decodeStrict(path, destination)
 }
 
 func validateID(kind, value string) error {

@@ -54,67 +54,72 @@ type encodedPlacement struct {
 
 // Decode strictly decodes state v2 and binds it to expectedHome.
 func Decode(data []byte, expectedHome string) (Snapshot, error) {
+	snapshot, _, err := decode(data, expectedHome)
+	return snapshot, err
+}
+
+func decode(data []byte, expectedHome string) (Snapshot, bool, error) {
 	home, err := cleanExpectedHome(expectedHome)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, false, err
 	}
 	if err := validateJSONText(data); err != nil {
-		return Snapshot{}, invalidf("%v", err)
+		return Snapshot{}, false, invalidf("%v", err)
 	}
 	if err := rejectDuplicateMembers(data); err != nil {
-		return Snapshot{}, invalidf("%v", err)
+		return Snapshot{}, false, invalidf("%v", err)
 	}
 	version, err := probeVersion(data)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, false, err
 	}
 	switch {
 	case version.Cmp(big.NewInt(Version)) > 0:
-		return Snapshot{}, fmt.Errorf(
+		return Snapshot{}, false, fmt.Errorf(
 			"%w: found version %s, maximum supported is %d",
 			ErrTooNew,
 			version,
 			Version,
 		)
 	case version.Cmp(big.NewInt(1)) == 0:
-		return Snapshot{}, fmt.Errorf(
+		return Snapshot{}, false, fmt.Errorf(
 			"%w: version 1 is unsupported; archive or remove the old state and retry",
 			ErrLegacyVersion,
 		)
 	case version.Cmp(big.NewInt(Version)) != 0:
-		return Snapshot{}, invalidf("unsupported state version %s", version)
+		return Snapshot{}, false, invalidf("unsupported state version %s", version)
 	}
 	if err := validateObjectShapes(data); err != nil {
-		return Snapshot{}, invalidf("%v", err)
+		return Snapshot{}, false, invalidf("%v", err)
 	}
 
 	var document stateDocument
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&document); err != nil {
-		return Snapshot{}, invalidf("decode state v2: %v", err)
+		return Snapshot{}, false, invalidf("decode state v2: %v", err)
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return Snapshot{}, invalidf("%v", err)
+		return Snapshot{}, false, invalidf("%v", err)
 	}
-	snapshot, err := snapshotFromDocument(document)
+	snapshot, needsRewrite, err := snapshotFromDocument(document)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, false, err
 	}
 	if snapshot.Home != home {
-		return Snapshot{}, fmt.Errorf(
+		return Snapshot{}, false, fmt.Errorf(
 			"%w: state is bound to %q, current home is %q",
 			ErrHomeMismatch,
 			snapshot.Home,
 			home,
 		)
 	}
-	return snapshot, nil
+	return snapshot, needsRewrite, nil
 }
 
 // Marshal validates and encodes one state v2 document.
 func Marshal(snapshot Snapshot) ([]byte, error) {
-	if err := validateSnapshot(snapshot); err != nil {
+	if err := validateCanonicalSnapshot(snapshot); err != nil {
 		return nil, err
 	}
 	document := encodedDocument{
@@ -136,12 +141,12 @@ func Marshal(snapshot Snapshot) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-func snapshotFromDocument(document stateDocument) (Snapshot, error) {
+func snapshotFromDocument(document stateDocument) (Snapshot, bool, error) {
 	if document.Version == nil || *document.Version != Version {
-		return Snapshot{}, invalidf("required top-level version must equal %d", Version)
+		return Snapshot{}, false, invalidf("required top-level version must equal %d", Version)
 	}
 	if document.Home == nil {
-		return Snapshot{}, invalidf("required top-level home is missing")
+		return Snapshot{}, false, invalidf("required top-level home is missing")
 	}
 	snapshot := Snapshot{
 		Home:    *document.Home,
@@ -154,16 +159,24 @@ func snapshotFromDocument(document stateDocument) (Snapshot, error) {
 			rawPlacement := rawModule.Placements[placementID]
 			placement, err := placementFromDocument(moduleID, placementID, rawPlacement)
 			if err != nil {
-				return Snapshot{}, err
+				return Snapshot{}, false, err
 			}
 			module.Placements[placementID] = placement
 		}
 		snapshot.Modules[moduleID] = module
 	}
 	if err := validateSnapshot(snapshot); err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, false, err
 	}
-	return snapshot, nil
+	needsRewrite := false
+	for moduleID, module := range snapshot.Modules {
+		if len(module.Placements) != 0 {
+			continue
+		}
+		delete(snapshot.Modules, moduleID)
+		needsRewrite = true
+	}
+	return snapshot, needsRewrite, nil
 }
 
 func placementFromDocument(
@@ -233,6 +246,18 @@ func validateSnapshot(snapshot Snapshot) error {
 			if err := validatePlacement(home, moduleID, placementID, placement); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func validateCanonicalSnapshot(snapshot Snapshot) error {
+	if err := validateSnapshot(snapshot); err != nil {
+		return err
+	}
+	for _, moduleID := range sortedKeys(snapshot.Modules) {
+		if len(snapshot.Modules[moduleID].Placements) == 0 {
+			return invalidf("module %q must contain at least one placement", moduleID)
 		}
 	}
 	return nil

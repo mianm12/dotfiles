@@ -57,7 +57,7 @@ type selectedModule struct {
 
 func loadModule(id string, file moduleFile, platform Platform) (Module, bool, error) {
 	var document moduleDocument
-	if err := decodeStrict(file.manifest, &document); err != nil {
+	if err := decodeStrictManifest(file.manifest, &document); err != nil {
 		return Module{}, false, fmt.Errorf(
 			"%w: module %q: %w",
 			ErrInvalidConfiguration,

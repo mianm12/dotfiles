@@ -4,6 +4,11 @@
 
 仓库中的 `dot.toml`、`modules/<id>/module.toml` 和配置内容描述共享期望。
 
+`dot.toml` 与当前命令 scope 内加载的 `module.toml` 必须是 regular file，或最终解析为 regular
+file 的 symlink。Directory、FIFO、socket、device、dangling symlink 和 symlink loop 必须在
+读取内容前失败；manifest symlink 的目标不要求位于 repository 内。Scope 外 module manifest
+继续按 [`cli.md`](cli.md#命令-scope-与加载) 延迟类型检查、读取和解析。
+
 ## Machine config
 
 机器配置保存仓库路径、active profiles 和本机额外 modules：
@@ -23,6 +28,11 @@ modules(active profiles) union extra_modules
 
 Profile 内容只在仓库中人工维护。`init` 写入 profiles；`apply <module>` 和
 `remove <module>` 可以确定性重写 `extra_modules`。CLI 重写机器配置时不承诺保留注释和空行。
+
+Machine config 不存在表示机器未初始化；一旦存在，其最终目录项本身必须是 regular file。
+类型检查不跟随最终 symlink，因此 symlink-to-regular、dangling symlink、directory、FIFO、
+socket 和 device 都必须在读取内容前失败。更高层 ancestor symlink 仍按 control root 规则
+处理。
 
 Init 之后调整 active profiles 的受支持方式是先通过
 [`dot paths`](cli.md#paths) 定位机器配置，手工编辑其中的 profiles，再执行 `dot apply`；

@@ -22,7 +22,7 @@ func Load(path, home string) (Loaded, error) {
 		)
 	}
 	path = filepath.Clean(path)
-	data, err := os.ReadFile(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		if statePathMissing(path, err) {
 			return Loaded{
@@ -31,17 +31,27 @@ func Load(path, home string) (Loaded, error) {
 				Warning:  MissingWarning,
 			}, nil
 		}
+		return Loaded{}, fmt.Errorf("inspect state %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return Loaded{}, invalidf(
+			"state %q must be a direct regular file",
+			path,
+		)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return Loaded{}, fmt.Errorf("read state %q: %w", path, err)
 	}
-	snapshot, err := Decode(data, empty.Home)
+	snapshot, needsRewrite, err := decode(data, empty.Home)
 	if err != nil {
 		return Loaded{}, fmt.Errorf("load state %q: %w", path, err)
 	}
-	return Loaded{Snapshot: snapshot}, nil
+	return Loaded{Snapshot: snapshot, NeedsRewrite: needsRewrite}, nil
 }
 
-func statePathMissing(path string, readErr error) bool {
-	if !errors.Is(readErr, fs.ErrNotExist) {
+func statePathMissing(path string, inspectErr error) bool {
+	if !errors.Is(inspectErr, fs.ErrNotExist) {
 		return false
 	}
 
