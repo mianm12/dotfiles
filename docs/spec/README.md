@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | [`product.md`](product.md) | 产品目标、范围、非目标和接受风险 | 无 |
 | [`selection.md`](selection.md) | 仓库 desired、机器选择、profile、platform 与 module resolution | product |
-| [`placements.md`](placements.md) | link/local 声明、source 和 target 路径边界 | product、selection |
+| [`placements.md`](placements.md) | link/local 声明、source、target 与 control-path topology 边界 | product、selection |
 | [`state-and-ownership.md`](state-and-ownership.md) | state schema、版本、安全字段和 ownership 证据 | product、placements |
 | [`planning.md`](planning.md) | 实际文件系统观察、conflict、create/update/prune/keep/forget 决策 | selection、placements、state |
 | [`mutation-and-recovery.md`](mutation-and-recovery.md) | mutation 顺序、锁、提交和中断恢复 | planning、state |

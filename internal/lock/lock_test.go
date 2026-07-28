@@ -104,8 +104,11 @@ func TestAcquire_RecoversAfterHolderProcessCrash(t *testing.T) {
 
 func TestAcquire_DistinguishesIOErrorFromBusy(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
-	if err := os.Mkdir(root, 0o700); err != nil {
+	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatalf("os.Mkdir(%q) error = %v", root, err)
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatalf("os.Chmod(%q) error = %v", root, err)
 	}
 	path := filepath.Join(root, "lock")
 	if err := os.Mkdir(path, 0o700); err != nil {
@@ -125,6 +128,7 @@ func TestAcquire_DistinguishesIOErrorFromBusy(t *testing.T) {
 	if !strings.Contains(err.Error(), "regular file") {
 		t.Errorf("Acquire() error = %q, want abnormal file detail", err)
 	}
+	assertPathMode(t, root, 0o755)
 }
 
 func TestAcquire_WritesOnlyWhenCalledAndRejectsInvalidPaths(t *testing.T) {

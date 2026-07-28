@@ -44,6 +44,21 @@ func TestPathsPrintsDerivedPathsWithoutMutation(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "overlapping control roots through symlink",
+			setup: func(t *testing.T, fixture *cliTestEnv) {
+				stateRoot := filepath.Dir(fixture.state)
+				configRoot := filepath.Dir(fixture.config)
+				for _, directory := range []string{stateRoot, filepath.Dir(configRoot)} {
+					if err := os.MkdirAll(directory, 0o700); err != nil {
+						t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
+					}
+				}
+				if err := os.Symlink(stateRoot, configRoot); err != nil {
+					t.Fatalf("os.Symlink(config root) error = %v", err)
+				}
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newCLITestEnv(t, "")

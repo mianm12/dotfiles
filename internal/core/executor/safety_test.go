@@ -12,6 +12,7 @@ import (
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
+	"github.com/mianm12/dotfiles/internal/lock"
 )
 
 func TestExecutorCreationNeverClobbersChangedTargets(t *testing.T) {
@@ -135,6 +136,164 @@ func TestExecutorUpdateRechecksResolvedParent(t *testing.T) {
 	}
 	assertExecutorPathUnchanged(t, firstBefore)
 	assertExecutorPathUnchanged(t, secondBefore)
+}
+
+func TestRunRejectsControlTopologyBeforeLockMutation(t *testing.T) {
+	root, home := newExecutorRoot(t)
+	repository := filepath.Join(root, "repository")
+	if err := os.Mkdir(repository, 0o755); err != nil {
+		t.Fatalf("os.Mkdir(repository) error = %v", err)
+	}
+	request := Request{
+		Home: home,
+		Controls: corepaths.Controls{
+			Repository: repository,
+			Config:     filepath.Join(root, "config-control", "config.toml"),
+			State:      filepath.Join(repository, "state.json"),
+			Lock:       filepath.Join(repository, "lock"),
+		},
+	}
+	beforeRepository := snapshotExecutorPath(t, repository)
+	beforeEntries := c1ExecutionEntries(t, root)
+
+	result, err := Run(request)
+
+	if !errors.Is(err, corepaths.ErrControlTopology) {
+		t.Fatalf("Run() = (%#v, %v), want control topology error", result, err)
+	}
+	if !strings.Contains(err.Error(), "run `dot paths`") {
+		t.Fatalf("Run() error = %q, want recovery hint", err)
+	}
+	if len(result.Plan.Actions) != 0 ||
+		len(result.Plan.Warnings) != 0 ||
+		result.TargetsChanged ||
+		result.StateChanged ||
+		len(result.Warnings) != 0 {
+		t.Fatalf("Run() result = %#v, want zero result", result)
+	}
+	assertExecutorPathUnchanged(t, beforeRepository)
+	afterEntries := c1ExecutionEntries(t, root)
+	if strings.Join(afterEntries, "\n") != strings.Join(beforeEntries, "\n") {
+		t.Fatalf(
+			"pre-lock failure changed entries: before=%v after=%v",
+			beforeEntries,
+			afterEntries,
+		)
+	}
+	for _, path := range []string{request.Controls.State, request.Controls.Lock} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Fatalf("control path %q error = %v, want missing", path, statErr)
+		}
+	}
+}
+
+func TestRunRejectsActiveControlBoundaryBeforeLockMutation(t *testing.T) {
+	root, home := newExecutorRoot(t)
+	repository := filepath.Join(home, "repository")
+	source := filepath.Join(repository, "modules", "app", "config")
+	writeExecutorFile(t, source, "config")
+	request := Request{
+		Home: home,
+		Controls: corepaths.Controls{
+			Repository: repository,
+			Config:     filepath.Join(root, "config-control", "config.toml"),
+			State:      filepath.Join(root, "state-control", "state.json"),
+			Lock:       filepath.Join(root, "state-control", "lock"),
+		},
+		Modules: []config.Module{{
+			ID:   "app",
+			Root: filepath.Dir(source),
+			Links: []config.Link{{
+				ID:         "config",
+				SourcePath: source,
+				Target:     "~/repository",
+			}},
+		}},
+	}
+	before := snapshotExecutorPath(t, repository)
+	beforeEntries := c1ExecutionEntries(t, root)
+
+	result, err := Run(request)
+
+	if !errors.Is(err, corepaths.ErrControlBoundary) {
+		t.Fatalf("Run() = (%#v, %v), want control-boundary error", result, err)
+	}
+	if !strings.Contains(err.Error(), repository) ||
+		!strings.Contains(err.Error(), "run `dot paths`") {
+		t.Fatalf("Run() error = %q, want conflicting path and recovery hint", err)
+	}
+	if len(result.Plan.Actions) != 0 ||
+		len(result.Plan.Warnings) != 0 ||
+		result.TargetsChanged ||
+		result.StateChanged ||
+		len(result.Warnings) != 0 {
+		t.Fatalf("Run() result = %#v, want zero result", result)
+	}
+	assertExecutorPathUnchanged(t, before)
+	afterEntries := c1ExecutionEntries(t, root)
+	if strings.Join(afterEntries, "\n") != strings.Join(beforeEntries, "\n") {
+		t.Fatalf(
+			"pre-lock boundary failure changed entries: before=%v after=%v",
+			beforeEntries,
+			afterEntries,
+		)
+	}
+	for _, path := range []string{request.Controls.State, request.Controls.Lock} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Fatalf("control path %q error = %v, want missing", path, statErr)
+		}
+	}
+}
+
+func TestRunWithLockRevalidatesControlTopologyWithoutFurtherMutation(t *testing.T) {
+	root, home := newExecutorRoot(t)
+	repository := filepath.Join(root, "repository")
+	if err := os.Mkdir(repository, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(repository) error = %v", err)
+	}
+	stateRoot := filepath.Join(root, "state-control")
+	lockPath := filepath.Join(stateRoot, "lock")
+	owner, err := lock.Acquire(stateRoot, lockPath)
+	if err != nil {
+		t.Fatalf("lock.Acquire() error = %v", err)
+	}
+	stateRootBefore := snapshotExecutorPath(t, stateRoot)
+	lockBefore := snapshotExecutorPath(t, lockPath)
+	beforeEntries := c1ExecutionEntries(t, root)
+	request := Request{
+		Home: home,
+		Controls: corepaths.Controls{
+			Repository: stateRoot,
+			Config:     filepath.Join(root, "config-control", "config.toml"),
+			State:      filepath.Join(stateRoot, "state.json"),
+			Lock:       lockPath,
+		},
+	}
+
+	result, runErr := RunWithLock(request, owner)
+
+	if !errors.Is(runErr, corepaths.ErrControlTopology) {
+		t.Fatalf("RunWithLock() = (%#v, %v), want topology error", result, runErr)
+	}
+	if len(result.Plan.Actions) != 0 ||
+		result.TargetsChanged ||
+		result.StateChanged ||
+		len(result.Warnings) != 0 {
+		t.Fatalf("RunWithLock() result = %#v, want zero result", result)
+	}
+	assertExecutorPathUnchanged(t, stateRootBefore)
+	assertExecutorPathUnchanged(t, lockBefore)
+	afterEntries := c1ExecutionEntries(t, root)
+	if strings.Join(afterEntries, "\n") != strings.Join(beforeEntries, "\n") {
+		t.Fatalf(
+			"locked revalidation changed entries: before=%v after=%v",
+			beforeEntries,
+			afterEntries,
+		)
+	}
+	if err := owner.Release(); err != nil {
+		t.Fatalf("owner.Release() error = %v", err)
+	}
 }
 
 func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {

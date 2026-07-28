@@ -71,7 +71,8 @@ dot help
 ## 输出与退出码
 
 正常结果、status 和 dry-run plan 写 stdout；错误写 stderr。不得输出 local 内容、配置内容或
-秘密。
+秘密。Control topology 或 placement/control path conflict 必须列出发生冲突的具体路径，并
+提示运行 `dot paths` 查看当前 control 文件位置。
 
 | Exit code | 含义 |
 | ---: | --- |

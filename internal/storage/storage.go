@@ -34,6 +34,26 @@ func ValidateRoot(path string) error {
 	return err
 }
 
+// ValidatePrivateFile read-only validates an existing private file entry.
+// A missing path is valid because mutation may create it later.
+func ValidatePrivateFile(path string) error {
+	cleanPath, err := cleanAbsolute(path)
+	if err != nil {
+		return fmt.Errorf("private file: %w", err)
+	}
+	info, err := os.Lstat(cleanPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect private file %q: %w", cleanPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("private file %q is not a regular file", cleanPath)
+	}
+	return nil
+}
+
 // EnsureRoot 建立私有控制根目录，并把现存目录权限收敛为 0700。
 // 最终对象必须是真实目录；更高层的 ancestor symlink 仍然合法。
 func EnsureRoot(path string) error {

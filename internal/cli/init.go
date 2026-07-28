@@ -76,7 +76,7 @@ func runInit(
 		return err
 	}
 
-	return withMutationLock(context, func(owner mutationOwner) error {
+	return withMutationLock(context.controls(preflight.machine.Repository), func(owner mutationOwner) error {
 		if err := requireUninitialized(context); err != nil {
 			return err
 		}
