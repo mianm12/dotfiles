@@ -54,7 +54,7 @@ func OpenRepository(root string) (Repository, error) {
 
 	var document rootDocument
 	manifestPath := filepath.Join(root, rootManifestName)
-	if err := decodeStrict(manifestPath, &document); err != nil {
+	if err := decodeStrictManifest(manifestPath, &document); err != nil {
 		return Repository{}, fmt.Errorf("%w: root manifest: %w", ErrInvalidConfiguration, err)
 	}
 	profiles, err := validateRootDocument(manifestPath, document)

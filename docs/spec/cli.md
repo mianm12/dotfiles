@@ -54,8 +54,9 @@ dot help
 
 - `dot apply` 的 scope 是全部 effective modules。
 - Scoped apply/remove 的 scope 是目标 module 与其他 effective modules。
-- 严格加载 `dot.toml`，但只解析命令 scope 内的 `module.toml`；scope 外 module 的解析错误
-  不影响本命令。
+- 严格加载 `dot.toml`，但只对命令 scope 内的 `module.toml` 做最终类型检查、读取和解析；
+  scope 外 module manifest 的异常类型、不可读、dangling symlink 或 malformed TOML 不影响
+  本命令。
 - Status 与 dry-run 使用对应 mutation 命令的相同 scope。
 
 ## Status 与 dry-run
@@ -65,6 +66,7 @@ dot help
 - 默认 status 即使发现 pending/conflict 仍返回成功；没有 `--check`。
 - Dry-run 使用与真实命令相同的解析、resolution 和 planner，但不写 config、state、target、
   parent directory、lock 或 temporary file。
+- Status 和 dry-run 可以在内存中删除兼容的空 state module，但不得因此重写 state。
 - Status 和 dry-run 不取锁；并发 mutation 时结果是 best-effort snapshot。
 - 真实命令总是重新规划，不执行保存的 dry-run plan。
 

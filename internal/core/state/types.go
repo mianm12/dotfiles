@@ -53,11 +53,13 @@ type Placement struct {
 }
 
 // Loaded is the result of reading a state path. Missing state contains a valid
-// empty Snapshot and a warning instead of an error.
+// empty Snapshot and a warning instead of an error. NeedsRewrite marks a
+// compatible non-canonical document without writing it during load.
 type Loaded struct {
-	Snapshot Snapshot
-	Missing  bool
-	Warning  string
+	Snapshot     Snapshot
+	Missing      bool
+	NeedsRewrite bool
+	Warning      string
 }
 
 // New returns an empty state bound to home.

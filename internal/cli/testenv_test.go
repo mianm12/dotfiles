@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/mianm12/dotfiles/internal/core/config"
@@ -108,7 +110,9 @@ func (fixture *cliTestEnv) runProcessAt(
 ) (int, string, string) {
 	commandArgs := []string{"-test.run=^TestCLIHelperProcess$", "--"}
 	commandArgs = append(commandArgs, args...)
-	command := exec.Command(os.Args[0], commandArgs...)
+	processContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(processContext, os.Args[0], commandArgs...)
 	command.Dir = directory
 	command.Env = append(os.Environ(), "DOT_CLI_TEST_HELPER_PROCESS=1")
 	var stdout, stderr bytes.Buffer
@@ -116,6 +120,9 @@ func (fixture *cliTestEnv) runProcessAt(
 	command.Stderr = &stderr
 
 	err := command.Run()
+	if processContext.Err() != nil {
+		return -1, stdout.String(), stderr.String() + processContext.Err().Error()
+	}
 	if err == nil {
 		return exitOK, stdout.String(), stderr.String()
 	}

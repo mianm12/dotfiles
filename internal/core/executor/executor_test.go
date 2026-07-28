@@ -2,6 +2,7 @@ package executor
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -79,6 +80,88 @@ func TestEmptySelectionCommitsStateOnce(t *testing.T) {
 		t.Fatalf("Run(second) = %#v, want zero mutation", second)
 	}
 	assertFilesUnchanged(t, before)
+}
+
+func TestExecutorCanonicalizesEmptyModuleStateOnce(t *testing.T) {
+	fixture := newFixture(t)
+	if err := os.MkdirAll(filepath.Dir(fixture.state), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(state parent) error = %v", err)
+	}
+	if err := os.WriteFile(fixture.state, []byte(fmt.Sprintf(
+		`{"version":2,"home":%q,"modules":{"empty":{"placements":{}}}}`,
+		fixture.home,
+	)), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(non-canonical state) error = %v", err)
+	}
+	request := fixture.request(nil)
+
+	first, err := Run(request)
+	if err != nil {
+		t.Fatalf("Run(first) error = %v", err)
+	}
+	if first.TargetsChanged || !first.StateChanged {
+		t.Fatalf("Run(first) = %#v, want canonical state-only change", first)
+	}
+	loaded, err := state.Load(fixture.state, fixture.home)
+	if err != nil {
+		t.Fatalf("state.Load(canonical) error = %v", err)
+	}
+	if loaded.NeedsRewrite || len(loaded.Snapshot.Modules) != 0 {
+		t.Fatalf("canonical loaded state = %#v", loaded)
+	}
+
+	before := snapshotFiles(t, fixture.state, fixture.lock)
+	second, err := Run(request)
+	if err != nil {
+		t.Fatalf("Run(second) error = %v", err)
+	}
+	if second.TargetsChanged || second.StateChanged {
+		t.Fatalf("Run(second) = %#v, want zero mutation", second)
+	}
+	assertFilesUnchanged(t, before)
+}
+
+func TestCanonicalStateCommitFailureLeavesOriginalForRetry(t *testing.T) {
+	fixture := newFixture(t)
+	if err := os.MkdirAll(filepath.Dir(fixture.state), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(state parent) error = %v", err)
+	}
+	if err := os.WriteFile(fixture.state, []byte(fmt.Sprintf(
+		`{"version":2,"home":%q,"modules":{"empty":{}}}`,
+		fixture.home,
+	)), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(non-canonical state) error = %v", err)
+	}
+	request := fixture.request(nil)
+	before := snapshotFiles(t, fixture.state)
+
+	failed, err := runLocked(request, func(string, state.Snapshot) error {
+		return errors.New("synthetic canonical commit failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "synthetic canonical commit failure") {
+		t.Fatalf("runLocked(failing commit) = (%#v, %v), want commit failure", failed, err)
+	}
+	if failed.TargetsChanged || failed.StateChanged {
+		t.Fatalf("runLocked(failing commit) = %#v, want no completed mutation", failed)
+	}
+	assertFilesUnchanged(t, before)
+
+	recovered, err := runLocked(request, commitState)
+	if err != nil {
+		t.Fatalf("runLocked(recovery) error = %v", err)
+	}
+	if recovered.TargetsChanged || !recovered.StateChanged {
+		t.Fatalf("runLocked(recovery) = %#v, want canonical state-only change", recovered)
+	}
+	canonical := snapshotFiles(t, fixture.state)
+	repeated, err := runLocked(request, commitState)
+	if err != nil {
+		t.Fatalf("runLocked(repeat) error = %v", err)
+	}
+	if repeated.TargetsChanged || repeated.StateChanged {
+		t.Fatalf("runLocked(repeat) = %#v, want zero mutation", repeated)
+	}
+	assertFilesUnchanged(t, canonical)
 }
 
 func TestExecutorDoesNotPruneUntilAllActiveCreatesSucceed(t *testing.T) {

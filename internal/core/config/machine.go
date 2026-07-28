@@ -19,11 +19,19 @@ type machineDocument struct {
 // LoadMachine strictly reads a machine config. A missing path is a valid
 // uninitialized state; an existing unreadable entry is an error.
 func LoadMachine(path string) (Machine, bool, error) {
-	if _, err := os.Lstat(path); err != nil {
+	info, err := os.Lstat(path)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return Machine{}, false, nil
 		}
 		return Machine{}, false, fmt.Errorf("inspect machine config %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return Machine{}, false, fmt.Errorf(
+			"%w: machine config %q must be a direct regular file",
+			ErrInvalidConfiguration,
+			path,
+		)
 	}
 
 	var document machineDocument

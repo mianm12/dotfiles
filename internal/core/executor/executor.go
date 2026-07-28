@@ -172,7 +172,9 @@ func runLocked(request Request, commit stateCommitter) (Result, error) {
 		}, mutation.wrapError(err)
 	}
 
-	stateChanged := loaded.Missing || !reflect.DeepEqual(loaded.Snapshot, next)
+	stateChanged := loaded.Missing ||
+		loaded.NeedsRewrite ||
+		!reflect.DeepEqual(loaded.Snapshot, next)
 	if stateChanged {
 		if err := commit(request.Controls.State, next); err != nil {
 			return Result{
