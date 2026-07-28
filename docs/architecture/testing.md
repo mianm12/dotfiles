@@ -10,6 +10,9 @@
 - CLI 的命令语法、错误映射和输出格式由 `commands_test.go` 覆盖。
 - Config、paths、state、planner 和 executor 在各自 package 覆盖局部模型与失败边界，并以
   具体行为命名。
+- Executor 负责 Session 固定 controls、单次 lock ownership、selection publication、
+  state reload/replan、Close 后拒绝调用等生命周期测试；lock package 只覆盖一次获取、一次
+  释放、busy、崩溃恢复和 I/O 分类，不测试嵌套 guard 或引用计数。
 - `cmd/dot` 只保留最小进程级 smoke；完整公开行为通过 `cli.Run` 测试。
 - CLI 合成环境集中在 `internal/cli/testenv_test.go`，不创建跨 package 通用测试框架。
 
@@ -36,5 +39,7 @@
 ## 架构约束
 
 架构测试解析生产 Go 文件的 imports，并以显式允许边表约束
-[`overview.md`](overview.md) 定义的层次。新增反向或越层依赖必须先作为架构变更审查，不能靠
-测试白名单静默放行。
+[`overview.md`](overview.md) 定义的层次；同时机械限制 mutation API 的声明和调用位置：
+CLI 不得依赖 lock 或直接发布 machine selection，lock acquisition 只属于 executor Session。
+新增反向依赖、越层依赖或第二个 mutation 入口必须先作为架构变更审查，不能靠测试白名单
+静默放行。

@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 
+	"github.com/mianm12/dotfiles/internal/core/executor"
 	"github.com/spf13/cobra"
 )
 
@@ -62,54 +62,52 @@ func runApply(
 		env.afterPreflight()
 	}
 
-	return withMutationLock(context.controls(preflight.ProspectiveMachine.Repository), func(owner mutationOwner) error {
-		machine, err := loadRequiredMachine(context)
-		if err != nil {
-			return err
-		}
-		locked, err := analyzeApply(context, machine, moduleID)
-		if err != nil {
-			return err
-		}
-		if err := rejectAnalysis(locked); err != nil {
-			return err
-		}
-		selectionChanged, err := publishSelection(
-			context,
-			locked.ProspectiveMachine,
-			locked.SelectionDelta.Changes(),
-		)
-		if err != nil {
-			return err
-		}
-		if err := afterSelectionPublished(env, selectionChanged); err != nil {
-			return fmt.Errorf(
-				"machine selection was saved before convergence was interrupted: %w; rerun dot apply",
-				err,
-			)
-		}
-		if env.beforeExecution != nil {
-			env.beforeExecution()
-		}
-		result, runErr := executeResolved(
-			context,
-			locked.ProspectiveMachine.Repository,
-			locked.resolution,
-			locked.scope,
-			owner.ownership(),
-		)
-		if runErr != nil {
-			if warningErr := printWarnings(command, result.Warnings); warningErr != nil {
-				return errors.Join(runErr, warningErr)
+	outcome, runErr := runMutationSession(
+		context,
+		preflight.ProspectiveMachine.Repository,
+		"dot apply",
+		func(session *executor.Session, outcome *mutationOutcome) error {
+			machine, err := loadRequiredMachine(context)
+			if err != nil {
+				return err
 			}
-			if selectionChanged {
+			locked, err := analyzeApply(context, machine, moduleID)
+			if err != nil {
+				return err
+			}
+			if err := rejectAnalysis(locked); err != nil {
+				return err
+			}
+			selectionChanged, err := session.PublishSelection(locked.ProspectiveMachine)
+			if err != nil {
+				return err
+			}
+			outcome.selectionChanged = selectionChanged
+			if err := afterSelectionPublished(env, selectionChanged); err != nil {
 				return fmt.Errorf(
-					"machine selection was saved before convergence failed: %w; rerun dot apply",
-					runErr,
+					"machine selection was saved before convergence was interrupted: %w; rerun dot apply",
+					err,
 				)
 			}
-			return runErr
-		}
-		return printMutationResult(command, result, selectionChanged, "dot apply")
-	})
+			if env.beforeExecution != nil {
+				env.beforeExecution()
+			}
+			result, convergeErr := session.Converge(
+				locked.resolution.Modules,
+				locked.scope,
+			)
+			outcome.result = result
+			if convergeErr != nil {
+				if selectionChanged {
+					return fmt.Errorf(
+						"machine selection was saved before convergence failed: %w; rerun dot apply",
+						convergeErr,
+					)
+				}
+				return convergeErr
+			}
+			return nil
+		},
+	)
+	return finishMutation(command, outcome, runErr, "dot apply")
 }

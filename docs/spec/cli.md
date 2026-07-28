@@ -101,6 +101,8 @@ dot help
 - 真实 mutation 在取锁前分析一次，并在锁内重新加载输入和建立新的 analysis；blocker 或
   conflict 转为失败后才可发布 selection。Operation analysis 不是 executor 输入，锁前
   analysis 永远不能直接执行。
+- 正常 mutation 结果只在 lock 成功释放后写 stdout。Lock 释放失败返回 `1` 且不得先输出
+  成功摘要；若 selection、target 或 state 已提交，错误说明可能已经应用并提示重跑确认收敛。
 
 ## 输出与退出码
 

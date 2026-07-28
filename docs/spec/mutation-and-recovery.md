@@ -9,7 +9,7 @@ read-only preflight
   -> resolve desired and observe actual
   -> validate control topology and supported path conflicts
   -> build candidate plan
-  -> acquire mutation lock
+  -> revalidate complete control topology and acquire mutation lock
   -> strict reload, re-resolve, revalidate and replan
   -> persist changed selection
   -> create parents
@@ -18,6 +18,7 @@ read-only preflight
   -> prune stale owned links
   -> re-read changed targets
   -> atomically commit state
+  -> release mutation lock
 ```
 
 ## 安全规则
@@ -35,6 +36,16 @@ read-only preflight
   preflight plan。锁内、首次发布 changed selection 之前的复核失败只可以留下 advisory-lock
   bookkeeping，不得写 selection、target 或 state；selection 已发布后的失败按下文中断恢复
   契约处理。
+- 一次真实 mutation 从获取到释放 lock 必须使用同一个固定 HOME、repository、config、state
+  和 lock 路径；只获取一次 lock，也只释放一次，不建立嵌套 guard 或复用计数。获取 lock
+  之前必须完成整组 control topology 与现存 control entry 的只读校验。
+- Selection 只能发布到该 mutation 固定的 config 路径，且 machine repository 必须与固定
+  repository 相同。锁内复核发现 repository 漂移时失败，不切换到新 repository 继续执行。
+- Artifact convergence 使用固定 HOME 和 controls，再次只读校验 controls、重新加载最新
+  state、重新规划、执行、复核 changed targets 并提交 state；不得接收或执行锁前、锁内
+  analysis 保存的 plan。
+- Lock 释放失败时命令返回失败；正常 mutation 成功摘要只能在 lock 成功释放后输出。已经
+  发布的 selection、target 或 state 不回滚，错误必须提示重跑完成或确认收敛。
 - 机器配置与 state/lock 的私有根目录最终对象必须是真实目录；更高层的 ancestor symlink
   合法。最终对象为 symlink 时 mutation 失败，不跟随、替换或 chmod 其目标。
 - 不防御同一用户权限的其他进程在检查与 mutation 之间并发替换私有控制根。

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/core/executor"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
-	"github.com/mianm12/dotfiles/internal/lock"
 )
 
 func TestApplyRejectsTargetConflictsBeforeMutation(t *testing.T) {
@@ -799,13 +799,18 @@ func TestCommandsRejectAbnormalLockBeforeChangingStateRoot(t *testing.T) {
 func TestMutationLockRejectsSecondProcess(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeMachine(t, []string{"base"}, nil)
-	owner, err := lock.Acquire(filepath.Dir(fixture.lock), fixture.lock)
+	session, err := executor.OpenSession(fixture.home, corepaths.Controls{
+		Repository: fixture.repository,
+		Config:     fixture.config,
+		State:      fixture.state,
+		Lock:       fixture.lock,
+	})
 	if err != nil {
-		t.Fatalf("lock.Acquire() error = %v", err)
+		t.Fatalf("executor.OpenSession() error = %v", err)
 	}
 	defer func() {
-		if err := owner.Release(); err != nil {
-			t.Fatalf("owner.Release() error = %v", err)
+		if err := session.Close(); err != nil {
+			t.Fatalf("session.Close() error = %v", err)
 		}
 	}()
 

@@ -37,12 +37,12 @@ func TestExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 		}},
 	}})
 
-	first, err := Run(request)
+	first, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(first) error = %v", err)
+		t.Fatalf("runSession(first) error = %v", err)
 	}
 	if !first.TargetsChanged || !first.StateChanged {
-		t.Fatalf("Run(first) = %#v, want target and state changes", first)
+		t.Fatalf("runSession(first) = %#v, want target and state changes", first)
 	}
 	assertSymlink(t, linkTarget, linkSource)
 	if data, err := os.ReadFile(localTarget); err != nil || string(data) != "local" {
@@ -50,12 +50,12 @@ func TestExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	}
 
 	before := snapshotFiles(t, linkTarget, localTarget, fixture.state)
-	second, err := Run(request)
+	second, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(second) error = %v", err)
+		t.Fatalf("runSession(second) error = %v", err)
 	}
 	if second.TargetsChanged || second.StateChanged {
-		t.Fatalf("Run(second) = %#v, want zero artifact/state mutation", second)
+		t.Fatalf("runSession(second) = %#v, want zero artifact/state mutation", second)
 	}
 	assertFilesUnchanged(t, before)
 }
@@ -64,20 +64,20 @@ func TestEmptySelectionCommitsStateOnce(t *testing.T) {
 	fixture := newFixture(t)
 	request := fixture.request(nil)
 
-	first, err := Run(request)
+	first, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(first) error = %v", err)
+		t.Fatalf("runSession(first) error = %v", err)
 	}
 	if first.TargetsChanged || !first.StateChanged {
-		t.Fatalf("Run(first) = %#v, want only initial empty state commit", first)
+		t.Fatalf("runSession(first) = %#v, want only initial empty state commit", first)
 	}
 	before := snapshotFiles(t, fixture.state)
-	second, err := Run(request)
+	second, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(second) error = %v", err)
+		t.Fatalf("runSession(second) error = %v", err)
 	}
 	if second.TargetsChanged || second.StateChanged {
-		t.Fatalf("Run(second) = %#v, want zero mutation", second)
+		t.Fatalf("runSession(second) = %#v, want zero mutation", second)
 	}
 	assertFilesUnchanged(t, before)
 }
@@ -95,12 +95,12 @@ func TestExecutorCanonicalizesEmptyModuleStateOnce(t *testing.T) {
 	}
 	request := fixture.request(nil)
 
-	first, err := Run(request)
+	first, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(first) error = %v", err)
+		t.Fatalf("runSession(first) error = %v", err)
 	}
 	if first.TargetsChanged || !first.StateChanged {
-		t.Fatalf("Run(first) = %#v, want canonical state-only change", first)
+		t.Fatalf("runSession(first) = %#v, want canonical state-only change", first)
 	}
 	loaded, err := state.Load(fixture.state, fixture.home)
 	if err != nil {
@@ -111,12 +111,12 @@ func TestExecutorCanonicalizesEmptyModuleStateOnce(t *testing.T) {
 	}
 
 	before := snapshotFiles(t, fixture.state, fixture.lock)
-	second, err := Run(request)
+	second, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(second) error = %v", err)
+		t.Fatalf("runSession(second) error = %v", err)
 	}
 	if second.TargetsChanged || second.StateChanged {
-		t.Fatalf("Run(second) = %#v, want zero mutation", second)
+		t.Fatalf("runSession(second) = %#v, want zero mutation", second)
 	}
 	assertFilesUnchanged(t, before)
 }
@@ -198,9 +198,9 @@ func TestExecutorDoesNotPruneUntilAllActiveCreatesSucceed(t *testing.T) {
 			Target:      "~/.new",
 		}},
 	}})
-	_, err = Run(request)
+	_, err = runSession(request)
 	if err == nil {
-		t.Fatal("Run() error = nil, want changed-target verification failure")
+		t.Fatal("runSession() error = nil, want changed-target verification failure")
 	}
 	assertSymlink(t, staleTarget, staleDestination)
 	loaded, loadErr := state.Load(fixture.state, fixture.home)
@@ -240,9 +240,9 @@ func TestExecutorDoesNotUpdateUntilAllCreatesSucceed(t *testing.T) {
 			}},
 		},
 	})
-	_, err := Run(request)
+	_, err := runSession(request)
 	if err == nil {
-		t.Fatal("Run() error = nil, want create failure")
+		t.Fatal("runSession() error = nil, want create failure")
 	}
 	assertSymlink(t, target, oldSource)
 	loaded, loadErr := state.Load(fixture.state, fixture.home)
@@ -265,12 +265,12 @@ func TestExecutorMovesTargetBeforePruning(t *testing.T) {
 	fixture.writeLinkState(t, oldTarget, source)
 
 	request := fixture.linkRequest(source, "~/.new")
-	first, err := Run(request)
+	first, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(first) error = %v", err)
+		t.Fatalf("runSession(first) error = %v", err)
 	}
 	if !first.TargetsChanged || !first.StateChanged {
-		t.Fatalf("Run(first) = %#v, want target and state changes", first)
+		t.Fatalf("runSession(first) = %#v, want target and state changes", first)
 	}
 	if _, err := os.Lstat(oldTarget); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old target error = %v, want missing; plan = %#v", err, first.Plan)
@@ -286,12 +286,12 @@ func TestExecutorMovesTargetBeforePruning(t *testing.T) {
 	}
 
 	before := snapshotFiles(t, newTarget, fixture.state)
-	second, err := Run(request)
+	second, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(second) error = %v", err)
+		t.Fatalf("runSession(second) error = %v", err)
 	}
 	if second.TargetsChanged || second.StateChanged {
-		t.Fatalf("Run(second) = %#v, want zero mutation", second)
+		t.Fatalf("runSession(second) = %#v, want zero mutation", second)
 	}
 	assertFilesUnchanged(t, before)
 }
@@ -307,12 +307,12 @@ func TestExecutorUpdatesOwnedLinkAndCommitsVerifiedState(t *testing.T) {
 	fixture.writeLinkState(t, target, oldSource)
 
 	request := fixture.linkRequest(newSource, "~/.file")
-	first, err := Run(request)
+	first, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(first) error = %v", err)
+		t.Fatalf("runSession(first) error = %v", err)
 	}
 	if !first.TargetsChanged || !first.StateChanged {
-		t.Fatalf("Run(first) = %#v, want target and state changes", first)
+		t.Fatalf("runSession(first) = %#v, want target and state changes", first)
 	}
 	assertSymlink(t, target, newSource)
 	loaded, err := state.Load(fixture.state, fixture.home)
@@ -324,12 +324,12 @@ func TestExecutorUpdatesOwnedLinkAndCommitsVerifiedState(t *testing.T) {
 	}
 
 	before := snapshotFiles(t, target, fixture.state)
-	second, err := Run(request)
+	second, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(second) error = %v", err)
+		t.Fatalf("runSession(second) error = %v", err)
 	}
 	if second.TargetsChanged || second.StateChanged {
-		t.Fatalf("Run(second) = %#v, want zero mutation", second)
+		t.Fatalf("runSession(second) = %#v, want zero mutation", second)
 	}
 	assertFilesUnchanged(t, before)
 }
@@ -354,16 +354,16 @@ func TestExecutorRejectsConflictBeforeArtifactOrStateMutation(t *testing.T) {
 	}})
 
 	before := snapshotFiles(t, target)
-	result, err := Run(request)
+	result, err := runSession(request)
 	if err == nil || !result.Plan.HasConflicts() {
-		t.Fatalf("Run() = (%#v, %v), want deterministic conflict", result, err)
+		t.Fatalf("runSession() = (%#v, %v), want deterministic conflict", result, err)
 	}
 	assertFilesUnchanged(t, before)
 	if _, err := os.Lstat(fixture.state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state path error = %v, want missing", err)
 	}
-	if _, err := os.Lstat(fixture.lock); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("lock path error = %v, want missing", err)
+	if _, err := os.Lstat(fixture.lock); err != nil {
+		t.Fatalf("lock path error = %v, want session bookkeeping", err)
 	}
 }
 
@@ -426,11 +426,11 @@ func TestExecutorRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
 func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 	tests := []struct {
 		name    string
-		prepare func(*testing.T, fixture) Request
+		prepare func(*testing.T, fixture) convergenceRequest
 	}{
 		{
 			name: "link created before state",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) convergenceRequest {
 				source := fixture.writeRepositoryFile(t, "modules/base/file", "file")
 				if err := os.Symlink(source, filepath.Join(fixture.home, ".file")); err != nil {
 					t.Fatalf("os.Symlink() error = %v", err)
@@ -440,7 +440,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		},
 		{
 			name: "local published before state",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) convergenceRequest {
 				source := fixture.writeRepositoryFile(t, "modules/base/local.example", "example")
 				if err := os.WriteFile(filepath.Join(fixture.home, ".local"), []byte("personal"), 0o600); err != nil {
 					t.Fatalf("os.WriteFile() error = %v", err)
@@ -450,7 +450,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		},
 		{
 			name: "updated link before state",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) convergenceRequest {
 				oldSource := fixture.writeRepositoryFile(t, "modules/base/old", "old")
 				newSource := fixture.writeRepositoryFile(t, "modules/base/new", "new")
 				target := filepath.Join(fixture.home, ".file")
@@ -463,7 +463,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		},
 		{
 			name: "old link deleted during update",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) convergenceRequest {
 				oldSource := fixture.writeRepositoryFile(t, "modules/base/old", "old")
 				newSource := fixture.writeRepositoryFile(t, "modules/base/new", "new")
 				target := filepath.Join(fixture.home, ".file")
@@ -473,7 +473,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		},
 		{
 			name: "stale link pruned before state",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) convergenceRequest {
 				source := fixture.writeRepositoryFile(t, "modules/base/file", "file")
 				target := filepath.Join(fixture.home, ".file")
 				fixture.writeLinkState(t, target, source)
@@ -486,20 +486,20 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newFixture(t)
 			request := test.prepare(t, fixture)
-			first, err := Run(request)
+			first, err := runSession(request)
 			if err != nil {
-				t.Fatalf("Run(first) error = %v", err)
+				t.Fatalf("runSession(first) error = %v", err)
 			}
 			if !first.StateChanged {
-				t.Fatalf("Run(first) = %#v, want state recovery", first)
+				t.Fatalf("runSession(first) = %#v, want state recovery", first)
 			}
 			before := snapshotExistingControlAndTargets(t, fixture)
-			second, err := Run(request)
+			second, err := runSession(request)
 			if err != nil {
-				t.Fatalf("Run(second) error = %v", err)
+				t.Fatalf("runSession(second) error = %v", err)
 			}
 			if second.TargetsChanged || second.StateChanged {
-				t.Fatalf("Run(second) = %#v, want no mutation", second)
+				t.Fatalf("runSession(second) = %#v, want no mutation", second)
 			}
 			assertFilesUnchanged(t, before)
 		})
@@ -522,20 +522,20 @@ func TestStateCommitFailureLeavesSafeArtifactForRerun(t *testing.T) {
 		t.Fatalf("state path error = %v, want missing", err)
 	}
 
-	recovered, err := Run(request)
+	recovered, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(recovery) error = %v", err)
+		t.Fatalf("runSession(recovery) error = %v", err)
 	}
 	if recovered.TargetsChanged || !recovered.StateChanged {
-		t.Fatalf("Run(recovery) = %#v, want adopt plus state commit", recovered)
+		t.Fatalf("runSession(recovery) = %#v, want adopt plus state commit", recovered)
 	}
 	before := snapshotFiles(t, filepath.Join(fixture.home, ".file"), fixture.state)
-	repeated, err := Run(request)
+	repeated, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(repeated) error = %v", err)
+		t.Fatalf("runSession(repeated) error = %v", err)
 	}
 	if repeated.TargetsChanged || repeated.StateChanged {
-		t.Fatalf("Run(repeated) = %#v, want zero mutation", repeated)
+		t.Fatalf("runSession(repeated) = %#v, want zero mutation", repeated)
 	}
 	assertFilesUnchanged(t, before)
 }
@@ -569,20 +569,20 @@ func TestLocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
 		t.Fatalf("state path error = %v, want missing", err)
 	}
 
-	recovered, err := Run(request)
+	recovered, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(recovery) error = %v", err)
+		t.Fatalf("runSession(recovery) error = %v", err)
 	}
 	if recovered.TargetsChanged || !recovered.StateChanged {
-		t.Fatalf("Run(recovery) = %#v, want keep plus state commit", recovered)
+		t.Fatalf("runSession(recovery) = %#v, want keep plus state commit", recovered)
 	}
 	before := snapshotFiles(t, target, fixture.state)
-	repeated, err := Run(request)
+	repeated, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(repeated) error = %v", err)
+		t.Fatalf("runSession(repeated) error = %v", err)
 	}
 	if repeated.TargetsChanged || repeated.StateChanged {
-		t.Fatalf("Run(repeated) = %#v, want zero mutation", repeated)
+		t.Fatalf("runSession(repeated) = %#v, want zero mutation", repeated)
 	}
 	assertFilesUnchanged(t, before)
 }
@@ -634,12 +634,12 @@ func TestScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	})
 	request.Scope = []string{"extra"}
 
-	first, err := Run(request)
+	first, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(first) error = %v", err)
+		t.Fatalf("runSession(first) error = %v", err)
 	}
 	if !first.TargetsChanged || !first.StateChanged {
-		t.Fatalf("Run(first) = %#v, want target and state changes", first)
+		t.Fatalf("runSession(first) = %#v, want target and state changes", first)
 	}
 	assertFilesUnchanged(t, baseBefore)
 	loaded, err := state.Load(fixture.state, fixture.home)
@@ -651,12 +651,12 @@ func TestScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	}
 
 	before := snapshotFiles(t, baseTarget, extraTarget, fixture.state)
-	second, err := Run(request)
+	second, err := runSession(request)
 	if err != nil {
-		t.Fatalf("Run(second) error = %v", err)
+		t.Fatalf("runSession(second) error = %v", err)
 	}
 	if second.TargetsChanged || second.StateChanged {
-		t.Fatalf("Run(second) = %#v, want zero mutation", second)
+		t.Fatalf("runSession(second) = %#v, want zero mutation", second)
 	}
 	assertFilesUnchanged(t, before)
 }
@@ -706,9 +706,9 @@ func TestExecutorUsesSingleAdvisoryLock(t *testing.T) {
 		}
 	}()
 
-	_, err = Run(fixture.request(nil))
+	_, err = runSession(fixture.request(nil))
 	if !errors.Is(err, lock.ErrBusy) {
-		t.Fatalf("Run() error = %v, want lock.ErrBusy", err)
+		t.Fatalf("runSession() error = %v, want lock.ErrBusy", err)
 	}
 	if _, err := os.Lstat(fixture.state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state path error = %v, want missing", err)
@@ -782,8 +782,19 @@ func newFixture(t *testing.T) fixture {
 	return fixture
 }
 
-func (fixture fixture) request(modules []config.Module) Request {
-	return Request{
+func runSession(request convergenceRequest) (result Result, err error) {
+	session, err := OpenSession(request.Home, request.Controls)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() {
+		err = errors.Join(err, session.Close())
+	}()
+	return session.Converge(request.Modules, request.Scope)
+}
+
+func (fixture fixture) request(modules []config.Module) convergenceRequest {
+	return convergenceRequest{
 		Home: fixture.home,
 		Controls: corepaths.Controls{
 			Repository: fixture.repository,
@@ -795,7 +806,7 @@ func (fixture fixture) request(modules []config.Module) Request {
 	}
 }
 
-func (fixture fixture) linkRequest(source, target string) Request {
+func (fixture fixture) linkRequest(source, target string) convergenceRequest {
 	return fixture.request([]config.Module{{
 		ID: "base",
 		Links: []config.Link{{
@@ -806,7 +817,7 @@ func (fixture fixture) linkRequest(source, target string) Request {
 	}})
 }
 
-func (fixture fixture) localRequest(source, target string) Request {
+func (fixture fixture) localRequest(source, target string) convergenceRequest {
 	return fixture.request([]config.Module{{
 		ID: "base",
 		Locals: []config.Local{{
