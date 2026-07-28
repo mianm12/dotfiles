@@ -10,13 +10,50 @@ var (
 	ErrInvalidConfiguration = errors.New("invalid configuration")
 	// ErrNotApplicable reports a required module with no matching platform form.
 	ErrNotApplicable = errors.New("module is not applicable")
+	// ErrIndeterminate reports that platform evidence cannot select or reject a module.
+	ErrIndeterminate = errors.New("module applicability is indeterminate")
 )
 
-// Platform is the explicit platform input used for module matching.
+// ApplicabilityState is the result of matching one module against a platform.
+type ApplicabilityState string
+
+const (
+	// ApplicabilityApplicable means every constrained field is known and matches.
+	ApplicabilityApplicable ApplicabilityState = "applicable"
+	// ApplicabilityNotApplicable means at least one known field does not match.
+	ApplicabilityNotApplicable ApplicabilityState = "not-applicable"
+	// ApplicabilityIndeterminate means no known field mismatches but evidence is incomplete.
+	ApplicabilityIndeterminate ApplicabilityState = "indeterminate"
+)
+
+// ModuleApplicability contains one applicability result and its uncertainty diagnostic.
+type ModuleApplicability struct {
+	State      ApplicabilityState
+	Diagnostic string
+}
+
+// PlatformField is one detected platform value or an explicit unknown diagnostic.
+type PlatformField struct {
+	Value      string
+	Known      bool
+	Diagnostic string
+}
+
+// KnownPlatformField returns a known platform field.
+func KnownPlatformField(value string) PlatformField {
+	return PlatformField{Value: value, Known: true}
+}
+
+// UnknownPlatformField returns an unknown platform field with its diagnostic.
+func UnknownPlatformField(diagnostic string) PlatformField {
+	return PlatformField{Diagnostic: diagnostic}
+}
+
+// Platform is the explicit, evidence-carrying input used for module matching.
 type Platform struct {
-	OS     string
-	Distro string
-	Arch   string
+	OS     PlatformField
+	Distro PlatformField
+	Arch   PlatformField
 }
 
 // Machine is one strictly decoded machine selection.

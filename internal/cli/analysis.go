@@ -87,9 +87,9 @@ func (source selectionSource) String() string {
 }
 
 type moduleObservation struct {
-	loaded     bool
-	applicable bool
-	variant    string
+	loaded        bool
+	applicability config.ModuleApplicability
+	variant       string
 }
 
 type analysisInputs struct {
@@ -228,7 +228,7 @@ func analyzeRemove(
 	profileSelected := slices.Contains(profileModules, moduleID)
 	knownAsExtra := slices.Contains(prospective.ExtraModules, moduleID)
 	_, knownInState := inputs.loaded.Snapshot.Modules[moduleID]
-	module, exists, applicable, err := inputs.repository.InspectModule(
+	module, exists, applicability, err := inputs.repository.InspectModule(
 		moduleID,
 		context.platform,
 	)
@@ -236,10 +236,10 @@ func analyzeRemove(
 		return OperationAnalysis{}, err
 	}
 	targetObservation := moduleObservation{
-		loaded:     exists,
-		applicable: applicable,
+		loaded:        exists,
+		applicability: applicability,
 	}
-	if applicable {
+	if applicability.State == config.ApplicabilityApplicable {
 		targetObservation.variant = module.Variant
 	}
 
@@ -250,6 +250,22 @@ func analyzeRemove(
 			Reason: fmt.Sprintf(
 				"module %q is selected by an active profile; remove it from the repository profile first",
 				moduleID,
+			),
+		})
+	case knownAsExtra &&
+		applicability.State == config.ApplicabilityNotApplicable:
+		blockers = append(blockers, AnalysisBlocker{
+			ModuleID: moduleID,
+			Reason:   fmt.Sprintf("module %q is not applicable", moduleID),
+		})
+	case knownAsExtra &&
+		applicability.State == config.ApplicabilityIndeterminate:
+		blockers = append(blockers, AnalysisBlocker{
+			ModuleID: moduleID,
+			Reason: fmt.Sprintf(
+				"module %q applicability is indeterminate: %s",
+				moduleID,
+				applicability.Diagnostic,
 			),
 		})
 	case !exists && !knownAsExtra && !knownInState:
@@ -331,7 +347,7 @@ func analyzeStatus(
 	if moduleID != nil {
 		requested := *moduleID
 		if _, inspected := observations[requested]; !inspected {
-			module, exists, applicable, inspectErr := inputs.repository.InspectModule(
+			module, exists, applicability, inspectErr := inputs.repository.InspectModule(
 				requested,
 				context.platform,
 			)
@@ -340,9 +356,9 @@ func analyzeStatus(
 			}
 			if exists {
 				observations[requested] = moduleObservation{
-					loaded:     true,
-					applicable: applicable,
-					variant:    module.Variant,
+					loaded:        true,
+					applicability: applicability,
+					variant:       module.Variant,
 				}
 			} else if _, stateKnown := inputs.loaded.Snapshot.Modules[requested]; !stateKnown &&
 				sources[requested] == (selectionSource{}) {
@@ -449,7 +465,7 @@ func resolveSelection(
 	observations := make(map[string]moduleObservation, len(ids))
 	blockers := make([]AnalysisBlocker, 0)
 	for _, moduleID := range ids {
-		module, exists, applicable, inspectErr := repository.InspectModule(
+		module, exists, applicability, inspectErr := repository.InspectModule(
 			moduleID,
 			platform,
 		)
@@ -468,11 +484,14 @@ func resolveSelection(
 			continue
 		}
 		observations[moduleID] = moduleObservation{
-			loaded:     true,
-			applicable: applicable,
-			variant:    module.Variant,
+			loaded:        true,
+			applicability: applicability,
+			variant:       module.Variant,
 		}
-		if !applicable {
+		switch applicability.State {
+		case config.ApplicabilityApplicable:
+			resolution.Modules = append(resolution.Modules, module)
+		case config.ApplicabilityNotApplicable:
 			if source.extra || required[moduleID] {
 				blockers = append(blockers, AnalysisBlocker{
 					ModuleID: moduleID,
@@ -484,9 +503,22 @@ func resolveSelection(
 					moduleID,
 				)
 			}
-			continue
+		case config.ApplicabilityIndeterminate:
+			blockers = append(blockers, AnalysisBlocker{
+				ModuleID: moduleID,
+				Reason: fmt.Sprintf(
+					"module %q applicability is indeterminate: %s",
+					moduleID,
+					applicability.Diagnostic,
+				),
+			})
+		default:
+			return config.Resolution{}, nil, nil, nil, fmt.Errorf(
+				"module %q returned invalid applicability %q",
+				moduleID,
+				applicability.State,
+			)
 		}
-		resolution.Modules = append(resolution.Modules, module)
 	}
 	slices.Sort(resolution.NotApplicable)
 	return resolution, sources, observations, blockers, nil
@@ -675,19 +707,19 @@ func buildModuleAnalyses(
 			Reason:        "",
 		}
 		if observation.loaded {
-			if observation.applicable {
-				analysis.Applicability = "applicable"
+			analysis.Applicability = string(observation.applicability.State)
+			if observation.applicability.State == config.ApplicabilityApplicable {
 				analysis.Variant = observation.variant
 				if analysis.Variant == "" {
 					analysis.Variant = "portable"
 				}
-			} else {
-				analysis.Applicability = "not-applicable"
 			}
 		}
 
 		switch {
-		case observation.loaded && !observation.applicable && source != (selectionSource{}):
+		case observation.loaded &&
+			observation.applicability.State == config.ApplicabilityNotApplicable &&
+			source != (selectionSource{}):
 			analysis.Summary = "not-applicable"
 		case source != (selectionSource{}):
 			if planned[moduleID] {
@@ -723,7 +755,7 @@ func buildModuleAnalyses(
 				continue
 			}
 			if source != (selectionSource{}) &&
-				observation.applicable &&
+				observation.applicability.State == config.ApplicabilityApplicable &&
 				action.Decision == planner.DecisionKeep &&
 				keepStateRecorded(snapshot, action) {
 				continue
@@ -746,6 +778,10 @@ func buildModuleAnalyses(
 		}
 		if analysis.Reason == "" && blocked {
 			analysis.Reason = blockerReason
+		}
+		if analysis.Reason == "" &&
+			observation.applicability.State == config.ApplicabilityIndeterminate {
+			analysis.Reason = observation.applicability.Diagnostic
 		}
 		result = append(result, analysis)
 	}

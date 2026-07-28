@@ -136,22 +136,27 @@ func (repository Repository) ProfileModules(profiles []string) ([]string, error)
 func (repository Repository) InspectModule(
 	id string,
 	platform Platform,
-) (module Module, exists, applicable bool, err error) {
+) (
+	module Module,
+	exists bool,
+	applicability ModuleApplicability,
+	err error,
+) {
 	if !repository.valid {
-		return Module{}, false, false, fmt.Errorf(
+		return Module{}, false, ModuleApplicability{}, fmt.Errorf(
 			"%w: repository is invalid",
 			ErrInvalidConfiguration,
 		)
 	}
 	if err := validateID("module", id); err != nil {
-		return Module{}, false, false, err
+		return Module{}, false, ModuleApplicability{}, err
 	}
 	exists, err = repository.inspectModule(id)
 	if err != nil || !exists {
-		return Module{}, exists, false, err
+		return Module{}, exists, ModuleApplicability{}, err
 	}
-	module, applicable, err = loadModule(id, repository.modules[id], platform)
-	return module, true, applicable, err
+	module, applicability, err = loadModule(id, repository.modules[id], platform)
+	return module, true, applicability, err
 }
 
 func (repository Repository) inspectModule(id string) (bool, error) {

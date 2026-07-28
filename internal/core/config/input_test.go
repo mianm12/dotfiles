@@ -125,7 +125,7 @@ base = ["app"]
 
 		resolution, err := loaded.Resolve(
 			coreconfig.Scope{Profiles: []string{"base"}},
-			coreconfig.Platform{OS: "linux"},
+			testPlatform("linux", "", ""),
 		)
 		if err != nil {
 			t.Fatalf("Resolve(symlink manifest) error = %v", err)
@@ -180,7 +180,7 @@ base = ["good"]
 
 			resolution, err := loaded.Resolve(
 				coreconfig.Scope{Profiles: []string{"base"}},
-				coreconfig.Platform{OS: "linux"},
+				testPlatform("linux", "", ""),
 			)
 			if err != nil {
 				t.Fatalf("Resolve(good scope) error = %v", err)
@@ -190,7 +190,7 @@ base = ["good"]
 			}
 			if _, exists, _, err := loaded.InspectModule(
 				"bad",
-				coreconfig.Platform{OS: "linux"},
+				testPlatform("linux", "", ""),
 			); !exists || !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
 				t.Fatalf(
 					"InspectModule(bad) = (exists=%t, err=%v), want selected failure",

@@ -72,18 +72,33 @@ func (repository Repository) Resolve(scope Scope, platform Platform) (Resolution
 		NotApplicable: make([]string, 0),
 	}
 	for _, id := range ids {
-		module, applicable, err := loadModule(id, repository.modules[id], platform)
+		module, applicability, err := loadModule(id, repository.modules[id], platform)
 		if err != nil {
 			return Resolution{}, err
 		}
-		if !applicable {
+		switch applicability.State {
+		case ApplicabilityApplicable:
+			resolution.Modules = append(resolution.Modules, module)
+		case ApplicabilityNotApplicable:
 			if required[id] {
 				return Resolution{}, fmt.Errorf("%w: module %q", ErrNotApplicable, id)
 			}
 			resolution.NotApplicable = append(resolution.NotApplicable, id)
-			continue
+		case ApplicabilityIndeterminate:
+			return Resolution{}, fmt.Errorf(
+				"%w: module %q: %s",
+				ErrIndeterminate,
+				id,
+				applicability.Diagnostic,
+			)
+		default:
+			return Resolution{}, fmt.Errorf(
+				"%w: module %q returned invalid applicability %q",
+				ErrInvalidConfiguration,
+				id,
+				applicability.State,
+			)
 		}
-		resolution.Modules = append(resolution.Modules, module)
 	}
 
 	slices.Sort(resolution.NotApplicable)

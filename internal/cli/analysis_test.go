@@ -382,6 +382,19 @@ target = "~/.app"
 		t.Fatalf("cleanup dry-run = (%d, %q, %q)", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.runInjected("apply")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "prune") ||
+		!strings.Contains(stdout, "targets_changed=true state_changed=true") {
+		t.Fatalf("cleanup apply = (%d, %q, %q)", code, stdout, stderr)
+	}
+	assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+		t.Fatalf("state modules = %#v, want cleanup complete", modules)
+	}
+	assertApplyNoMutation(t, fixture, fixture.runInjected)
 }
 
 func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {

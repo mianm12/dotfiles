@@ -48,6 +48,8 @@ dot help
 - 删除 state 证明、resolved target 未改变且 raw destination 未漂移的 module links。
 - 保留所有 local，并在 state 可用时提示。
 - Manifest 已删除但 extra/state 仍有 module 记录时允许清理。
+- Current selection 中仍是 extra 的 module，若 manifest 存在但已确定 not-applicable 或为
+  indeterminate，则 remove 拒绝 selection 写入和 prune；先修复平台检测或 manifest。
 - 已 inactive 且无 state 时成功 no-op；完全未知的 module 失败。
 
 ## 命令 scope 与加载
@@ -73,16 +75,19 @@ dot help
 
   ```text
   selection=<none|profile|extra|profile+extra>
-  applicability=<applicable|not-applicable|->
+  applicability=<applicable|not-applicable|indeterminate|->
   convergence=<converged|pending|pending-cleanup|conflict|->
   variant=<portable|VARIANT|->
   reason=<-|QUOTED_REASON>
   ```
 
-  `-` 表示当前分析未加载或不存在该维度，不是第三种平台状态。带空格或特殊字符的 reason
-  使用双引号和转义；conflict 或 module-specific blocker 的完整 reason 不得省略。Profile
-  module 已确定 not-applicable 但仍有旧 ownership action 时显示
-  `convergence=pending-cleanup`，reason 至少标出对应 cleanup decision。
+  `-` 表示当前分析未加载或不存在该维度，不是平台状态。Effective indeterminate module 的
+  第二列摘要为 `conflict`、convergence 为 `-`，reason 显示平台字段或 variant 歧义诊断，
+  不生成 placement action；`status MODULE` 检查未选中的 indeterminate module 时仍显示
+  `inactive`，不产生 blocker。带空格或特殊字符的 reason 使用双引号和转义；conflict 或
+  module-specific blocker 的完整 reason 不得省略。Profile module 已确定 not-applicable 但仍有
+  旧 ownership action 时显示 `convergence=pending-cleanup`，reason 至少标出对应 cleanup
+  decision。
 - Dry-run 在 placement actions 之前显示非空 selection delta：`create`、`add-extra` 或
   `remove-extra`；`add-extra`/`remove-extra` 同时显示 module ID。完整分析中的 blocker 写
   stdout 并包含 reason。输入 warning 仍写 stderr。
@@ -109,11 +114,11 @@ dot help
 | `1` | 配置、ownership、lock、文件系统或运行时失败 |
 | `2` | CLI 参数或用法错误 |
 
-真实 mutation 请求未知或不适用的 module 时返回 `1`。Status/dry-run 能把 request-specific
-未知、不适用、profile-selected remove、已初始化 init 或路径 conflict 表达为完整 blocker
-时返回 `0`；无效 module ID、active profile 引用缺失 module、malformed manifest 与 variant
-ambiguity 仍是配置失败并返回 `1`。`2` 仅用于 CLI 语法错误，例如未知 flag 或 `remove`
-缺少 `MODULE` 参数。
+真实 mutation 请求未知、不适用或 applicability indeterminate 的 module 时返回 `1`。
+Status/dry-run 能把 request-specific 未知、不适用、indeterminate、profile-selected remove、
+已初始化 init 或路径 conflict 表达为完整 blocker 时返回 `0`；无效 module ID、active profile
+引用缺失 module、malformed manifest 与多个已确定 matching variants 仍是配置失败并返回
+`1`。`2` 仅用于 CLI 语法错误，例如未知 flag 或 `remove` 缺少 `MODULE` 参数。
 
 运行时失败不要求维护完整的 completed/failed/not-attempted 结果协议。错误信息必须指出失败
 动作；已经发生 mutation 时提示本轮可能部分完成并建议重跑，不得把未执行动作显示为成功。
