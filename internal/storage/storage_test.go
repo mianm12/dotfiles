@@ -144,6 +144,49 @@ func TestValidateRoot_IsReadOnly(t *testing.T) {
 	}
 }
 
+func TestValidatePrivateFile_IsReadOnly(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "lock")
+	if err := os.WriteFile(path, []byte("lock"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("os.Chmod(%q) error = %v", path, err)
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("os.Lstat(%q) error = %v", path, err)
+	}
+
+	if err := ValidatePrivateFile(path); err != nil {
+		t.Fatalf("ValidatePrivateFile(%q) error = %v", path, err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("os.Lstat(%q) after validation error = %v", path, err)
+	}
+	if after.Mode().Perm() != 0o644 || !os.SameFile(before, after) {
+		t.Fatalf("ValidatePrivateFile() changed regular file: before=%v after=%v", before, after)
+	}
+
+	missing := filepath.Join(root, "missing")
+	if err := ValidatePrivateFile(missing); err != nil {
+		t.Fatalf("ValidatePrivateFile(%q) error = %v", missing, err)
+	}
+	if _, err := os.Lstat(missing); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("os.Lstat(%q) error = %v, want missing path preserved", missing, err)
+	}
+
+	abnormal := filepath.Join(root, "directory")
+	if err := os.Mkdir(abnormal, 0o755); err != nil {
+		t.Fatalf("os.Mkdir(%q) error = %v", abnormal, err)
+	}
+	if err := ValidatePrivateFile(abnormal); err == nil {
+		t.Fatal("ValidatePrivateFile(directory) error = nil")
+	}
+	assertMode(t, abnormal, 0o755)
+}
+
 func TestEnsurePrivateFile_CreatesAndCorrectsMode(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	if err := EnsureRoot(root); err != nil {

@@ -279,6 +279,9 @@ func TestExecutorRejectsConflictBeforeArtifactOrStateMutation(t *testing.T) {
 	if _, err := os.Lstat(fixture.state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state path error = %v, want missing", err)
 	}
+	if _, err := os.Lstat(fixture.lock); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock path error = %v, want missing", err)
+	}
 }
 
 func TestExecutorRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
@@ -684,9 +687,9 @@ func newFixture(t *testing.T) fixture {
 		root:       root,
 		home:       filepath.Join(root, "home"),
 		repository: filepath.Join(root, "repository"),
-		config:     filepath.Join(root, "control", "machine.toml"),
-		state:      filepath.Join(root, "control", "state.json"),
-		lock:       filepath.Join(root, "control", "mutation.lock"),
+		config:     filepath.Join(root, "config-control", "machine.toml"),
+		state:      filepath.Join(root, "state-control", "state.json"),
+		lock:       filepath.Join(root, "state-control", "mutation.lock"),
 	}
 	for _, directory := range []string{fixture.home, fixture.repository} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {

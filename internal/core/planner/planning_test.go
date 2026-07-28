@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
@@ -97,7 +98,7 @@ func TestPlanIndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanStaleLinkInsideControlPathIsRejected(t *testing.T) {
+func TestPlanStaleLinkInsideControlPathIsForgotten(t *testing.T) {
 	for _, controlName := range []string{"repository", "config", "state", "lock"} {
 		t.Run(controlName, func(t *testing.T) {
 			fixture := newFixture(t)
@@ -115,8 +116,10 @@ func TestPlanStaleLinkInsideControlPathIsRejected(t *testing.T) {
 				target = controls.Config
 			case "state":
 				controls.State = fixture.target(".local/state/dot/state.json")
+				controls.Lock = fixture.target(".local/state/dot/lock")
 				target = controls.State
 			case "lock":
+				controls.State = fixture.target(".local/state/dot/state.json")
 				controls.Lock = fixture.target(".local/state/dot/lock")
 				target = controls.Lock
 			}
@@ -137,19 +140,55 @@ func TestPlanStaleLinkInsideControlPathIsRejected(t *testing.T) {
 				Controls: controls,
 				State:    snapshot,
 			})
-
-			if !errors.Is(err, corepaths.ErrControlBoundary) {
-				t.Fatalf("Build() = (%#v, %v), want control boundary error", plan, err)
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
 			}
-			if plan.Actions != nil || plan.Warnings != nil {
-				t.Fatalf("Build() returned partial plan %#v", plan)
+			assertDecisions(t, plan, planner.DecisionForget)
+			if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
+				t.Fatalf("forget reason = %q", got)
+			}
+			if len(plan.Warnings) != 1 {
+				t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
 }
 
-func TestPlanStaleLinkContainingControlPathIsRejected(t *testing.T) {
+func TestPlanRejectsUnknownStaleKindBeforeControlOverlapFallback(t *testing.T) {
+	fixture := newFixture(t)
+	controls := fixture.controls
+	controls.Repository = fixture.target("repository")
+	if err := os.MkdirAll(controls.Repository, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(repository) error = %v", err)
+	}
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"stale": {
+			Kind:   state.Kind("unknown"),
+			Target: controls.Repository,
+		},
+	})
+	before := snapshotTree(t, fixture.root)
+
+	plan, err := planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: controls,
+		State:    snapshot,
+	})
+
+	if !errors.Is(err, state.ErrInvalid) {
+		t.Fatalf("Build() = (%#v, %v), want invalid state error", plan, err)
+	}
+	if !strings.Contains(err.Error(), `unsupported kind "unknown"`) {
+		t.Fatalf("Build() error = %q, want unsupported kind", err)
+	}
+	if len(plan.Actions) != 0 || len(plan.Warnings) != 0 {
+		t.Fatalf("Build() plan = %#v, want empty plan", plan)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanStaleLinkContainingControlPathIsForgotten(t *testing.T) {
 	for _, controlName := range []string{"repository", "config", "state", "lock"} {
 		t.Run(controlName, func(t *testing.T) {
 			fixture := newFixture(t)
@@ -162,7 +201,9 @@ func TestPlanStaleLinkContainingControlPathIsRejected(t *testing.T) {
 				controls.Config = filepath.Join(target, "dot", "config.toml")
 			case "state":
 				controls.State = filepath.Join(target, "dot", "state.json")
+				controls.Lock = filepath.Join(target, "dot", "lock")
 			case "lock":
+				controls.State = filepath.Join(target, "dot", "state.json")
 				controls.Lock = filepath.Join(target, "dot", "lock")
 			}
 
@@ -181,19 +222,22 @@ func TestPlanStaleLinkContainingControlPathIsRejected(t *testing.T) {
 				Controls: controls,
 				State:    snapshot,
 			})
-
-			if !errors.Is(err, corepaths.ErrControlBoundary) {
-				t.Fatalf("Build() = (%#v, %v), want control boundary error", plan, err)
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
 			}
-			if plan.Actions != nil || plan.Warnings != nil {
-				t.Fatalf("Build() returned partial plan %#v", plan)
+			assertDecisions(t, plan, planner.DecisionForget)
+			if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
+				t.Fatalf("forget reason = %q", got)
+			}
+			if len(plan.Warnings) != 1 {
+				t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
 }
 
-func TestPlanStaleLocalContainingControlPathIsRejected(t *testing.T) {
+func TestPlanStaleLocalContainingControlPathIsForgotten(t *testing.T) {
 	for _, controlName := range []string{"repository", "config", "state", "lock"} {
 		t.Run(controlName, func(t *testing.T) {
 			fixture := newFixture(t)
@@ -206,7 +250,9 @@ func TestPlanStaleLocalContainingControlPathIsRejected(t *testing.T) {
 				controls.Config = filepath.Join(target, "dot", "config.toml")
 			case "state":
 				controls.State = filepath.Join(target, "dot", "state.json")
+				controls.Lock = filepath.Join(target, "dot", "lock")
 			case "lock":
+				controls.State = filepath.Join(target, "dot", "state.json")
 				controls.Lock = filepath.Join(target, "dot", "lock")
 			}
 
@@ -223,16 +269,80 @@ func TestPlanStaleLocalContainingControlPathIsRejected(t *testing.T) {
 				Controls: controls,
 				State:    snapshot,
 			})
-
-			if !errors.Is(err, corepaths.ErrControlBoundary) {
-				t.Fatalf("Build() = (%#v, %v), want control boundary error", plan, err)
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
 			}
-			if plan.Actions != nil || plan.Warnings != nil {
-				t.Fatalf("Build() returned partial plan %#v", plan)
+			assertDecisions(t, plan, planner.DecisionForget)
+			if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
+				t.Fatalf("forget reason = %q", got)
+			}
+			if len(plan.Warnings) != 1 {
+				t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
+}
+
+func TestPlanStaleResolvedAliasOverlappingControlPathIsForgotten(t *testing.T) {
+	fixture := newFixture(t)
+	repositoryAlias := filepath.Join(fixture.home, "repository-alias")
+	if err := os.Symlink(fixture.repo, repositoryAlias); err != nil {
+		t.Fatalf("os.Symlink(repository alias) error = %v", err)
+	}
+	target := filepath.Join(repositoryAlias, "owned")
+	resolved := fixture.resolved(t, target)
+	if err := os.WriteFile(resolved, []byte("control data"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(resolved target) error = %v", err)
+	}
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"stale": linkRecord(
+			target,
+			resolved,
+			filepath.Join(fixture.root, "old-source"),
+		),
+	})
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, nil, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionForget)
+	if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
+		t.Fatalf("forget reason = %q", got)
+	}
+	if len(plan.Warnings) != 1 {
+		t.Fatalf("Build() warnings = %v, want one", plan.Warnings)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanInvalidControlTopologyPrecedesStaleForget(t *testing.T) {
+	fixture := newFixture(t)
+	controls := fixture.controls
+	controls.State = filepath.Join(fixture.repo, "state.json")
+	controls.Lock = filepath.Join(fixture.repo, "lock")
+	target := fixture.target("stale")
+	snapshot := fixture.snapshot(map[string]state.Placement{
+		"stale": {
+			Kind:   state.KindLocal,
+			Target: target,
+		},
+	})
+	before := snapshotTree(t, fixture.root)
+
+	plan, err := planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: controls,
+		State:    snapshot,
+	})
+
+	if !errors.Is(err, corepaths.ErrControlTopology) {
+		t.Fatalf("Build() = (%#v, %v), want control topology error", plan, err)
+	}
+	if plan.Actions != nil || plan.Warnings != nil {
+		t.Fatalf("Build() returned partial plan %#v", plan)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
 }
 
 func TestPlanDriftedStaleLinkWarnsAndDoesNotBlock(t *testing.T) {
@@ -600,9 +710,9 @@ func newFixture(t *testing.T) *fixture {
 		repo: repo,
 		controls: corepaths.Controls{
 			Repository: repo,
-			Config:     filepath.Join(root, "control", "machine.toml"),
-			State:      filepath.Join(root, "control", "state.json"),
-			Lock:       filepath.Join(root, "control", "dot.lock"),
+			Config:     filepath.Join(root, "config-control", "machine.toml"),
+			State:      filepath.Join(root, "state-control", "state.json"),
+			Lock:       filepath.Join(root, "state-control", "dot.lock"),
 		},
 	}
 }

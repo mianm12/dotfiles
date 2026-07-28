@@ -61,14 +61,31 @@ target = "~/.config/example/config.local"
   [`planning.md`](planning.md#local) 定义。
 - `*.local.example -> *.local` 是推荐命名，不是语法要求。
 
-## 简化的路径唯一性
+## 路径身份与边界
 
 - Target 先展开 HOME 并做词法规范化。
 - 对现存 ancestor symlink，解析到其实际父路径；missing suffix 按原名称追加。
 - 两个 placements 的规范化 target 或解析后 target 相同时拒绝。
 - Directory link 与其他 placement 的后代 target 互斥。
-- Target 与 repository、machine config、state 或 lock 的规范化路径和解析后路径不得相等或
-  互为祖先、后代；这些检查只使用规范化路径和上述 ancestor 解析，不建设通用控制面身份系统。
 - Parent symlink 合法。Link state 保存其上次 resolved target；该值改变时拒绝 update/prune。
 
 不额外探测 case sensitivity、Unicode alias、filesystem type 或 hard-link identity。
+
+### Control-path topology
+
+- Config root 是 machine config 的直接父目录；machine config 必须是该 root 的直接子项。
+- State root 是 state 与 lock 的共同直接父目录；state 与 lock 必须是两个不同的 sibling。
+- Control family 分为：
+  - repository tree；
+  - config root tree，以及 machine config 目录项与最终解析身份；
+  - state root tree，以及 state/lock 目录项与最终解析身份。
+- 三个 family 在词法规范化、现存 ancestor 解析和最终 control 解析后的任意交叉表示中，不得
+  相等或互为祖先、后代。
+- 参与当前命令 path validation 的 active placement target 不得与任一 control family 相等、
+  包含它或位于其中。
+- 这些关系由同一套只读路径身份比较实现。
+- Control 文件的公开发现入口及输出契约只由 [`cli.md`](cli.md#paths) 定义。
+
+Control topology 自身无效或 active target 越界时，规划不可执行。已退出 desired 的 stale
+target 与 control family 重叠时采用不同的保守清理规则，见
+[`planning.md`](planning.md#通用决策规则)。

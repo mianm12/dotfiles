@@ -7,13 +7,21 @@ Target 使用 `lstat` 区分 absent、symlink、regular file、directory 和 spe
 
 ## 通用决策规则
 
-选定 scope 内任一 placement 在规划阶段落到 conflict 时，整条命令在 mutation 前失败、零
-写入；status 仍逐 placement 展示各自状态。执行阶段 update/prune 前的 resolved/raw 复核失败
-属于 mutation 中途的安全停止，见 [`mutation-and-recovery.md`](mutation-and-recovery.md)。
+选定 scope 内任一 placement 在规划阶段落到 conflict 时，plan 不可执行。Status 的公开投影
+与退出码只由 [`cli.md`](cli.md#status-与-dry-run) 定义。执行前后的写入边界见
+[`mutation-and-recovery.md`](mutation-and-recovery.md)。执行阶段 update/prune 前的
+resolved/raw 复核失败属于 mutation 中途的安全停止。
 
 State 中 placement 的 kind 与当前 desired 的 kind 不一致（同一 ID 在 link 与 local 之间互换）
 是 conflict，不尝试自动收敛；恢复方式是改用新 placement ID，或先 `dot remove` 该 module 再
 修改 manifest。
+
+Control topology 自身无效时整条规划失败，不能使用 stale 宽容规则绕过。Active target 与
+control family 重叠仍是 path conflict。仅当 state placement 已退出 desired，且其历史 target
+与当前 control family 重叠时，`dot` 生成 warning 与 `forget`：放弃 ownership/provenance，
+禁止 prune，不删除、替换或以其他 placement action 修改对应 target。该规则同时适用于
+stale link 与 stale local，只处理当前命令 scope 内的记录；损坏 state、HOME 不匹配和未知 kind
+等输入错误不得降级为 forget。
 
 ## Link
 

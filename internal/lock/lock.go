@@ -52,6 +52,9 @@ func Acquire(root, path string) (*Ownership, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateEntries(cleanRoot, cleanPath); err != nil {
+		return nil, err
+	}
 	if err := storage.EnsureRoot(cleanRoot); err != nil {
 		return nil, fmt.Errorf("%w: prepare process lock root: %w", ErrIO, err)
 	}
@@ -68,6 +71,25 @@ func Acquire(root, path string) (*Ownership, error) {
 		return nil, fmt.Errorf("%w: %q", ErrBusy, cleanPath)
 	}
 	return newOwnership(fileLock, cleanRoot, cleanPath), nil
+}
+
+// Validate read-only validates the lock root and existing lock entry.
+func Validate(root, path string) error {
+	cleanRoot, cleanPath, err := cleanPair(root, path)
+	if err != nil {
+		return err
+	}
+	return validateEntries(cleanRoot, cleanPath)
+}
+
+func validateEntries(root, path string) error {
+	if err := storage.ValidateRoot(root); err != nil {
+		return fmt.Errorf("%w: validate process lock root: %w", ErrIO, err)
+	}
+	if err := storage.ValidatePrivateFile(path); err != nil {
+		return fmt.Errorf("%w: validate process lock file: %w", ErrIO, err)
+	}
+	return nil
 }
 
 func newOwnership(fileLock backend, root, path string) *Ownership {

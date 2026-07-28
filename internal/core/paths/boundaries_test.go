@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
@@ -166,6 +167,7 @@ func TestValidateRejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
 			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
 				controls := controlsOutsideHome(root)
 				controls.State = filepath.Join(home, ".local", "state", "dot")
+				controls.Lock = filepath.Join(home, ".local", "state", "lock")
 				return controls, []corepaths.Placement{
 					{Label: "inside-state", Target: "~/.local/state/dot/state.json"},
 				}
@@ -176,6 +178,7 @@ func TestValidateRejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
 			name: "target equals lock path",
 			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
 				controls := controlsOutsideHome(root)
+				controls.State = filepath.Join(home, ".local", "state", "dot", "state.json")
 				controls.Lock = filepath.Join(home, ".local", "state", "dot", "lock")
 				return controls, []corepaths.Placement{
 					{Label: "lock", Target: "~/.local/state/dot/lock"},
@@ -233,12 +236,14 @@ func TestValidateRejectsControlPathsContainedByTarget(t *testing.T) {
 			target: "~/.local",
 			configure: func(_ *testing.T, _, home string, controls *corepaths.Controls) {
 				controls.State = filepath.Join(home, ".local", "state", "dot", "state.json")
+				controls.Lock = filepath.Join(home, ".local", "state", "dot", "lock")
 			},
 		},
 		{
 			name:   "lock",
 			target: "~/.local",
 			configure: func(_ *testing.T, _, home string, controls *corepaths.Controls) {
+				controls.State = filepath.Join(home, ".local", "state", "dot", "state.json")
 				controls.Lock = filepath.Join(home, ".local", "state", "dot", "lock")
 			},
 		},
@@ -288,13 +293,326 @@ func TestValidateRejectsControlPathsContainedByTarget(t *testing.T) {
 	}
 }
 
-func controlsOutsideHome(root string) corepaths.Controls {
-	controlRoot := filepath.Join(root, "control")
+func TestValidateControlTopologyRejectsRootRelationshipsReadOnly(t *testing.T) {
+	pairs := []struct {
+		name        string
+		left, right int
+	}{
+		{name: "repository-config", left: 0, right: 1},
+		{name: "repository-state", left: 0, right: 2},
+		{name: "config-state", left: 1, right: 2},
+	}
+	relations := []struct {
+		name  string
+		roots func(string) (string, string)
+	}{
+		{
+			name: "equal",
+			roots: func(base string) (string, string) {
+				return base, base
+			},
+		},
+		{
+			name: "left-ancestor",
+			roots: func(base string) (string, string) {
+				return base, filepath.Join(base, "nested")
+			},
+		},
+		{
+			name: "right-ancestor",
+			roots: func(base string) (string, string) {
+				return filepath.Join(base, "nested"), base
+			},
+		},
+	}
+
+	for _, pair := range pairs {
+		for _, relation := range relations {
+			t.Run(pair.name+"/"+relation.name, func(t *testing.T) {
+				root := t.TempDir()
+				roots := []string{
+					filepath.Join(root, "repository"),
+					filepath.Join(root, "config-control"),
+					filepath.Join(root, "state-control"),
+				}
+				roots[pair.left], roots[pair.right] = relation.roots(
+					filepath.Join(root, "overlap"),
+				)
+				controls := controlsFromRoots(roots[0], roots[1], roots[2])
+				before := snapshotTree(t, root)
+
+				err := corepaths.ValidateControlTopology(controls)
+				if !errors.Is(err, corepaths.ErrControlTopology) {
+					t.Fatalf("ValidateControlTopology() error = %v, want topology conflict", err)
+				}
+				if !containsAll(err.Error(), "run `dot paths`", roots[pair.left], roots[pair.right]) {
+					t.Fatalf("topology error = %q, want both paths and recovery hint", err)
+				}
+
+				resolved, validateErr := corepaths.Validate(
+					filepath.Join(root, "home"),
+					controls,
+					nil,
+				)
+				if !errors.Is(validateErr, corepaths.ErrControlTopology) || resolved != nil {
+					t.Fatalf(
+						"Validate(empty) = (%#v, %v), want empty topology conflict",
+						resolved,
+						validateErr,
+					)
+				}
+				resolved, validateErr = corepaths.ValidateScoped(
+					filepath.Join(root, "home"),
+					controls,
+					nil,
+					nil,
+				)
+				if !errors.Is(validateErr, corepaths.ErrControlTopology) || resolved != nil {
+					t.Fatalf(
+						"ValidateScoped(empty) = (%#v, %v), want empty topology conflict",
+						resolved,
+						validateErr,
+					)
+				}
+				if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+					t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
+				}
+			})
+		}
+	}
+}
+
+func TestValidateControlTopologyRejectsResolvedControlAliases(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, string) corepaths.Controls
+	}{
+		{
+			name: "config root resolves to repository",
+			setup: func(t *testing.T, root string) corepaths.Controls {
+				repository := filepath.Join(root, "repository")
+				if err := os.MkdirAll(repository, 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(repository) error = %v", err)
+				}
+				configRoot := filepath.Join(root, "config-alias")
+				if err := os.Symlink(repository, configRoot); err != nil {
+					t.Fatalf("os.Symlink(config root) error = %v", err)
+				}
+				return controlsFromRoots(
+					repository,
+					configRoot,
+					filepath.Join(root, "state-control"),
+				)
+			},
+		},
+		{
+			name: "state root resolves below repository",
+			setup: func(t *testing.T, root string) corepaths.Controls {
+				repository := filepath.Join(root, "repository")
+				stateDestination := filepath.Join(repository, "state")
+				if err := os.MkdirAll(stateDestination, 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(state destination) error = %v", err)
+				}
+				stateRoot := filepath.Join(root, "state-alias")
+				if err := os.Symlink(stateDestination, stateRoot); err != nil {
+					t.Fatalf("os.Symlink(state root) error = %v", err)
+				}
+				return controlsFromRoots(
+					repository,
+					filepath.Join(root, "config-control"),
+					stateRoot,
+				)
+			},
+		},
+		{
+			name: "machine config resolves inside repository",
+			setup: func(t *testing.T, root string) corepaths.Controls {
+				repository := filepath.Join(root, "repository")
+				destination := filepath.Join(repository, "machine.toml")
+				if err := os.MkdirAll(repository, 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(repository) error = %v", err)
+				}
+				if err := os.WriteFile(destination, []byte("config"), 0o600); err != nil {
+					t.Fatalf("os.WriteFile(destination) error = %v", err)
+				}
+				controls := controlsFromRoots(
+					repository,
+					filepath.Join(root, "config-control"),
+					filepath.Join(root, "state-control"),
+				)
+				if err := os.MkdirAll(filepath.Dir(controls.Config), 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(config root) error = %v", err)
+				}
+				if err := os.Symlink(destination, controls.Config); err != nil {
+					t.Fatalf("os.Symlink(machine config) error = %v", err)
+				}
+				return controls
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			controls := test.setup(t, root)
+			before := snapshotTree(t, root)
+
+			err := corepaths.ValidateControlTopology(controls)
+
+			if !errors.Is(err, corepaths.ErrControlTopology) {
+				t.Fatalf("ValidateControlTopology() error = %v, want resolved conflict", err)
+			}
+			if err == nil || !containsAll(err.Error(), "resolved", "run `dot paths`") {
+				t.Fatalf("topology error = %q, want resolved paths and recovery hint", err)
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func TestValidateControlTopologyReportsLexicalOverlapBeforeBlockedResolution(t *testing.T) {
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	if err := os.WriteFile(repository, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(repository) error = %v", err)
+	}
+	controls := corepaths.Controls{
+		Repository: repository,
+		Config:     filepath.Join(repository, "config.toml"),
+		State:      filepath.Join(root, "state-control", "state.json"),
+		Lock:       filepath.Join(root, "state-control", "lock"),
+	}
+	before := snapshotTree(t, root)
+
+	err := corepaths.ValidateControlTopology(controls)
+
+	if !errors.Is(err, corepaths.ErrControlTopology) {
+		t.Fatalf("ValidateControlTopology() error = %v, want lexical topology conflict", err)
+	}
+	if errors.Is(err, corepaths.ErrPathBlocked) {
+		t.Fatalf("ValidateControlTopology() error = %v, want topology diagnosed before resolution", err)
+	}
+	if !containsAll(err.Error(), repository, "machine config root", "run `dot paths`") {
+		t.Fatalf("topology error = %q, want root identities and recovery hint", err)
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestValidateControlTopologyRequiresDistinctStateSiblings(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, string, *corepaths.Controls)
+	}{
+		{
+			name: "same lexical path",
+			setup: func(_ *testing.T, _ string, controls *corepaths.Controls) {
+				controls.Lock = controls.State
+			},
+		},
+		{
+			name: "different roots",
+			setup: func(_ *testing.T, root string, controls *corepaths.Controls) {
+				controls.Lock = filepath.Join(root, "other-state-control", "lock")
+			},
+		},
+		{
+			name: "resolved aliases",
+			setup: func(t *testing.T, root string, controls *corepaths.Controls) {
+				destination := filepath.Join(root, "shared-control-file")
+				if err := os.WriteFile(destination, []byte("shared"), 0o600); err != nil {
+					t.Fatalf("os.WriteFile(shared) error = %v", err)
+				}
+				if err := os.MkdirAll(filepath.Dir(controls.State), 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(state root) error = %v", err)
+				}
+				if err := os.Symlink(destination, controls.State); err != nil {
+					t.Fatalf("os.Symlink(state) error = %v", err)
+				}
+				if err := os.Symlink(destination, controls.Lock); err != nil {
+					t.Fatalf("os.Symlink(lock) error = %v", err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			controls := controlsOutsideHome(root)
+			test.setup(t, root, &controls)
+			before := snapshotTree(t, root)
+
+			err := corepaths.ValidateControlTopology(controls)
+
+			if !errors.Is(err, corepaths.ErrControlTopology) {
+				t.Fatalf("ValidateControlTopology() error = %v, want sibling conflict", err)
+			}
+			if err == nil || !containsAll(err.Error(), controls.State, controls.Lock, "dot paths") {
+				t.Fatalf("topology error = %q, want state, lock, and recovery hint", err)
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
+func TestValidateControlTopologyAllowsSeparatedSiblingRoots(t *testing.T) {
+	root := t.TempDir()
+	shared := filepath.Join(root, "shared")
+	actual := filepath.Join(root, "actual")
+	for _, directory := range []string{shared, actual} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
+		}
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(actual, alias); err != nil {
+		t.Fatalf("os.Symlink(alias) error = %v", err)
+	}
+	controls := controlsFromRoots(
+		filepath.Join(shared, "repository"),
+		filepath.Join(alias, "config-control"),
+		filepath.Join(alias, "state-control"),
+	)
+	before := snapshotTree(t, root)
+
+	if err := corepaths.ValidateControlTopology(controls); err != nil {
+		t.Fatalf("ValidateControlTopology() error = %v", err)
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func controlsFromRoots(repository, configRoot, stateRoot string) corepaths.Controls {
 	return corepaths.Controls{
-		Repository: filepath.Join(controlRoot, "repository"),
-		Config:     filepath.Join(controlRoot, "config.toml"),
-		State:      filepath.Join(controlRoot, "state.json"),
-		Lock:       filepath.Join(controlRoot, "lock"),
+		Repository: repository,
+		Config:     filepath.Join(configRoot, "config.toml"),
+		State:      filepath.Join(stateRoot, "state.json"),
+		Lock:       filepath.Join(stateRoot, "lock"),
+	}
+}
+
+func containsAll(text string, values ...string) bool {
+	for _, value := range values {
+		if !strings.Contains(text, value) {
+			return false
+		}
+	}
+	return true
+}
+
+func controlsOutsideHome(root string) corepaths.Controls {
+	return corepaths.Controls{
+		Repository: filepath.Join(root, "repository"),
+		Config:     filepath.Join(root, "config-control", "config.toml"),
+		State:      filepath.Join(root, "state-control", "state.json"),
+		Lock:       filepath.Join(root, "state-control", "lock"),
 	}
 }
 

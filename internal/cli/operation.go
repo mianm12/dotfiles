@@ -8,6 +8,7 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	"github.com/mianm12/dotfiles/internal/core/executor"
+	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/mianm12/dotfiles/internal/lock"
@@ -35,13 +36,14 @@ func preparePlan(
 	resolution config.Resolution,
 	scope []string,
 ) (preparedPlan, error) {
+	controls := context.controls(machine.Repository)
 	loaded, err := state.Load(context.statePath, context.home)
 	if err != nil {
 		return preparedPlan{}, err
 	}
 	plan, err := planner.Build(planner.Request{
 		Home:     context.home,
-		Controls: context.controls(machine.Repository),
+		Controls: controls,
 		Modules:  resolution.Modules,
 		Scope:    scope,
 		State:    loaded.Snapshot,
@@ -62,6 +64,9 @@ func prepareInit(
 	context commandContext,
 	machine config.Machine,
 ) (preparedPlan, error) {
+	if err := validateOperationControls(context, machine); err != nil {
+		return preparedPlan{}, err
+	}
 	repository, err := config.OpenRepository(machine.Repository)
 	if err != nil {
 		return preparedPlan{}, err
@@ -79,6 +84,9 @@ func prepareApply(
 	machine config.Machine,
 	moduleID *string,
 ) (prepared preparedPlan, selectionChanged bool, err error) {
+	if err := validateOperationControls(context, machine); err != nil {
+		return preparedPlan{}, false, err
+	}
 	repository, err := config.OpenRepository(machine.Repository)
 	if err != nil {
 		return preparedPlan{}, false, err
@@ -113,6 +121,9 @@ func prepareRemove(
 	machine config.Machine,
 	moduleID string,
 ) (prepared preparedPlan, selectionChanged bool, err error) {
+	if err := validateOperationControls(context, machine); err != nil {
+		return preparedPlan{}, false, err
+	}
 	repository, err := config.OpenRepository(machine.Repository)
 	if err != nil {
 		return preparedPlan{}, false, err
@@ -176,6 +187,10 @@ func prepareRemove(
 	}, selectionChanged, nil
 }
 
+func validateOperationControls(context commandContext, machine config.Machine) error {
+	return executor.ValidateMutationControls(context.controls(machine.Repository))
+}
+
 func removeResolutionScope(
 	repository config.Repository,
 	machine config.Machine,
@@ -226,10 +241,13 @@ func rejectConflicts(plan planner.Plan) error {
 }
 
 func withMutationLock(
-	context commandContext,
+	controls corepaths.Controls,
 	run func(mutationOwner) error,
 ) (err error) {
-	owner, err := lock.Acquire(filepath.Dir(context.lockPath), context.lockPath)
+	if err := executor.ValidateMutationControls(controls); err != nil {
+		return err
+	}
+	owner, err := lock.Acquire(filepath.Dir(controls.Lock), controls.Lock)
 	if err != nil {
 		return err
 	}

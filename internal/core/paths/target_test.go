@@ -167,8 +167,8 @@ func TestValidateScopedIgnoresUnselectedOnlyConflictsAndBoundaries(t *testing.T)
 	controls := Controls{
 		Repository: filepath.Join(root, "repo"),
 		Config:     filepath.Join(home, ".control", "machine.toml"),
-		State:      filepath.Join(root, "state.json"),
-		Lock:       filepath.Join(root, "lock"),
+		State:      filepath.Join(root, "state-control", "state.json"),
+		Lock:       filepath.Join(root, "state-control", "lock"),
 	}
 	placements := []Placement{
 		{Label: "selected", Target: "~/.config/selected"},
@@ -203,11 +203,10 @@ func TestValidateScopedIgnoresUnselectedOnlyConflictsAndBoundaries(t *testing.T)
 }
 
 func controlsOutsideFixture(root string) Controls {
-	controlRoot := filepath.Join(root, "control")
 	return Controls{
-		Repository: filepath.Join(controlRoot, "repository"),
-		Config:     filepath.Join(controlRoot, "config.toml"),
-		State:      filepath.Join(controlRoot, "state.json"),
-		Lock:       filepath.Join(controlRoot, "lock"),
+		Repository: filepath.Join(root, "repository"),
+		Config:     filepath.Join(root, "config-control", "config.toml"),
+		State:      filepath.Join(root, "state-control", "state.json"),
+		Lock:       filepath.Join(root, "state-control", "lock"),
 	}
 }

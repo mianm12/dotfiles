@@ -36,6 +36,9 @@ func runStatus(command *cobra.Command, moduleID *string, env environment) error 
 	if err != nil {
 		return err
 	}
+	if err := validateOperationControls(context, machine); err != nil {
+		return err
+	}
 	repository, err := config.OpenRepository(machine.Repository)
 	if err != nil {
 		return err
@@ -118,6 +121,7 @@ func buildStatusPlan(
 	snapshot state.Snapshot,
 	moduleIDs []string,
 ) (planner.Plan, error) {
+	controls := context.controls(machine.Repository)
 	plan := planner.Plan{
 		Actions:  make([]planner.Action, 0),
 		Warnings: make([]string, 0),
@@ -125,7 +129,7 @@ func buildStatusPlan(
 	for _, moduleID := range moduleIDs {
 		scoped, err := planner.Build(planner.Request{
 			Home:     context.home,
-			Controls: context.controls(machine.Repository),
+			Controls: controls,
 			Modules:  resolution.Modules,
 			Scope:    []string{moduleID},
 			State:    snapshot,
@@ -140,6 +144,9 @@ func buildStatusPlan(
 				Decision: planner.DecisionConflict,
 				Reason:   err.Error(),
 			})
+			if errors.Is(err, corepaths.ErrControlBoundary) {
+				plan.Warnings = append(plan.Warnings, err.Error())
+			}
 			continue
 		}
 		plan.Actions = append(plan.Actions, scoped.Actions...)

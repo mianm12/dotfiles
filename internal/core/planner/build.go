@@ -310,6 +310,17 @@ func planOneStale(
 	key placementKey,
 	record state.Placement,
 ) (Action, string, error) {
+	switch record.Kind {
+	case state.KindLink, state.KindLocal:
+	default:
+		return Action{}, "", fmt.Errorf(
+			"%w: stale placement %s has unsupported kind %q",
+			state.ErrInvalid,
+			placementLabel(key.moduleID, key.placementID),
+			record.Kind,
+		)
+	}
+
 	base := Action{
 		ModuleID:                key.moduleID,
 		PlacementID:             key.placementID,
@@ -322,13 +333,30 @@ func planOneStale(
 	}
 
 	if record.Kind == state.KindLocal {
-		if _, err := resolveStateTarget(home, controls, record.Target); err != nil &&
-			!isSafeStaleResolutionDrift(err) {
-			return Action{}, "", fmt.Errorf(
-				"resolve stale local %s: %w",
-				placementLabel(key.moduleID, key.placementID),
-				err,
-			)
+		current, err := resolveStateTarget(home, record.Target)
+		if err != nil {
+			if !isSafeStaleResolutionDrift(err) {
+				return Action{}, "", fmt.Errorf(
+					"resolve stale local %s: %w",
+					placementLabel(key.moduleID, key.placementID),
+					err,
+				)
+			}
+		} else {
+			overlaps, overlapErr := corepaths.TargetOverlapsControls(controls, current)
+			if overlapErr != nil {
+				return Action{}, "", overlapErr
+			}
+			if overlaps {
+				base.Decision = DecisionForget
+				base.Reason = "stale target overlaps a protected control path"
+				warning := fmt.Sprintf(
+					"local %s left desired and overlaps a protected control path; "+
+						"keeping target and forgetting provenance",
+					placementLabel(key.moduleID, key.placementID),
+				)
+				return base, warning, nil
+			}
 		}
 		base.Decision = DecisionForget
 		warning := fmt.Sprintf(
@@ -338,7 +366,7 @@ func planOneStale(
 		return base, warning, nil
 	}
 
-	current, err := resolveStateTarget(home, controls, record.Target)
+	current, err := resolveStateTarget(home, record.Target)
 	if err != nil {
 		if !isSafeStaleResolutionDrift(err) {
 			return Action{}, "", fmt.Errorf(
@@ -352,6 +380,15 @@ func planOneStale(
 		return base, staleWarning(key, base.Reason), nil
 	}
 	base.ResolvedTarget = current.Resolved()
+	overlaps, err := corepaths.TargetOverlapsControls(controls, current)
+	if err != nil {
+		return Action{}, "", err
+	}
+	if overlaps {
+		base.Decision = DecisionForget
+		base.Reason = "stale target overlaps a protected control path"
+		return base, staleWarning(key, base.Reason), nil
+	}
 
 	if targetUsedByDesired(current, desired) {
 		base.Decision = DecisionForget
@@ -478,7 +515,6 @@ func strictDescendant(parent, candidate string) bool {
 
 func resolveStateTarget(
 	home string,
-	controls corepaths.Controls,
 	target string,
 ) (corepaths.Target, error) {
 	relative, err := filepath.Rel(home, target)
@@ -489,18 +525,14 @@ func resolveStateTarget(
 		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return corepaths.Target{}, fmt.Errorf("state target %q is outside HOME %q", target, home)
 	}
-	resolved, err := corepaths.Validate(
+	resolved, err := corepaths.ResolveTarget(
 		home,
-		controls,
-		[]corepaths.Placement{{
-			Label:  "state target",
-			Target: "~/" + filepath.ToSlash(relative),
-		}},
+		"~/"+filepath.ToSlash(relative),
 	)
 	if err != nil {
 		return corepaths.Target{}, err
 	}
-	return resolved[0].Target, nil
+	return resolved, nil
 }
 
 func isSafeStaleResolutionDrift(err error) bool {

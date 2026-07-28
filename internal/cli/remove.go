@@ -56,7 +56,7 @@ func runRemove(
 		return err
 	}
 
-	return withMutationLock(context, func(owner mutationOwner) error {
+	return withMutationLock(context.controls(preflight.machine.Repository), func(owner mutationOwner) error {
 		machine, err := loadRequiredMachine(context)
 		if err != nil {
 			return err

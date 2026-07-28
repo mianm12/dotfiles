@@ -37,11 +37,41 @@ type Result struct {
 
 type stateCommitter func(string, state.Snapshot) error
 
+// ValidateMutationControls performs every read-only control check required
+// before lock acquisition.
+func ValidateMutationControls(controls corepaths.Controls) error {
+	if err := corepaths.ValidateControlTopology(controls); err != nil {
+		return err
+	}
+	configRoot := filepath.Dir(filepath.Clean(controls.Config))
+	if err := storage.ValidateRoot(configRoot); err != nil {
+		return fmt.Errorf(
+			"validate machine config root %q before mutation: %w; "+
+				"run `dot paths` to inspect the active control paths",
+			configRoot,
+			err,
+		)
+	}
+	stateRoot := filepath.Dir(filepath.Clean(controls.State))
+	if err := lock.Validate(stateRoot, controls.Lock); err != nil {
+		return fmt.Errorf(
+			"validate state root and lock %q before mutation: %w; "+
+				"run `dot paths` to inspect the active control paths",
+			controls.Lock,
+			err,
+		)
+	}
+	return nil
+}
+
 // Run obtains the stable mutation lock, reloads state, rebuilds the plan, and
 // applies it. Dry-run plans are never accepted as executable input.
 func Run(request Request) (result Result, err error) {
 	if err := validateRequest(request); err != nil {
 		return Result{}, err
+	}
+	if preflight, err := buildPreflight(request); err != nil {
+		return preflight, err
 	}
 
 	lockRoot := filepath.Dir(filepath.Clean(request.Controls.Lock))
@@ -57,6 +87,28 @@ func Run(request Request) (result Result, err error) {
 	}()
 
 	return runLocked(request, commitState)
+}
+
+func buildPreflight(request Request) (Result, error) {
+	loaded, err := state.Load(request.Controls.State, request.Home)
+	if err != nil {
+		return Result{}, err
+	}
+	plan, err := planner.Build(planner.Request{
+		Home:     request.Home,
+		Controls: request.Controls,
+		Modules:  request.Modules,
+		Scope:    request.Scope,
+		State:    loaded.Snapshot,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{Plan: plan, Warnings: warnings(loaded, plan)}
+	if plan.HasConflicts() {
+		return result, conflictError(plan)
+	}
+	return result, nil
 }
 
 // RunWithLock applies a request while reusing an outer owner bound to the same
@@ -142,27 +194,8 @@ func validateRequest(request Request) error {
 	if request.Home == "" || !filepath.IsAbs(request.Home) {
 		return fmt.Errorf("executor HOME must be a non-empty absolute path")
 	}
-	controls := request.Controls
-	controlPaths := []struct {
-		label string
-		path  string
-	}{
-		{label: "repository", path: controls.Repository},
-		{label: "machine config", path: controls.Config},
-		{label: "state", path: controls.State},
-		{label: "lock", path: controls.Lock},
-	}
-	for _, control := range controlPaths {
-		if control.path == "" || !filepath.IsAbs(control.path) {
-			return fmt.Errorf(
-				"executor %s path must be a non-empty absolute path",
-				control.label,
-			)
-		}
-	}
-	if filepath.Dir(filepath.Clean(controls.State)) !=
-		filepath.Dir(filepath.Clean(controls.Lock)) {
-		return fmt.Errorf("executor state and lock must share one control directory")
+	if err := ValidateMutationControls(request.Controls); err != nil {
+		return fmt.Errorf("validate executor mutation controls: %w", err)
 	}
 	return nil
 }

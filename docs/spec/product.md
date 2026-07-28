@@ -54,8 +54,8 @@ Desired repository + Machine selection + State + Actual filesystem -> Plan
 - 只用一把文件锁避免多个 `dot` mutation 并发；不协调编辑器、软件或用户同时修改文件。
 - Status 与 dry-run 的并发可见性和恢复方式由
   [`cli.md` 的对应规则](cli.md#status-与-dry-run) 定义。
-- 路径唯一性只比较规范化路径和解析现存 ancestor symlink 后的路径。不保证识别所有大小写、
-  Unicode normalization 或特殊文件系统别名。
+- 路径身份只按 [`placements.md`](placements.md#路径身份与边界) 定义的有限关系比较。不保证
+  识别所有大小写、Unicode normalization 或特殊文件系统别名。
 - 不分析不同路径之间的 hard-link inode 关系；`dot` 不修改已有普通文件内容。
 - 不提供断电事务或完整 durability 保证。原子文件发布用于避免暴露半写配置，不承诺跨多个
   target 的原子性。
