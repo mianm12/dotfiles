@@ -9,19 +9,35 @@
 repository desired + machine selection + state + actual filesystem
   -> CLI OperationAnalysis (selection delta + resolve + plan)
   -> status / dry-run projection
-  -> mutation lock
+  -> executor OpenSession (fixed HOME + controls + lock ownership)
   -> rebuild OperationAnalysis
-  -> execute
-  -> verify changed targets
-  -> commit state
+  -> Session.PublishSelection
+  -> Session.Converge (reload state + replan + execute + verify + commit state)
+  -> Session.Close
+  -> CLI mutation result projection
 ```
 
 核心业务逻辑与 CLI、文件发布和进程退出分离。`cmd/dot` 只把进程 IO/环境交给 `cli.Run` 并以
 其结果退出。OperationAnalysis 是只读观察结果，不是 executor 输入；真实 mutation 在锁内
-重新分析后，只把 resolution、scope 和 controls 交给 executor，由 executor 再次加载 state
-并重新规划。Scoped mutation 的 module 投影只包含请求 scope 和具有 module-specific
+重新分析后，只把 prospective machine、resolution 和 scope 交给持锁 Session；Session 固定
+HOME 与 controls，selection 发布和 artifact convergence 都不能替换这组边界。Converge 再次
+加载 state 并重新规划。Scoped mutation 的 module 投影只包含请求 scope 和具有 module-specific
 blocker 的 module；完整 prospective selection 仍保存在 machine 中，其他 effective modules
 继续通过 resolution 参与 target topology 校验。
+
+唯一内部 mutation 生命周期是：
+
+```go
+OpenSession(home, controls)
+Session.PublishSelection(machine)
+Session.Converge(modules, scope)
+Session.Close()
+```
+
+CLI 不直接获取、复用或释放 lock，也不直接发布 machine selection。Session 只表达这一条
+线性生命周期，不引入通用 workflow、事务或 rollback。Session 的值副本共享同一份 lock
+ownership 与关闭状态；Close 失败后只允许重试 Close，不再接受 selection 或 artifact
+mutation。
 
 ## Package 职责
 
@@ -33,7 +49,7 @@ blocker 的 module；完整 prospective selection 仍保存在 machine 中，其
 | `internal/core/config` | repository、machine 和 module 配置解析 |
 | `internal/lock` | mutation advisory lock |
 | `internal/core/planner` | desired、state 与 actual 的纯计划决策 |
-| `internal/core/executor` | mutation 顺序、复核和恢复语义 |
+| `internal/core/executor` | Session、lock ownership、selection 发布调度、mutation 顺序、复核和恢复语义 |
 | `internal/cli` | 命令、只读 operation analysis、scope、输出和退出码 |
 | `cmd/dot` | 进程入口 |
 

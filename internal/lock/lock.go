@@ -15,33 +15,20 @@ var (
 	ErrBusy = errors.New("another dot process is running")
 	// ErrIO 表示准备、获取或释放进程锁时发生文件系统错误。
 	ErrIO = errors.New("process lock I/O failure")
-	// ErrOwnership 表示嵌套 guard 不属于活动 owner，或路径与 owner 不一致。
+	// ErrOwnership 表示锁所有权无效或已经释放。
 	ErrOwnership = errors.New("invalid lock ownership")
 )
 
 // Ownership 表示一次 mutation 周期持有的排他锁所有权。
-// 调用方必须显式传递它来复用嵌套流程；值副本共享同一根引用，零值无效。
+// 值副本共享同一次所有权且只能成功释放一次；零值无效。
 type Ownership struct {
-	reference *ownershipReference
-}
-
-// Guard 表示从 Ownership 复用的一份嵌套所有权引用；值副本共享同一引用。
-type Guard struct {
-	reference *ownershipReference
+	state *ownershipState
 }
 
 type ownershipState struct {
-	mu         sync.Mutex
-	backend    backend
-	root       string
-	path       string
-	references int
-}
-
-// ownershipReference 是一个只能成功释放一次的逻辑引用。
-// 外层 handle 的值副本共享该 token，不能各自消费 owner 的引用计数。
-type ownershipReference struct {
-	owner    *ownershipState
+	mu       sync.Mutex
+	backend  backend
+	path     string
 	released bool
 }
 
@@ -70,7 +57,7 @@ func Acquire(root, path string) (*Ownership, error) {
 	if !locked {
 		return nil, fmt.Errorf("%w: %q", ErrBusy, cleanPath)
 	}
-	return newOwnership(fileLock, cleanRoot, cleanPath), nil
+	return newOwnership(fileLock, cleanPath), nil
 }
 
 // Validate read-only validates the lock root and existing lock entry.
@@ -92,76 +79,28 @@ func validateEntries(root, path string) error {
 	return nil
 }
 
-func newOwnership(fileLock backend, root, path string) *Ownership {
-	state := &ownershipState{
-		backend:    fileLock,
-		root:       root,
-		path:       path,
-		references: 1,
-	}
-	return &Ownership{reference: &ownershipReference{owner: state}}
+func newOwnership(fileLock backend, path string) *Ownership {
+	return &Ownership{state: &ownershipState{
+		backend: fileLock,
+		path:    path,
+	}}
 }
 
-// Reuse 为同一 root/path 的嵌套流程创建 guard，不再次获取 OS lock。
-func (owner *Ownership) Reuse(root, path string) (*Guard, error) {
-	if owner == nil || owner.reference == nil || owner.reference.owner == nil {
-		return nil, ErrOwnership
-	}
-	cleanRoot, cleanPath, err := cleanPair(root, path)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrOwnership, err)
-	}
-
-	reference := owner.reference
-	state := reference.owner
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if reference.released || state.references < 1 || state.backend == nil {
-		return nil, ErrOwnership
-	}
-	if cleanRoot != state.root || cleanPath != state.path {
-		return nil, fmt.Errorf("%w: owner is bound to %q and %q", ErrOwnership, state.root, state.path)
-	}
-	state.references++
-	return &Guard{reference: &ownershipReference{owner: state}}, nil
-}
-
-// Release 释放外层 owner 的引用；仍有嵌套 guard 时不会提前解除 OS lock。
+// Release 释放锁；同一次所有权只能成功释放一次。
 func (owner *Ownership) Release() error {
-	if owner == nil || owner.reference == nil {
+	if owner == nil || owner.state == nil {
 		return ErrOwnership
 	}
-	return owner.reference.release()
-}
-
-// Release 释放一份嵌套引用；只有最后一份所有权释放时才解除 OS lock。
-func (guard *Guard) Release() error {
-	if guard == nil || guard.reference == nil {
-		return ErrOwnership
-	}
-	return guard.reference.release()
-}
-
-func (reference *ownershipReference) release() error {
-	if reference == nil || reference.owner == nil {
-		return ErrOwnership
-	}
-	state := reference.owner
+	state := owner.state
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if reference.released || state.references < 1 || state.backend == nil {
+	if state.released || state.backend == nil {
 		return ErrOwnership
-	}
-	if state.references > 1 {
-		reference.released = true
-		state.references--
-		return nil
 	}
 	if err := state.backend.Unlock(); err != nil {
 		return fmt.Errorf("%w: release process lock %q: %w", ErrIO, state.path, err)
 	}
-	reference.released = true
-	state.references = 0
+	state.released = true
 	return nil
 }
 

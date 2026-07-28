@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/core/config"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -545,6 +546,63 @@ target = "~/.extra"
 			t.Fatalf("extra_modules = %v, want unchanged [extra]", extras)
 		}
 		assertCLIMissing(t, fixture.state)
+	})
+
+	t.Run("repository drift", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = []`)
+		fixture.writeModule(t, "extra", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.extra"
+`, map[string]string{"config": "old"})
+		fixture.writeMachine(t, []string{"base"}, nil)
+
+		otherRepository := filepath.Join(fixture.root, "other-repository")
+		writeCLIFile(
+			t,
+			filepath.Join(otherRepository, "dot.toml"),
+			"version = 1\n[profiles]\nbase = []\n",
+		)
+		writeCLIFile(
+			t,
+			filepath.Join(otherRepository, "modules", "extra", "module.toml"),
+			"[[links]]\nid = \"config\"\nsource = \"config\"\ntarget = \"~/.extra\"\n",
+		)
+		writeCLIFile(
+			t,
+			filepath.Join(otherRepository, "modules", "extra", "config"),
+			"new",
+		)
+		fixture.env.afterPreflight = func() {
+			if _, err := config.PublishMachine(fixture.config, config.Machine{
+				Version:      1,
+				Repository:   otherRepository,
+				Profiles:     []string{"base"},
+				ExtraModules: []string{},
+			}); err != nil {
+				t.Fatalf("PublishMachine(repository drift) error = %v", err)
+			}
+		}
+
+		code, stdout, stderr := fixture.runInjected("apply", "extra")
+
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "does not match mutation session repository") {
+			t.Fatalf(
+				"apply after repository drift = (%d, %q, %q), want fixed-session failure",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		machine := fixture.loadMachine(t)
+		if machine.Repository != otherRepository || len(machine.ExtraModules) != 0 {
+			t.Fatalf("machine after repository drift = %#v, want external edit only", machine)
+		}
+		assertCLIMissing(t, fixture.state)
+		assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
 	})
 }
 

@@ -3,7 +3,6 @@
 package executor
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -16,10 +15,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/storage"
 )
 
-// Request contains validated, in-memory desired inputs and the stable control
-// paths used for one mutation. Configuration loading and selection persistence
-// are owned by the CLI layer.
-type Request struct {
+type convergenceRequest struct {
 	Home     string
 	Controls corepaths.Controls
 	Modules  []config.Module
@@ -64,85 +60,9 @@ func ValidateMutationControls(controls corepaths.Controls) error {
 	return nil
 }
 
-// Run obtains the stable mutation lock, reloads state, rebuilds the plan, and
-// applies it. Dry-run plans are never accepted as executable input.
-func Run(request Request) (result Result, err error) {
+func runLocked(request convergenceRequest, commit stateCommitter) (Result, error) {
 	if err := validateRequest(request); err != nil {
 		return Result{}, err
-	}
-	if preflight, err := buildPreflight(request); err != nil {
-		return preflight, err
-	}
-
-	lockRoot := filepath.Dir(filepath.Clean(request.Controls.Lock))
-	owner, err := lock.Acquire(lockRoot, request.Controls.Lock)
-	if err != nil {
-		return Result{}, err
-	}
-	defer func() {
-		releaseErr := owner.Release()
-		if releaseErr != nil {
-			err = errors.Join(err, releaseErr)
-		}
-	}()
-
-	return runLocked(request, commitState)
-}
-
-func buildPreflight(request Request) (Result, error) {
-	loaded, err := state.Load(request.Controls.State, request.Home)
-	if err != nil {
-		return Result{}, err
-	}
-	plan, err := planner.Build(planner.Request{
-		Home:     request.Home,
-		Controls: request.Controls,
-		Modules:  request.Modules,
-		Scope:    request.Scope,
-		State:    loaded.Snapshot,
-	})
-	if err != nil {
-		return Result{}, err
-	}
-	result := Result{Plan: plan, Warnings: warnings(loaded, plan)}
-	if plan.HasConflicts() {
-		return result, conflictError(plan)
-	}
-	return result, nil
-}
-
-// RunWithLock applies a request while reusing an outer owner bound to the same
-// stable lock. The CLI uses this after prospective selection preflight and
-// machine config publication so the entire mutation pipeline remains under one
-// lock.
-func RunWithLock(
-	request Request,
-	owner *lock.Ownership,
-) (result Result, err error) {
-	if err := validateRequest(request); err != nil {
-		return Result{}, err
-	}
-	if owner == nil {
-		return Result{}, fmt.Errorf("executor lock owner is nil")
-	}
-	lockRoot := filepath.Dir(filepath.Clean(request.Controls.Lock))
-	guard, err := owner.Reuse(lockRoot, request.Controls.Lock)
-	if err != nil {
-		return Result{}, err
-	}
-	defer func() {
-		releaseErr := guard.Release()
-		if releaseErr != nil {
-			err = errors.Join(err, releaseErr)
-		}
-	}()
-	return runLocked(request, commitState)
-}
-
-func runLocked(request Request, commit stateCommitter) (Result, error) {
-	configRoot := filepath.Dir(filepath.Clean(request.Controls.Config))
-	if err := storage.ValidateRoot(configRoot); err != nil {
-		return Result{}, fmt.Errorf("validate machine config root: %w", err)
 	}
 	loaded, err := state.Load(request.Controls.State, request.Home)
 	if err != nil {
@@ -192,7 +112,7 @@ func runLocked(request Request, commit stateCommitter) (Result, error) {
 	}, nil
 }
 
-func validateRequest(request Request) error {
+func validateRequest(request convergenceRequest) error {
 	if request.Home == "" || !filepath.IsAbs(request.Home) {
 		return fmt.Errorf("executor HOME must be a non-empty absolute path")
 	}

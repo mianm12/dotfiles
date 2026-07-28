@@ -1,11 +1,11 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
+	"github.com/mianm12/dotfiles/internal/core/executor"
 	"github.com/spf13/cobra"
 )
 
@@ -73,9 +73,11 @@ func runInit(
 		env.afterPreflight()
 	}
 
-	return withMutationLock(
-		context.controls(preflight.ProspectiveMachine.Repository),
-		func(owner mutationOwner) error {
+	outcome, runErr := runMutationSession(
+		context,
+		preflight.ProspectiveMachine.Repository,
+		"dot apply",
+		func(session *executor.Session, outcome *mutationOutcome) error {
 			locked, err := analyzeInit(context, machine)
 			if err != nil {
 				return err
@@ -83,40 +85,35 @@ func runInit(
 			if err := rejectAnalysis(locked); err != nil {
 				return err
 			}
-			selectionChanged, err := config.PublishMachine(
-				context.configPath,
-				locked.ProspectiveMachine,
-			)
+			selectionChanged, err := session.PublishSelection(locked.ProspectiveMachine)
 			if err != nil {
 				return err
 			}
+			outcome.selectionChanged = selectionChanged
 			if err := afterSelectionPublished(env, selectionChanged); err != nil {
 				return fmt.Errorf(
 					"machine selection was saved before convergence was interrupted: %w; rerun dot apply",
 					err,
 				)
 			}
-			result, runErr := executeResolved(
-				context,
-				locked.ProspectiveMachine.Repository,
-				locked.resolution,
+			result, convergeErr := session.Converge(
+				locked.resolution.Modules,
 				locked.scope,
-				owner.ownership(),
 			)
-			if runErr != nil {
-				if warningErr := printWarnings(command, result.Warnings); warningErr != nil {
-					return errors.Join(runErr, warningErr)
-				}
+			outcome.result = result
+			if convergeErr != nil {
 				if selectionChanged {
 					return fmt.Errorf(
 						"machine selection was saved before convergence failed: %w; rerun dot apply",
-						runErr,
+						convergeErr,
 					)
 				}
-				return runErr
+				return convergeErr
 			}
-			return printMutationResult(command, result, selectionChanged, "dot apply")
-		})
+			return nil
+		},
+	)
+	return finishMutation(command, outcome, runErr, "dot apply")
 }
 
 func initRepository(args []string, env environment) (string, error) {

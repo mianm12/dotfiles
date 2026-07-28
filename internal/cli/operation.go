@@ -3,40 +3,71 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	"github.com/mianm12/dotfiles/internal/core/executor"
-	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/planner"
-	"github.com/mianm12/dotfiles/internal/lock"
+	"github.com/spf13/cobra"
 )
 
-type mutationOwner struct {
-	owner *lock.Ownership
-}
-
-func (owner mutationOwner) ownership() *lock.Ownership {
-	return owner.owner
+type mutationOutcome struct {
+	result           executor.Result
+	selectionChanged bool
 }
 
 func validateOperationControls(context commandContext, machine config.Machine) error {
 	return executor.ValidateMutationControls(context.controls(machine.Repository))
 }
 
-func executeResolved(
+func runMutationSession(
 	context commandContext,
 	repository string,
-	resolution config.Resolution,
-	scope []string,
-	owner *lock.Ownership,
-) (executor.Result, error) {
-	return executor.RunWithLock(executor.Request{
-		Home:     context.home,
-		Controls: context.controls(repository),
-		Modules:  resolution.Modules,
-		Scope:    scope,
-	}, owner)
+	rerun string,
+	run func(*executor.Session, *mutationOutcome) error,
+) (outcome mutationOutcome, err error) {
+	session, err := executor.OpenSession(
+		context.home,
+		context.controls(repository),
+	)
+	if err != nil {
+		return mutationOutcome{}, err
+	}
+	defer func() {
+		err = joinMutationSessionErrors(err, session.Close(), rerun)
+	}()
+	err = run(session, &outcome)
+	return outcome, err
+}
+
+func joinMutationSessionErrors(runErr, closeErr error, rerun string) error {
+	if closeErr != nil {
+		closeErr = fmt.Errorf(
+			"release mutation lock: %w; mutation may already be applied; rerun %s",
+			closeErr,
+			rerun,
+		)
+	}
+	return errors.Join(runErr, closeErr)
+}
+
+func finishMutation(
+	command *cobra.Command,
+	outcome mutationOutcome,
+	runErr error,
+	rerun string,
+) error {
+	if runErr != nil {
+		if warningErr := printWarnings(command, outcome.result.Warnings); warningErr != nil {
+			return errors.Join(runErr, warningErr)
+		}
+		return runErr
+	}
+	return printMutationResult(
+		command,
+		outcome.result,
+		outcome.selectionChanged,
+		rerun,
+	)
 }
 
 func rejectAnalysis(analysis OperationAnalysis) error {
@@ -64,23 +95,6 @@ func rejectAnalysis(analysis OperationAnalysis) error {
 	return nil
 }
 
-func withMutationLock(
-	controls corepaths.Controls,
-	run func(mutationOwner) error,
-) (err error) {
-	if err := executor.ValidateMutationControls(controls); err != nil {
-		return err
-	}
-	owner, err := lock.Acquire(filepath.Dir(controls.Lock), controls.Lock)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		err = errors.Join(err, owner.Release())
-	}()
-	return run(mutationOwner{owner: owner})
-}
-
 func loadRequiredMachine(context commandContext) (config.Machine, error) {
 	machine, exists, err := config.LoadMachine(context.configPath)
 	if err != nil {
@@ -93,17 +107,6 @@ func loadRequiredMachine(context commandContext) (config.Machine, error) {
 		)
 	}
 	return machine, nil
-}
-
-func publishSelection(
-	context commandContext,
-	machine config.Machine,
-	needed bool,
-) (bool, error) {
-	if !needed {
-		return false, nil
-	}
-	return config.PublishMachine(context.configPath, machine)
 }
 
 func afterSelectionPublished(env environment, changed bool) error {

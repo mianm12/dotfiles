@@ -12,7 +12,6 @@ import (
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
-	"github.com/mianm12/dotfiles/internal/lock"
 )
 
 func TestExecutorCreationNeverClobbersChangedTargets(t *testing.T) {
@@ -138,38 +137,28 @@ func TestExecutorUpdateRechecksResolvedParent(t *testing.T) {
 	assertExecutorPathUnchanged(t, secondBefore)
 }
 
-func TestRunRejectsControlTopologyBeforeLockMutation(t *testing.T) {
+func TestOpenSessionRejectsControlTopologyBeforeLockMutation(t *testing.T) {
 	root, home := newExecutorRoot(t)
 	repository := filepath.Join(root, "repository")
 	if err := os.Mkdir(repository, 0o755); err != nil {
 		t.Fatalf("os.Mkdir(repository) error = %v", err)
 	}
-	request := Request{
-		Home: home,
-		Controls: corepaths.Controls{
-			Repository: repository,
-			Config:     filepath.Join(root, "config-control", "config.toml"),
-			State:      filepath.Join(repository, "state.json"),
-			Lock:       filepath.Join(repository, "lock"),
-		},
+	controls := corepaths.Controls{
+		Repository: repository,
+		Config:     filepath.Join(root, "config-control", "config.toml"),
+		State:      filepath.Join(repository, "state.json"),
+		Lock:       filepath.Join(repository, "lock"),
 	}
 	beforeRepository := snapshotExecutorPath(t, repository)
 	beforeEntries := c1ExecutionEntries(t, root)
 
-	result, err := Run(request)
+	session, err := OpenSession(home, controls)
 
 	if !errors.Is(err, corepaths.ErrControlTopology) {
-		t.Fatalf("Run() = (%#v, %v), want control topology error", result, err)
+		t.Fatalf("OpenSession() = (%#v, %v), want control topology error", session, err)
 	}
 	if !strings.Contains(err.Error(), "run `dot paths`") {
-		t.Fatalf("Run() error = %q, want recovery hint", err)
-	}
-	if len(result.Plan.Actions) != 0 ||
-		len(result.Plan.Warnings) != 0 ||
-		result.TargetsChanged ||
-		result.StateChanged ||
-		len(result.Warnings) != 0 {
-		t.Fatalf("Run() result = %#v, want zero result", result)
+		t.Fatalf("OpenSession() error = %q, want recovery hint", err)
 	}
 	assertExecutorPathUnchanged(t, beforeRepository)
 	afterEntries := c1ExecutionEntries(t, root)
@@ -180,54 +169,60 @@ func TestRunRejectsControlTopologyBeforeLockMutation(t *testing.T) {
 			afterEntries,
 		)
 	}
-	for _, path := range []string{request.Controls.State, request.Controls.Lock} {
+	for _, path := range []string{controls.State, controls.Lock} {
 		if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
 			t.Fatalf("control path %q error = %v, want missing", path, statErr)
 		}
 	}
 }
 
-func TestRunRejectsActiveControlBoundaryBeforeLockMutation(t *testing.T) {
+func TestSessionConvergeRejectsActiveControlBoundary(t *testing.T) {
 	root, home := newExecutorRoot(t)
 	repository := filepath.Join(home, "repository")
 	source := filepath.Join(repository, "modules", "app", "config")
 	writeExecutorFile(t, source, "config")
-	request := Request{
-		Home: home,
-		Controls: corepaths.Controls{
-			Repository: repository,
-			Config:     filepath.Join(root, "config-control", "config.toml"),
-			State:      filepath.Join(root, "state-control", "state.json"),
-			Lock:       filepath.Join(root, "state-control", "lock"),
-		},
-		Modules: []config.Module{{
-			ID:   "app",
-			Root: filepath.Dir(source),
-			Links: []config.Link{{
-				ID:         "config",
-				SourcePath: source,
-				Target:     "~/repository",
-			}},
-		}},
+	controls := corepaths.Controls{
+		Repository: repository,
+		Config:     filepath.Join(root, "config-control", "config.toml"),
+		State:      filepath.Join(root, "state-control", "state.json"),
+		Lock:       filepath.Join(root, "state-control", "lock"),
 	}
+	session, err := OpenSession(home, controls)
+	if err != nil {
+		t.Fatalf("OpenSession() error = %v", err)
+	}
+	defer func() {
+		if err := session.Close(); err != nil {
+			t.Fatalf("Session.Close() error = %v", err)
+		}
+	}()
+	modules := []config.Module{{
+		ID:   "app",
+		Root: filepath.Dir(source),
+		Links: []config.Link{{
+			ID:         "config",
+			SourcePath: source,
+			Target:     "~/repository",
+		}},
+	}}
 	before := snapshotExecutorPath(t, repository)
 	beforeEntries := c1ExecutionEntries(t, root)
 
-	result, err := Run(request)
+	result, err := session.Converge(modules, nil)
 
 	if !errors.Is(err, corepaths.ErrControlBoundary) {
-		t.Fatalf("Run() = (%#v, %v), want control-boundary error", result, err)
+		t.Fatalf("Session.Converge() = (%#v, %v), want control-boundary error", result, err)
 	}
 	if !strings.Contains(err.Error(), repository) ||
 		!strings.Contains(err.Error(), "run `dot paths`") {
-		t.Fatalf("Run() error = %q, want conflicting path and recovery hint", err)
+		t.Fatalf("Session.Converge() error = %q, want conflicting path and recovery hint", err)
 	}
 	if len(result.Plan.Actions) != 0 ||
 		len(result.Plan.Warnings) != 0 ||
 		result.TargetsChanged ||
 		result.StateChanged ||
 		len(result.Warnings) != 0 {
-		t.Fatalf("Run() result = %#v, want zero result", result)
+		t.Fatalf("Session.Converge() result = %#v, want zero result", result)
 	}
 	assertExecutorPathUnchanged(t, before)
 	afterEntries := c1ExecutionEntries(t, root)
@@ -238,14 +233,12 @@ func TestRunRejectsActiveControlBoundaryBeforeLockMutation(t *testing.T) {
 			afterEntries,
 		)
 	}
-	for _, path := range []string{request.Controls.State, request.Controls.Lock} {
-		if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
-			t.Fatalf("control path %q error = %v, want missing", path, statErr)
-		}
+	if _, statErr := os.Lstat(controls.State); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("state path %q error = %v, want missing", controls.State, statErr)
 	}
 }
 
-func TestRunWithLockRevalidatesControlTopologyWithoutFurtherMutation(t *testing.T) {
+func TestSessionConvergeRevalidatesControlTopologyWithoutFurtherMutation(t *testing.T) {
 	root, home := newExecutorRoot(t)
 	repository := filepath.Join(root, "repository")
 	if err := os.Mkdir(repository, 0o700); err != nil {
@@ -253,33 +246,41 @@ func TestRunWithLockRevalidatesControlTopologyWithoutFurtherMutation(t *testing.
 	}
 	stateRoot := filepath.Join(root, "state-control")
 	lockPath := filepath.Join(stateRoot, "lock")
-	owner, err := lock.Acquire(stateRoot, lockPath)
+	controls := corepaths.Controls{
+		Repository: repository,
+		Config:     filepath.Join(root, "config-control", "config.toml"),
+		State:      filepath.Join(stateRoot, "state.json"),
+		Lock:       lockPath,
+	}
+	session, err := OpenSession(home, controls)
 	if err != nil {
-		t.Fatalf("lock.Acquire() error = %v", err)
+		t.Fatalf("OpenSession() error = %v", err)
+	}
+	defer func() {
+		if err := session.Close(); err != nil {
+			t.Fatalf("Session.Close() error = %v", err)
+		}
+	}()
+	if err := os.Remove(repository); err != nil {
+		t.Fatalf("os.Remove(repository) error = %v", err)
+	}
+	if err := os.Symlink(stateRoot, repository); err != nil {
+		t.Fatalf("os.Symlink(repository to state root) error = %v", err)
 	}
 	stateRootBefore := snapshotExecutorPath(t, stateRoot)
 	lockBefore := snapshotExecutorPath(t, lockPath)
 	beforeEntries := c1ExecutionEntries(t, root)
-	request := Request{
-		Home: home,
-		Controls: corepaths.Controls{
-			Repository: stateRoot,
-			Config:     filepath.Join(root, "config-control", "config.toml"),
-			State:      filepath.Join(stateRoot, "state.json"),
-			Lock:       lockPath,
-		},
-	}
 
-	result, runErr := RunWithLock(request, owner)
+	result, runErr := session.Converge(nil, nil)
 
 	if !errors.Is(runErr, corepaths.ErrControlTopology) {
-		t.Fatalf("RunWithLock() = (%#v, %v), want topology error", result, runErr)
+		t.Fatalf("Session.Converge() = (%#v, %v), want topology error", result, runErr)
 	}
 	if len(result.Plan.Actions) != 0 ||
 		result.TargetsChanged ||
 		result.StateChanged ||
 		len(result.Warnings) != 0 {
-		t.Fatalf("RunWithLock() result = %#v, want zero result", result)
+		t.Fatalf("Session.Converge() result = %#v, want zero result", result)
 	}
 	assertExecutorPathUnchanged(t, stateRootBefore)
 	assertExecutorPathUnchanged(t, lockBefore)
@@ -291,9 +292,6 @@ func TestRunWithLockRevalidatesControlTopologyWithoutFurtherMutation(t *testing.
 			afterEntries,
 		)
 	}
-	if err := owner.Release(); err != nil {
-		t.Fatalf("owner.Release() error = %v", err)
-	}
 }
 
 func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
@@ -302,7 +300,7 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 	source := filepath.Join(repository, "modules", "app", "config")
 	writeExecutorFile(t, source, "config")
 	target := filepath.Join(home, ".app")
-	request := Request{
+	request := convergenceRequest{
 		Home: home,
 		Controls: corepaths.Controls{
 			Repository: repository,
