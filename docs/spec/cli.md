@@ -1,13 +1,13 @@
 # Public CLI
 
 ```text
-dot init [REPOSITORY] --profile NAME... [--dry-run]
+dot init [REPOSITORY] [--profile NAME]... [--dry-run]
 dot status [MODULE]
 dot apply [MODULE] [--dry-run]
 dot remove MODULE [--dry-run]
 dot paths
 dot version
-dot help
+dot help [COMMAND]
 ```
 
 ## Paths
@@ -21,15 +21,24 @@ dot help
 - 命令不接受位置参数；参数错误返回 `2`。HOME 无法取得、为空或不是绝对路径时返回 `1` 且
   stdout 为空；成功返回 `0`，正常结果只写 stdout。
 
+## Help 与 Version
+
+- `dot help` 显示公开命令；`dot help COMMAND` 显示一个公开命令的帮助。未知 topic 或多余参数
+  返回 `2`，命令不读取 repository、machine config、state 或 platform，也不执行 mutation。
+- `dot version` 不接受参数，按顺序输出
+  `version=<value>`、`commit=<value>`、`build_time=<value>` 三行。未注入构建信息的开发版本
+  使用 `dev`、`unknown`、`unknown`。
+
 ## Init
 
 - Repository 省略时使用当前目录，并且必须存在有效 `dot.toml`。
 - Init 写入 repository 与 active profiles，然后执行首次全量收敛。
-- `--profile` 至少提供一个；要初始化为空机器时显式选中一个空 profile，而不是省略
-  `--profile`。
+- `--profile` 可重复；省略时初始化为空 selection，不要求仓库为此声明无意义的空 profile。
 - Preflight 失败时不写机器配置或 artifacts。
 - 机器配置提交后 apply 失败时保留 selection，用户通过 `dot apply` 重试。
 - 已初始化时拒绝再次 init，不提供 reconfigure/rebind。
+- First init 遇到缺失 state 属于预期路径；warning 先明确这一点，再以条件句提醒：如果同一 HOME
+  曾被 dot 管理，则无法发现已退出 desired 的旧 link。
 
 ## Apply
 
@@ -37,10 +46,18 @@ dot help
 - `dot apply <module>` 对 active module 做 scoped apply。
 - 未 active 的 module 在 preflight 成功后加入 `extra_modules` 再收敛。
 - Module 不存在、不适用或与其他 effective module/state target 冲突时，不修改 selection。
+- Scoped apply 在 selection 已提交后失败时提示重跑同一条 `dot apply <module>`；无参数 apply
+  仍提示 `dot apply`。
 
 ## Remove
 
-- Active profile 仍选择 module 时拒绝，不修改 selection 或文件系统。
+- 只有 active profile 选择且不在 `extra_modules` 中的 module 才拒绝 remove，不修改 selection
+  或文件系统。
+- 同时由 profile 与 `extra_modules` 选择时，remove 删除冗余 extra：applicable module 继续按
+  profile selection 收敛；not-applicable module 按既有 profile cleanup 规则处理；
+  indeterminate 或配置错误仍在 selection 写入前失败。
+- Remove 的 selection 已提交后若 cleanup、结果输出或 lock release 失败，统一提示运行
+  `dot apply`，按已持久化的当前 selection 恢复收敛。
 - 要移除 profile 选中的 module，先在仓库 profile 删除引用，再 `dot apply` 收敛 prune。
 - Extra module 先从 prospective selection 移除，通过 preflight 后写回配置。
 - 对目标 module 投影 [`planning.md`](planning.md) 产生的 prune/forget action；CLI 不另行定义
@@ -72,27 +89,26 @@ dot help
   prospective machine selection、selection delta、module selection source、applicability、
   variant、convergence、placement actions、reason、输入 warning 与 blocker。
 - Status 保留第二列的 `converged`、`pending`、`conflict`、`not-applicable`、`inactive` 或
-  `stale` 摘要，并固定追加：
+  `stale` 摘要。每行固定从 `MODULE  SUMMARY` 开始，只追加有区分度的维度：
 
-  ```text
-  selection=<none|profile|extra|profile+extra>
-  applicability=<applicable|not-applicable|indeterminate|->
-  convergence=<converged|pending|pending-cleanup|conflict|->
-  variant=<portable|VARIANT|->
-  reason=<-|QUOTED_REASON>
-  ```
+  - selection 不是 `none` 时追加 `selection=<profile|extra|profile+extra>`；
+  - applicability 仅在不是 `applicable`/`-` 且未与 `not-applicable` 摘要重复时追加；
+  - convergence 不是 `-` 且未与摘要重复时追加；
+  - 只有具名 variant 才追加 `variant=VARIANT`；portable layout 与 `-` 省略，但名字恰好为
+    `portable` 的具名 variant 仍显示 `variant=portable`；
+  - 只有非空 reason 才追加带双引号和转义的 `reason=QUOTED_REASON`。
 
-  `-` 表示当前分析未加载或不存在该维度，不是平台状态。Effective indeterminate module 的
-  第二列摘要为 `conflict`、convergence 为 `-`，reason 显示平台字段或 variant 歧义诊断，
+  Analysis 内部的 `-` 仍表示未加载或不存在该维度，不是平台状态。Effective indeterminate
+  module 的第二列摘要为 `conflict`，显示 applicability 与平台字段或 variant 歧义 reason，
   不生成 placement action；`status MODULE` 检查未选中的 indeterminate module 时仍显示
-  `inactive`，不产生 blocker。带空格或特殊字符的 reason 使用双引号和转义；conflict 或
-  module-specific blocker 的完整 reason 不得省略。Profile module 已确定 not-applicable 但仍有
-  旧 ownership action 时显示 `convergence=pending-cleanup`，reason 至少标出对应 cleanup
-  decision。
+  `inactive`，不产生 blocker。Concrete placement conflict 逐条显示结构化 action；module/path
+  级合成 conflict 不伪造 placement action，而在 module 行保留完整 reason。Profile module
+  已确定 not-applicable 但仍有旧 ownership action 时显示
+  `convergence=pending-cleanup`，reason 至少标出对应 cleanup decision。
 - Dry-run 在 placement actions 之前显示非空 selection delta：`create`、`add-extra` 或
   `remove-extra`；`add-extra`/`remove-extra` 同时显示 module ID。完整分析中的 blocker 写
   stdout 并包含 reason。Dry-run 和 status 都显示计划执行的 forget action 及其结构化
-  reason；输入 warning 仍写 stderr。
+  reason；status 还显示每条 concrete placement conflict；输入 warning 仍写 stderr。
 - Status 与 dry-run 只要形成完整 analysis 就返回成功，即使其中有 pending、conflict 或
   blocker；没有 `--check`。配置、manifest 或 state 无法解析、必要输入无法读取，或未分类的
   文件系统观察失败时 analysis 不完整并返回失败。

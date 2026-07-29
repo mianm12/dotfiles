@@ -53,6 +53,24 @@ target = "~/.app"
 	}
 }
 
+func TestInitWithoutProfilesCreatesEmptySelection(t *testing.T) {
+	fixture := newCLITestEnv(t, "")
+
+	code, _, stderr := fixture.runInjected("init", fixture.repository)
+	if code != exitOK || !strings.Contains(stderr, initMissingStateWarning) {
+		t.Fatalf(
+			"init without profiles = (%d, %q), want successful first-init warning",
+			code,
+			stderr,
+		)
+	}
+	machine := fixture.loadMachine(t)
+	if len(machine.Profiles) != 0 || len(machine.ExtraModules) != 0 {
+		t.Fatalf("machine selection = %#v, want empty profiles and extras", machine)
+	}
+	assertApplyNoMutation(t, fixture, fixture.runInjected)
+}
+
 func TestInitConflictIsStrictlyReadOnly(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `

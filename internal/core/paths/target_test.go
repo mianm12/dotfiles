@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 )
@@ -62,6 +63,11 @@ func TestResolveAbsoluteTargetRequiresStrictHomeDescendant(t *testing.T) {
 		{name: "relative HOME", home: "home", target: inside},
 		{name: "relative target", home: home, target: ".config/tool"},
 		{name: "target containing NUL", home: home, target: inside + "\x00"},
+		{
+			name:   "HOME containing invalid UTF-8",
+			home:   filepath.Join(string(filepath.Separator), "home-"+string([]byte{0xff})),
+			target: inside,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -76,6 +82,33 @@ func TestResolveAbsoluteTargetRequiresStrictHomeDescendant(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestResolveTargetRejectsInvalidUTF8ResolvedAncestor(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	resolvedParent := filepath.Join(root, "resolved-"+string([]byte{0xff}))
+	for _, directory := range []string{home, resolvedParent} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			if runtime.GOOS == "darwin" &&
+				directory == resolvedParent &&
+				(errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EILSEQ)) {
+				t.Skip("the current Darwin filesystem rejects invalid UTF-8 entry names")
+			}
+			t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
+		}
+	}
+	if err := os.Symlink(resolvedParent, filepath.Join(home, "alias")); err != nil {
+		t.Fatalf("os.Symlink(alias) error = %v", err)
+	}
+
+	target, err := ResolveTarget(home, "~/alias/config")
+	if !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("ResolveTarget() = (%#v, %v), want ErrInvalidPath", target, err)
+	}
+	if target != (Target{}) {
+		t.Fatalf("ResolveTarget(error) = %#v, want zero target", target)
 	}
 }
 

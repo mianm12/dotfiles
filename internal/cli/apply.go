@@ -11,7 +11,7 @@ func newApplyCommand(env environment) *cobra.Command {
 	var dryRun bool
 	command := &cobra.Command{
 		Use:   "apply [MODULE]",
-		Short: "Converge all effective modules or one module",
+		Short: "Converge effective modules; persistently activate MODULE when inactive",
 		Args:  maximumArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			var moduleID *string
@@ -34,6 +34,10 @@ func runApply(
 	context, err := resolveContext(env)
 	if err != nil {
 		return err
+	}
+	rerun := "dot apply"
+	if moduleID != nil {
+		rerun = fmt.Sprintf("dot apply %s", *moduleID)
 	}
 	if dryRun {
 		machine, err := loadRequiredMachine(context)
@@ -65,7 +69,7 @@ func runApply(
 	outcome, runErr := runMutationSession(
 		context,
 		preflight.ProspectiveMachine.Repository,
-		"dot apply",
+		rerun,
 		func(session *executor.Session, outcome *mutationOutcome) error {
 			machine, err := loadRequiredMachine(context)
 			if err != nil {
@@ -85,8 +89,9 @@ func runApply(
 			outcome.selectionChanged = selectionChanged
 			if err := afterSelectionPublished(env, selectionChanged); err != nil {
 				return fmt.Errorf(
-					"machine selection was saved before convergence was interrupted: %w; rerun dot apply",
+					"machine selection was saved before convergence was interrupted: %w; rerun %s",
 					err,
+					rerun,
 				)
 			}
 			if env.beforeExecution != nil {
@@ -100,8 +105,9 @@ func runApply(
 			if convergeErr != nil {
 				if selectionChanged {
 					return fmt.Errorf(
-						"machine selection was saved before convergence failed: %w; rerun dot apply",
+						"machine selection was saved before convergence failed: %w; rerun %s",
 						convergeErr,
+						rerun,
 					)
 				}
 				return convergeErr
@@ -109,5 +115,5 @@ func runApply(
 			return nil
 		},
 	)
-	return finishMutation(command, outcome, runErr, "dot apply")
+	return finishMutation(command, outcome, runErr, rerun)
 }

@@ -75,8 +75,7 @@ work = ["work-git"]
   文件、非目录项或不合规目录一律忽略，不报错。
 - Profile 值是 module ID 数组，不得重复。
 - 多个 active profiles 只做集合并集，顺序不改变语义。
-- 空 profile 合法；active profile 列表可为空（例如仅选中空 profile），但 `init` 至少要求一个
-  `--profile`。
+- 空 profile 合法；active profile 列表可为空，`init` 省略 `--profile` 时写入空列表。
 - Active profile 引用不存在的 module 时配置无效；该失效只针对仓库 profile。extra_modules
   和 state 中引用已删除 module 视为可清理，因为 profile 由仓库权威维护，extra/state 由本机
   维护。

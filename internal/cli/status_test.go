@@ -154,3 +154,77 @@ target = "~/.pending"
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
 }
+
+func TestStatusReportsEveryPlacementConflict(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "first"
+source = "first"
+target = "~/.first"
+
+[[links]]
+id = "second"
+source = "second"
+target = "~/.second"
+`, map[string]string{
+		"first":  "first",
+		"second": "second",
+	})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	first := filepath.Join(fixture.home, ".first")
+	second := filepath.Join(fixture.home, ".second")
+	writeCLIFile(t, first, "personal")
+	writeCLIFile(t, second, "personal")
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("status", "app")
+
+	if code != exitOK ||
+		!strings.Contains(stdout, "app  conflict selection=profile\n") ||
+		!strings.Contains(stdout, "conflict     app/first "+first) ||
+		!strings.Contains(stdout, "conflict     app/second "+second) ||
+		strings.Count(stdout, `reason="actual target is regular file"`) != 2 ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf(
+			"status placement conflicts = (%d, %q, %q), want both concrete conflicts",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, fixture.lock)
+}
+
+func TestStatusShowsNamedPortableVariant(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[variants.portable]
+root = "."
+
+[[variants.portable.links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "app"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runInjected("status", "app")
+
+	if code != exitOK ||
+		!strings.Contains(stdout, "app  pending selection=profile variant=portable\n") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf(
+			"status named portable variant = (%d, %q, %q), want explicit variant",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, fixture.lock)
+}

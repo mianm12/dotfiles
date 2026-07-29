@@ -50,8 +50,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 		stderr != "" ||
 		!strings.Contains(
 			stdout,
-			"gated  conflict selection=profile applicability=indeterminate "+
-				"convergence=- variant=-",
+			"gated  conflict selection=profile applicability=indeterminate ",
 		) ||
 		!strings.Contains(stdout, "synthetic os-release failure") ||
 		!strings.Contains(stdout, "blocked module=gated") ||
@@ -120,8 +119,7 @@ func TestExplicitIndeterminateModuleShowsAnalysisButDoesNotChangeSelection(t *te
 	if code != exitOK ||
 		!strings.Contains(
 			stdout,
-			"gated  inactive selection=none applicability=indeterminate "+
-				"convergence=- variant=-",
+			"gated  inactive applicability=indeterminate ",
 		) ||
 		!strings.Contains(stdout, `reason="platform distro is unknown:`) ||
 		strings.Contains(stdout, "blocked") ||

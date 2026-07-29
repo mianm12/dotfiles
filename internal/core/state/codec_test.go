@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	corestate "github.com/mianm12/dotfiles/internal/core/state"
@@ -253,12 +254,17 @@ func TestDecode_ClassifiesVersionsBeforeLegacySchema(t *testing.T) {
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Decode(version %s) error = %v, want %v", test.version, err, test.want)
 			}
+			if errors.Is(err, corestate.ErrLegacyVersion) &&
+				!strings.Contains(err.Error(), "dot paths") {
+				t.Fatalf("Decode(version 1) error = %v, want dot paths recovery hint", err)
+			}
 		})
 	}
 }
 
 func TestMarshal_RejectsInvalidConstructedSnapshot(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
+	invalidComponent := "invalid-" + string([]byte{0xff})
 	tests := []struct {
 		name     string
 		snapshot corestate.Snapshot
@@ -288,6 +294,29 @@ func TestMarshal_RejectsInvalidConstructedSnapshot(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "invalid UTF-8 home",
+			snapshot: corestate.Snapshot{
+				Home:    filepath.Join(string(filepath.Separator), invalidComponent),
+				Modules: map[string]corestate.Module{},
+			},
+		},
+		{
+			name: "invalid UTF-8 placement target",
+			snapshot: corestate.Snapshot{
+				Home: home,
+				Modules: map[string]corestate.Module{
+					"app": {
+						Placements: map[string]corestate.Placement{
+							"local": {
+								Kind:   corestate.KindLocal,
+								Target: filepath.Join(home, invalidComponent),
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -296,6 +325,26 @@ func TestMarshal_RejectsInvalidConstructedSnapshot(t *testing.T) {
 				t.Fatalf("Marshal() = (%q, %v), want ErrInvalid", data, err)
 			}
 		})
+	}
+}
+
+func TestDecodeRejectsInvalidUTF8ExpectedHome(t *testing.T) {
+	invalidHome := filepath.Join(
+		string(filepath.Separator),
+		"home-"+string([]byte{0xff}),
+	)
+	decoded, err := corestate.Decode(
+		[]byte(`{"version":2,"home":"/valid","modules":{}}`),
+		invalidHome,
+	)
+	if !errors.Is(err, corestate.ErrInvalid) ||
+		decoded.Home != "" ||
+		decoded.Modules != nil {
+		t.Fatalf(
+			"Decode(invalid expected HOME) = (%#v, %v), want zero snapshot and ErrInvalid",
+			decoded,
+			err,
+		)
 	}
 }
 

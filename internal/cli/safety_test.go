@@ -679,15 +679,17 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 
 func TestApplyRejectsInvalidStateWithoutMutation(t *testing.T) {
 	tests := []struct {
-		name     string
-		document string
-		want     string
+		name         string
+		document     string
+		want         string
+		wantPathHint bool
 	}{
 		{name: "corrupt", document: "{", want: "invalid state"},
 		{
-			name:     "legacy v1",
-			document: `{"version":1,"entries":{},"run_once":{}}`,
-			want:     "legacy state version",
+			name:         "legacy v1",
+			document:     `{"version":1,"entries":{},"run_once":{}}`,
+			want:         "legacy state version",
+			wantPathHint: true,
 		},
 		{name: "too new", document: `{"version":3}`, want: "state version is newer"},
 	}
@@ -706,7 +708,10 @@ target = "~/.app"
 			before := snapshotTree(t, fixture.root)
 
 			code, stdout, stderr := fixture.run("apply")
-			if code != exitError || stdout != "" || !strings.Contains(stderr, test.want) {
+			if code != exitError ||
+				stdout != "" ||
+				!strings.Contains(stderr, test.want) ||
+				(test.wantPathHint && !strings.Contains(stderr, "dot paths")) {
 				t.Fatalf("apply = (%d, %q, %q), want %q failure", code, stdout, stderr, test.want)
 			}
 			assertSnapshotUnchanged(t, before)

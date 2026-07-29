@@ -83,7 +83,8 @@ func decode(data []byte, expectedHome string) (Snapshot, bool, error) {
 		)
 	case version.Cmp(big.NewInt(1)) == 0:
 		return Snapshot{}, false, fmt.Errorf(
-			"%w: version 1 is unsupported; archive or remove the old state and retry",
+			"%w: version 1 is unsupported; run `dot paths` to locate the state file, "+
+				"then archive or remove it and retry",
 			ErrLegacyVersion,
 		)
 	case version.Cmp(big.NewInt(Version)) != 0:
@@ -326,15 +327,28 @@ func validateTarget(home, target string) error {
 }
 
 func cleanExpectedHome(home string) (string, error) {
-	if home == "" || strings.ContainsRune(home, '\x00') || !filepath.IsAbs(home) {
-		return "", invalidf("home %q must be a non-empty absolute path", home)
+	if home == "" ||
+		strings.ContainsRune(home, '\x00') ||
+		!utf8.ValidString(home) ||
+		!filepath.IsAbs(home) {
+		return "", invalidf(
+			"home %q must be a non-empty absolute path without NUL and with valid UTF-8",
+			home,
+		)
 	}
 	return filepath.Clean(home), nil
 }
 
 func cleanStoredAbsolute(name, value string) (string, error) {
-	if value == "" || strings.ContainsRune(value, '\x00') || !filepath.IsAbs(value) {
-		return "", invalidf("%s %q must be a non-empty absolute path", name, value)
+	if value == "" ||
+		strings.ContainsRune(value, '\x00') ||
+		!utf8.ValidString(value) ||
+		!filepath.IsAbs(value) {
+		return "", invalidf(
+			"%s %q must be a non-empty absolute path without NUL and with valid UTF-8",
+			name,
+			value,
+		)
 	}
 	cleaned := filepath.Clean(value)
 	if cleaned != value {

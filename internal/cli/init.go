@@ -14,12 +14,9 @@ func newInitCommand(env environment) *cobra.Command {
 	var dryRun bool
 	command := &cobra.Command{
 		Use:   "init [REPOSITORY]",
-		Short: "Initialize this machine and converge selected profiles",
+		Short: "Initialize this machine and converge its selection",
 		Args:  maximumArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			if len(profiles) == 0 {
-				return usagef("dot init requires at least one --profile")
-			}
 			return runInit(command, args, profiles, dryRun, env)
 		},
 	}
@@ -100,6 +97,9 @@ func runInit(
 				locked.resolvedModules,
 				locked.scope,
 			)
+			if locked.loaded.Missing {
+				result.Warnings = []string{initMissingStateWarning}
+			}
 			outcome.result = result
 			if convergeErr != nil {
 				if selectionChanged {

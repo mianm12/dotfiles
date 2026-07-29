@@ -137,6 +137,25 @@ func TestExecutorUpdateRechecksResolvedParent(t *testing.T) {
 	assertExecutorPathUnchanged(t, secondBefore)
 }
 
+func TestVerifyAbsentRejectsReappearedTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := verifyAbsent(target); err != nil {
+		t.Fatalf("verifyAbsent(missing) error = %v", err)
+	}
+	writeExecutorFile(t, target, "reappeared")
+	if err := verifyAbsent(target); err == nil ||
+		!strings.Contains(err.Error(), "reappeared") {
+		t.Fatalf("verifyAbsent(reappeared) error = %v, want reappearance failure", err)
+	}
+	parent := filepath.Join(root, "not-a-directory")
+	writeExecutorFile(t, parent, "file")
+	if err := verifyAbsent(filepath.Join(parent, "child")); err == nil ||
+		!strings.Contains(err.Error(), "re-read removed target") {
+		t.Fatalf("verifyAbsent(unreadable) error = %v, want re-read failure", err)
+	}
+}
+
 func TestOpenSessionRejectsControlTopologyBeforeLockMutation(t *testing.T) {
 	root, home := newExecutorRoot(t)
 	repository := filepath.Join(root, "repository")
@@ -173,6 +192,121 @@ func TestOpenSessionRejectsControlTopologyBeforeLockMutation(t *testing.T) {
 		if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
 			t.Fatalf("control path %q error = %v, want missing", path, statErr)
 		}
+	}
+}
+
+func TestOpenSessionRejectsUnsafeControlEntriesBeforeLockMutation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		control string
+		kind    string
+	}{
+		{name: "config directory", control: "config", kind: "directory"},
+		{name: "config symlink", control: "config", kind: "symlink"},
+		{name: "state directory", control: "state", kind: "directory"},
+		{name: "state symlink", control: "state", kind: "symlink"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, home := newExecutorRoot(t)
+			repository := filepath.Join(root, "repository")
+			configRoot := filepath.Join(root, "config-control")
+			stateRoot := filepath.Join(root, "state-control")
+			for _, directory := range []string{repository, configRoot, stateRoot} {
+				if err := os.Mkdir(directory, 0o700); err != nil {
+					t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
+				}
+			}
+			controls := corepaths.Controls{
+				Repository: repository,
+				Config:     filepath.Join(configRoot, "config.toml"),
+				State:      filepath.Join(stateRoot, "state.json"),
+				Lock:       filepath.Join(stateRoot, "lock"),
+			}
+			entry := controls.Config
+			if test.control == "state" {
+				entry = controls.State
+			}
+			switch test.kind {
+			case "directory":
+				if err := os.Mkdir(entry, 0o700); err != nil {
+					t.Fatalf("os.Mkdir(unsafe entry) error = %v", err)
+				}
+			case "symlink":
+				destination := filepath.Join(root, test.control+"-destination")
+				writeExecutorFile(t, destination, "private")
+				if err := os.Symlink(destination, entry); err != nil {
+					t.Fatalf("os.Symlink(unsafe entry) error = %v", err)
+				}
+			default:
+				t.Fatalf("unsupported test entry kind %q", test.kind)
+			}
+			beforeEntry := snapshotExecutorPath(t, entry)
+			beforeEntries := c1ExecutionEntries(t, root)
+
+			session, err := OpenSession(home, controls)
+			if session != nil {
+				_ = session.Close()
+			}
+
+			if err == nil ||
+				!strings.Contains(err.Error(), entry) ||
+				!strings.Contains(err.Error(), "run `dot paths`") {
+				t.Fatalf(
+					"OpenSession() = (%#v, %v), want unsafe %s entry and recovery hint",
+					session,
+					err,
+					test.control,
+				)
+			}
+			assertExecutorPathUnchanged(t, beforeEntry)
+			afterEntries := c1ExecutionEntries(t, root)
+			if strings.Join(afterEntries, "\n") != strings.Join(beforeEntries, "\n") {
+				t.Fatalf(
+					"unsafe control entry changed filesystem: before=%v after=%v",
+					beforeEntries,
+					afterEntries,
+				)
+			}
+			if _, statErr := os.Lstat(controls.Lock); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Fatalf("lock path %q error = %v, want missing", controls.Lock, statErr)
+			}
+		})
+	}
+}
+
+func TestOpenSessionRejectsInvalidUTF8HomeBeforeLockMutation(t *testing.T) {
+	root, _ := newExecutorRoot(t)
+	repository := filepath.Join(root, "repository")
+	if err := os.Mkdir(repository, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(repository) error = %v", err)
+	}
+	controls := corepaths.Controls{
+		Repository: repository,
+		Config:     filepath.Join(root, "config-control", "config.toml"),
+		State:      filepath.Join(root, "state-control", "state.json"),
+		Lock:       filepath.Join(root, "state-control", "lock"),
+	}
+	home := filepath.Join(root, "home-"+string([]byte{0xff}))
+	beforeEntries := c1ExecutionEntries(t, root)
+
+	session, err := OpenSession(home, controls)
+	if session != nil {
+		_ = session.Close()
+	}
+
+	if err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("OpenSession() = (%#v, %v), want invalid UTF-8 HOME failure", session, err)
+	}
+	afterEntries := c1ExecutionEntries(t, root)
+	if strings.Join(afterEntries, "\n") != strings.Join(beforeEntries, "\n") {
+		t.Fatalf(
+			"invalid HOME changed entries: before=%v after=%v",
+			beforeEntries,
+			afterEntries,
+		)
+	}
+	if _, statErr := os.Lstat(controls.Lock); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("lock path %q error = %v, want missing", controls.Lock, statErr)
 	}
 }
 
