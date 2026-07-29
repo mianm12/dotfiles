@@ -93,7 +93,7 @@ func TestResolveTargetRejectsInvalidUTF8ResolvedAncestor(t *testing.T) {
 		if err := os.Mkdir(directory, 0o700); err != nil {
 			if runtime.GOOS == "darwin" &&
 				directory == resolvedParent &&
-				errors.Is(err, fs.ErrPermission) {
+				(errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EILSEQ)) {
 				t.Skip("the current Darwin filesystem rejects invalid UTF-8 entry names")
 			}
 			t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
