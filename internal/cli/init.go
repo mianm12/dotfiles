@@ -56,7 +56,7 @@ func runInit(
 		if err != nil {
 			return err
 		}
-		return printOperationAnalysis(command, analysis)
+		return printDryRunAnalysis(command, analysis)
 	}
 
 	preflight, err := analyzeInit(context, machine)

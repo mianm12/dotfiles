@@ -240,7 +240,7 @@ target = "~/alias/child"
 	before := snapshotTree(t, fixture.root)
 
 	code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
-	if code != exitOK ||
+	if code != exitError ||
 		!strings.Contains(stdout, "conflict") ||
 		!strings.Contains(stdout, "traverses state-owned link") ||
 		stderr != "" {
@@ -400,12 +400,14 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 		args             []string
 		extras           []string
 		readOnlyAnalysis bool
+		wantCode         int
 	}{
 		{name: "apply", args: []string{"apply"}},
 		{
 			name:             "apply dry-run",
 			args:             []string{"apply", "--dry-run"},
 			readOnlyAnalysis: true,
+			wantCode:         exitError,
 		},
 		{name: "remove before selection publish", args: []string{"remove", "app"}, extras: []string{"app"}},
 		{
@@ -432,12 +434,12 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 			code, stdout, stderr := fixture.run(test.args...)
 
 			if test.readOnlyAnalysis {
-				if code != exitOK ||
+				if code != test.wantCode ||
 					!strings.Contains(stdout, "blocked") ||
 					!strings.Contains(stdout, fixture.repository) ||
 					!strings.Contains(stdout, "run `dot paths`") {
 					t.Fatalf(
-						"analysis = (%d, %q, %q), want successful topology blocker",
+						"analysis = (%d, %q, %q), want complete topology blocker",
 						code,
 						stdout,
 						stderr,
@@ -543,14 +545,14 @@ target = "~/.config/dot/managed"
 	assertSnapshotUnchanged(t, before)
 
 	code, stdout, stderr = fixture.run("apply", "--dry-run")
-	if code != exitOK ||
+	if code != exitError ||
 		!strings.Contains(stdout, "blocked") ||
 		!strings.Contains(stdout, target) ||
 		!strings.Contains(stdout, filepath.Dir(fixture.config)) ||
 		!strings.Contains(stdout, "run `dot paths`") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
-			"apply --dry-run = (%d, %q, %q), want successful blocker analysis",
+			"apply --dry-run = (%d, %q, %q), want complete blocker analysis",
 			code,
 			stdout,
 			stderr,

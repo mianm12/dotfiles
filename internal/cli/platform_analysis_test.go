@@ -67,7 +67,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 	assertSnapshotUnchanged(t, before)
 
 	code, stdout, stderr = fixture.runInjected("apply", "--dry-run")
-	if code != exitOK ||
+	if code != exitError ||
 		stderr != "" ||
 		!strings.Contains(stdout, "blocked module=gated") ||
 		!strings.Contains(stdout, "synthetic os-release failure") ||
@@ -139,7 +139,7 @@ func TestExplicitIndeterminateModuleShowsAnalysisButDoesNotChangeSelection(t *te
 		"gated",
 		"--dry-run",
 	)
-	if code != exitOK ||
+	if code != exitError ||
 		!strings.Contains(stdout, "selection-delta add-extra module=gated") ||
 		!strings.Contains(stdout, "blocked module=gated") ||
 		!strings.Contains(stdout, "distribution is unreadable") ||
@@ -193,7 +193,7 @@ func TestInitWithIndeterminateProfileDoesNotPublishSelection(t *testing.T) {
 		"base",
 		"--dry-run",
 	)
-	if code != exitOK ||
+	if code != exitError ||
 		!strings.Contains(stdout, "selection-delta create") ||
 		!strings.Contains(stdout, "blocked module=gated") ||
 		!strings.Contains(stdout, "distribution is unavailable") ||
@@ -255,7 +255,7 @@ target = "~/.extra"
 		"extra",
 		"--dry-run",
 	)
-	if code != exitOK ||
+	if code != exitError ||
 		!strings.Contains(stdout, "selection-delta add-extra module=extra") ||
 		!strings.Contains(stdout, "blocked module=uncertain") ||
 		strings.Contains(stdout, "create-link") ||
@@ -479,7 +479,7 @@ target = "~/.extra"
 	before := snapshotTree(t, fixture.root)
 
 	code, stdout, stderr := fixture.runInjected("remove", "extra", "--dry-run")
-	if code != exitOK ||
+	if code != exitError ||
 		!strings.Contains(stdout, "selection-delta remove-extra module=extra") ||
 		!strings.Contains(stdout, "blocked module=uncertain") ||
 		strings.Contains(stdout, "prune") ||

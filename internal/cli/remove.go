@@ -40,7 +40,7 @@ func runRemove(
 		if err != nil {
 			return err
 		}
-		return printOperationAnalysis(command, analysis)
+		return printDryRunAnalysis(command, analysis)
 	}
 
 	machine, err := loadRequiredMachine(context)

@@ -60,7 +60,7 @@ func TestInitializedInitDryRunKeepsGeneralMissingStateWarning(t *testing.T) {
 		"--dry-run",
 	)
 
-	if code != exitOK ||
+	if code != exitError ||
 		!strings.Contains(stdout, "machine is already initialized") ||
 		stderr != "warning: "+state.MissingWarning+"\n" ||
 		strings.Contains(stderr, "expected on first init") {
@@ -283,7 +283,7 @@ func TestStatusRendersSelectionSources(t *testing.T) {
 	}
 }
 
-func TestDryRunRendersCompleteBlockersAsSuccess(t *testing.T) {
+func TestDryRunRendersCompleteBlockersWithFailureExit(t *testing.T) {
 	t.Run("placement conflict", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = ["app"]`)
 		fixture.writeModule(t, "app", `
@@ -298,10 +298,11 @@ target = "~/.app"
 
 		code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 
-		if code != exitOK ||
+		if code != exitError ||
 			!strings.Contains(stdout, "conflict") ||
 			!strings.Contains(stdout, `reason="actual target is regular file"`) ||
-			!strings.Contains(stderr, "state is missing") {
+			!strings.Contains(stderr, "state is missing") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("conflict dry-run = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
@@ -322,11 +323,12 @@ os = ["macos"]
 			"--dry-run",
 		)
 
-		if code != exitOK ||
+		if code != exitError ||
 			!strings.Contains(stdout, "selection-delta add-extra module=gated") ||
 			!strings.Contains(stdout, "blocked module=gated") ||
 			!strings.Contains(stdout, "not applicable") ||
-			!strings.Contains(stderr, "state is missing") {
+			!strings.Contains(stderr, "state is missing") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("not-applicable dry-run = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
@@ -344,10 +346,11 @@ os = ["macos"]
 			"--dry-run",
 		)
 
-		if code != exitOK ||
+		if code != exitError ||
 			!strings.Contains(stdout, "blocked module=app") ||
 			!strings.Contains(stdout, "selected by an active profile") ||
-			!strings.Contains(stderr, "state is missing") {
+			!strings.Contains(stderr, "state is missing") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("profile remove dry-run = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
@@ -364,11 +367,12 @@ os = ["macos"]
 			"--dry-run",
 		)
 
-		if code != exitOK ||
+		if code != exitError ||
 			!strings.Contains(stdout, "selection-delta add-extra module=missing") ||
 			!strings.Contains(stdout, "blocked module=missing") ||
 			!strings.Contains(stdout, "does not exist") ||
-			!strings.Contains(stderr, "state is missing") {
+			!strings.Contains(stderr, "state is missing") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("unknown dry-run = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
