@@ -51,12 +51,28 @@ func ValidateMutationControls(controls corepaths.Controls) error {
 			err,
 		)
 	}
+	if err := storage.ValidatePrivateFile(controls.Config); err != nil {
+		return fmt.Errorf(
+			"validate machine config %q before mutation: %w; "+
+				"run `dot paths` to inspect the active control paths",
+			controls.Config,
+			err,
+		)
+	}
 	stateRoot := filepath.Dir(filepath.Clean(controls.State))
 	if err := lock.Validate(stateRoot, controls.Lock); err != nil {
 		return fmt.Errorf(
 			"validate state root and lock %q before mutation: %w; "+
 				"run `dot paths` to inspect the active control paths",
 			controls.Lock,
+			err,
+		)
+	}
+	if err := storage.ValidatePrivateFile(controls.State); err != nil {
+		return fmt.Errorf(
+			"validate state %q before mutation: %w; "+
+				"run `dot paths` to inspect the active control paths",
+			controls.State,
 			err,
 		)
 	}

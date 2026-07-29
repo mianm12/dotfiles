@@ -224,7 +224,19 @@ func (run *mutationRun) removeOwnedLink(action planner.Action) error {
 		return fmt.Errorf("remove owned symlink %q: %w", action.Target, err)
 	}
 	run.changed = true
-	return nil
+	return verifyAbsent(action.Target)
+}
+
+func verifyAbsent(target string) error {
+	_, err := os.Lstat(target)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("re-read removed target %q: %w", target, err)
+	default:
+		return fmt.Errorf("removed target %q reappeared", target)
+	}
 }
 
 func (run *mutationRun) verifyLink(action planner.Action) error {

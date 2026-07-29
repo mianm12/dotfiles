@@ -25,10 +25,10 @@ read-only preflight
 
 - 配置与 manifest 的严格加载及命令 scope 由
   [`cli.md`](cli.md#命令-scope-与加载) 定义。
-- 初次只读 preflight 的 deterministic config、control topology、私有 control root/lock
-  目录项类型、不受支持的路径编码、path 或 ownership conflict 必须在获取 lock 前失败，零文件
-  系统写入：不得创建或 chmod config/state/lock root、lock、temporary file、selection、state、
-  parent 或 target。
+- 初次只读 preflight 的 deterministic config、control topology、私有 control root 及
+  config/state/lock 目录项类型、不受支持的路径编码、path 或 ownership conflict 必须在获取
+  lock 前失败，零文件系统写入：不得创建或 chmod config/state/lock root、lock、temporary
+  file、selection、state、parent 或 target。
 - [`selection.md`](selection.md#platform-与-module) 定义的任意 prospective effective
   indeterminate、extra/explicit selection 的 not-applicable，或 remove current extra 时目标
   自身的 not-applicable/indeterminate，都属于同一 preflight 失败边界：整次真实 mutation 在
@@ -53,6 +53,8 @@ read-only preflight
 - 不建立通用 action snapshot 或 precondition 系统。
 - Local 和新 link 以 `0600`、完整且不可覆盖的方式发布；target 已出现时停止。
 - Update/prune 删除 symlink 前重新读取 resolved target 和 raw destination；与 state 不同则停止。
+- Update/prune 删除后重新读取 target；只有确认不存在才继续，重新出现或无法确认时停止且不推进
+  state。
 - 新 target 创建和 update 全部成功后才开始 prune。
 - Changed target 重新读取符合预期后才进入 state；不建设独立 postcondition framework。
 - State 最后原子提交；state commit 和 lock release 均成功才构成 mutation 成功。公开成功或
