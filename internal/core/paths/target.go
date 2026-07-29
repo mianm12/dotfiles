@@ -139,7 +139,7 @@ func ResolveAbsoluteTarget(home, target string) (Target, error) {
 	relative, err := filepath.Rel(cleanHome, cleanTarget)
 	if err != nil {
 		return Target{}, fmt.Errorf(
-			"%w: compare target %q with HOME %q: %v",
+			"%w: compare target %q with HOME %q: %w",
 			ErrInvalidPath,
 			target,
 			home,

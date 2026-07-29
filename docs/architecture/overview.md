@@ -90,10 +90,9 @@ storage / paths / state
 - `gofrs/flock`：单进程 mutation lock。
 - `renameio/v2`：仅由 `internal/storage` 用于私有 control file 的原子覆盖发布。
 
-测试专用依赖限 `google/go-cmp` 与 `stretchr/testify`。
-
-`golangci-lint` 与 `govulncheck` 通过 `go.mod` 的 `tool` directive 固定版本，并由
-`go tool` 调用。它们进入 module graph，但不是生产代码第三方 import allowlist 的一部分。
+`golangci-lint` 与 `govulncheck` 通过 `tools/go.mod` 的 `tool` directive 固定版本，并从仓库
+根目录使用 `go tool -modfile=tools/go.mod` 调用。工具 module graph 与产品 module graph
+隔离，也不属于生产代码第三方 import allowlist。
 
 Local 与新文件的不可覆盖发布不使用 rename：先写 `0600` 临时文件，再以 `os.Link` 发布到
 target；已存在时得到 `EEXIST`，同时保证内容完整、不可覆盖和原子出现。

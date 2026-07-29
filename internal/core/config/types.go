@@ -5,10 +5,8 @@ import (
 	"errors"
 )
 
-var (
-	// ErrInvalidConfiguration reports a malformed or inconsistent config.
-	ErrInvalidConfiguration = errors.New("invalid configuration")
-)
+// ErrInvalidConfiguration reports a malformed or inconsistent config.
+var ErrInvalidConfiguration = errors.New("invalid configuration")
 
 // ApplicabilityState is the result of matching one module against a platform.
 type ApplicabilityState string

@@ -116,7 +116,7 @@ func TestProductionThirdPartyDependenciesMatchArchitecture(t *testing.T) {
 	}
 }
 
-func TestProductionMutationLifecycleUsesSessionOnly(t *testing.T) {
+func TestProductionSensitiveMutationReferencesHaveSingleOwner(t *testing.T) {
 	root := repositoryRoot(t)
 	modulePath := repositoryModulePath(t, root)
 	var failures []string
@@ -127,67 +127,61 @@ func TestProductionMutationLifecycleUsesSessionOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse production file %q: %v", filename, err)
 		}
-		imports := importedPackageNames(t, file, modulePath)
-		for _, declaration := range file.Decls {
-			switch declaration := declaration.(type) {
-			case *ast.FuncDecl:
-				receiver := receiverTypeName(declaration)
-				if forbiddenMutationDeclaration(source, declaration.Name.Name, receiver) {
-					failures = append(
-						failures,
-						fmtPosition(fileSet, declaration.Pos())+
-							": forbidden mutation lifecycle declaration",
-					)
-				}
-				ast.Inspect(declaration.Body, func(node ast.Node) bool {
-					call, ok := node.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-					target, ok := importedCallTarget(call, imports)
-					if !ok || allowedMutationCall(source, declaration.Name.Name, receiver, target) {
-						return true
-					}
-					if target == "internal/core/config.PublishMachine" &&
-						source == "internal/cli" {
-						failures = append(
-							failures,
-							fmtPosition(fileSet, call.Pos())+
-								": CLI must publish selection through executor.Session",
-						)
-						return true
-					}
-					if target == "internal/lock.Acquire" ||
-						target == "internal/core/config.PublishMachine" {
-						failures = append(
-							failures,
-							fmtPosition(fileSet, call.Pos())+
-								": forbidden direct call to "+target,
-						)
-					}
-					return true
-				})
-			case *ast.GenDecl:
-				if declaration.Tok != token.TYPE || source != "internal/lock" {
-					continue
-				}
-				for _, item := range declaration.Specs {
-					typeSpec := item.(*ast.TypeSpec)
-					if typeSpec.Name.Name == "Guard" {
-						failures = append(
-							failures,
-							fmtPosition(fileSet, typeSpec.Pos())+
-								": forbidden mutation lifecycle declaration",
-						)
-					}
-				}
-			}
-		}
+		failures = append(
+			failures,
+			sensitiveMutationFailures(t, fileSet, file, source, modulePath)...,
+		)
 	})
 
 	sort.Strings(failures)
 	if len(failures) != 0 {
-		t.Fatalf("production mutation lifecycle bypasses Session:\n%s", strings.Join(failures, "\n"))
+		t.Fatalf(
+			"production sensitive mutation reference has wrong owner:\n%s",
+			strings.Join(failures, "\n"),
+		)
+	}
+}
+
+func TestSensitiveMutationBoundaryRejectsIndirectReferences(t *testing.T) {
+	const modulePath = "example.com/dot"
+	tests := map[string]string{
+		"function value": `package sample
+import config "example.com/dot/internal/core/config"
+func bypass() {
+	publish := config.PublishMachine
+	_ = publish
+}
+`,
+		"package function value": `package sample
+import config "example.com/dot/internal/core/config"
+var publish = config.PublishMachine
+`,
+		"dot import": `package sample
+import . "example.com/dot/internal/core/config"
+func bypass() {
+	_ = PublishMachine
+}
+`,
+	}
+
+	for name, source := range tests {
+		t.Run(name, func(t *testing.T) {
+			fileSet := token.NewFileSet()
+			file, err := parser.ParseFile(fileSet, name+".go", source, 0)
+			if err != nil {
+				t.Fatalf("parse synthetic source: %v", err)
+			}
+			failures := sensitiveMutationFailures(
+				t,
+				fileSet,
+				file,
+				"internal/cli",
+				modulePath,
+			)
+			if len(failures) == 0 {
+				t.Fatal("indirect sensitive mutation reference was not rejected")
+			}
+		})
 	}
 }
 
@@ -478,14 +472,78 @@ func importedPackageNames(
 	return result
 }
 
-func importedCallTarget(
-	call *ast.CallExpr,
+func sensitiveMutationFailures(
+	t *testing.T,
+	fileSet *token.FileSet,
+	file *ast.File,
+	source string,
+	modulePath string,
+) []string {
+	t.Helper()
+	imports := importedPackageNames(t, file, modulePath)
+	var failures []string
+	for _, importSpec := range file.Imports {
+		if importSpec.Name == nil || importSpec.Name.Name != "." {
+			continue
+		}
+		importPath, err := strconv.Unquote(importSpec.Path.Value)
+		if err != nil {
+			t.Fatalf("unquote import %s: %v", importSpec.Path.Value, err)
+		}
+		internalPath := strings.TrimPrefix(importPath, modulePath+"/")
+		if internalPath != "internal/lock" &&
+			internalPath != "internal/core/config" {
+			continue
+		}
+		failures = append(
+			failures,
+			fmtPosition(fileSet, importSpec.Pos())+
+				": dot import of sensitive mutation package "+internalPath,
+		)
+	}
+
+	inspectReferences := func(node ast.Node, function, receiver string) {
+		ast.Inspect(node, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			target, ok := importedSelectorTarget(selector, imports)
+			if !ok || allowedMutationReference(
+				source,
+				function,
+				receiver,
+				target,
+			) {
+				return true
+			}
+			failures = append(
+				failures,
+				fmtPosition(fileSet, selector.Pos())+
+					": forbidden reference to "+target,
+			)
+			return true
+		})
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok {
+			inspectReferences(declaration, "", "")
+			continue
+		}
+		inspectReferences(
+			function.Body,
+			function.Name.Name,
+			receiverTypeName(function),
+		)
+	}
+	return failures
+}
+
+func importedSelectorTarget(
+	selector *ast.SelectorExpr,
 	imports map[string]string,
 ) (string, bool) {
-	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return "", false
-	}
 	qualifier, ok := selector.X.(*ast.Ident)
 	if !ok {
 		return "", false
@@ -497,7 +555,7 @@ func importedCallTarget(
 	return importPath + "." + selector.Sel.Name, true
 }
 
-func allowedMutationCall(
+func allowedMutationReference(
 	source, function, receiver, target string,
 ) bool {
 	switch target {
@@ -511,22 +569,6 @@ func allowedMutationCall(
 			receiver == "Session"
 	default:
 		return true
-	}
-}
-
-func forbiddenMutationDeclaration(
-	source, function, receiver string,
-) bool {
-	switch source {
-	case "internal/core/executor":
-		return receiver == "" &&
-			(function == "Run" || function == "RunWithLock")
-	case "internal/cli":
-		return receiver == "" && function == "withMutationLock"
-	case "internal/lock":
-		return receiver == "Ownership" && function == "Reuse"
-	default:
-		return false
 	}
 }
 

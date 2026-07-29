@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   fuzz:
-    name: State and target fuzz
+    name: State, target, and os-release fuzz
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -40,5 +40,6 @@ jobs:
           path: |
             internal/core/state/testdata/fuzz/FuzzDecode
             internal/core/paths/testdata/fuzz/FuzzTargetExpression
+            internal/cli/testdata/fuzz/FuzzOSReleaseID
           if-no-files-found: ignore
           retention-days: 14
