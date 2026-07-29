@@ -48,6 +48,24 @@ func Build(request Request) (Plan, error) {
 		if planErr != nil {
 			return Plan{}, planErr
 		}
+		if action.Decision != DecisionConflict {
+			owner, owned, ownershipErr := stateOwnedParentLink(
+				home,
+				placement.target,
+				request.State,
+			)
+			if ownershipErr != nil {
+				return Plan{}, ownershipErr
+			}
+			if owned {
+				action.Decision = DecisionConflict
+				action.Reason = fmt.Sprintf(
+					"target traverses state-owned link from module %q placement %q",
+					owner.moduleID,
+					owner.placementID,
+				)
+			}
+		}
 		if used {
 			usedState[placement.key] = true
 		}
@@ -394,12 +412,25 @@ func planOneStale(
 		base.Reason = "stale target is absent"
 		return base, nil
 	}
-	if actual.kind == actualSymlink &&
-		actual.linkDestination == record.LinkDestination &&
-		current.Resolved() == record.ResolvedTarget {
-		if staleLinkContainsDesired(current, desired) {
+	if stateOwnsLink(record, current, actual) {
+		dependent, traversed, err := desiredTraversingLink(
+			desired,
+			current.Resolved(),
+		)
+		if err != nil {
+			return Action{}, fmt.Errorf(
+				"compare stale link %s with desired targets: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
+		if traversed {
 			base.Decision = DecisionConflict
-			base.Reason = "stale link target contains an active desired target"
+			base.Reason = fmt.Sprintf(
+				"state-owned link is traversed by active module %q placement %q",
+				dependent.moduleID,
+				dependent.placementID,
+			)
 			return base, nil
 		}
 		base.Decision = DecisionPrune
@@ -456,6 +487,77 @@ func otherModuleOwner(
 	return placementKey{}, false
 }
 
+func stateOwnedParentLink(
+	home string,
+	target corepaths.Target,
+	snapshot state.Snapshot,
+) (placementKey, bool, error) {
+	for _, key := range stateKeys(snapshot) {
+		record, _ := statePlacement(snapshot, key)
+		if record.Kind != state.KindLink {
+			continue
+		}
+		traverses, err := corepaths.TargetParentTraversesLink(
+			target,
+			record.ResolvedTarget,
+		)
+		if err != nil {
+			return placementKey{}, false, fmt.Errorf(
+				"compare target with state-owned link %s: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
+		if !traverses {
+			continue
+		}
+
+		current, err := resolveStateTarget(home, record.Target)
+		if err != nil {
+			if isSafeStaleResolutionDrift(err) {
+				continue
+			}
+			return placementKey{}, false, fmt.Errorf(
+				"resolve state-owned link %s: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
+		if !stateLinkTargetMatches(record, current) {
+			continue
+		}
+		actual, err := observeLink(current.Lexical())
+		if err != nil {
+			return placementKey{}, false, fmt.Errorf(
+				"inspect state-owned link %s: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
+		if stateOwnsLink(record, current, actual) {
+			return key, true, nil
+		}
+	}
+	return placementKey{}, false, nil
+}
+
+func stateOwnsLink(
+	record state.Placement,
+	current corepaths.Target,
+	actual actual,
+) bool {
+	return stateLinkTargetMatches(record, current) &&
+		actual.kind == actualSymlink &&
+		actual.linkDestination == record.LinkDestination
+}
+
+func stateLinkTargetMatches(
+	record state.Placement,
+	current corepaths.Target,
+) bool {
+	return current.Resolved() == record.ResolvedTarget
+}
+
 func samePlacementTarget(
 	desired desiredPlacement,
 	record state.Placement,
@@ -474,13 +576,23 @@ func targetUsedByDesired(
 	})
 }
 
-func staleLinkContainsDesired(
-	target corepaths.Target,
+func desiredTraversingLink(
 	desired []desiredPlacement,
-) bool {
-	return slices.ContainsFunc(desired, func(placement desiredPlacement) bool {
-		return corepaths.TargetStrictlyContains(target, placement.target)
-	})
+	linkEntry string,
+) (placementKey, bool, error) {
+	for _, placement := range desired {
+		traverses, err := corepaths.TargetParentTraversesLink(
+			placement.target,
+			linkEntry,
+		)
+		if err != nil {
+			return placementKey{}, false, err
+		}
+		if traverses {
+			return placement.key, true, nil
+		}
+	}
+	return placementKey{}, false, nil
 }
 
 func resolveStateTarget(

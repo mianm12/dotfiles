@@ -610,7 +610,7 @@ func TestStaleLoopedAncestorForgets(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestStaleLinkTargetContainingDesiredTargetIsConflict(t *testing.T) {
+func TestActiveTargetAndStaleParentBothProjectTraversalConflict(t *testing.T) {
 	fixture := newFixture(t)
 	oldDirectory := fixture.dir(t, "repo-old/app")
 	parentTarget := fixture.target(".config/app")
@@ -625,11 +625,17 @@ func TestStaleLinkTargetContainingDesiredTargetIsConflict(t *testing.T) {
 
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
-	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionConflict)
+	assertDecisions(t, plan, planner.DecisionConflict, planner.DecisionConflict)
 	if !plan.HasConflicts() {
-		t.Fatal("Build() HasConflicts() = false, want unsafe parent prune conflict")
+		t.Fatal("Build() HasConflicts() = false, want traversal conflicts")
 	}
-	if got := plan.Actions[1].Reason; got != "stale link target contains an active desired target" {
+	if got := plan.Actions[0].Reason; !strings.Contains(got, "traverses state-owned link") {
+		t.Fatalf("active target conflict reason = %q", got)
+	}
+	if got := plan.Actions[1].Reason; !strings.Contains(
+		got,
+		"state-owned link is traversed by active module",
+	) {
 		t.Fatalf("stale parent conflict reason = %q", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)

@@ -15,6 +15,12 @@ State 中 placement 的 kind 与当前 desired 的 kind 不一致（同一 ID �
 是 conflict，不尝试自动收敛；恢复方式是改用新 placement ID，或先 `dot remove` 该 module 再
 修改 manifest。
 
+Active target 的父路径解析链经过一条仍有完整 state ownership 证据的 link 时为 conflict。
+该守卫包括 scope 外和仅存在于 state 的 link，避免 active action 先写入其当前 destination，
+而该 link 随后更新或清理后让成功结果失去可达性。只有解析链实际经过该 link 目录项才命中；
+独立 alias 即使最终解析到同一 destination 也不冲突。State target 的 resolved identity 或
+actual raw destination 已漂移时 ownership 不成立，不使用该守卫。
+
 Control topology 自身无效时整条规划失败，不能使用 stale 宽容规则绕过。Active target 与
 control family 重叠仍是 path conflict。仅当 state placement 已退出 desired，且其历史 target
 与当前 control family 重叠时，`dot` 生成带结构化原因的 `forget`：放弃
@@ -51,9 +57,11 @@ state 记录时才允许 prune。Dangling symlink 仍按 raw destination 应用�
 
 Stale link target 与 active desired target 相等时，stale cleanup action 为 forget 旧
 ownership；该 action 不覆盖 active placement 按上文规则独立产生的 ownership conflict。
-Stale link target 在规范化或解析后关系中严格包含 active desired target 时为 conflict，禁止
-删除可能承载 active target 的父 symlink。该判定复用
-[`placements.md`](placements.md#路径身份与边界) 的同一 target 关系。
+Active target 的父路径解析链经过 stale link 时，由通用 state-owned link 守卫把 active
+placement 标记为 conflict；stale cleanup 也必须比较全部 effective desired targets，即使命令
+scope 不包含对应 child。只要 child 的父路径解析链仍经过该 link，prune action 同样为
+conflict，避免 scoped cleanup 切断 scope 外的 desired target。两种 action 投影复用同一个
+traversal 与 ownership 不变量。
 
 Stale link 不满足该守卫时（target 已变成普通文件、目录或 special，raw destination 漂移，或
 resolved target 改变）不是 conflict：用户已接管该 target，`dot` 生成说明事实原因的 forget

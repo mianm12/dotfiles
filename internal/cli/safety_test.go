@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/core/config"
 	"github.com/mianm12/dotfiles/internal/core/executor"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
@@ -181,6 +182,95 @@ target = "~/real/tree/child"
 			assertCLIMissing(t, fixture.lock)
 		})
 	}
+}
+
+func TestApplyRejectsRepositoryRebindThroughUpdatedParentLink(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "parent"
+source = "old"
+target = "~/parent"
+`, map[string]string{"old/keep": "old"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	if code, _, stderr := fixture.runInjected("apply"); code != exitOK {
+		t.Fatalf("initial apply = (%d, %q)", code, stderr)
+	}
+
+	oldRepository := fixture.repository
+	alias := filepath.Join(fixture.home, "alias")
+	if err := os.Symlink(filepath.Join(fixture.home, "parent"), alias); err != nil {
+		t.Fatalf("os.Symlink(alias) error = %v", err)
+	}
+	newRepository := filepath.Join(fixture.root, "new-repository")
+	writeCLIFile(
+		t,
+		filepath.Join(newRepository, "dot.toml"),
+		"version = 1\n[profiles]\nbase = [\"app\"]\n",
+	)
+	writeCLIFile(t, filepath.Join(newRepository, "modules", "app", "module.toml"), `
+[[links]]
+id = "parent"
+source = "new"
+target = "~/parent"
+
+[[links]]
+id = "child"
+source = "child-source"
+target = "~/alias/child"
+`)
+	writeCLIFile(
+		t,
+		filepath.Join(newRepository, "modules", "app", "new", "keep"),
+		"new",
+	)
+	writeCLIFile(
+		t,
+		filepath.Join(newRepository, "modules", "app", "child-source"),
+		"child",
+	)
+	if _, err := config.PublishMachine(fixture.config, config.Machine{
+		Version:      1,
+		Repository:   newRepository,
+		Profiles:     []string{"base"},
+		ExtraModules: []string{},
+	}); err != nil {
+		t.Fatalf("PublishMachine(rebind) error = %v", err)
+	}
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
+	if code != exitOK ||
+		!strings.Contains(stdout, "conflict") ||
+		!strings.Contains(stdout, "traverses state-owned link") ||
+		stderr != "" {
+		t.Fatalf(
+			"apply dry-run after rebind = (%d, %q, %q), want read-only conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.runInjected("apply")
+
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(stderr, "traverses state-owned link") {
+		t.Fatalf(
+			"apply after rebind = (%d, %q, %q), want parent ownership conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLIMissing(
+		t,
+		filepath.Join(oldRepository, "modules", "app", "old", "child"),
+	)
+	assertCLIMissing(t, filepath.Join(alias, "child"))
 }
 
 func TestInitRejectsControlPathAncestorsBeforeMutation(t *testing.T) {

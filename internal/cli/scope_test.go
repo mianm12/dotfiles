@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
+	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
 func TestScopedApplyAndRemoveIgnoreBrokenOutOfScopeModule(t *testing.T) {
@@ -145,4 +149,181 @@ target = "~/.tree/child"
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
 	assertCLIMissing(t, filepath.Join(fixture.home, ".tree"))
+}
+
+func TestScopedApplyRejectsStateOwnedParentLinkBeforeMutation(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	fixture.writeModule(t, "active", `
+[[links]]
+id = "child"
+source = "config"
+target = "~/.shared/child"
+`, map[string]string{"config": "active"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	oldTree := filepath.Join(fixture.root, "old-repository", "modules", "stale", "tree")
+	if err := os.MkdirAll(oldTree, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", oldTree, err)
+	}
+	parentTarget := filepath.Join(fixture.home, ".shared")
+	if err := os.Symlink(oldTree, parentTarget); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", oldTree, parentTarget, err)
+	}
+	resolvedParent, err := corepaths.ResolveAbsoluteTarget(fixture.home, parentTarget)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
+	}
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"stale": {Placements: map[string]state.Placement{
+				"tree": {
+					Kind:            state.KindLink,
+					Target:          parentTarget,
+					ResolvedTarget:  resolvedParent.Resolved(),
+					LinkDestination: oldTree,
+				},
+			}},
+		},
+	})
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("apply", "active")
+
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(stderr, "traverses state-owned link") {
+		t.Fatalf(
+			"scoped apply = (%d, %q, %q), want parent ownership conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
+	}
+	assertCLIMissing(t, filepath.Join(oldTree, "child"))
+	assertCLIMissing(t, fixture.lock)
+}
+
+func TestScopedApplyThroughDriftedParentConvergesWithoutCleaningOtherState(
+	t *testing.T,
+) {
+	fixture := newCLITestEnv(t, `base = ["active"]`)
+	fixture.writeModule(t, "active", `
+[[links]]
+id = "child"
+source = "config"
+target = "~/.shared/child"
+`, map[string]string{"config": "active"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	recordedTree := filepath.Join(fixture.root, "old-repository", "tree")
+	userTree := filepath.Join(fixture.root, "user", "tree")
+	for _, directory := range []string{recordedTree, userTree} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
+		}
+	}
+	parentTarget := filepath.Join(fixture.home, ".shared")
+	if err := os.Symlink(userTree, parentTarget); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", userTree, parentTarget, err)
+	}
+	resolvedParent, err := corepaths.ResolveAbsoluteTarget(fixture.home, parentTarget)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
+	}
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"stale": {Placements: map[string]state.Placement{
+				"tree": {
+					Kind:            state.KindLink,
+					Target:          parentTarget,
+					ResolvedTarget:  resolvedParent.Resolved(),
+					LinkDestination: recordedTree,
+				},
+			}},
+		},
+	})
+
+	code, stdout, stderr := fixture.run("apply", "active")
+
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "targets_changed=true state_changed=true") {
+		t.Fatalf(
+			"scoped apply through drifted parent = (%d, %q, %q)",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	destination := filepath.Join(fixture.repository, "modules", "active", "config")
+	assertCLILink(t, filepath.Join(userTree, "child"), destination)
+	loaded := loadTestState(t, fixture)
+	if _, exists := loaded.Modules["stale"]; !exists {
+		t.Fatal("scoped apply removed scope-out stale state")
+	}
+	if _, exists := loaded.Modules["active"].Placements["child"]; !exists {
+		t.Fatal("scoped apply did not record active child")
+	}
+
+	assertApplyNoMutation(t, fixture, fixture.run, "active")
+}
+
+func TestScopedRemoveRejectsOwnedParentUsedByOutOfScopeDesired(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["active"]`)
+	fixture.writeModule(t, "active", `
+[[links]]
+id = "child"
+source = "config"
+target = "~/.shared/child"
+`, map[string]string{"config": "active"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	oldTree := filepath.Join(fixture.root, "old-repository", "tree")
+	if err := os.MkdirAll(oldTree, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", oldTree, err)
+	}
+	parentTarget := filepath.Join(fixture.home, ".shared")
+	if err := os.Symlink(oldTree, parentTarget); err != nil {
+		t.Fatalf("os.Symlink(%q, %q) error = %v", oldTree, parentTarget, err)
+	}
+	resolvedParent, err := corepaths.ResolveAbsoluteTarget(fixture.home, parentTarget)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
+	}
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"stale": {Placements: map[string]state.Placement{
+				"tree": {
+					Kind:            state.KindLink,
+					Target:          parentTarget,
+					ResolvedTarget:  resolvedParent.Resolved(),
+					LinkDestination: oldTree,
+				},
+			}},
+		},
+	})
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("remove", "stale")
+
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(stderr, "state-owned link is traversed by active module") {
+		t.Fatalf(
+			"scoped remove = (%d, %q, %q), want out-of-scope dependency conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLIMissing(t, filepath.Join(oldTree, "child"))
+	assertCLIMissing(t, fixture.lock)
 }

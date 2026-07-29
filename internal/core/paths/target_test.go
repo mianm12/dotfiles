@@ -355,6 +355,83 @@ func TestResolveTarget_DoesNotFollowTargetLeafSymlink(t *testing.T) {
 	}
 }
 
+func TestTargetParentTraversesLinkDistinguishesResolutionChain(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	destination := filepath.Join(root, "destination")
+	for _, directory := range []string{home, destination} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
+		}
+	}
+
+	owned := filepath.Join(home, "owned")
+	throughOwned := filepath.Join(home, "through-owned")
+	throughAlias := filepath.Join(home, "through-alias")
+	throughDotDot := filepath.Join(home, "through-dotdot")
+	directDestination := filepath.Join(home, "direct-destination")
+	if err := os.Symlink(destination, owned); err != nil {
+		t.Fatalf("os.Symlink(owned) error = %v", err)
+	}
+	if err := os.Symlink(filepath.Base(owned), throughOwned); err != nil {
+		t.Fatalf("os.Symlink(through owned) error = %v", err)
+	}
+	if err := os.Symlink(filepath.Base(throughOwned), throughAlias); err != nil {
+		t.Fatalf("os.Symlink(through alias) error = %v", err)
+	}
+	if err := os.Symlink("owned/../destination", throughDotDot); err != nil {
+		t.Fatalf("os.Symlink(through dot-dot) error = %v", err)
+	}
+	if err := os.Symlink(destination, directDestination); err != nil {
+		t.Fatalf("os.Symlink(direct destination) error = %v", err)
+	}
+
+	ownedTarget, err := ResolveAbsoluteTarget(home, owned)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(owned) error = %v", err)
+	}
+	tests := []struct {
+		name       string
+		expression string
+		want       bool
+	}{
+		{name: "direct descendant", expression: "~/owned/child", want: true},
+		{name: "one alias", expression: "~/through-owned/child", want: true},
+		{name: "multiple aliases", expression: "~/through-alias/child", want: true},
+		{name: "dot-dot after owned link", expression: "~/through-dotdot/child", want: true},
+		{
+			name:       "independent alias to same destination",
+			expression: "~/direct-destination/child",
+			want:       false,
+		},
+		{name: "owned target leaf", expression: "~/owned", want: false},
+		{name: "unrelated target", expression: "~/unrelated/child", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			target, resolveErr := ResolveTarget(home, test.expression)
+			if resolveErr != nil {
+				t.Fatalf("ResolveTarget(%q) error = %v", test.expression, resolveErr)
+			}
+			got, traverseErr := TargetParentTraversesLink(
+				target,
+				ownedTarget.Resolved(),
+			)
+			if traverseErr != nil {
+				t.Fatalf("TargetParentTraversesLink() error = %v", traverseErr)
+			}
+			if got != test.want {
+				t.Fatalf(
+					"TargetParentTraversesLink(%q) = %t, want %t",
+					test.expression,
+					got,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
 func TestValidate_DoesNotInventCaseUnicodeOrHardLinkAliases(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
