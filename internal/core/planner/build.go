@@ -487,20 +487,9 @@ func resolveStateTarget(
 	home string,
 	target string,
 ) (corepaths.Target, error) {
-	relative, err := filepath.Rel(home, target)
-	if err != nil ||
-		relative == "." ||
-		relative == ".." ||
-		filepath.IsAbs(relative) ||
-		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return corepaths.Target{}, fmt.Errorf("state target %q is outside HOME %q", target, home)
-	}
-	resolved, err := corepaths.ResolveTarget(
-		home,
-		"~/"+filepath.ToSlash(relative),
-	)
+	resolved, err := corepaths.ResolveAbsoluteTarget(home, target)
 	if err != nil {
-		return corepaths.Target{}, err
+		return corepaths.Target{}, fmt.Errorf("resolve state target %q: %w", target, err)
 	}
 	return resolved, nil
 }

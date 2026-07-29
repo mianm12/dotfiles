@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/planner"
@@ -262,16 +261,7 @@ func (run *mutationRun) verifyLink(action planner.Action) error {
 }
 
 func (run *mutationRun) resolveTarget(target string) (corepaths.Target, error) {
-	relative, err := filepath.Rel(run.home, target)
-	if err != nil ||
-		relative == "." ||
-		relative == ".." ||
-		filepath.IsAbs(relative) ||
-		relative == "" ||
-		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return corepaths.Target{}, fmt.Errorf("target %q is outside HOME %q", target, run.home)
-	}
-	resolved, err := corepaths.ResolveTarget(run.home, "~/"+filepath.ToSlash(relative))
+	resolved, err := corepaths.ResolveAbsoluteTarget(run.home, target)
 	if err != nil {
 		return corepaths.Target{}, fmt.Errorf("resolve target %q: %w", target, err)
 	}

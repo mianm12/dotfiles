@@ -117,6 +117,38 @@ func ResolveTarget(home, expression string) (Target, error) {
 	}, nil
 }
 
+// ResolveAbsoluteTarget resolves an absolute target that must be a strict
+// lexical descendant of HOME.
+func ResolveAbsoluteTarget(home, target string) (Target, error) {
+	cleanHome, err := cleanAbsolute("HOME", home)
+	if err != nil {
+		return Target{}, err
+	}
+	cleanTarget, err := cleanAbsolute("target", target)
+	if err != nil {
+		return Target{}, err
+	}
+	if !strictDescendant(cleanHome, cleanTarget) {
+		return Target{}, fmt.Errorf(
+			"%w: target %q must be below HOME %q",
+			ErrInvalidPath,
+			target,
+			home,
+		)
+	}
+	relative, err := filepath.Rel(cleanHome, cleanTarget)
+	if err != nil {
+		return Target{}, fmt.Errorf(
+			"%w: compare target %q with HOME %q: %v",
+			ErrInvalidPath,
+			target,
+			home,
+			err,
+		)
+	}
+	return ResolveTarget(cleanHome, "~/"+filepath.ToSlash(relative))
+}
+
 // ValidateTargetExpression validates the target syntax without consulting the
 // filesystem or requiring a concrete HOME.
 func ValidateTargetExpression(expression string) error {
