@@ -182,6 +182,25 @@ func TestOwnership_ReleasesOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestOwnership_RejectsValueCopy(t *testing.T) {
+	fileLock := &stubBackend{}
+	owner := newOwnership(fileLock, "/state/lock")
+	copied := *owner
+
+	if err := owner.Release(); err != nil {
+		t.Fatalf("original Ownership.Release() error = %v", err)
+	}
+	if fileLock.unlockCalls != 1 {
+		t.Fatalf("original Ownership.Unlock() calls = %d, want 1", fileLock.unlockCalls)
+	}
+	if err := copied.Release(); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("copied Ownership.Release() error = %v, want ErrOwnership", err)
+	}
+	if fileLock.unlockCalls != 1 {
+		t.Fatalf("copied Ownership.Unlock() calls = %d, want unchanged 1", fileLock.unlockCalls)
+	}
+}
+
 func TestOwnership_ReleaseIOErrorCanBeRetried(t *testing.T) {
 	unlockErr := errors.New("unlock failed")
 	fileLock := &stubBackend{unlockErr: unlockErr}

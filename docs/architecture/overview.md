@@ -36,9 +36,9 @@ Session.Close()
 
 CLI 不直接获取、复用或释放 lock，也不直接发布 machine selection。Session 只表达这一条
 线性生命周期，不引入通用 workflow、事务或 rollback。Session 和 lock ownership 都只支持
-同一指针的串行使用，不得复制或并发调用。Close 失败表示 lock 尚未确认释放；Session 不再
-接受 selection 或 artifact mutation，只允许重试 Close。成功释放后，同一 ownership 不得再次
-释放。
+同一指针的串行使用，值副本会被拒绝，并发调用不受支持。Close 失败表示 lock 尚未确认释放；
+Session 不再接受 selection 或 artifact mutation，只允许重试 Close。成功释放后，同一
+ownership 不得再次释放。
 
 ## Package 职责
 

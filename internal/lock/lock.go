@@ -19,8 +19,9 @@ var (
 )
 
 // Ownership 表示一次 mutation 周期持有的排他锁所有权。
-// 它只支持同一指针的串行使用，不得复制或并发调用；零值无效。
+// 它只支持同一指针的串行使用；值副本和零值无效，并发调用不受支持。
 type Ownership struct {
+	self    *Ownership
 	backend backend
 	path    string
 }
@@ -73,21 +74,24 @@ func validateEntries(root, path string) error {
 }
 
 func newOwnership(fileLock backend, path string) *Ownership {
-	return &Ownership{
+	owner := &Ownership{
 		backend: fileLock,
 		path:    path,
 	}
+	owner.self = owner
+	return owner
 }
 
 // Release 释放锁；同一次所有权只能成功释放一次。
 func (owner *Ownership) Release() error {
-	if owner == nil || owner.backend == nil {
+	if owner == nil || owner.self != owner || owner.backend == nil {
 		return ErrOwnership
 	}
 	if err := owner.backend.Unlock(); err != nil {
 		return fmt.Errorf("%w: release process lock %q: %w", ErrIO, owner.path, err)
 	}
 	owner.backend = nil
+	owner.self = nil
 	return nil
 }
 

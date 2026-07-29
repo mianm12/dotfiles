@@ -11,8 +11,8 @@ import (
 	"github.com/mianm12/dotfiles/internal/lock"
 )
 
-// ErrSessionClosed reports use of a mutation session after its lock was
-// successfully released.
+// ErrSessionClosed reports use of a nil, copied, or successfully closed
+// mutation session.
 var ErrSessionClosed = errors.New("mutation session is closed")
 
 // ErrSessionClosing reports a failed lock release that must be retried before
@@ -20,9 +20,10 @@ var ErrSessionClosed = errors.New("mutation session is closed")
 var ErrSessionClosing = errors.New("mutation session lock release is pending")
 
 // Session owns the fixed control boundary and the single advisory lock for one
-// real mutation. It is a linear capability and must not be copied or used
-// concurrently.
+// real mutation. It is a linear capability; value copies are invalid and
+// concurrent use is unsupported.
 type Session struct {
+	self     *Session
 	home     string
 	controls corepaths.Controls
 	release  func() error
@@ -44,11 +45,13 @@ func OpenSession(home string, controls corepaths.Controls) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Session{
+	session := &Session{
 		home:     home,
 		controls: controls,
 		release:  owner.Release,
-	}, nil
+	}
+	session.self = session
+	return session, nil
 }
 
 // PublishSelection publishes a changed machine selection within the Session's
@@ -103,7 +106,7 @@ func (session *Session) Converge(
 // Close releases the Session's single mutation lock. A failed release blocks
 // further mutation but preserves ownership so callers can retry Close.
 func (session *Session) Close() error {
-	if session == nil || session.release == nil {
+	if session == nil || session.self != session || session.release == nil {
 		return ErrSessionClosed
 	}
 	session.closing = true
@@ -112,11 +115,12 @@ func (session *Session) Close() error {
 	}
 	session.closing = false
 	session.release = nil
+	session.self = nil
 	return nil
 }
 
 func (session *Session) ensureMutable() error {
-	if session == nil || session.release == nil {
+	if session == nil || session.self != session || session.release == nil {
 		return ErrSessionClosed
 	}
 	if session.closing {

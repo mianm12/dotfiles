@@ -112,6 +112,46 @@ func TestClosedSessionRejectsPublishAndConverge(t *testing.T) {
 	assertSessionPathMissing(t, fixture.state)
 }
 
+func TestCopiedSessionIsRejectedWithoutReleasingLock(t *testing.T) {
+	fixture := newFixture(t)
+	controls := sessionTestControls(fixture)
+	session, err := OpenSession(fixture.home, controls)
+	if err != nil {
+		t.Fatalf("OpenSession() error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	copied := *session
+
+	if err := copied.Close(); !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("copied Close() error = %v, want ErrSessionClosed", err)
+	}
+	if contender, err := OpenSession(fixture.home, controls); contender != nil ||
+		!errors.Is(err, lock.ErrBusy) {
+		t.Fatalf("OpenSession(after copied close) = (%#v, %v), want busy", contender, err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("original Close() error = %v", err)
+	}
+	if changed, err := copied.PublishSelection(
+		sessionTestMachine(fixture.repository),
+	); changed || !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf(
+			"copied PublishSelection() = (%t, %v), want unchanged ErrSessionClosed",
+			changed,
+			err,
+		)
+	}
+	if result, err := copied.Converge(nil, nil); !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf(
+			"copied Converge() = (%#v, %v), want ErrSessionClosed",
+			result,
+			err,
+		)
+	}
+	assertSessionPathMissing(t, fixture.config)
+	assertSessionPathMissing(t, fixture.state)
+}
+
 func TestSessionRejectsSelectionRepositoryMismatchWithoutConfigWrite(t *testing.T) {
 	fixture := newFixture(t)
 	session, err := OpenSession(fixture.home, sessionTestControls(fixture))
