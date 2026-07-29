@@ -596,11 +596,14 @@ func buildStatusActions(
 	actions := make([]planner.Action, 0)
 	warnings := make([]string, 0)
 	planned := make(map[string]bool)
+	plannable := make([]string, 0, len(moduleIDs))
+	// Probe modules separately to localize path blockers, then plan the
+	// successful scopes together so cross-module cleanup rules stay intact.
 	for _, moduleID := range moduleIDs {
 		if blocked[moduleID] {
 			continue
 		}
-		scoped, err := planner.Build(planner.Request{
+		_, err := planner.Build(planner.Request{
 			Home:     context.home,
 			Controls: context.controls(machine.Repository),
 			Modules:  resolvedModules,
@@ -622,8 +625,22 @@ func buildStatusActions(
 			planned[moduleID] = true
 			continue
 		}
-		actions = append(actions, scoped.Actions...)
+		plannable = append(plannable, moduleID)
 		planned[moduleID] = true
+	}
+
+	if len(plannable) != 0 {
+		combined, err := planner.Build(planner.Request{
+			Home:     context.home,
+			Controls: context.controls(machine.Repository),
+			Modules:  resolvedModules,
+			Scope:    plannable,
+			State:    snapshot,
+		})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		actions = append(actions, combined.Actions...)
 	}
 	return actions, warnings, planned, nil
 }

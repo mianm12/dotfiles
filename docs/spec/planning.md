@@ -21,6 +21,17 @@ Active target 的父路径解析链经过一条仍有完整 state ownership 证�
 独立 alias 即使最终解析到同一 destination 也不冲突。State target 的 resolved identity 或
 actual raw destination 已漂移时 ownership 不成立，不使用该守卫。
 
+Scope 内非 conflict active link action 若会改变 link 目录项，或当前 state 尚不能完整 owns
+该 actual link，则成功后会建立或刷新 ownership。若任一 effective desired target 的当前父
+路径解析链经过该 active link 目录项，该 action 为 conflict；比较必须包含 scope 外 desired。
+该规则既避免 Adopt、RepairState 或 resolved-drift Keep 首次成功后让相同输入在下一次 apply
+才冲突，也避免 scoped Update 切断 scope 外 desired target 的当前可达性。当前 state 已完整
+owns 同一 resolved link entry 与 raw destination 的 Keep 不改变 namespace 或建立新 ownership
+边界，不使用该 prospective guard；这包括 recorded lexical target 与 desired 不同、但旧
+target 仍能证明同一 ownership 的 rebind。CreateLink 的 actual 尚不存在，因此当前解析链不会
+经过该目录项。该 guard 只把本轮 scope 内 active link action 视为 parent；scope 外且没有完整
+state ownership 的 desired link 不因本规则获得 ownership。
+
 Control topology 自身无效时整条规划失败，不能使用 stale 宽容规则绕过。Active target 与
 control family 重叠仍是 path conflict。仅当 state placement 已退出 desired，且其历史 target
 与当前 control family 重叠时，`dot` 生成带结构化原因的 `forget`：放弃
@@ -88,6 +99,22 @@ placement 标记为 conflict；stale cleanup 也必须比较全部 effective des
 scope 不包含对应 child。只要 child 的父路径解析链仍经过该 link，prune action 同样为
 conflict，避免 scoped cleanup 切断 scope 外的 desired target。两种 action 投影复用同一个
 traversal 与 ownership 不变量。
+
+同一 plan 内本可 prune 的 state-owned stale link，如果其当前父路径解析链经过一条将在此前
+执行 Update 的 active link，则 stale cleanup 为 conflict。否则 Update 会先改变 namespace，
+让后续 prune 的 resolved ownership 复核被本轮自身必然破坏，并留下部分完成。该规则只比较
+当前 scope 实际生成的 Update/Prune action pair；独立 alias 即使到达相同 destination 也不
+命中，scope 外未生成 cleanup action 的 stale record 不阻断 scoped Update，之后若发生 resolved
+drift 仍按下文 forget。恢复时先保持 parent 的旧 destination 并完成 stale cleanup，再更新
+parent；跨 module 可以在命令 scope 允许时先做 scoped cleanup/remove，同一 module 则分两次
+desired 变更。
+
+当前 scope 内其余 Prune action 按实际 traversal 依赖排序：child target 的父路径解析链经过
+另一条 stale parent link 时，child 先于 parent；无依赖的 action 保持稳定 state key 顺序，
+独立 alias 不建立依赖。多个完整 ownership record 若指向同一个当前 target，只由稳定顺序中的
+第一条 action 代表物理 Prune，其余生成说明代表 action 的 forget；不同 target 即使 raw
+destination 相同仍分别 Prune。该归一化不增加删除授权，每条实际 Prune 仍独立携带并在执行前
+复核自己的 resolved target 与 raw destination。
 
 Stale link 不满足该守卫时（target 已变成普通文件、目录或 special，raw destination 漂移，或
 resolved target 改变）不是 conflict：用户已接管该 target，`dot` 生成说明事实原因的 forget

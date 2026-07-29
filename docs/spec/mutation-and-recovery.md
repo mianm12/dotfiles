@@ -57,7 +57,8 @@ read-only preflight
 - Update/prune 删除 symlink 前重新读取 resolved target 和 raw destination；与 state 不同则停止。
 - Update/prune 删除后重新读取 target；只有确认不存在才继续，重新出现或无法确认时停止且不推进
   state。
-- 新 target 创建和 update 全部成功后才开始 prune。
+- 新 target 创建和 update 全部成功后才开始 prune；Prune 按
+  [`planning.md`](planning.md#link) 生成的 action 顺序执行。
 - Changed target 重新读取符合预期后才进入 state；不建设独立 postcondition framework。
 - State 最后原子提交；state commit 和 lock release 均成功才构成 mutation 成功。公开成功或
   未完成结果的投影只由 [`cli.md`](cli.md#status-与-dry-run) 定义。加载时若发现兼容的非

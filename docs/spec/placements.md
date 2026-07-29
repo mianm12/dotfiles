@@ -80,6 +80,9 @@ target = "~/.config/example/config.local"
   resolved target 及其变化对应的 action eligibility 分别由
   [`state-and-ownership.md`](state-and-ownership.md#ownership-规则) 和
   [`planning.md`](planning.md#link) 定义。
+- State-owned parent link 与本轮 active link ownership 的实际 traversal 约束由
+  [`planning.md`](planning.md#通用决策规则) 定义；只比较真实经过的 link 目录项，不因独立
+  alias 最终到达同一 destination 而建立关系。
 
 不额外探测 case sensitivity、Unicode alias、filesystem type 或 hard-link identity。
 

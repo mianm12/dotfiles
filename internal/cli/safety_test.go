@@ -243,6 +243,14 @@ target = "~/alias/child"
 	if code != exitError ||
 		!strings.Contains(stdout, "conflict") ||
 		!strings.Contains(stdout, "traverses state-owned link") ||
+		!strings.Contains(
+			stdout,
+			"active link cannot be owned or changed while traversed",
+		) ||
+		!strings.Contains(
+			stdout,
+			`effective module \"app\" placement \"child\"`,
+		) ||
 		stderr != "" {
 		t.Fatalf(
 			"apply dry-run after rebind = (%d, %q, %q), want read-only conflict",
@@ -257,9 +265,12 @@ target = "~/alias/child"
 
 	if code != exitError ||
 		stdout != "" ||
-		!strings.Contains(stderr, "traverses state-owned link") {
+		!strings.Contains(
+			stderr,
+			"active link cannot be owned or changed while traversed",
+		) {
 		t.Fatalf(
-			"apply after rebind = (%d, %q, %q), want parent ownership conflict",
+			"apply after rebind = (%d, %q, %q), want active-link traversal conflict",
 			code,
 			stdout,
 			stderr,
@@ -271,6 +282,215 @@ target = "~/alias/child"
 		filepath.Join(oldRepository, "modules", "app", "old", "child"),
 	)
 	assertCLIMissing(t, filepath.Join(alias, "child"))
+}
+
+func TestApplyRejectsProspectiveLinkOwnershipBeforeMutation(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["parent", "child"]`)
+	fixture.writeModule(t, "parent", `
+[[links]]
+id = "tree"
+source = "tree"
+target = "~/owned"
+`, nil)
+	fixture.writeModule(t, "child", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/access/child"
+`, map[string]string{"config": "child"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	parentSource := filepath.Join(fixture.repository, "modules", "parent", "tree")
+	outside := filepath.Join(fixture.root, "outside")
+	for _, directory := range []string{parentSource, outside} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(parentSource, "out")); err != nil {
+		t.Fatalf("os.Symlink(parent internal link) error = %v", err)
+	}
+	parentTarget := filepath.Join(fixture.home, "owned")
+	if err := os.Symlink(parentSource, parentTarget); err != nil {
+		t.Fatalf("os.Symlink(parent target) error = %v", err)
+	}
+	if err := os.Symlink(
+		filepath.Join(parentTarget, "out"),
+		filepath.Join(fixture.home, "access"),
+	); err != nil {
+		t.Fatalf("os.Symlink(access) error = %v", err)
+	}
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("apply")
+
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(
+			stderr,
+			"active link cannot be owned or changed while traversed",
+		) ||
+		!strings.Contains(stderr, `effective module "child" placement "config"`) {
+		t.Fatalf(
+			"apply = (%d, %q, %q), want prospective ownership conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLIMissing(t, filepath.Join(outside, "child"))
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, fixture.lock)
+}
+
+func TestApplyRejectsUpdateThatWouldInvalidateStalePruneBeforeMutation(
+	t *testing.T,
+) {
+	topology := newParentUpdateStaleCLIEnv(t, "new")
+	fixture := topology.fixture
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("apply", "--dry-run")
+	if code != exitError ||
+		stderr != "" ||
+		!strings.Contains(stdout, "update") ||
+		!strings.Contains(stdout, "conflict") ||
+		!strings.Contains(
+			stdout,
+			"cleanup would be invalidated by active link update",
+		) {
+		t.Fatalf(
+			"apply dry-run = (%d, %q, %q), want update/prune conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.run("apply")
+
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(
+			stderr,
+			"cleanup would be invalidated by active link update",
+		) ||
+		!strings.Contains(
+			stderr,
+			`module "parent" placement "tree"`,
+		) {
+		t.Fatalf(
+			"apply = (%d, %q, %q), want preflight update/prune conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLILink(t, topology.parentTarget, topology.oldSource)
+	assertCLILink(t, topology.staleActual, topology.staleSource)
+	assertCLIMissing(t, filepath.Join(topology.newSource, "out"))
+	assertCLIMissing(t, fixture.lock)
+}
+
+type parentUpdateStaleCLIEnv struct {
+	fixture      *cliTestEnv
+	oldSource    string
+	newSource    string
+	parentTarget string
+	staleActual  string
+	staleSource  string
+}
+
+func newParentUpdateStaleCLIEnv(
+	t *testing.T,
+	desiredParentSource string,
+) parentUpdateStaleCLIEnv {
+	t.Helper()
+	fixture := newCLITestEnv(t, `base = ["parent"]`)
+	fixture.writeModule(t, "parent", `
+[[links]]
+id = "tree"
+source = "`+desiredParentSource+`"
+target = "~/owned"
+`, map[string]string{
+		"old/keep": "old",
+		"new/keep": "new",
+	})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	parentRoot := filepath.Join(fixture.repository, "modules", "parent")
+	oldSource := filepath.Join(parentRoot, "old")
+	newSource := filepath.Join(parentRoot, "new")
+	outside := filepath.Join(fixture.root, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", outside, err)
+	}
+	if err := os.Symlink(outside, filepath.Join(oldSource, "out")); err != nil {
+		t.Fatalf("os.Symlink(parent internal link) error = %v", err)
+	}
+	parentTarget := filepath.Join(fixture.home, "owned")
+	if err := os.Symlink(oldSource, parentTarget); err != nil {
+		t.Fatalf("os.Symlink(parent target) error = %v", err)
+	}
+	if err := os.Symlink(
+		filepath.Join(parentTarget, "out"),
+		filepath.Join(fixture.home, "access"),
+	); err != nil {
+		t.Fatalf("os.Symlink(access) error = %v", err)
+	}
+	staleSource := filepath.Join(fixture.root, "old-repository", "child")
+	writeCLIFile(t, staleSource, "stale")
+	staleActual := filepath.Join(outside, "child")
+	if err := os.Symlink(staleSource, staleActual); err != nil {
+		t.Fatalf("os.Symlink(stale target) error = %v", err)
+	}
+	staleTarget := filepath.Join(fixture.home, "access", "child")
+	resolvedParent, err := corepaths.ResolveAbsoluteTarget(
+		fixture.home,
+		parentTarget,
+	)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
+	}
+	resolvedStale, err := corepaths.ResolveAbsoluteTarget(
+		fixture.home,
+		staleTarget,
+	)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(stale) error = %v", err)
+	}
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": {
+					Kind:            state.KindLink,
+					Target:          parentTarget,
+					ResolvedTarget:  resolvedParent.Resolved(),
+					LinkDestination: oldSource,
+				},
+			}},
+			"stale": {Placements: map[string]state.Placement{
+				"child": {
+					Kind:            state.KindLink,
+					Target:          staleTarget,
+					ResolvedTarget:  resolvedStale.Resolved(),
+					LinkDestination: staleSource,
+				},
+			}},
+		},
+	})
+	return parentUpdateStaleCLIEnv{
+		fixture:      fixture,
+		oldSource:    oldSource,
+		newSource:    newSource,
+		parentTarget: parentTarget,
+		staleActual:  staleActual,
+		staleSource:  staleSource,
+	}
 }
 
 func TestInitRejectsControlPathAncestorsBeforeMutation(t *testing.T) {

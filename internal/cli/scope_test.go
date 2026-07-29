@@ -208,6 +208,111 @@ target = "~/.shared/child"
 	assertCLIMissing(t, fixture.lock)
 }
 
+func TestScopedApplyRejectsParentUpdateTraversedByEffectiveChild(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["parent", "child"]`)
+	fixture.writeModule(t, "parent", `
+[[links]]
+id = "tree"
+source = "new"
+target = "~/owned"
+`, map[string]string{
+		"old/keep": "old",
+		"new/keep": "new",
+	})
+	fixture.writeModule(t, "child", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/access/child"
+`, map[string]string{"config": "child"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	parentRoot := filepath.Join(fixture.repository, "modules", "parent")
+	oldSource := filepath.Join(parentRoot, "old")
+	newSource := filepath.Join(parentRoot, "new")
+	outside := filepath.Join(fixture.root, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", outside, err)
+	}
+	if err := os.Symlink(outside, filepath.Join(oldSource, "out")); err != nil {
+		t.Fatalf("os.Symlink(parent internal link) error = %v", err)
+	}
+	parentTarget := filepath.Join(fixture.home, "owned")
+	if err := os.Symlink(oldSource, parentTarget); err != nil {
+		t.Fatalf("os.Symlink(parent target) error = %v", err)
+	}
+	if err := os.Symlink(
+		filepath.Join(parentTarget, "out"),
+		filepath.Join(fixture.home, "access"),
+	); err != nil {
+		t.Fatalf("os.Symlink(access) error = %v", err)
+	}
+	childSource := filepath.Join(fixture.repository, "modules", "child", "config")
+	childTarget := filepath.Join(outside, "child")
+	if err := os.Symlink(childSource, childTarget); err != nil {
+		t.Fatalf("os.Symlink(child target) error = %v", err)
+	}
+	resolvedParent, err := corepaths.ResolveAbsoluteTarget(
+		fixture.home,
+		parentTarget,
+	)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
+	}
+	lexicalChild := filepath.Join(fixture.home, "access", "child")
+	resolvedChild, err := corepaths.ResolveAbsoluteTarget(
+		fixture.home,
+		lexicalChild,
+	)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(child) error = %v", err)
+	}
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": {
+					Kind:            state.KindLink,
+					Target:          parentTarget,
+					ResolvedTarget:  resolvedParent.Resolved(),
+					LinkDestination: oldSource,
+				},
+			}},
+			"child": {Placements: map[string]state.Placement{
+				"config": {
+					Kind:            state.KindLink,
+					Target:          lexicalChild,
+					ResolvedTarget:  resolvedChild.Resolved(),
+					LinkDestination: childSource,
+				},
+			}},
+		},
+	})
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("apply", "parent")
+
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(
+			stderr,
+			"active link cannot be owned or changed while traversed",
+		) ||
+		!strings.Contains(stderr, `effective module "child" placement "config"`) {
+		t.Fatalf(
+			"scoped parent update = (%d, %q, %q), want traversal conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLILink(t, parentTarget, oldSource)
+	assertCLILink(t, childTarget, childSource)
+	assertCLIMissing(t, filepath.Join(newSource, "out"))
+	assertCLIMissing(t, fixture.lock)
+}
+
 func TestScopedApplyThroughDriftedParentConvergesWithoutCleaningOtherState(
 	t *testing.T,
 ) {
