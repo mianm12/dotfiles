@@ -265,6 +265,7 @@ func TestStatusAnalysisRendersOnlyDistinctDimensions(t *testing.T) {
 			Applicability: "applicable",
 			Convergence:   "converged",
 			Variant:       "ubuntu",
+			NamedVariant:  true,
 		},
 		{
 			ID:            "gated",

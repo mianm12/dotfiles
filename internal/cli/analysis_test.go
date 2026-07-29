@@ -49,6 +49,31 @@ target = "~/.extra"
 	}
 }
 
+func TestInitializedInitDryRunKeepsGeneralMissingStateWarning(t *testing.T) {
+	fixture := newCLITestEnv(t, "")
+	fixture.writeMachine(t, nil, nil)
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runInjected(
+		"init",
+		fixture.repository,
+		"--dry-run",
+	)
+
+	if code != exitOK ||
+		!strings.Contains(stdout, "machine is already initialized") ||
+		stderr != "warning: "+state.MissingWarning+"\n" ||
+		strings.Contains(stderr, "expected on first init") {
+		t.Fatalf(
+			"initialized init --dry-run = (%d, %q, %q), want blocker and general missing-state warning",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+}
+
 func TestOperationAnalysisTreatsMachineSelectionsAsSets(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `

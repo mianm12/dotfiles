@@ -109,6 +109,19 @@ func TestApplyHelpExplainsPersistentActivation(t *testing.T) {
 	}
 }
 
+func TestRemoveHelpExplainsExtraSelection(t *testing.T) {
+	fixture := newCLITestEnv(t, "")
+	code, stdout, stderr := fixture.run("help", "remove")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(
+			stdout,
+			"Remove MODULE from extra selection and converge managed targets",
+		) {
+		t.Fatalf("help remove = (%d, %q, %q), want extra-selection semantics", code, stdout, stderr)
+	}
+}
+
 func TestVersionReportsBuildInformation(t *testing.T) {
 	fixture := newCLITestEnv(t, "")
 	code, stdout, stderr := fixture.runInjected("version")

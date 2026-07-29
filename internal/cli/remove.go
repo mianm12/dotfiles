@@ -11,7 +11,7 @@ func newRemoveCommand(env environment) *cobra.Command {
 	var dryRun bool
 	command := &cobra.Command{
 		Use:   "remove MODULE",
-		Short: "Deactivate an extra module and clean owned links",
+		Short: "Remove MODULE from extra selection and converge managed targets",
 		Args:  exactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runRemove(command, args[0], dryRun, env)
@@ -58,10 +58,11 @@ func runRemove(
 		env.afterPreflight()
 	}
 
+	rerun := "dot apply"
 	outcome, runErr := runMutationSession(
 		context,
 		preflight.ProspectiveMachine.Repository,
-		fmt.Sprintf("dot remove %s", moduleID),
+		rerun,
 		func(session *executor.Session, outcome *mutationOutcome) error {
 			machine, err := loadRequiredMachine(context)
 			if err != nil {
@@ -81,9 +82,9 @@ func runRemove(
 			outcome.selectionChanged = selectionChanged
 			if err := afterSelectionPublished(env, selectionChanged); err != nil {
 				return fmt.Errorf(
-					"machine selection was saved before cleanup was interrupted: %w; rerun dot remove %s",
+					"machine selection was saved before cleanup was interrupted: %w; rerun %s",
 					err,
-					moduleID,
+					rerun,
 				)
 			}
 			if !selectionChanged &&
@@ -102,9 +103,9 @@ func runRemove(
 			if convergeErr != nil {
 				if selectionChanged {
 					return fmt.Errorf(
-						"machine selection was saved before cleanup failed: %w; rerun dot remove %s",
+						"machine selection was saved before cleanup failed: %w; rerun %s",
 						convergeErr,
-						moduleID,
+						rerun,
 					)
 				}
 				return convergeErr
@@ -116,6 +117,6 @@ func runRemove(
 		command,
 		outcome,
 		runErr,
-		fmt.Sprintf("dot remove %s", moduleID),
+		rerun,
 	)
 }

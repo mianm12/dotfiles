@@ -197,3 +197,34 @@ target = "~/.second"
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
 }
+
+func TestStatusShowsNamedPortableVariant(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[variants.portable]
+root = "."
+
+[[variants.portable.links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "app"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runInjected("status", "app")
+
+	if code != exitOK ||
+		!strings.Contains(stdout, "app  pending selection=profile variant=portable\n") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf(
+			"status named portable variant = (%d, %q, %q), want explicit variant",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, fixture.lock)
+}

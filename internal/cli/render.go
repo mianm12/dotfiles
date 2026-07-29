@@ -254,7 +254,7 @@ func printStatusAnalysis(
 		if module.Convergence != "-" && module.Convergence != module.Summary {
 			line += " convergence=" + module.Convergence
 		}
-		if module.Variant != "-" && module.Variant != "portable" {
+		if module.NamedVariant {
 			line += " variant=" + module.Variant
 		}
 		if module.Reason != "" {

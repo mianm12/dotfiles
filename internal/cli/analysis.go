@@ -54,6 +54,7 @@ type ModuleAnalysis struct {
 	Applicability string
 	Convergence   string
 	Variant       string
+	NamedVariant  bool
 	Reason        string
 }
 
@@ -152,7 +153,7 @@ func analyzeInit(
 	if err != nil {
 		return OperationAnalysis{}, err
 	}
-	if inputs.loaded.Missing {
+	if inputs.loaded.Missing && !exists {
 		analysis.Warnings = []string{initMissingStateWarning}
 	}
 	return analysis, nil
@@ -710,6 +711,7 @@ func buildModuleAnalyses(
 			analysis.Applicability = string(observation.applicability.State)
 			if observation.applicability.State == config.ApplicabilityApplicable {
 				analysis.Variant = observation.variant
+				analysis.NamedVariant = observation.variant != ""
 				if analysis.Variant == "" {
 					analysis.Variant = "portable"
 				}

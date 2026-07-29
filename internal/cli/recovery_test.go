@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/core/config"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -217,20 +218,80 @@ target = "~/.app"
 		}
 
 		stderr = runWithFailedStdout(t, []string{"remove", "app"})
-		assertOutputFailure(t, stderr, "dot remove app")
+		assertOutputFailure(t, stderr, "dot apply")
 		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
 		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 			t.Fatalf("extra_modules = %v, want empty", extras)
 		}
 
 		before := snapshotPaths(t, fixture.config, fixture.state, fixture.lock)
-		code, stdout, stderr := fixture.run("remove", "app")
+		code, stdout, stderr := fixture.run("apply")
 		if code != exitOK || stderr != "" {
-			t.Fatalf("recovery remove = (%d, %q, %q)", code, stdout, stderr)
+			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertCLINoMutationResult(t, stdout)
 		assertSnapshotUnchanged(t, before)
 	})
+}
+
+func TestProfileExtraRemoveInterruptionAdvisesApply(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[match]
+os = ["macos"]
+
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "app"})
+	fixture.writeMachine(t, []string{"base"}, []string{"app"})
+	fixture.env.platform = func() config.Platform {
+		return cliTestPlatform("macos", "", "aarch64")
+	}
+	if code, _, stderr := fixture.runInjected("apply"); code != exitOK {
+		t.Fatalf("initial apply = (%d, %q)", code, stderr)
+	}
+	target := filepath.Join(fixture.home, ".app")
+	fixture.env.platform = func() config.Platform {
+		return cliTestPlatform("linux", "ubuntu", "x86_64")
+	}
+	fixture.env.afterSelectionPublish = func() error {
+		return errors.New("synthetic interruption")
+	}
+
+	code, stdout, stderr := fixture.runInjected("remove", "app")
+
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(stderr, "rerun dot apply") ||
+		strings.Contains(stderr, "rerun dot remove") {
+		t.Fatalf(
+			"profile+extra remove interruption = (%d, %q, %q), want apply recovery",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+		t.Fatalf("extra_modules = %v, want persisted empty selection", extras)
+	}
+	assertCLILink(
+		t,
+		target,
+		filepath.Join(fixture.repository, "modules", "app", "config"),
+	)
+
+	fixture.env.afterSelectionPublish = nil
+	code, _, stderr = fixture.runInjected("apply")
+	if code != exitOK {
+		t.Fatalf("recovery apply = (%d, %q)", code, stderr)
+	}
+	assertCLIMissing(t, target)
+	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+		t.Fatalf("state modules = %#v, want empty after recovery", modules)
+	}
+	assertApplyNoMutation(t, fixture, fixture.runInjected)
 }
 
 func TestScopedApplyFailureAdvisesScopedRerun(t *testing.T) {

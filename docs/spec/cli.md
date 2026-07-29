@@ -56,6 +56,8 @@ dot help [COMMAND]
 - 同时由 profile 与 `extra_modules` 选择时，remove 删除冗余 extra：applicable module 继续按
   profile selection 收敛；not-applicable module 按既有 profile cleanup 规则处理；
   indeterminate 或配置错误仍在 selection 写入前失败。
+- Remove 的 selection 已提交后若 cleanup、结果输出或 lock release 失败，统一提示运行
+  `dot apply`，按已持久化的当前 selection 恢复收敛。
 - 要移除 profile 选中的 module，先在仓库 profile 删除引用，再 `dot apply` 收敛 prune。
 - Extra module 先从 prospective selection 移除，通过 preflight 后写回配置。
 - 对目标 module 投影 [`planning.md`](planning.md) 产生的 prune/forget action；CLI 不另行定义
@@ -92,7 +94,8 @@ dot help [COMMAND]
   - selection 不是 `none` 时追加 `selection=<profile|extra|profile+extra>`；
   - applicability 仅在不是 `applicable`/`-` 且未与 `not-applicable` 摘要重复时追加；
   - convergence 不是 `-` 且未与摘要重复时追加；
-  - 只有具名 variant 才追加 `variant=VARIANT`，`portable` 与 `-` 省略；
+  - 只有具名 variant 才追加 `variant=VARIANT`；portable layout 与 `-` 省略，但名字恰好为
+    `portable` 的具名 variant 仍显示 `variant=portable`；
   - 只有非空 reason 才追加带双引号和转义的 `reason=QUOTED_REASON`。
 
   Analysis 内部的 `-` 仍表示未加载或不存在该维度，不是平台状态。Effective indeterminate
