@@ -36,6 +36,86 @@ func TestResolveTarget_ExpandsAndCleansBelowHome(t *testing.T) {
 	}
 }
 
+func TestResolveAbsoluteTargetRequiresStrictHomeDescendant(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(home) error = %v", err)
+	}
+	inside := filepath.Join(home, ".config", "tool")
+	target, err := ResolveAbsoluteTarget(home, inside)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(inside) error = %v", err)
+	}
+	if got := target.Lexical(); got != inside {
+		t.Fatalf("ResolveAbsoluteTarget(inside).Lexical() = %q, want %q", got, inside)
+	}
+
+	tests := []struct {
+		name   string
+		home   string
+		target string
+	}{
+		{name: "HOME itself", home: home, target: home},
+		{name: "HOME parent", home: home, target: root},
+		{name: "sibling with HOME prefix", home: home, target: filepath.Join(root, "home-other")},
+		{name: "relative HOME", home: "home", target: inside},
+		{name: "relative target", home: home, target: ".config/tool"},
+		{name: "target containing NUL", home: home, target: inside + "\x00"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ResolveAbsoluteTarget(test.home, test.target)
+			if !errors.Is(err, ErrInvalidPath) {
+				t.Fatalf("ResolveAbsoluteTarget() error = %v, want ErrInvalidPath", err)
+			}
+			if class, ok := ClassifyResolutionError(err); ok {
+				t.Fatalf(
+					"ClassifyResolutionError() = (%v, true), want unclassified invalid input",
+					class,
+				)
+			}
+		})
+	}
+}
+
+func TestResolveAbsoluteTargetPreservesAncestorAndLeafSemantics(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	outside := filepath.Join(root, "outside")
+	destination := filepath.Join(root, "destination")
+	for _, directory := range []string{home, outside, destination} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(home, "alias")); err != nil {
+		t.Fatalf("os.Symlink(ancestor) error = %v", err)
+	}
+	if err := os.Symlink(destination, filepath.Join(outside, "leaf")); err != nil {
+		t.Fatalf("os.Symlink(leaf) error = %v", err)
+	}
+	resolvedOutside, err := filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatalf("filepath.EvalSymlinks(outside) error = %v", err)
+	}
+
+	absolute := filepath.Join(home, "alias", "leaf")
+	target, err := ResolveAbsoluteTarget(home, absolute)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget() error = %v", err)
+	}
+	if got := target.Lexical(); got != absolute {
+		t.Fatalf("Lexical() = %q, want %q", got, absolute)
+	}
+	if got, want := target.Resolved(), filepath.Join(resolvedOutside, "leaf"); got != want {
+		t.Fatalf("Resolved() = %q, want target entry %q", got, want)
+	}
+	if target.Resolved() == destination {
+		t.Fatal("ResolveAbsoluteTarget() followed the target leaf symlink")
+	}
+}
+
 func TestResolveTarget_RejectsUnsupportedOrEscapingExpressions(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {

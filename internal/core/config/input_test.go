@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"errors"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -123,15 +124,21 @@ base = ["app"]
 			t.Fatalf("OpenRepository() error = %v", err)
 		}
 
-		resolution, err := loaded.Resolve(
-			coreconfig.Scope{Profiles: []string{"base"}},
+		module, exists, applicability, err := loaded.InspectModule(
+			"app",
 			testPlatform("linux", "", ""),
 		)
 		if err != nil {
-			t.Fatalf("Resolve(symlink manifest) error = %v", err)
+			t.Fatalf("InspectModule(symlink manifest) error = %v", err)
 		}
-		if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"app"}) {
-			t.Fatalf("resolved modules = %v, want [app]", got)
+		if !exists || module.ID != "app" ||
+			applicability.State != coreconfig.ApplicabilityApplicable {
+			t.Fatalf(
+				"InspectModule(symlink manifest) = (%#v, %t, %#v), want applicable app",
+				module,
+				exists,
+				applicability,
+			)
 		}
 	})
 }
@@ -157,7 +164,7 @@ func TestOpenRepositoryRejectsUnsafeRootManifestEntries(t *testing.T) {
 	}
 }
 
-func TestResolveDefersUnsafeOutOfScopeManifestEntries(t *testing.T) {
+func TestInspectModuleDefersUnsafeOutOfScopeManifestEntries(t *testing.T) {
 	for _, test := range unsafeManifestEntries() {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -178,15 +185,28 @@ base = ["good"]
 			}
 			before := snapshotTree(t, root)
 
-			resolution, err := loaded.Resolve(
-				coreconfig.Scope{Profiles: []string{"base"}},
+			profileModules, err := loaded.ProfileModules([]string{"base"})
+			if err != nil {
+				t.Fatalf("ProfileModules(good scope) error = %v", err)
+			}
+			if !reflect.DeepEqual(profileModules, []string{"good"}) {
+				t.Fatalf("ProfileModules(good scope) = %v, want [good]", profileModules)
+			}
+			module, exists, applicability, err := loaded.InspectModule(
+				"good",
 				testPlatform("linux", "", ""),
 			)
-			if err != nil {
-				t.Fatalf("Resolve(good scope) error = %v", err)
-			}
-			if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"good"}) {
-				t.Fatalf("resolved modules = %v, want [good]", got)
+			if err != nil ||
+				!exists ||
+				module.ID != "good" ||
+				applicability.State != coreconfig.ApplicabilityApplicable {
+				t.Fatalf(
+					"InspectModule(good) = (%#v, %t, %#v, %v), want applicable good",
+					module,
+					exists,
+					applicability,
+					err,
+				)
 			}
 			if _, exists, _, err := loaded.InspectModule(
 				"bad",
@@ -200,6 +220,52 @@ base = ["good"]
 			}
 			assertTreeUnchanged(t, root, before)
 		})
+	}
+}
+
+func TestProfileModulesDefersOutOfScopeDiscoveryError(t *testing.T) {
+	root := t.TempDir()
+	repository := writeRepository(t, root, `
+version = 1
+
+[profiles]
+base = ["good"]
+`)
+	writeModule(t, repository, "good", "")
+	badRoot := writeModule(t, repository, "bad", "")
+	if err := os.Chmod(badRoot, 0); err != nil {
+		t.Fatalf("os.Chmod(bad module) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(badRoot, 0o700)
+	})
+	manifest := filepath.Join(badRoot, "module.toml")
+	if _, err := os.Lstat(manifest); !errors.Is(err, fs.ErrPermission) {
+		t.Skipf("filesystem does not enforce directory traversal permissions: %v", err)
+	}
+
+	loaded, err := coreconfig.OpenRepository(repository)
+	if err != nil {
+		t.Fatalf("OpenRepository() error = %v", err)
+	}
+	profileModules, err := loaded.ProfileModules([]string{"base"})
+	if err != nil {
+		t.Fatalf("ProfileModules(good scope) error = %v", err)
+	}
+	if !reflect.DeepEqual(profileModules, []string{"good"}) {
+		t.Fatalf("ProfileModules(good scope) = %v, want [good]", profileModules)
+	}
+	if _, exists, _, err := loaded.InspectModule(
+		"bad",
+		testPlatform("linux", "", ""),
+	); exists ||
+		!errors.Is(err, coreconfig.ErrInvalidConfiguration) ||
+		!errors.Is(err, fs.ErrPermission) {
+		t.Fatalf(
+			"InspectModule(bad) = (exists=%t, err=%v), want discovery permission failure",
+			exists,
+			err,
+		)
 	}
 }
 

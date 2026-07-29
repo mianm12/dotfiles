@@ -6,6 +6,8 @@ on:
       - "**/*.go"
       - go.mod
       - go.sum
+      - tools/go.mod
+      - tools/go.sum
       - Makefile
       - .github/workflows/security.yml
   schedule:
@@ -34,6 +36,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
 
       - name: Scan reachable vulnerabilities
         run: make vuln

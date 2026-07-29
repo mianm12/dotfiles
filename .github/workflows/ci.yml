@@ -35,6 +35,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
 
       - name: Run project checks
         # Makefile 是本地与 CI 的唯一门禁入口；构建产物无需保留在工作区。

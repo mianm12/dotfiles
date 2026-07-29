@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sync"
 
 	"github.com/mianm12/dotfiles/internal/storage"
 )
@@ -20,16 +19,11 @@ var (
 )
 
 // Ownership 表示一次 mutation 周期持有的排他锁所有权。
-// 值副本共享同一次所有权且只能成功释放一次；零值无效。
+// 它只支持同一指针的串行使用；值副本和零值无效，并发调用不受支持。
 type Ownership struct {
-	state *ownershipState
-}
-
-type ownershipState struct {
-	mu       sync.Mutex
-	backend  backend
-	path     string
-	released bool
+	self    *Ownership
+	backend backend
+	path    string
 }
 
 // Acquire 建立 state root 与 lock 文件，并尝试立即取得进程间排他锁。
@@ -80,27 +74,24 @@ func validateEntries(root, path string) error {
 }
 
 func newOwnership(fileLock backend, path string) *Ownership {
-	return &Ownership{state: &ownershipState{
+	owner := &Ownership{
 		backend: fileLock,
 		path:    path,
-	}}
+	}
+	owner.self = owner
+	return owner
 }
 
 // Release 释放锁；同一次所有权只能成功释放一次。
 func (owner *Ownership) Release() error {
-	if owner == nil || owner.state == nil {
+	if owner == nil || owner.self != owner || owner.backend == nil {
 		return ErrOwnership
 	}
-	state := owner.state
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.released || state.backend == nil {
-		return ErrOwnership
+	if err := owner.backend.Unlock(); err != nil {
+		return fmt.Errorf("%w: release process lock %q: %w", ErrIO, owner.path, err)
 	}
-	if err := state.backend.Unlock(); err != nil {
-		return fmt.Errorf("%w: release process lock %q: %w", ErrIO, state.path, err)
-	}
-	state.released = true
+	owner.backend = nil
+	owner.self = nil
 	return nil
 }
 

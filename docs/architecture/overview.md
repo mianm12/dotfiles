@@ -19,11 +19,11 @@ repository desired + machine selection + state + actual filesystem
 
 核心业务逻辑与 CLI、文件发布和进程退出分离。`cmd/dot` 只把进程 IO/环境交给 `cli.Run` 并以
 其结果退出。OperationAnalysis 是只读观察结果，不是 executor 输入；真实 mutation 在锁内
-重新分析后，只把 prospective machine、resolution 和 scope 交给持锁 Session；Session 固定
-HOME 与 controls，selection 发布和 artifact convergence 都不能替换这组边界。Converge 再次
-加载 state 并重新规划。Scoped mutation 的 module 投影只包含请求 scope 和具有 module-specific
-blocker 的 module；完整 prospective selection 仍保存在 machine 中，其他 effective modules
-继续通过 resolution 参与 target topology 校验。
+重新分析后，只把 prospective machine、已解析 module 集合和 scope 交给持锁 Session；
+Session 固定 HOME 与 controls，selection 发布和 artifact convergence 都不能替换这组边界。
+Converge 再次加载 state 并重新规划。Scoped mutation 的 module 投影只包含请求 scope 和具有
+module-specific blocker 的 module；完整 prospective selection 仍保存在 machine 中，其他
+effective modules 继续通过已解析 module 集合参与 target topology 校验。
 
 唯一内部 mutation 生命周期是：
 
@@ -35,9 +35,10 @@ Session.Close()
 ```
 
 CLI 不直接获取、复用或释放 lock，也不直接发布 machine selection。Session 只表达这一条
-线性生命周期，不引入通用 workflow、事务或 rollback。Session 的值副本共享同一份 lock
-ownership 与关闭状态；Close 失败后只允许重试 Close，不再接受 selection 或 artifact
-mutation。
+线性生命周期，不引入通用 workflow、事务或 rollback。Session 和 lock ownership 都只支持
+同一指针的串行使用，值副本会被拒绝，并发调用不受支持。Close 失败表示 lock 尚未确认释放；
+Session 不再接受 selection 或 artifact mutation，只允许重试 Close。成功释放后，同一
+ownership 不得再次释放。
 
 ## Package 职责
 
@@ -89,10 +90,9 @@ storage / paths / state
 - `gofrs/flock`：单进程 mutation lock。
 - `renameio/v2`：仅由 `internal/storage` 用于私有 control file 的原子覆盖发布。
 
-测试专用依赖限 `google/go-cmp` 与 `stretchr/testify`。
-
-`golangci-lint` 与 `govulncheck` 通过 `go.mod` 的 `tool` directive 固定版本，并由
-`go tool` 调用。它们进入 module graph，但不是生产代码第三方 import allowlist 的一部分。
+`golangci-lint` 与 `govulncheck` 通过 `tools/go.mod` 的 `tool` directive 固定版本，并从仓库
+根目录使用 `go tool -modfile=tools/go.mod` 调用。工具 module graph 与产品 module graph
+隔离，也不属于生产代码第三方 import allowlist。
 
 Local 与新文件的不可覆盖发布不使用 rename：先写 `0600` 临时文件，再以 `os.Link` 发布到
 target；已存在时得到 `EEXIST`，同时保证内容完整、不可覆盖和原子出现。

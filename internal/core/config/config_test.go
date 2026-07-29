@@ -108,7 +108,7 @@ func TestOpenRepository_StrictRootManifest(t *testing.T) {
 	}
 }
 
-func TestResolve_ValidatesOnlySelectedProfileReferences(t *testing.T) {
+func TestProfileModules_ValidatesOnlySelectedProfileReferences(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -121,21 +121,22 @@ inactive = ["deleted"]
 	if err != nil {
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
-	if _, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"active"}},
-		testPlatform("linux", "", ""),
-	); err != nil {
-		t.Fatalf("Resolve(active profile) error = %v", err)
+	modules, err := loaded.ProfileModules([]string{"active"})
+	if err != nil {
+		t.Fatalf("ProfileModules(active profile) error = %v", err)
 	}
-	if _, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"inactive"}},
-		testPlatform("linux", "", ""),
-	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
-		t.Fatalf("Resolve(inactive profile when selected) error = %v", err)
+	if !reflect.DeepEqual(modules, []string{"good"}) {
+		t.Fatalf("ProfileModules(active profile) = %v, want [good]", modules)
+	}
+	if _, err := loaded.ProfileModules([]string{"inactive"}); !errors.Is(
+		err,
+		coreconfig.ErrInvalidConfiguration,
+	) {
+		t.Fatalf("ProfileModules(inactive profile) error = %v", err)
 	}
 }
 
-func TestResolve_TreatsMachineSelectionsAsSets(t *testing.T) {
+func TestProfileModules_TreatsProfilesAsSet(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -147,23 +148,16 @@ base = ["app"]
 	if err != nil {
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
-	resolution, err := loaded.Resolve(
-		coreconfig.Scope{
-			Profiles:        []string{"base", "base"},
-			ExtraModules:    []string{"app", "app"},
-			RequiredModules: []string{"app", "app"},
-		},
-		testPlatform("linux", "", ""),
-	)
+	modules, err := loaded.ProfileModules([]string{"base", "base"})
 	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
+		t.Fatalf("ProfileModules() error = %v", err)
 	}
-	if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"app"}) {
-		t.Fatalf("resolved modules = %v, want [app]", got)
+	if !reflect.DeepEqual(modules, []string{"app"}) {
+		t.Fatalf("ProfileModules() = %v, want [app]", modules)
 	}
 }
 
-func TestResolve_ValidatesModuleStructure(t *testing.T) {
+func TestInspectModule_ValidatesModuleStructure(t *testing.T) {
 	tests := []struct {
 		name     string
 		manifest string
@@ -232,17 +226,17 @@ root = "."
 			if err != nil {
 				t.Fatalf("OpenRepository() error = %v", err)
 			}
-			if _, err := loaded.Resolve(
-				coreconfig.Scope{RequiredModules: []string{"app"}},
+			if _, _, _, err := loaded.InspectModule(
+				"app",
 				testPlatform("linux", "ubuntu", "aarch64"),
 			); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
-				t.Fatalf("Resolve() error = %v, want ErrInvalidConfiguration", err)
+				t.Fatalf("InspectModule() error = %v, want ErrInvalidConfiguration", err)
 			}
 		})
 	}
 }
 
-func TestResolve_DistroAllowsDuplicateLinuxMatchTokens(t *testing.T) {
+func TestInspectModule_DistroAllowsDuplicateLinuxMatchTokens(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, "version = 1\n[profiles]\nbase = [\"app\"]\n")
 	writeModule(t, repository, "app", `
@@ -255,19 +249,25 @@ distro = ["ubuntu"]
 	if err != nil {
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
-	resolution, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"base"}},
+	module, exists, applicability, err := loaded.InspectModule(
+		"app",
 		testPlatform("linux", "ubuntu", ""),
 	)
 	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
+		t.Fatalf("InspectModule() error = %v", err)
 	}
-	if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"app"}) {
-		t.Fatalf("resolved modules = %v, want [app]", got)
+	if !exists || module.ID != "app" ||
+		applicability.State != coreconfig.ApplicabilityApplicable {
+		t.Fatalf(
+			"InspectModule() = (%#v, %t, %#v), want applicable app",
+			module,
+			exists,
+			applicability,
+		)
 	}
 }
 
-func TestResolve_MaterializesFileAndDirectoryLinksAndLocal(t *testing.T) {
+func TestInspectModule_MaterializesFileAndDirectoryLinksAndLocal(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -303,28 +303,34 @@ target = "~/.config/app/config.local"
 	if err != nil {
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
-	resolution, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"base"}},
+	module, exists, applicability, err := loaded.InspectModule(
+		"app",
 		testPlatform("macos", "", "aarch64"),
 	)
 	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
+		t.Fatalf("InspectModule() error = %v", err)
 	}
-	if len(resolution.Modules) != 1 ||
-		len(resolution.Modules[0].Links) != 3 ||
-		len(resolution.Modules[0].Locals) != 1 {
-		t.Fatalf("resolution = %#v", resolution)
+	if !exists ||
+		applicability.State != coreconfig.ApplicabilityApplicable ||
+		len(module.Links) != 3 ||
+		len(module.Locals) != 1 {
+		t.Fatalf(
+			"InspectModule() = (%#v, %t, %#v)",
+			module,
+			exists,
+			applicability,
+		)
 	}
-	if directoryLink := resolution.Modules[0].Links[1]; directoryLink.SourcePath !=
+	if directoryLink := module.Links[1]; directoryLink.SourcePath !=
 		filepath.Join(moduleRoot, "tree") {
 		t.Fatalf("directory link = %#v, want source path under module root", directoryLink)
 	}
-	if rootLink := resolution.Modules[0].Links[2]; rootLink.SourcePath != moduleRoot {
+	if rootLink := module.Links[2]; rootLink.SourcePath != moduleRoot {
 		t.Fatalf("root directory link = %#v, want source path %q", rootLink, moduleRoot)
 	}
 }
 
-func TestResolve_RejectsVariantRootSymlinkEscape(t *testing.T) {
+func TestInspectModule_RejectsVariantRootSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -349,11 +355,11 @@ os = ["linux"]
 	if err != nil {
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
-	if _, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"base"}},
+	if _, _, _, err := loaded.InspectModule(
+		"app",
 		testPlatform("linux", "", ""),
 	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
-		t.Fatalf("Resolve() error = %v, want ErrInvalidConfiguration", err)
+		t.Fatalf("InspectModule() error = %v, want ErrInvalidConfiguration", err)
 	}
 }
 

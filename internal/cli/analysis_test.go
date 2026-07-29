@@ -53,6 +53,42 @@ target = "~/.extra"
 	}
 }
 
+func TestOperationAnalysisTreatsMachineSelectionsAsSets(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "portable"})
+	fixture.writeMachine(
+		t,
+		[]string{"base", "base"},
+		[]string{"app", "app"},
+	)
+	context, err := resolveContext(fixture.env)
+	if err != nil {
+		t.Fatalf("resolveContext() error = %v", err)
+	}
+
+	analysis, err := analyzeStatus(context, fixture.loadMachine(t), nil)
+	if err != nil {
+		t.Fatalf("analyzeStatus() error = %v", err)
+	}
+	if len(analysis.Modules) != 1 ||
+		analysis.Modules[0].ID != "app" ||
+		analysis.Modules[0].Selection != "profile+extra" ||
+		len(analysis.Actions) != 1 ||
+		analysis.Actions[0].ModuleID != "app" ||
+		analysis.Actions[0].PlacementID != "config" {
+		t.Fatalf(
+			"analysis = %#v, actions = %#v; want one profile+extra app action",
+			analysis.Modules,
+			analysis.Actions,
+		)
+	}
+}
+
 func TestScopedMutationAnalysisProjectsOnlyScopeAndModuleBlockers(t *testing.T) {
 	t.Run("successful scope", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = ["base"]`)

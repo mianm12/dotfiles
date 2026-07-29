@@ -97,7 +97,7 @@ func runInit(
 				)
 			}
 			result, convergeErr := session.Converge(
-				locked.resolution.Modules,
+				locked.resolvedModules,
 				locked.scope,
 			)
 			outcome.result = result
