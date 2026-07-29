@@ -8,10 +8,6 @@ import (
 var (
 	// ErrInvalidConfiguration reports a malformed or inconsistent config.
 	ErrInvalidConfiguration = errors.New("invalid configuration")
-	// ErrNotApplicable reports a required module with no matching platform form.
-	ErrNotApplicable = errors.New("module is not applicable")
-	// ErrIndeterminate reports that platform evidence cannot select or reject a module.
-	ErrIndeterminate = errors.New("module applicability is indeterminate")
 )
 
 // ApplicabilityState is the result of matching one module against a platform.
@@ -62,29 +58,6 @@ type Machine struct {
 	Repository   string
 	Profiles     []string
 	ExtraModules []string
-}
-
-// Scope names the modules needed by one operation. Profile modules may be
-// not-applicable; extras and explicitly required modules must apply.
-type Scope struct {
-	Profiles        []string
-	ExtraModules    []string
-	RequiredModules []string
-}
-
-// Scope returns a detached scope derived from the machine selection.
-func (machine Machine) Scope(required ...string) Scope {
-	return Scope{
-		Profiles:        append([]string(nil), machine.Profiles...),
-		ExtraModules:    append([]string(nil), machine.ExtraModules...),
-		RequiredModules: append([]string(nil), required...),
-	}
-}
-
-// Resolution is the deterministic result of loading exactly one scope.
-type Resolution struct {
-	Modules       []Module
-	NotApplicable []string
 }
 
 // Module is one portable module or selected variant.

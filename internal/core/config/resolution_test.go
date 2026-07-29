@@ -2,175 +2,16 @@ package config_test
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
-	"strconv"
-	"strings"
 	"testing"
 
 	coreconfig "github.com/mianm12/dotfiles/internal/core/config"
 )
 
-func TestResolveProfileVariantSkipsButExplicitModuleFails(t *testing.T) {
-	root := t.TempDir()
-	repository := writeRepository(t, root, `
-version = 1
-
-[profiles]
-base = ["variant"]
-`)
-	writeModule(t, repository, "variant", `
-[variants.linux]
-root = "."
-
-[variants.linux.match]
-os = ["linux"]
-
-[[variants.linux.links]]
-id = "config"
-source = "config"
-target = "~/.config/example/config"
-`)
-	writeFile(t, filepath.Join(repository, "modules", "variant", "config"), "portable bytes")
-
-	machinePath := filepath.Join(root, "machine.toml")
-	writeFile(t, machinePath, fmt.Sprintf(`
-version = 1
-repository = %s
-profiles = ["base"]
-extra_modules = []
-`, strconv.Quote(repository)))
-	machine, exists, err := coreconfig.LoadMachine(machinePath)
-	if err != nil || !exists {
-		t.Fatalf("LoadMachine() = (%#v, %t, %v), want existing config", machine, exists, err)
-	}
-
-	loaded, err := coreconfig.OpenRepository(repository)
-	if err != nil {
-		t.Fatalf("OpenRepository() error = %v", err)
-	}
-	before := snapshotTree(t, root)
-	resolution, err := loaded.Resolve(
-		machine.Scope(),
-		testPlatform("macos", "", "aarch64"),
-	)
-	if err != nil {
-		t.Fatalf("Resolve(profile scope) error = %v", err)
-	}
-	if len(resolution.Modules) != 0 ||
-		!reflect.DeepEqual(resolution.NotApplicable, []string{"variant"}) {
-		t.Fatalf("profile resolution = %#v, want variant skipped", resolution)
-	}
-
-	explicit, err := loaded.Resolve(
-		machine.Scope("variant"),
-		testPlatform("macos", "", "aarch64"),
-	)
-	if !errors.Is(err, coreconfig.ErrNotApplicable) {
-		t.Fatalf("Resolve(explicit variant) = (%#v, %v), want ErrNotApplicable", explicit, err)
-	}
-	if len(machine.ExtraModules) != 0 {
-		t.Fatalf("explicit failure changed in-memory extras: %#v", machine.ExtraModules)
-	}
-	assertTreeUnchanged(t, root, before)
-}
-
-func TestResolveScopedResolutionIgnoresDamagedOutOfScopeModule(t *testing.T) {
-	root := t.TempDir()
-	repository := writeRepository(t, root, `
-version = 1
-
-[profiles]
-base = ["good"]
-`)
-	writeModule(t, repository, "good", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.config/good/config"
-`)
-	writeFile(t, filepath.Join(repository, "modules", "good", "config"), "good")
-	writeModule(t, repository, "bad", "unknown = true\n")
-
-	loaded, err := coreconfig.OpenRepository(repository)
-	if err != nil {
-		t.Fatalf("OpenRepository() error = %v", err)
-	}
-	before := snapshotTree(t, root)
-	resolution, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"base"}},
-		testPlatform("linux", "ubuntu", "x86_64"),
-	)
-	if err != nil {
-		t.Fatalf("Resolve(good scope) error = %v", err)
-	}
-	if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"good"}) {
-		t.Fatalf("resolved modules = %v, want [good]", got)
-	}
-
-	damaged, err := loaded.Resolve(
-		coreconfig.Scope{
-			Profiles:        []string{"base"},
-			RequiredModules: []string{"bad"},
-		},
-		testPlatform("linux", "ubuntu", "x86_64"),
-	)
-	if !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
-		t.Fatalf("Resolve(bad scope) = (%#v, %v), want ErrInvalidConfiguration", damaged, err)
-	}
-	assertTreeUnchanged(t, root, before)
-}
-
-func TestResolveScopedResolutionDefersOutOfScopeDiscoveryError(t *testing.T) {
-	root := t.TempDir()
-	repository := writeRepository(t, root, `
-version = 1
-
-[profiles]
-base = ["good"]
-`)
-	writeModule(t, repository, "good", "")
-	badRoot := writeModule(t, repository, "bad", "")
-	if err := os.Chmod(badRoot, 0); err != nil {
-		t.Fatalf("os.Chmod(bad module) error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chmod(badRoot, 0o700)
-	})
-	manifest := filepath.Join(badRoot, "module.toml")
-	if _, err := os.Lstat(manifest); !errors.Is(err, fs.ErrPermission) {
-		t.Skipf("filesystem does not enforce directory traversal permissions: %v", err)
-	}
-
-	loaded, err := coreconfig.OpenRepository(repository)
-	if err != nil {
-		t.Fatalf("OpenRepository() error = %v", err)
-	}
-	resolution, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"base"}},
-		testPlatform("linux", "", ""),
-	)
-	if err != nil {
-		t.Fatalf("Resolve(good scope) error = %v", err)
-	}
-	if got := moduleIDs(resolution.Modules); !reflect.DeepEqual(got, []string{"good"}) {
-		t.Fatalf("resolved modules = %v, want [good]", got)
-	}
-
-	if _, err := loaded.Resolve(
-		coreconfig.Scope{RequiredModules: []string{"bad"}},
-		testPlatform("linux", "", ""),
-	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) ||
-		!errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("Resolve(bad scope) error = %v, want invalid configuration with permission error", err)
-	}
-}
-
-func TestResolveInvalidSourceOrExampleFailsReadOnly(t *testing.T) {
+func TestInspectModuleInvalidSourceOrExampleFailsReadOnly(t *testing.T) {
 	tests := []struct {
 		name     string
 		manifest string
@@ -249,7 +90,10 @@ target = "~/.config/example/config.local"
 `,
 			setup: func(t *testing.T, moduleRoot string) {
 				writeFile(t, filepath.Join(moduleRoot, "real.example"), "content")
-				if err := os.Symlink("real.example", filepath.Join(moduleRoot, "alias.example")); err != nil {
+				if err := os.Symlink(
+					"real.example",
+					filepath.Join(moduleRoot, "alias.example"),
+				); err != nil {
 					t.Fatalf("os.Symlink(alias example) error = %v", err)
 				}
 			},
@@ -274,92 +118,21 @@ base = ["app"]
 				t.Fatalf("OpenRepository() error = %v", err)
 			}
 			before := snapshotTree(t, root)
-			resolution, err := loaded.Resolve(
-				coreconfig.Scope{Profiles: []string{"base"}},
+
+			_, exists, _, err := loaded.InspectModule(
+				"app",
 				testPlatform("linux", "ubuntu", "x86_64"),
 			)
-			if !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
-				t.Fatalf("Resolve() = (%#v, %v), want ErrInvalidConfiguration", resolution, err)
+			if !exists || !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
+				t.Fatalf(
+					"InspectModule() = (exists=%t, err=%v), want selected invalid configuration",
+					exists,
+					err,
+				)
 			}
 			assertTreeUnchanged(t, root, before)
 		})
 	}
-}
-
-func TestResolveDistinguishesKnownMismatchFromIndeterminatePlatform(t *testing.T) {
-	root := t.TempDir()
-	repository := writeRepository(t, root, `
-version = 1
-
-[profiles]
-base = ["portable", "gated"]
-`)
-	writeModule(t, repository, "portable", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.config/portable/config"
-`)
-	writeFile(t, filepath.Join(repository, "modules", "portable", "config"), "portable")
-	writeModule(t, repository, "gated", `
-[variants.ubuntu]
-root = "."
-
-[variants.ubuntu.match]
-os = ["linux"]
-distro = ["ubuntu"]
-
-[[variants.ubuntu.links]]
-id = "config"
-source = "config"
-target = "~/.config/gated/config"
-`)
-	writeFile(t, filepath.Join(repository, "modules", "gated", "config"), "gated")
-	writeModule(t, repository, "invalid-os", `
-[match]
-os = ["freebsd"]
-`)
-
-	loaded, err := coreconfig.OpenRepository(repository)
-	if err != nil {
-		t.Fatalf("OpenRepository() error = %v", err)
-	}
-	before := snapshotTree(t, root)
-	knownMismatch, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"base"}},
-		testPlatform("linux", "gentoo", "riscv64"),
-	)
-	if err != nil {
-		t.Fatalf("Resolve(known mismatch) error = %v", err)
-	}
-	if got := moduleIDs(knownMismatch.Modules); !reflect.DeepEqual(got, []string{"portable"}) ||
-		!reflect.DeepEqual(knownMismatch.NotApplicable, []string{"gated"}) {
-		t.Fatalf(
-			"known-mismatch resolution = %#v, want portable plus gated not-applicable",
-			knownMismatch,
-		)
-	}
-
-	unknownDistro := testPlatform("linux", "", "x86_64")
-	unknownDistro.Distro = coreconfig.UnknownPlatformField(
-		"/etc/os-release is unreadable",
-	)
-	if _, err := loaded.Resolve(
-		coreconfig.Scope{Profiles: []string{"base"}},
-		unknownDistro,
-	); !errors.Is(err, coreconfig.ErrIndeterminate) ||
-		!strings.Contains(err.Error(), "platform distro is unknown") {
-		t.Fatalf("Resolve(unknown distro) error = %v, want ErrIndeterminate", err)
-	}
-
-	invalid, err := loaded.Resolve(
-		coreconfig.Scope{RequiredModules: []string{"invalid-os"}},
-		testPlatform("linux", "ubuntu", "x86_64"),
-	)
-	if !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
-		t.Fatalf("Resolve(invalid os) = (%#v, %v), want ErrInvalidConfiguration", invalid, err)
-	}
-	assertTreeUnchanged(t, root, before)
 }
 
 func writeRepository(t *testing.T, root, manifest string) string {
@@ -390,15 +163,6 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
 	}
-}
-
-func moduleIDs(modules []coreconfig.Module) []string {
-	ids := make([]string, len(modules))
-	for index := range modules {
-		ids[index] = modules[index].ID
-	}
-	slices.Sort(ids)
-	return ids
 }
 
 type treeEntry struct {
@@ -447,6 +211,6 @@ func assertTreeUnchanged(t *testing.T, root string, before map[string]treeEntry)
 	t.Helper()
 	after := snapshotTree(t, root)
 	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("config resolution mutated fixture\nbefore=%v\nafter=%v", before, after)
+		t.Fatalf("config inspection mutated fixture\nbefore=%v\nafter=%v", before, after)
 	}
 }

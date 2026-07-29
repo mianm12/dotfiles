@@ -25,10 +25,9 @@ type moduleFile struct {
 }
 
 // Repository is a strictly loaded root manifest plus lazily discovered module
-// manifest paths. Module contents are not decoded until Resolve selects them.
+// manifest paths. Module contents are not decoded until InspectModule is called.
 type Repository struct {
 	valid        bool
-	root         string
 	profiles     map[string][]string
 	modules      map[string]moduleFile
 	moduleErrors map[string]error
@@ -67,17 +66,11 @@ func OpenRepository(root string) (Repository, error) {
 	}
 	return Repository{
 		valid:        true,
-		root:         root,
 		profiles:     profiles,
 		modules:      modules,
 		moduleErrors: moduleErrors,
 		ids:          ids,
 	}, nil
-}
-
-// Root returns the absolute repository root.
-func (repository Repository) Root() string {
-	return repository.root
 }
 
 // ModuleIDs returns the recognized module IDs in byte order.

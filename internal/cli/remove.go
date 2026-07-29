@@ -95,7 +95,7 @@ func runRemove(
 				return nil
 			}
 			result, convergeErr := session.Converge(
-				locked.resolution.Modules,
+				locked.resolvedModules,
 				locked.scope,
 			)
 			outcome.result = result

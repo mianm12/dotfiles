@@ -64,9 +64,9 @@ type OperationAnalysis struct {
 	Warnings []string
 	Blockers []AnalysisBlocker
 
-	resolution config.Resolution
-	scope      []string
-	loaded     state.Loaded
+	resolvedModules []config.Module
+	scope           []string
+	loaded          state.Loaded
 }
 
 type selectionSource struct {
@@ -123,7 +123,7 @@ func analyzeInit(
 		return OperationAnalysis{}, err
 	}
 	blockers = append(blockers, inputs.blockers...)
-	resolution, sources, observations, selectionBlockers, err := resolveSelection(
+	resolvedModules, sources, observations, selectionBlockers, err := resolveSelection(
 		inputs.repository,
 		prospective,
 		context.platform,
@@ -140,7 +140,7 @@ func analyzeInit(
 		SelectionDelta{Kind: SelectionDeltaCreate},
 		nil,
 		inputs.loaded,
-		resolution,
+		resolvedModules,
 		sources,
 		observations,
 		blockers,
@@ -183,7 +183,7 @@ func analyzeApply(
 		plannerScope = []string{requested}
 	}
 
-	resolution, sources, observations, selectionBlockers, err := resolveSelection(
+	resolvedModules, sources, observations, selectionBlockers, err := resolveSelection(
 		inputs.repository,
 		prospective,
 		context.platform,
@@ -203,7 +203,7 @@ func analyzeApply(
 		delta,
 		plannerScope,
 		inputs.loaded,
-		resolution,
+		resolvedModules,
 		sources,
 		observations,
 		blockers,
@@ -288,7 +288,7 @@ func analyzeRemove(
 		}
 	}
 
-	resolution, sources, observations, selectionBlockers, err := resolveSelection(
+	resolvedModules, sources, observations, selectionBlockers, err := resolveSelection(
 		inputs.repository,
 		prospective,
 		context.platform,
@@ -308,7 +308,7 @@ func analyzeRemove(
 		delta,
 		[]string{moduleID},
 		inputs.loaded,
-		resolution,
+		resolvedModules,
 		sources,
 		observations,
 		blockers,
@@ -325,7 +325,7 @@ func analyzeStatus(
 	if err != nil {
 		return OperationAnalysis{}, err
 	}
-	resolution, sources, observations, selectionBlockers, err := resolveSelection(
+	resolvedModules, sources, observations, selectionBlockers, err := resolveSelection(
 		inputs.repository,
 		current,
 		context.platform,
@@ -374,7 +374,7 @@ func analyzeStatus(
 	actions, inputWarnings, planned, err := buildStatusActions(
 		context,
 		current,
-		resolution,
+		resolvedModules,
 		inputs.loaded.Snapshot,
 		ids,
 		blockers,
@@ -387,7 +387,7 @@ func analyzeStatus(
 		SelectionDelta{Kind: SelectionDeltaNone},
 		nil,
 		inputs.loaded,
-		resolution,
+		resolvedModules,
 		sources,
 		observations,
 		actions,
@@ -431,7 +431,7 @@ func resolveSelection(
 	required map[string]bool,
 	ignoreMissingExtras bool,
 ) (
-	config.Resolution,
+	[]config.Module,
 	map[string]selectionSource,
 	map[string]moduleObservation,
 	[]AnalysisBlocker,
@@ -439,7 +439,7 @@ func resolveSelection(
 ) {
 	profileModules, err := repository.ProfileModules(machine.Profiles)
 	if err != nil {
-		return config.Resolution{}, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	sources := make(map[string]selectionSource)
 	for _, moduleID := range profileModules {
@@ -459,10 +459,7 @@ func resolveSelection(
 	}
 
 	ids := sortedAnalysisKeys(sources)
-	resolution := config.Resolution{
-		Modules:       make([]config.Module, 0, len(ids)),
-		NotApplicable: make([]string, 0),
-	}
+	resolvedModules := make([]config.Module, 0, len(ids))
 	observations := make(map[string]moduleObservation, len(ids))
 	blockers := make([]AnalysisBlocker, 0)
 	for _, moduleID := range ids {
@@ -471,7 +468,7 @@ func resolveSelection(
 			platform,
 		)
 		if inspectErr != nil {
-			return config.Resolution{}, nil, nil, nil, inspectErr
+			return nil, nil, nil, nil, inspectErr
 		}
 		source := sources[moduleID]
 		if !exists {
@@ -491,18 +488,13 @@ func resolveSelection(
 		}
 		switch applicability.State {
 		case config.ApplicabilityApplicable:
-			resolution.Modules = append(resolution.Modules, module)
+			resolvedModules = append(resolvedModules, module)
 		case config.ApplicabilityNotApplicable:
 			if source.extra || required[moduleID] {
 				blockers = append(blockers, AnalysisBlocker{
 					ModuleID: moduleID,
 					Reason:   fmt.Sprintf("module %q is not applicable", moduleID),
 				})
-			} else {
-				resolution.NotApplicable = append(
-					resolution.NotApplicable,
-					moduleID,
-				)
 			}
 		case config.ApplicabilityIndeterminate:
 			blockers = append(blockers, AnalysisBlocker{
@@ -514,15 +506,14 @@ func resolveSelection(
 				),
 			})
 		default:
-			return config.Resolution{}, nil, nil, nil, fmt.Errorf(
+			return nil, nil, nil, nil, fmt.Errorf(
 				"module %q returned invalid applicability %q",
 				moduleID,
 				applicability.State,
 			)
 		}
 	}
-	slices.Sort(resolution.NotApplicable)
-	return resolution, sources, observations, blockers, nil
+	return resolvedModules, sources, observations, blockers, nil
 }
 
 func buildMutationAnalysis(
@@ -531,7 +522,7 @@ func buildMutationAnalysis(
 	delta SelectionDelta,
 	scope []string,
 	loaded state.Loaded,
-	resolution config.Resolution,
+	resolvedModules []config.Module,
 	sources map[string]selectionSource,
 	observations map[string]moduleObservation,
 	blockers []AnalysisBlocker,
@@ -542,7 +533,7 @@ func buildMutationAnalysis(
 		plan, err := planner.Build(planner.Request{
 			Home:     context.home,
 			Controls: context.controls(machine.Repository),
-			Modules:  resolution.Modules,
+			Modules:  resolvedModules,
 			Scope:    scope,
 			State:    loaded.Snapshot,
 		})
@@ -574,7 +565,7 @@ func buildMutationAnalysis(
 		delta,
 		scope,
 		loaded,
-		resolution,
+		resolvedModules,
 		sources,
 		observations,
 		actions,
@@ -588,7 +579,7 @@ func buildMutationAnalysis(
 func buildStatusActions(
 	context commandContext,
 	machine config.Machine,
-	resolution config.Resolution,
+	resolvedModules []config.Module,
 	snapshot state.Snapshot,
 	moduleIDs []string,
 	blockers []AnalysisBlocker,
@@ -616,7 +607,7 @@ func buildStatusActions(
 		scoped, err := planner.Build(planner.Request{
 			Home:     context.home,
 			Controls: context.controls(machine.Repository),
-			Modules:  resolution.Modules,
+			Modules:  resolvedModules,
 			Scope:    []string{moduleID},
 			State:    snapshot,
 		})
@@ -646,7 +637,7 @@ func newOperationAnalysis(
 	delta SelectionDelta,
 	scope []string,
 	loaded state.Loaded,
-	resolution config.Resolution,
+	resolvedModules []config.Module,
 	sources map[string]selectionSource,
 	observations map[string]moduleObservation,
 	actions []planner.Action,
@@ -667,12 +658,12 @@ func newOperationAnalysis(
 			blockers,
 			planned,
 		),
-		Actions:    append([]planner.Action(nil), actions...),
-		Warnings:   append([]string(nil), warnings...),
-		Blockers:   append([]AnalysisBlocker(nil), blockers...),
-		resolution: resolution,
-		scope:      append([]string(nil), scope...),
-		loaded:     loaded,
+		Actions:         append([]planner.Action(nil), actions...),
+		Warnings:        append([]string(nil), warnings...),
+		Blockers:        append([]AnalysisBlocker(nil), blockers...),
+		resolvedModules: append([]config.Module(nil), resolvedModules...),
+		scope:           append([]string(nil), scope...),
+		loaded:          loaded,
 	}
 }
 

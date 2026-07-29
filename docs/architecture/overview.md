@@ -19,11 +19,11 @@ repository desired + machine selection + state + actual filesystem
 
 核心业务逻辑与 CLI、文件发布和进程退出分离。`cmd/dot` 只把进程 IO/环境交给 `cli.Run` 并以
 其结果退出。OperationAnalysis 是只读观察结果，不是 executor 输入；真实 mutation 在锁内
-重新分析后，只把 prospective machine、resolution 和 scope 交给持锁 Session；Session 固定
-HOME 与 controls，selection 发布和 artifact convergence 都不能替换这组边界。Converge 再次
-加载 state 并重新规划。Scoped mutation 的 module 投影只包含请求 scope 和具有 module-specific
-blocker 的 module；完整 prospective selection 仍保存在 machine 中，其他 effective modules
-继续通过 resolution 参与 target topology 校验。
+重新分析后，只把 prospective machine、已解析 module 集合和 scope 交给持锁 Session；
+Session 固定 HOME 与 controls，selection 发布和 artifact convergence 都不能替换这组边界。
+Converge 再次加载 state 并重新规划。Scoped mutation 的 module 投影只包含请求 scope 和具有
+module-specific blocker 的 module；完整 prospective selection 仍保存在 machine 中，其他
+effective modules 继续通过已解析 module 集合参与 target topology 校验。
 
 唯一内部 mutation 生命周期是：
 
