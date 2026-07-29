@@ -89,7 +89,6 @@ func loadModule(
 	return Module{
 		ID:      id,
 		Variant: selected.variant,
-		Root:    selected.root,
 		Links:   links,
 		Locals:  locals,
 	}, applicability, nil
@@ -493,7 +492,6 @@ func materializePlacements(
 		}
 		links[index] = Link{
 			ID:         declared.ID,
-			Source:     declared.Source,
 			SourcePath: sourcePath,
 			Target:     declared.Target,
 		}
@@ -507,7 +505,6 @@ func materializePlacements(
 		}
 		locals[index] = Local{
 			ID:          declared.ID,
-			Example:     declared.Example,
 			ExamplePath: examplePath,
 			Target:      declared.Target,
 		}
