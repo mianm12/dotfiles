@@ -88,16 +88,18 @@ func TestClosedSessionRejectsPublishAndConverge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSession() error = %v", err)
 	}
-	copied := *session
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	if changed, err := copied.PublishSelection(sessionTestMachine(fixture.repository)); err == nil || changed {
+	if changed, err := session.PublishSelection(sessionTestMachine(fixture.repository)); err == nil || changed {
 		t.Fatalf("PublishSelection(after close) = (%t, %v), want unchanged error", changed, err)
 	}
-	if result, err := copied.Converge(nil, nil); err == nil {
+	if result, err := session.Converge(nil, nil); err == nil {
 		t.Fatalf("Converge(after close) = (%#v, nil), want error", result)
+	}
+	if err := session.Close(); !errors.Is(err, ErrSessionClosed) {
+		t.Fatalf("Close(after close) error = %v, want ErrSessionClosed", err)
 	}
 	var nilSession *Session
 	if changed, err := nilSession.PublishSelection(sessionTestMachine(fixture.repository)); err == nil || changed {
@@ -247,9 +249,9 @@ func TestSessionCloseFailureKeepsOwnershipForRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSession() error = %v", err)
 	}
-	originalRelease := session.state.release
+	originalRelease := session.release
 	attempts := 0
-	session.state.release = func() error {
+	session.release = func() error {
 		attempts++
 		if attempts == 1 {
 			return fmt.Errorf("%w: synthetic release failure", lock.ErrIO)

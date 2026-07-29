@@ -156,19 +156,18 @@ func TestAcquire_WritesOnlyWhenCalledAndRejectsInvalidPaths(t *testing.T) {
 	}
 }
 
-func TestOwnership_CopiesShareSingleRelease(t *testing.T) {
+func TestOwnership_ReleasesOnlyOnce(t *testing.T) {
 	root, path := lockFixturePaths(t)
 	owner, err := Acquire(root, path)
 	if err != nil {
 		t.Fatalf("Acquire() error = %v", err)
 	}
-	copied := *owner
 
 	if err := owner.Release(); err != nil {
 		t.Fatalf("Ownership.Release() error = %v", err)
 	}
-	if err := copied.Release(); !errors.Is(err, ErrOwnership) {
-		t.Fatalf("copied Ownership.Release() error = %v, want ErrOwnership", err)
+	if err := owner.Release(); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("second Ownership.Release() error = %v, want ErrOwnership", err)
 	}
 	if code, stderr := runProbe(t, root, path); code != 0 {
 		t.Fatalf("probe after release exit = %d, want 0; stderr=%q", code, stderr)
@@ -183,41 +182,6 @@ func TestOwnership_CopiesShareSingleRelease(t *testing.T) {
 	}
 }
 
-func TestOwnership_CopiesReleaseConcurrentlyOnce(t *testing.T) {
-	fileLock := &stubBackend{}
-	owner := newOwnership(fileLock, "/state/lock")
-
-	const copies = 16
-	start := make(chan struct{})
-	results := make(chan error, copies)
-	for range copies {
-		copied := *owner
-		go func() {
-			<-start
-			results <- copied.Release()
-		}()
-	}
-	close(start)
-
-	succeeded := 0
-	for range copies {
-		err := <-results
-		switch {
-		case err == nil:
-			succeeded++
-		case errors.Is(err, ErrOwnership):
-		default:
-			t.Fatalf("copied Ownership.Release() error = %v, want nil or ErrOwnership", err)
-		}
-	}
-	if succeeded != 1 {
-		t.Fatalf("successful copied Ownership.Release() calls = %d, want 1", succeeded)
-	}
-	if fileLock.unlockCalls != 1 {
-		t.Fatalf("Unlock() calls = %d, want 1", fileLock.unlockCalls)
-	}
-}
-
 func TestOwnership_ReleaseIOErrorCanBeRetried(t *testing.T) {
 	unlockErr := errors.New("unlock failed")
 	fileLock := &stubBackend{unlockErr: unlockErr}
@@ -227,13 +191,12 @@ func TestOwnership_ReleaseIOErrorCanBeRetried(t *testing.T) {
 	if !errors.Is(err, ErrIO) || !errors.Is(err, unlockErr) {
 		t.Fatalf("Ownership.Release() error = %v, want ErrIO wrapping unlock failure", err)
 	}
-	copied := *owner
 	fileLock.unlockErr = nil
-	if err := copied.Release(); err != nil {
-		t.Fatalf("copied Ownership.Release() retry error = %v", err)
+	if err := owner.Release(); err != nil {
+		t.Fatalf("Ownership.Release() retry error = %v", err)
 	}
 	if err := owner.Release(); !errors.Is(err, ErrOwnership) {
-		t.Fatalf("Ownership.Release() after copied retry error = %v, want ErrOwnership", err)
+		t.Fatalf("Ownership.Release() after retry error = %v, want ErrOwnership", err)
 	}
 	if fileLock.unlockCalls != 2 {
 		t.Errorf("Unlock() calls = %d, want 2", fileLock.unlockCalls)
