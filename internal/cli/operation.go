@@ -15,6 +15,21 @@ type mutationOutcome struct {
 	selectionChanged bool
 }
 
+var errDryRunBlocked = errors.New("dry-run blocked")
+
+func printDryRunAnalysis(
+	command *cobra.Command,
+	analysis OperationAnalysis,
+) error {
+	if err := printOperationAnalysis(command, analysis); err != nil {
+		return err
+	}
+	if rejectAnalysis(analysis) != nil {
+		return errDryRunBlocked
+	}
+	return nil
+}
+
 func validateOperationControls(context commandContext, machine config.Machine) error {
 	return executor.ValidateMutationControls(context.controls(machine.Repository))
 }

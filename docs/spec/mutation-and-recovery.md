@@ -30,10 +30,11 @@ read-only preflight
   lock 前失败，零文件系统写入：不得创建或 chmod config/state/lock root、lock、temporary
   file、selection、state、parent 或 target。
 - [`selection.md`](selection.md#platform-与-module) 定义的任意 prospective effective
-  indeterminate、extra/explicit selection 的 not-applicable，或 remove 仅由 extra 选中的
-  current module 时目标自身的 not-applicable/indeterminate，都属于同一 preflight 失败边界：
-  整次真实 mutation 在获取 lock 前失败，零写入。Profile not-applicable cleanup 是否存在只由
-  [`planning.md`](planning.md#通用决策规则) 决定。
+  indeterminate，以及 init/apply 中 extra/explicit selection 的 not-applicable，都属于同一
+  preflight 失败边界：整次真实 mutation 在获取 lock 前失败，零写入。Remove 仅由 extra 选中的
+  module 是 selection 收缩：目标不再 prospective effective，因此其当前 not-applicable 或
+  indeterminate 不阻断 remove；cleanup 只能依据既有 state ownership 规划。Profile
+  not-applicable cleanup 是否存在只由 [`planning.md`](planning.md#通用决策规则) 决定。
 - 只有只读 preflight 成功后才能获取 lock；锁内必须重新加载、验证和规划，不执行保存的
   preflight plan。锁内、首次发布 changed selection 之前的复核失败只可以留下 advisory-lock
   bookkeeping，不得写 selection、target 或 state；selection 已发布后的失败按下文中断恢复
@@ -56,7 +57,8 @@ read-only preflight
 - Update/prune 删除 symlink 前重新读取 resolved target 和 raw destination；与 state 不同则停止。
 - Update/prune 删除后重新读取 target；只有确认不存在才继续，重新出现或无法确认时停止且不推进
   state。
-- 新 target 创建和 update 全部成功后才开始 prune。
+- 新 target 创建和 update 全部成功后才开始 prune；Prune 按
+  [`planning.md`](planning.md#link) 生成的 action 顺序执行。
 - Changed target 重新读取符合预期后才进入 state；不建设独立 postcondition framework。
 - State 最后原子提交；state commit 和 lock release 均成功才构成 mutation 成功。公开成功或
   未完成结果的投影只由 [`cli.md`](cli.md#status-与-dry-run) 定义。加载时若发现兼容的非

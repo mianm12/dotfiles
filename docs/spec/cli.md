@@ -63,9 +63,9 @@ dot help [COMMAND]
 - 对目标 module 投影 [`planning.md`](planning.md) 产生的 prune/forget action；CLI 不另行定义
   link 或 local cleanup eligibility。
 - Manifest 已删除但 extra/state 仍有 module 记录时允许清理。
-- Current selection 中仍是 extra 的 module，若 manifest 存在但已确定 not-applicable 或为
-  indeterminate，则按 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 的
-  selection 写入边界显示 blocker；先修复平台检测或 manifest。
+- 仅由 extra 选择的 module 即使当前已确定 not-applicable 或为 indeterminate，remove 仍可
+  收缩 selection，并只依据既有 state ownership 投影 cleanup。该 selection 写入与 mutation
+  边界由 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
 - 已 inactive 且无 state 时成功 no-op；完全未知的 module 失败。
 
 ## 命令 scope 与加载
@@ -109,9 +109,11 @@ dot help [COMMAND]
   `remove-extra`；`add-extra`/`remove-extra` 同时显示 module ID。完整分析中的 blocker 写
   stdout 并包含 reason。Dry-run 和 status 都显示计划执行的 forget action 及其结构化
   reason；status 还显示每条 concrete placement conflict；输入 warning 仍写 stderr。
-- Status 与 dry-run 只要形成完整 analysis 就返回成功，即使其中有 pending、conflict 或
-  blocker；没有 `--check`。配置、manifest 或 state 无法解析、必要输入无法读取，或未分类的
-  文件系统观察失败时 analysis 不完整并返回失败。
+- Status 只要形成完整 analysis 就返回成功，即使其中有 pending、conflict 或 blocker。
+  Mutation dry-run 形成完整 analysis 后，若同一 analysis 会因 blocker 或 plan conflict
+  被真实 mutation 拒绝，则完整输出后返回 `1`；否则返回成功。Pending、create、update、
+  prune 或 forget action 本身不改变 dry-run 退出码。没有 `--check`。配置、manifest 或 state
+  无法解析、必要输入无法读取，或未分类的文件系统观察失败时 analysis 不完整并返回失败。
 - Dry-run 使用与真实命令相同的解析、resolution 和 planner，但不写 config、state、target、
   parent directory、lock 或 temporary file。
 - Status 和 dry-run 可以在内存中删除兼容的空 state module，但不得因此重写 state。
@@ -125,21 +127,26 @@ dot help [COMMAND]
 
 ## 输出与退出码
 
-正常结果、status 和 dry-run plan 写 stdout；错误写 stderr。不得输出 local 内容、配置内容或
-秘密。Control topology 或 placement/control path conflict 必须列出发生冲突的具体路径，并
-提示运行 `dot paths` 查看当前 control 文件位置。
+正常结果、status 和 dry-run plan 写 stdout；错误写 stderr。Blocked dry-run 的完整 analysis
+仍是 stdout 结果，不在 stderr 重复 blocker。不得输出 local 内容、配置内容或秘密。Control
+topology 或 placement/control path conflict 必须列出发生冲突的具体路径，并提示运行
+`dot paths` 查看当前 control 文件位置。
 
 | Exit code | 含义 |
 | ---: | --- |
-| `0` | 成功，或有效 status/dry-run |
-| `1` | 配置、ownership、lock、文件系统或运行时失败 |
+| `0` | 成功、完整 status，或可执行的 mutation dry-run |
+| `1` | Blocked mutation dry-run，或配置、ownership、lock、文件系统及运行时失败 |
 | `2` | CLI 参数或用法错误 |
 
-真实 mutation 请求未知、不适用或 applicability indeterminate 的 module 时返回 `1`。
-Status/dry-run 能把 request-specific 未知、不适用、indeterminate、profile-selected remove、
-已初始化 init 或路径 conflict 表达为完整 blocker 时返回 `0`；无效 module ID、active profile
-引用缺失 module、malformed manifest 与多个已确定 matching variants 仍是配置失败并返回
-`1`。`2` 仅用于 CLI 语法错误，例如未知 flag 或 `remove` 缺少 `MODULE` 参数。
+真实 mutation 的 request-specific 未知 module、init/apply 请求的 not-applicable 或
+applicability indeterminate，以及 remove 的 profile-selected blocker 都返回 `1`。仅由
+extra 选择的 remove 目标按上文 selection contraction 规则处理；其他 prospective effective
+indeterminate module 仍返回 `1`。
+Status 能把 request-specific 未知、不适用、indeterminate、profile-selected remove、已初始化
+init 或路径 conflict 表达为完整 blocker 时返回 `0`；mutation dry-run 对同样的完整 blocker
+返回 `1`，同时保留完整 stdout。无效 module ID、active profile 引用缺失 module、malformed
+manifest 与多个已确定 matching variants 仍是配置失败并返回 `1`。`2` 仅用于 CLI 语法错误，
+例如未知 flag 或 `remove` 缺少 `MODULE` 参数。
 
 运行时失败不要求维护完整的 completed/failed/not-attempted 结果协议。错误信息必须指出失败
 动作；已经发生 mutation 时提示本轮可能部分完成并建议重跑，不得输出计划 action 或把未完成

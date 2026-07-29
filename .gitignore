@@ -24,6 +24,7 @@
 # ── Go 模块与工作区 ──
 ## 取消下一行注释以忽略 vendor 目录
 # /vendor/
+## 本地 workspace 可以存在；仓库 Make 目标显式使用 GOWORK=off
 /go.work
 /go.work.sum
 

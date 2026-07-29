@@ -331,8 +331,7 @@ func TestSessionConvergeRejectsActiveControlBoundary(t *testing.T) {
 		}
 	}()
 	modules := []config.Module{{
-		ID:   "app",
-		Root: filepath.Dir(source),
+		ID: "app",
 		Links: []config.Link{{
 			ID:         "config",
 			SourcePath: source,
@@ -442,8 +441,7 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 			Lock:       filepath.Join(home, ".local", "state", "dot", "lock"),
 		},
 		Modules: []config.Module{{
-			ID:   "app",
-			Root: filepath.Dir(source),
+			ID: "app",
 			Links: []config.Link{{
 				ID:         "config",
 				SourcePath: source,

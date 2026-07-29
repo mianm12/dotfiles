@@ -62,7 +62,6 @@ type Machine struct {
 type Module struct {
 	ID      string
 	Variant string
-	Root    string
 	Links   []Link
 	Locals  []Local
 }
@@ -70,7 +69,6 @@ type Module struct {
 // Link is one validated file or directory link placement.
 type Link struct {
 	ID         string
-	Source     string
 	SourcePath string
 	Target     string
 }
@@ -78,7 +76,6 @@ type Link struct {
 // Local is one validated local-file placement.
 type Local struct {
 	ID          string
-	Example     string
 	ExamplePath string
 	Target      string
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
+	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -164,6 +165,219 @@ target = "~/.app"
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
 	})
+}
+
+func TestApplyUsesTwoStagesForParentUpdateAndTraversedStaleCleanup(
+	t *testing.T,
+) {
+	topology := newParentUpdateStaleCLIEnv(t, "old")
+	fixture := topology.fixture
+
+	code, _, stderr := fixture.run("apply")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("stage-one apply = (%d, %q), want stale cleanup", code, stderr)
+	}
+	assertCLILink(t, topology.parentTarget, topology.oldSource)
+	assertCLIMissing(t, topology.staleActual)
+	if _, exists := loadTestState(t, fixture).Modules["stale"]; exists {
+		t.Fatal("stage-one apply retained stale ownership")
+	}
+	assertApplyNoMutation(t, fixture, fixture.run)
+
+	writeModuleManifest(t, fixture, "parent", `
+[[links]]
+id = "tree"
+source = "new"
+target = "~/owned"
+`)
+	code, _, stderr = fixture.run("apply")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("stage-two apply = (%d, %q), want parent update", code, stderr)
+	}
+	assertCLILink(t, topology.parentTarget, topology.newSource)
+	assertApplyNoMutation(t, fixture, fixture.run)
+}
+
+func TestApplyPrunesTraversedStaleLinksChildFirst(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	fixture.writeMachine(t, []string{"base"}, nil)
+	parentSource := filepath.Join(fixture.root, "old-repository", "tree")
+	outside := filepath.Join(fixture.root, "outside")
+	for _, directory := range []string{parentSource, outside} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(parentSource, "out")); err != nil {
+		t.Fatalf("os.Symlink(parent internal link) error = %v", err)
+	}
+	parentTarget := filepath.Join(fixture.home, "owned")
+	if err := os.Symlink(parentSource, parentTarget); err != nil {
+		t.Fatalf("os.Symlink(parent target) error = %v", err)
+	}
+	access := filepath.Join(fixture.home, "access")
+	if err := os.Symlink(filepath.Join(parentSource, "out"), access); err != nil {
+		t.Fatalf("os.Symlink(initial access) error = %v", err)
+	}
+	childSource := filepath.Join(fixture.root, "old-repository", "child")
+	writeCLIFile(t, childSource, "stale")
+	childActual := filepath.Join(outside, "child")
+	if err := os.Symlink(childSource, childActual); err != nil {
+		t.Fatalf("os.Symlink(child target) error = %v", err)
+	}
+	childTarget := filepath.Join(access, "child")
+	resolvedParent, err := corepaths.ResolveAbsoluteTarget(
+		fixture.home,
+		parentTarget,
+	)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
+	}
+	resolvedChild, err := corepaths.ResolveAbsoluteTarget(
+		fixture.home,
+		childTarget,
+	)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(child) error = %v", err)
+	}
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"stale": {Placements: map[string]state.Placement{
+				"a-parent": {
+					Kind:            state.KindLink,
+					Target:          parentTarget,
+					ResolvedTarget:  resolvedParent.Resolved(),
+					LinkDestination: parentSource,
+				},
+				"z-child": {
+					Kind:            state.KindLink,
+					Target:          childTarget,
+					ResolvedTarget:  resolvedChild.Resolved(),
+					LinkDestination: childSource,
+				},
+			}},
+		},
+	})
+	if err := os.Remove(access); err != nil {
+		t.Fatalf("os.Remove(access) error = %v", err)
+	}
+	if err := os.Symlink(filepath.Join(parentTarget, "out"), access); err != nil {
+		t.Fatalf("os.Symlink(rebound access) error = %v", err)
+	}
+	if current, err := corepaths.ResolveAbsoluteTarget(
+		fixture.home,
+		childTarget,
+	); err != nil || current.Resolved() != resolvedChild.Resolved() {
+		t.Fatalf(
+			"ResolveAbsoluteTarget(rebound child) = (%#v, %v), want %q",
+			current,
+			err,
+			resolvedChild.Resolved(),
+		)
+	}
+
+	code, _, stderr := fixture.run("apply")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("apply = (%d, %q), want ordered stale cleanup", code, stderr)
+	}
+	assertCLIMissing(t, childActual)
+	assertCLIMissing(t, parentTarget)
+	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+		t.Fatalf("state modules = %#v, want both stale records removed", modules)
+	}
+	assertApplyNoMutation(t, fixture, fixture.run)
+}
+
+func TestDuplicateStaleOwnershipAcrossStatusDryRunAndApply(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	fixture.writeMachine(t, []string{"base"}, nil)
+	realParent := filepath.Join(fixture.root, "targets")
+	if err := os.MkdirAll(realParent, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", realParent, err)
+	}
+	firstAlias := filepath.Join(fixture.home, "first")
+	secondAlias := filepath.Join(fixture.home, "second")
+	for _, alias := range []string{firstAlias, secondAlias} {
+		if err := os.Symlink(realParent, alias); err != nil {
+			t.Fatalf("os.Symlink(%q) error = %v", alias, err)
+		}
+	}
+	source := filepath.Join(fixture.root, "old-repository", "config")
+	writeCLIFile(t, source, "stale")
+	actual := filepath.Join(realParent, "config")
+	if err := os.Symlink(source, actual); err != nil {
+		t.Fatalf("os.Symlink(actual) error = %v", err)
+	}
+	firstTarget := filepath.Join(firstAlias, "config")
+	secondTarget := filepath.Join(secondAlias, "config")
+	resolved, err := corepaths.ResolveAbsoluteTarget(fixture.home, firstTarget)
+	if err != nil {
+		t.Fatalf("ResolveAbsoluteTarget(first) error = %v", err)
+	}
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"stale-a": {Placements: map[string]state.Placement{
+				"config": {
+					Kind:            state.KindLink,
+					Target:          firstTarget,
+					ResolvedTarget:  resolved.Resolved(),
+					LinkDestination: source,
+				},
+			}},
+			"stale-b": {Placements: map[string]state.Placement{
+				"config": {
+					Kind:            state.KindLink,
+					Target:          secondTarget,
+					ResolvedTarget:  resolved.Resolved(),
+					LinkDestination: source,
+				},
+			}},
+		},
+	})
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "forget") ||
+		!strings.Contains(stdout, "shares ownership") {
+		t.Fatalf(
+			"status = (%d, %q, %q), want cross-module duplicate ownership",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.run("apply", "--dry-run")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "prune") ||
+		!strings.Contains(stdout, "forget") ||
+		!strings.Contains(stdout, "shares ownership") {
+		t.Fatalf(
+			"apply dry-run = (%d, %q, %q), want one prune and one forget",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, _, stderr = fixture.run("apply")
+	if code != exitOK ||
+		!strings.Contains(stderr, "forgot ownership") ||
+		!strings.Contains(stderr, "shares ownership") {
+		t.Fatalf("apply = (%d, %q), want duplicate cleanup", code, stderr)
+	}
+	assertCLIMissing(t, actual)
+	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+		t.Fatalf("state modules = %#v, want duplicate records removed", modules)
+	}
+	assertApplyNoMutation(t, fixture, fixture.run)
 }
 
 func TestMutationOutputFailureAdvisesRerun(t *testing.T) {

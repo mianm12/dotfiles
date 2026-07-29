@@ -24,6 +24,64 @@ func TestEnsureRoot_CreatesAndCorrectsPrivateDirectory(t *testing.T) {
 		t.Fatalf("EnsureRoot(%q) after broad mode error = %v", root, err)
 	}
 	assertMode(t, root, PrivateDirectoryMode)
+
+	if err := os.Chmod(root, PrivateDirectoryMode|fs.ModeSticky); err != nil {
+		t.Fatalf("os.Chmod(%q) sticky error = %v", root, err)
+	}
+	if err := EnsureRoot(root); err != nil {
+		t.Fatalf("EnsureRoot(%q) after sticky mode error = %v", root, err)
+	}
+	assertMode(t, root, PrivateDirectoryMode)
+}
+
+func TestChmodPrivateIfNeededSkipsExactModeAndCorrectsMismatch(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	for _, test := range []struct {
+		name    string
+		current fs.FileMode
+		want    fs.FileMode
+		match   bool
+	}{
+		{
+			name:    "exact directory",
+			current: fs.ModeDir | PrivateDirectoryMode,
+			want:    PrivateDirectoryMode,
+			match:   true,
+		},
+		{
+			name:    "exact file",
+			current: PrivateFileMode,
+			want:    PrivateFileMode,
+			match:   true,
+		},
+		{name: "broad", current: 0o755, want: PrivateDirectoryMode},
+		{name: "narrow", current: 0o600, want: PrivateDirectoryMode},
+		{
+			name:    "setuid",
+			current: PrivateDirectoryMode | fs.ModeSetuid,
+			want:    PrivateDirectoryMode,
+		},
+		{
+			name:    "setgid",
+			current: PrivateDirectoryMode | fs.ModeSetgid,
+			want:    PrivateDirectoryMode,
+		},
+		{
+			name:    "sticky",
+			current: PrivateDirectoryMode | fs.ModeSticky,
+			want:    PrivateDirectoryMode,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := chmodPrivateIfNeeded(missing, test.current, test.want)
+			if test.match && err != nil {
+				t.Fatalf("chmodPrivateIfNeeded(exact mode) error = %v", err)
+			}
+			if !test.match && err == nil {
+				t.Fatal("chmodPrivateIfNeeded(mismatched mode) error = nil, want chmod attempt")
+			}
+		})
+	}
 }
 
 func TestEnsureRoot_RejectsNonDirectory(t *testing.T) {
@@ -529,7 +587,7 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	if err != nil {
 		t.Fatalf("os.Stat(%q) error = %v", path, err)
 	}
-	if got := info.Mode().Perm(); got != want {
+	if got := info.Mode() & privateModeMask; got != want {
 		t.Errorf("mode(%q) = %04o, want %04o", path, got, want)
 	}
 }

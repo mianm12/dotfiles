@@ -24,6 +24,11 @@ type desiredPlacement struct {
 	destination string
 }
 
+type stalePrune struct {
+	action Action
+	target corepaths.Target
+}
+
 // Build observes the filesystem without mutating it and returns a deterministic
 // plan. Active decisions always precede stale cleanup decisions.
 func Build(request Request) (Plan, error) {
@@ -48,6 +53,60 @@ func Build(request Request) (Plan, error) {
 		if planErr != nil {
 			return Plan{}, planErr
 		}
+		if action.Decision != DecisionConflict {
+			owner, owned, ownershipErr := stateOwnedParentLink(
+				home,
+				placement.target,
+				request.State,
+			)
+			if ownershipErr != nil {
+				return Plan{}, ownershipErr
+			}
+			if owned {
+				action.Decision = DecisionConflict
+				action.Reason = fmt.Sprintf(
+					"target traverses state-owned link from module %q placement %q",
+					owner.moduleID,
+					owner.placementID,
+				)
+			}
+		}
+		if action.Decision != DecisionConflict && action.Kind == state.KindLink {
+			dependent, traversed, traversalErr := desiredTraversingLink(
+				desired,
+				action.ResolvedTarget,
+			)
+			if traversalErr != nil {
+				return Plan{}, fmt.Errorf(
+					"compare active link %s with desired targets: %w",
+					placementLabel(action.ModuleID, action.PlacementID),
+					traversalErr,
+				)
+			}
+			if traversed {
+				guard, guardErr := activeLinkNeedsProspectiveGuard(
+					home,
+					action,
+					request.State,
+				)
+				if guardErr != nil {
+					return Plan{}, fmt.Errorf(
+						"inspect current ownership for active link %s: %w",
+						placementLabel(action.ModuleID, action.PlacementID),
+						guardErr,
+					)
+				}
+				if guard {
+					action.Decision = DecisionConflict
+					action.Reason = fmt.Sprintf(
+						"active link cannot be owned or changed while traversed by "+
+							"effective module %q placement %q",
+						dependent.moduleID,
+						dependent.placementID,
+					)
+				}
+			}
+		}
 		if used {
 			usedState[placement.key] = true
 		}
@@ -58,6 +117,7 @@ func Build(request Request) (Plan, error) {
 		home,
 		request.Controls,
 		desired,
+		plan.Actions,
 		request.State,
 		usedState,
 		scope,
@@ -265,6 +325,7 @@ func planStale(
 	home string,
 	controls corepaths.Controls,
 	desired []desiredPlacement,
+	active []Action,
 	snapshot state.Snapshot,
 	used map[placementKey]bool,
 	scope moduleScope,
@@ -280,6 +341,7 @@ func planStale(
 			home,
 			controls,
 			desired,
+			active,
 			key,
 			record,
 		)
@@ -288,13 +350,135 @@ func planStale(
 		}
 		actions = append(actions, action)
 	}
+	return normalizeStalePrunes(home, actions)
+}
+
+func normalizeStalePrunes(
+	home string,
+	actions []Action,
+) ([]Action, error) {
+	slots := make([]int, 0)
+	prunes := make([]stalePrune, 0)
+	for index := range actions {
+		if actions[index].Decision != DecisionPrune {
+			continue
+		}
+		current, err := resolveStateTarget(home, actions[index].Target)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"re-resolve stale prune %s: %w",
+				placementLabel(actions[index].ModuleID, actions[index].PlacementID),
+				err,
+			)
+		}
+		if current.Resolved() != actions[index].ResolvedTarget {
+			return nil, fmt.Errorf(
+				"stale prune %s changed resolved target while ordering",
+				placementLabel(actions[index].ModuleID, actions[index].PlacementID),
+			)
+		}
+
+		duplicate := slices.IndexFunc(prunes, func(candidate stalePrune) bool {
+			return corepaths.TargetsEqual(current, candidate.target)
+		})
+		if duplicate >= 0 {
+			representative := prunes[duplicate].action
+			if actions[index].ExpectedLinkDestination !=
+				representative.ExpectedLinkDestination {
+				return nil, fmt.Errorf(
+					"duplicate stale prune %s has inconsistent link destination",
+					placementLabel(
+						actions[index].ModuleID,
+						actions[index].PlacementID,
+					),
+				)
+			}
+			actions[index].Decision = DecisionForget
+			actions[index].Reason = fmt.Sprintf(
+				"stale target shares ownership with module %q placement %q; "+
+					"that action represents cleanup",
+				representative.ModuleID,
+				representative.PlacementID,
+			)
+			continue
+		}
+		slots = append(slots, index)
+		prunes = append(prunes, stalePrune{
+			action: actions[index],
+			target: current,
+		})
+	}
+
+	ordered, err := orderStalePrunes(prunes)
+	if err != nil {
+		return nil, err
+	}
+	for index, slot := range slots {
+		actions[slot] = ordered[index].action
+	}
 	return actions, nil
+}
+
+func orderStalePrunes(prunes []stalePrune) ([]stalePrune, error) {
+	edges := make([][]int, len(prunes))
+	incoming := make([]int, len(prunes))
+	for child := range prunes {
+		for parent := range prunes {
+			if child == parent {
+				continue
+			}
+			traverses, err := corepaths.TargetParentTraversesLink(
+				prunes[child].target,
+				prunes[parent].action.ResolvedTarget,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"compare stale prunes %s and %s: %w",
+					placementLabel(
+						prunes[child].action.ModuleID,
+						prunes[child].action.PlacementID,
+					),
+					placementLabel(
+						prunes[parent].action.ModuleID,
+						prunes[parent].action.PlacementID,
+					),
+					err,
+				)
+			}
+			if traverses {
+				edges[child] = append(edges[child], parent)
+				incoming[parent]++
+			}
+		}
+	}
+
+	ordered := make([]stalePrune, 0, len(prunes))
+	used := make([]bool, len(prunes))
+	for len(ordered) < len(prunes) {
+		next := -1
+		for index := range prunes {
+			if !used[index] && incoming[index] == 0 {
+				next = index
+				break
+			}
+		}
+		if next < 0 {
+			return nil, fmt.Errorf("stale prune traversal dependencies form a cycle")
+		}
+		used[next] = true
+		ordered = append(ordered, prunes[next])
+		for _, parent := range edges[next] {
+			incoming[parent]--
+		}
+	}
+	return ordered, nil
 }
 
 func planOneStale(
 	home string,
 	controls corepaths.Controls,
 	desired []desiredPlacement,
+	active []Action,
 	key placementKey,
 	record state.Placement,
 ) (Action, error) {
@@ -394,12 +578,43 @@ func planOneStale(
 		base.Reason = "stale target is absent"
 		return base, nil
 	}
-	if actual.kind == actualSymlink &&
-		actual.linkDestination == record.LinkDestination &&
-		current.Resolved() == record.ResolvedTarget {
-		if staleLinkContainsDesired(current, desired) {
+	if stateOwnsLink(record, current, actual) {
+		dependent, traversed, err := desiredTraversingLink(
+			desired,
+			current.Resolved(),
+		)
+		if err != nil {
+			return Action{}, fmt.Errorf(
+				"compare stale link %s with desired targets: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
+		if traversed {
 			base.Decision = DecisionConflict
-			base.Reason = "stale link target contains an active desired target"
+			base.Reason = fmt.Sprintf(
+				"state-owned link is traversed by active module %q placement %q",
+				dependent.moduleID,
+				dependent.placementID,
+			)
+			return base, nil
+		}
+		parent, traversed, err := updatedParentLink(current, active)
+		if err != nil {
+			return Action{}, fmt.Errorf(
+				"compare stale link %s with active updates: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
+		if traversed {
+			base.Decision = DecisionConflict
+			base.Reason = fmt.Sprintf(
+				"stale state-owned link cleanup would be invalidated by "+
+					"active link update from module %q placement %q",
+				parent.moduleID,
+				parent.placementID,
+			)
 			return base, nil
 		}
 		base.Decision = DecisionPrune
@@ -456,6 +671,113 @@ func otherModuleOwner(
 	return placementKey{}, false
 }
 
+func stateOwnedParentLink(
+	home string,
+	target corepaths.Target,
+	snapshot state.Snapshot,
+) (placementKey, bool, error) {
+	for _, key := range stateKeys(snapshot) {
+		record, _ := statePlacement(snapshot, key)
+		if record.Kind != state.KindLink {
+			continue
+		}
+		traverses, err := corepaths.TargetParentTraversesLink(
+			target,
+			record.ResolvedTarget,
+		)
+		if err != nil {
+			return placementKey{}, false, fmt.Errorf(
+				"compare target with state-owned link %s: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
+		if !traverses {
+			continue
+		}
+
+		owned, err := stateRecordOwnsLink(home, record)
+		if err != nil {
+			return placementKey{}, false, fmt.Errorf(
+				"inspect state-owned link %s: %w",
+				placementLabel(key.moduleID, key.placementID),
+				err,
+			)
+		}
+		if owned {
+			return key, true, nil
+		}
+	}
+	return placementKey{}, false, nil
+}
+
+func activeLinkNeedsProspectiveGuard(
+	home string,
+	action Action,
+	snapshot state.Snapshot,
+) (bool, error) {
+	if action.Decision != DecisionKeep {
+		return true, nil
+	}
+	record, exists := statePlacement(snapshot, placementKey{
+		moduleID:    action.ModuleID,
+		placementID: action.PlacementID,
+	})
+	if !exists {
+		return true, nil
+	}
+	if record.Target == action.Target &&
+		record.ResolvedTarget == action.ResolvedTarget &&
+		record.LinkDestination == action.LinkDestination {
+		return false, nil
+	}
+	owned, err := stateRecordOwnsLink(home, record)
+	if err != nil {
+		return false, err
+	}
+	return !owned ||
+		action.ResolvedTarget != record.ResolvedTarget ||
+		action.LinkDestination != record.LinkDestination, nil
+}
+
+func stateRecordOwnsLink(
+	home string,
+	record state.Placement,
+) (bool, error) {
+	current, err := resolveStateTarget(home, record.Target)
+	if err != nil {
+		if isSafeStaleResolutionDrift(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !stateLinkTargetMatches(record, current) {
+		return false, nil
+	}
+	actual, err := observeLink(current.Lexical())
+	if err != nil {
+		return false, err
+	}
+	return stateOwnsLink(record, current, actual), nil
+}
+
+func stateOwnsLink(
+	record state.Placement,
+	current corepaths.Target,
+	actual actual,
+) bool {
+	return stateLinkTargetMatches(record, current) &&
+		actual.kind == actualSymlink &&
+		actual.linkDestination == record.LinkDestination
+}
+
+func stateLinkTargetMatches(
+	record state.Placement,
+	current corepaths.Target,
+) bool {
+	return current.Resolved() == record.ResolvedTarget
+}
+
 func samePlacementTarget(
 	desired desiredPlacement,
 	record state.Placement,
@@ -474,13 +796,48 @@ func targetUsedByDesired(
 	})
 }
 
-func staleLinkContainsDesired(
-	target corepaths.Target,
+func desiredTraversingLink(
 	desired []desiredPlacement,
-) bool {
-	return slices.ContainsFunc(desired, func(placement desiredPlacement) bool {
-		return corepaths.TargetStrictlyContains(target, placement.target)
-	})
+	linkEntry string,
+) (placementKey, bool, error) {
+	for _, placement := range desired {
+		traverses, err := corepaths.TargetParentTraversesLink(
+			placement.target,
+			linkEntry,
+		)
+		if err != nil {
+			return placementKey{}, false, err
+		}
+		if traverses {
+			return placement.key, true, nil
+		}
+	}
+	return placementKey{}, false, nil
+}
+
+func updatedParentLink(
+	target corepaths.Target,
+	active []Action,
+) (placementKey, bool, error) {
+	for _, action := range active {
+		if action.Decision != DecisionUpdate || action.Kind != state.KindLink {
+			continue
+		}
+		traverses, err := corepaths.TargetParentTraversesLink(
+			target,
+			action.ResolvedTarget,
+		)
+		if err != nil {
+			return placementKey{}, false, err
+		}
+		if traverses {
+			return placementKey{
+				moduleID:    action.ModuleID,
+				placementID: action.PlacementID,
+			}, true, nil
+		}
+	}
+	return placementKey{}, false, nil
 }
 
 func resolveStateTarget(

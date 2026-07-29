@@ -95,6 +95,938 @@ func TestPlanIndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
+func TestPlanRejectsActiveTargetTraversingStateOwnedParentLink(t *testing.T) {
+	tests := []struct {
+		name        string
+		local       bool
+		childTarget func(*testing.T, *fixture, string) string
+	}{
+		{
+			name: "direct descendant",
+			childTarget: func(_ *testing.T, fixture *fixture, _ string) string {
+				return filepath.Join(fixture.home, "owned", "child")
+			},
+		},
+		{
+			name: "alias chain",
+			childTarget: func(t *testing.T, fixture *fixture, parent string) string {
+				alias := fixture.target("alias")
+				fixture.symlink(t, parent, alias)
+				return filepath.Join(alias, "child")
+			},
+		},
+		{
+			name:  "alias chain local",
+			local: true,
+			childTarget: func(t *testing.T, fixture *fixture, parent string) string {
+				alias := fixture.target("alias")
+				fixture.symlink(t, parent, alias)
+				return filepath.Join(alias, "child")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t)
+			oldTree := fixture.dir(t, "old-repo/tree")
+			parent := fixture.target("owned")
+			fixture.symlink(t, oldTree, parent)
+			snapshot := state.Snapshot{
+				Home: fixture.home,
+				Modules: map[string]state.Module{
+					"stale": {Placements: map[string]state.Placement{
+						"tree": linkRecord(parent, fixture.resolved(t, parent), oldTree),
+					}},
+				},
+			}
+			child := test.childTarget(t, fixture, parent)
+			relative, err := filepath.Rel(fixture.home, child)
+			if err != nil {
+				t.Fatalf("filepath.Rel(child) error = %v", err)
+			}
+			source := fixture.file(t, "repo/modules/active/config", "active")
+			target := "~/" + filepath.ToSlash(relative)
+			module := linkModule("active", "child", source, target)
+			if test.local {
+				module = localModule("active", "child", source, target)
+			}
+			before := snapshotTree(t, fixture.root)
+
+			plan, err := planner.Build(planner.Request{
+				Home:     fixture.home,
+				Controls: fixture.controls,
+				Modules:  []config.Module{module},
+				Scope:    []string{"active"},
+				State:    snapshot,
+			})
+			if err != nil {
+				t.Fatalf("Build(scoped) error = %v", err)
+			}
+
+			assertDecisions(t, plan, planner.DecisionConflict)
+			if got := plan.Actions[0].Reason; !strings.Contains(
+				got,
+				`state-owned link from module "stale" placement "tree"`,
+			) {
+				t.Fatalf("conflict reason = %q, want state owner", got)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
+		})
+	}
+}
+
+func TestPlanRejectsAdoptedLinkTraversedByEffectiveDesiredTarget(t *testing.T) {
+	fixture := newFixture(t)
+	parentSource := fixture.dir(t, "repo/modules/parent/tree")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(parentSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, parentSource, parentTarget)
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
+	childSource := fixture.file(t, "repo/modules/child/config", "child")
+	modules := []config.Module{
+		linkModule("parent", "tree", parentSource, "~/owned"),
+		linkModule("child", "config", childSource, "~/access/child"),
+	}
+	snapshot := state.Snapshot{
+		Home:    fixture.home,
+		Modules: map[string]state.Module{},
+	}
+	before := snapshotTree(t, fixture.root)
+
+	parentOnly := fixture.build(t, modules[:1], snapshot)
+	assertDecisions(t, parentOnly, planner.DecisionAdopt)
+
+	plan := fixture.build(t, modules, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionConflict, planner.DecisionCreateLink)
+	if got := plan.Actions[0].Reason; !strings.Contains(
+		got,
+		`effective module "child" placement "config"`,
+	) {
+		t.Fatalf("prospective ownership conflict reason = %q", got)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanRejectsResolvedDriftKeepTraversedByEffectiveDesiredTarget(
+	t *testing.T,
+) {
+	fixture := newFixture(t)
+	parentSource := fixture.dir(t, "repo/modules/parent/tree")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(parentSource, "out"))
+	oldParent := fixture.dir(t, "parents/old")
+	newParent := fixture.dir(t, "parents/new")
+	alias := fixture.target("alias")
+	fixture.symlink(t, oldParent, alias)
+	parentTarget := filepath.Join(alias, "owned")
+	fixture.symlink(t, parentSource, filepath.Join(oldParent, "owned"))
+	recordedResolved := fixture.resolved(t, parentTarget)
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": linkRecord(parentTarget, recordedResolved, parentSource),
+			}},
+		},
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatalf("os.Remove(alias) error = %v", err)
+	}
+	fixture.symlink(t, newParent, alias)
+	fixture.symlink(t, parentSource, filepath.Join(newParent, "owned"))
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
+	childSource := fixture.file(t, "repo/modules/child/config", "child")
+	modules := []config.Module{
+		linkModule("parent", "tree", parentSource, "~/alias/owned"),
+		linkModule("child", "config", childSource, "~/access/child"),
+	}
+	before := snapshotTree(t, fixture.root)
+
+	parentOnly := fixture.build(t, modules[:1], snapshot)
+	assertDecisions(t, parentOnly, planner.DecisionKeep)
+
+	plan := fixture.build(t, modules, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionConflict, planner.DecisionCreateLink)
+	if got := plan.Actions[0].Reason; !strings.Contains(
+		got,
+		`effective module "child" placement "config"`,
+	) {
+		t.Fatalf("resolved-drift ownership conflict reason = %q", got)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanRejectsRepairStateTraversedByEffectiveDesiredTarget(t *testing.T) {
+	fixture := newFixture(t)
+	parentSource := fixture.dir(t, "repo/modules/parent/tree")
+	oldSource := fixture.dir(t, "repo/modules/parent/old")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(parentSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, parentSource, parentTarget)
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": linkRecord(
+					parentTarget,
+					fixture.resolved(t, parentTarget),
+					oldSource,
+				),
+			}},
+		},
+	}
+	childSource := fixture.file(t, "repo/modules/child/config", "child")
+	modules := []config.Module{
+		linkModule("parent", "tree", parentSource, "~/owned"),
+		linkModule("child", "config", childSource, "~/access/child"),
+	}
+	before := snapshotTree(t, fixture.root)
+
+	parentOnly := fixture.build(t, modules[:1], snapshot)
+	assertDecisions(t, parentOnly, planner.DecisionRepairState)
+
+	plan := fixture.build(t, modules, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionConflict, planner.DecisionCreateLink)
+	if got := plan.Actions[0].Reason; !strings.Contains(
+		got,
+		`effective module "child" placement "config"`,
+	) {
+		t.Fatalf("repair-state ownership conflict reason = %q", got)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestScopedPlanRejectsLinkUpdateTraversedByOutOfScopeDesired(t *testing.T) {
+	tests := []struct {
+		name  string
+		local bool
+	}{
+		{name: "link"},
+		{name: "local", local: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t)
+			oldSource := fixture.dir(t, "repo/modules/parent/old")
+			newSource := fixture.dir(t, "repo/modules/parent/new")
+			outside := fixture.dir(t, "outside")
+			fixture.symlink(t, outside, filepath.Join(oldSource, "out"))
+			parentTarget := fixture.target("owned")
+			fixture.symlink(t, oldSource, parentTarget)
+			fixture.symlink(
+				t,
+				filepath.Join(parentTarget, "out"),
+				fixture.target("access"),
+			)
+			snapshot := state.Snapshot{
+				Home: fixture.home,
+				Modules: map[string]state.Module{
+					"parent": {Placements: map[string]state.Placement{
+						"tree": linkRecord(
+							parentTarget,
+							fixture.resolved(t, parentTarget),
+							oldSource,
+						),
+					}},
+				},
+			}
+			childSource := fixture.file(t, "repo/modules/child/config", "child")
+			parent := linkModule("parent", "tree", newSource, "~/owned")
+			child := linkModule("child", "config", childSource, "~/access/child")
+			if test.local {
+				child = localModule("child", "config", childSource, "~/access/child")
+			}
+			before := snapshotTree(t, fixture.root)
+
+			parentOnly := fixture.build(t, []config.Module{parent}, snapshot)
+			assertDecisions(t, parentOnly, planner.DecisionUpdate)
+
+			plan, err := planner.Build(planner.Request{
+				Home:     fixture.home,
+				Controls: fixture.controls,
+				Modules:  []config.Module{parent, child},
+				Scope:    []string{"parent"},
+				State:    snapshot,
+			})
+			if err != nil {
+				t.Fatalf("Build(scoped parent) error = %v", err)
+			}
+
+			assertDecisions(t, plan, planner.DecisionConflict)
+			if got := plan.Actions[0].Reason; !strings.Contains(
+				got,
+				`effective module "child" placement "config"`,
+			) {
+				t.Fatalf("scoped update conflict reason = %q", got)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
+		})
+	}
+}
+
+func TestScopedPlanDoesNotOwnOutOfScopeDesiredParentLink(t *testing.T) {
+	fixture := newFixture(t)
+	parentSource := fixture.dir(t, "repo/modules/parent/tree")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(parentSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, parentSource, parentTarget)
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
+	childSource := fixture.file(t, "repo/modules/child/config", "child")
+	before := snapshotTree(t, fixture.root)
+
+	plan, err := planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules: []config.Module{
+			linkModule("parent", "tree", parentSource, "~/owned"),
+			linkModule("child", "config", childSource, "~/access/child"),
+		},
+		Scope: []string{"child"},
+		State: state.Snapshot{
+			Home:    fixture.home,
+			Modules: map[string]state.Module{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build(scoped child) error = %v", err)
+	}
+
+	assertDecisions(t, plan, planner.DecisionCreateLink)
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestScopedPlanAllowsFullyOwnedKeepTraversedByOutOfScopeDesired(
+	t *testing.T,
+) {
+	fixture := newFixture(t)
+	parentSource := fixture.dir(t, "repo/modules/parent/tree")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(parentSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, parentSource, parentTarget)
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
+	childSource := fixture.file(t, "repo/modules/child/config", "child")
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": linkRecord(
+					parentTarget,
+					fixture.resolved(t, parentTarget),
+					parentSource,
+				),
+			}},
+		},
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan, err := planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules: []config.Module{
+			linkModule("parent", "tree", parentSource, "~/owned"),
+			linkModule("child", "config", childSource, "~/access/child"),
+		},
+		Scope: []string{"parent"},
+		State: snapshot,
+	})
+	if err != nil {
+		t.Fatalf("Build(scoped parent) error = %v", err)
+	}
+
+	assertDecisions(t, plan, planner.DecisionKeep)
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestScopedPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
+	t *testing.T,
+) {
+	tests := []struct {
+		name           string
+		removeOldAlias bool
+		want           planner.Decision
+	}{
+		{
+			name: "existing ownership remains valid",
+			want: planner.DecisionKeep,
+		},
+		{
+			name:           "recorded alias no longer proves ownership",
+			removeOldAlias: true,
+			want:           planner.DecisionConflict,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t)
+			parentSource := fixture.dir(t, "repo/modules/parent/tree")
+			outside := fixture.dir(t, "outside")
+			fixture.symlink(t, outside, filepath.Join(parentSource, "out"))
+			realParent := fixture.dir(t, "targets")
+			oldAlias := fixture.target("old-alias")
+			newAlias := fixture.target("new-alias")
+			fixture.symlink(t, realParent, oldAlias)
+			fixture.symlink(t, realParent, newAlias)
+			recordedTarget := filepath.Join(oldAlias, "owned")
+			desiredTarget := filepath.Join(newAlias, "owned")
+			fixture.symlink(t, parentSource, filepath.Join(realParent, "owned"))
+			recordedResolved := fixture.resolved(t, recordedTarget)
+			if test.removeOldAlias {
+				if err := os.Remove(oldAlias); err != nil {
+					t.Fatalf("os.Remove(old alias) error = %v", err)
+				}
+			}
+			fixture.symlink(
+				t,
+				filepath.Join(desiredTarget, "out"),
+				fixture.target("access"),
+			)
+			childSource := fixture.file(t, "repo/modules/child/config", "child")
+			snapshot := state.Snapshot{
+				Home: fixture.home,
+				Modules: map[string]state.Module{
+					"parent": {Placements: map[string]state.Placement{
+						"tree": linkRecord(
+							recordedTarget,
+							recordedResolved,
+							parentSource,
+						),
+					}},
+				},
+			}
+			before := snapshotTree(t, fixture.root)
+
+			plan, err := planner.Build(planner.Request{
+				Home:     fixture.home,
+				Controls: fixture.controls,
+				Modules: []config.Module{
+					linkModule(
+						"parent",
+						"tree",
+						parentSource,
+						"~/new-alias/owned",
+					),
+					linkModule("child", "config", childSource, "~/access/child"),
+				},
+				Scope: []string{"parent"},
+				State: snapshot,
+			})
+			if err != nil {
+				t.Fatalf("Build(scoped parent) error = %v", err)
+			}
+
+			assertDecisions(t, plan, test.want)
+			if test.want == planner.DecisionConflict &&
+				!strings.Contains(
+					plan.Actions[0].Reason,
+					`effective module "child" placement "config"`,
+				) {
+				t.Fatalf("rebind conflict reason = %q", plan.Actions[0].Reason)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
+		})
+	}
+}
+
+func TestScopedStaleCleanupRejectsParentTraversedByOutOfScopeDesired(
+	t *testing.T,
+) {
+	tests := []struct {
+		name        string
+		local       bool
+		childTarget func(*testing.T, *fixture, string) string
+	}{
+		{
+			name: "direct link",
+			childTarget: func(_ *testing.T, fixture *fixture, _ string) string {
+				return filepath.Join(fixture.home, "owned", "child")
+			},
+		},
+		{
+			name:  "alias local",
+			local: true,
+			childTarget: func(t *testing.T, fixture *fixture, parent string) string {
+				alias := fixture.target("alias")
+				fixture.symlink(t, parent, alias)
+				return filepath.Join(alias, "child")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t)
+			oldTree := fixture.dir(t, "old-repo/tree")
+			parent := fixture.target("owned")
+			fixture.symlink(t, oldTree, parent)
+			snapshot := state.Snapshot{
+				Home: fixture.home,
+				Modules: map[string]state.Module{
+					"stale": {Placements: map[string]state.Placement{
+						"tree": linkRecord(parent, fixture.resolved(t, parent), oldTree),
+					}},
+				},
+			}
+			child := test.childTarget(t, fixture, parent)
+			relative, err := filepath.Rel(fixture.home, child)
+			if err != nil {
+				t.Fatalf("filepath.Rel(child) error = %v", err)
+			}
+			source := fixture.file(t, "repo/modules/active/config", "active")
+			target := "~/" + filepath.ToSlash(relative)
+			module := linkModule("active", "child", source, target)
+			if test.local {
+				module = localModule("active", "child", source, target)
+			}
+			before := snapshotTree(t, fixture.root)
+
+			plan, err := planner.Build(planner.Request{
+				Home:     fixture.home,
+				Controls: fixture.controls,
+				Modules:  []config.Module{module},
+				Scope:    []string{"stale"},
+				State:    snapshot,
+			})
+			if err != nil {
+				t.Fatalf("Build(scoped stale cleanup) error = %v", err)
+			}
+
+			assertDecisions(t, plan, planner.DecisionConflict)
+			if got := plan.Actions[0].Reason; !strings.Contains(
+				got,
+				`active module "active" placement "child"`,
+			) {
+				t.Fatalf("stale cleanup conflict reason = %q, want dependent child", got)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
+		})
+	}
+}
+
+func TestPlanDoesNotConfuseIndependentAliasWithOwnedLinkTraversal(t *testing.T) {
+	fixture := newFixture(t)
+	oldTree := fixture.dir(t, "old-repo/tree")
+	newTree := fixture.dir(t, "repo/modules/parent/new")
+	parent := fixture.target("owned")
+	fixture.symlink(t, oldTree, parent)
+	alias := fixture.target("alias")
+	fixture.symlink(t, oldTree, alias)
+	childSource := fixture.file(t, "repo/modules/active/config", "active")
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": linkRecord(parent, fixture.resolved(t, parent), oldTree),
+			}},
+		},
+	}
+	modules := []config.Module{
+		linkModule("parent", "tree", newTree, "~/owned"),
+		linkModule("active", "child", childSource, "~/alias/child"),
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, modules, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionUpdate, planner.DecisionCreateLink)
+	if plan.HasConflicts() {
+		t.Fatalf("Build() = %#v, want independent alias to remain executable", plan)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanRejectsUpdateBeforeTraversedStalePrune(t *testing.T) {
+	fixture := newFixture(t)
+	oldSource := fixture.dir(t, "repo/modules/parent/old")
+	newSource := fixture.dir(t, "repo/modules/parent/new")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(oldSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, oldSource, parentTarget)
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
+	staleSource := fixture.file(t, "old-repo/child", "stale")
+	staleTarget := fixture.target("access/child")
+	fixture.symlink(t, staleSource, filepath.Join(outside, "child"))
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": linkRecord(
+					parentTarget,
+					fixture.resolved(t, parentTarget),
+					oldSource,
+				),
+			}},
+			"stale": {Placements: map[string]state.Placement{
+				"child": linkRecord(
+					staleTarget,
+					fixture.resolved(t, staleTarget),
+					staleSource,
+				),
+			}},
+		},
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, []config.Module{
+		linkModule("parent", "tree", newSource, "~/owned"),
+	}, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionUpdate, planner.DecisionConflict)
+	if got := plan.Actions[1].Reason; !strings.Contains(
+		got,
+		`active link update from module "parent" placement "tree"`,
+	) {
+		t.Fatalf("stale cleanup conflict reason = %q", got)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanAllowsUpdateBeforeIndependentStalePrune(t *testing.T) {
+	fixture := newFixture(t)
+	oldSource := fixture.dir(t, "repo/modules/parent/old")
+	newSource := fixture.dir(t, "repo/modules/parent/new")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(oldSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, oldSource, parentTarget)
+	fixture.symlink(t, outside, fixture.target("access"))
+	staleSource := fixture.file(t, "old-repo/child", "stale")
+	staleTarget := fixture.target("access/child")
+	fixture.symlink(t, staleSource, filepath.Join(outside, "child"))
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": linkRecord(
+					parentTarget,
+					fixture.resolved(t, parentTarget),
+					oldSource,
+				),
+			}},
+			"stale": {Placements: map[string]state.Placement{
+				"child": linkRecord(
+					staleTarget,
+					fixture.resolved(t, staleTarget),
+					staleSource,
+				),
+			}},
+		},
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, []config.Module{
+		linkModule("parent", "tree", newSource, "~/owned"),
+	}, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionUpdate, planner.DecisionPrune)
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanAllowsUpdateWithTraversedDriftedStaleForget(t *testing.T) {
+	fixture := newFixture(t)
+	oldSource := fixture.dir(t, "repo/modules/parent/old")
+	newSource := fixture.dir(t, "repo/modules/parent/new")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(oldSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, oldSource, parentTarget)
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
+	recordedSource := fixture.file(t, "old-repo/child", "stale")
+	userSource := fixture.file(t, "user/child", "user")
+	staleTarget := fixture.target("access/child")
+	fixture.symlink(t, userSource, filepath.Join(outside, "child"))
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": linkRecord(
+					parentTarget,
+					fixture.resolved(t, parentTarget),
+					oldSource,
+				),
+			}},
+			"stale": {Placements: map[string]state.Placement{
+				"child": linkRecord(
+					staleTarget,
+					fixture.resolved(t, staleTarget),
+					recordedSource,
+				),
+			}},
+		},
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, []config.Module{
+		linkModule("parent", "tree", newSource, "~/owned"),
+	}, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionUpdate, planner.DecisionForget)
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanOrdersTraversedStalePrunesChildFirst(t *testing.T) {
+	fixture := newFixture(t)
+	parentSource := fixture.dir(t, "old-repo/tree")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(parentSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, parentSource, parentTarget)
+	access := fixture.target("access")
+	fixture.symlink(t, filepath.Join(parentSource, "out"), access)
+	childSource := fixture.file(t, "old-repo/child", "stale")
+	childTarget := filepath.Join(access, "child")
+	fixture.symlink(t, childSource, filepath.Join(outside, "child"))
+	childResolved := fixture.resolved(t, childTarget)
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"app": {Placements: map[string]state.Placement{
+				"a-parent": linkRecord(
+					parentTarget,
+					fixture.resolved(t, parentTarget),
+					parentSource,
+				),
+				"z-child": linkRecord(
+					childTarget,
+					childResolved,
+					childSource,
+				),
+			}},
+		},
+	}
+	if err := os.Remove(access); err != nil {
+		t.Fatalf("os.Remove(access) error = %v", err)
+	}
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), access)
+	if got := fixture.resolved(t, childTarget); got != childResolved {
+		t.Fatalf("rebound child resolved target = %q, want %q", got, childResolved)
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, nil, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionPrune, planner.DecisionPrune)
+	if plan.Actions[0].PlacementID != "z-child" ||
+		plan.Actions[1].PlacementID != "a-parent" {
+		t.Fatalf("stale prune order = %#v, want child before parent", plan.Actions)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanCollapsesDuplicateStaleOwnershipToOnePrune(t *testing.T) {
+	fixture := newFixture(t)
+	realParent := fixture.dir(t, "targets")
+	firstAlias := fixture.target("first")
+	secondAlias := fixture.target("second")
+	fixture.symlink(t, realParent, firstAlias)
+	fixture.symlink(t, realParent, secondAlias)
+	source := fixture.file(t, "old-repo/config", "stale")
+	fixture.symlink(t, source, filepath.Join(realParent, "config"))
+	firstTarget := filepath.Join(firstAlias, "config")
+	secondTarget := filepath.Join(secondAlias, "config")
+	resolved := fixture.resolved(t, firstTarget)
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"app": {Placements: map[string]state.Placement{
+				"a-first":  linkRecord(firstTarget, resolved, source),
+				"b-second": linkRecord(secondTarget, resolved, source),
+			}},
+		},
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, nil, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionPrune, planner.DecisionForget)
+	if got := plan.Actions[1].Reason; !strings.Contains(
+		got,
+		`module "app" placement "a-first"`,
+	) {
+		t.Fatalf("duplicate ownership forget reason = %q", got)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanKeepsIndependentStalePrunesWithSameDestination(t *testing.T) {
+	fixture := newFixture(t)
+	source := fixture.file(t, "old-repo/config", "stale")
+	firstTarget := fixture.target("first")
+	secondTarget := fixture.target("second")
+	fixture.symlink(t, source, firstTarget)
+	fixture.symlink(t, source, secondTarget)
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"app": {Placements: map[string]state.Placement{
+				"a-first": linkRecord(
+					firstTarget,
+					fixture.resolved(t, firstTarget),
+					source,
+				),
+				"b-second": linkRecord(
+					secondTarget,
+					fixture.resolved(t, secondTarget),
+					source,
+				),
+			}},
+		},
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, nil, snapshot)
+
+	assertDecisions(t, plan, planner.DecisionPrune, planner.DecisionPrune)
+	if plan.Actions[0].PlacementID != "a-first" ||
+		plan.Actions[1].PlacementID != "b-second" {
+		t.Fatalf("independent prune order = %#v", plan.Actions)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestScopedPlanAllowsUpdateWithOutOfScopeStaleDependency(t *testing.T) {
+	fixture := newFixture(t)
+	oldSource := fixture.dir(t, "repo/modules/parent/old")
+	newSource := fixture.dir(t, "repo/modules/parent/new")
+	outside := fixture.dir(t, "outside")
+	fixture.symlink(t, outside, filepath.Join(oldSource, "out"))
+	parentTarget := fixture.target("owned")
+	fixture.symlink(t, oldSource, parentTarget)
+	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
+	staleSource := fixture.file(t, "old-repo/child", "stale")
+	staleTarget := fixture.target("access/child")
+	fixture.symlink(t, staleSource, filepath.Join(outside, "child"))
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"parent": {Placements: map[string]state.Placement{
+				"tree": linkRecord(
+					parentTarget,
+					fixture.resolved(t, parentTarget),
+					oldSource,
+				),
+			}},
+			"stale": {Placements: map[string]state.Placement{
+				"child": linkRecord(
+					staleTarget,
+					fixture.resolved(t, staleTarget),
+					staleSource,
+				),
+			}},
+		},
+	}
+	before := snapshotTree(t, fixture.root)
+
+	plan, err := planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules: []config.Module{
+			linkModule("parent", "tree", newSource, "~/owned"),
+		},
+		Scope: []string{"parent"},
+		State: snapshot,
+	})
+	if err != nil {
+		t.Fatalf("Build(scoped parent) error = %v", err)
+	}
+
+	assertDecisions(t, plan, planner.DecisionUpdate)
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanDoesNotTreatDriftedParentLinkAsStateOwned(t *testing.T) {
+	fixture := newFixture(t)
+	recordedTree := fixture.dir(t, "old-repo/tree")
+	userTree := fixture.dir(t, "user/tree")
+	parent := fixture.target("owned")
+	fixture.symlink(t, userTree, parent)
+	source := fixture.file(t, "repo/modules/active/config", "active")
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"stale": {Placements: map[string]state.Placement{
+				"tree": linkRecord(parent, fixture.resolved(t, parent), recordedTree),
+			}},
+		},
+	}
+	module := linkModule("active", "child", source, "~/owned/child")
+	before := snapshotTree(t, fixture.root)
+
+	plan, err := planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules:  []config.Module{module},
+		Scope:    []string{"active"},
+		State:    snapshot,
+	})
+	if err != nil {
+		t.Fatalf("Build(scoped) error = %v", err)
+	}
+
+	assertDecisions(t, plan, planner.DecisionCreateLink)
+	if plan.HasConflicts() {
+		t.Fatalf("Build() = %#v, want drifted state link to remain unowned", plan)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanDoesNotTreatResolvedParentDriftAsStateOwned(t *testing.T) {
+	fixture := newFixture(t)
+	oldParent := fixture.dir(t, "parents/old")
+	newParent := fixture.dir(t, "parents/new")
+	tree := fixture.dir(t, "old-repo/tree")
+	alias := fixture.target("alias")
+	fixture.symlink(t, oldParent, alias)
+	recordTarget := filepath.Join(alias, "owned")
+	fixture.symlink(t, tree, filepath.Join(oldParent, "owned"))
+	recordResolved := fixture.resolved(t, recordTarget)
+
+	if err := os.Remove(alias); err != nil {
+		t.Fatalf("os.Remove(alias) error = %v", err)
+	}
+	fixture.symlink(t, newParent, alias)
+	fixture.symlink(t, tree, filepath.Join(newParent, "owned"))
+	source := fixture.file(t, "repo/modules/active/config", "active")
+	snapshot := state.Snapshot{
+		Home: fixture.home,
+		Modules: map[string]state.Module{
+			"stale": {Placements: map[string]state.Placement{
+				"tree": linkRecord(recordTarget, recordResolved, tree),
+			}},
+		},
+	}
+	module := linkModule("active", "child", source, "~/alias/owned/child")
+	before := snapshotTree(t, fixture.root)
+
+	plan, err := planner.Build(planner.Request{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules:  []config.Module{module},
+		Scope:    []string{"active"},
+		State:    snapshot,
+	})
+	if err != nil {
+		t.Fatalf("Build(scoped) error = %v", err)
+	}
+
+	assertDecisions(t, plan, planner.DecisionCreateLink)
+	if plan.HasConflicts() {
+		t.Fatalf("Build() = %#v, want resolved state drift to remain unowned", plan)
+	}
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
 func TestPlanStaleLinkInsideControlPathIsForgotten(t *testing.T) {
 	for _, controlName := range []string{"repository", "config", "state", "lock"} {
 		t.Run(controlName, func(t *testing.T) {

@@ -35,7 +35,9 @@ symlink，不递归解释或记录其 descendants；source 内新增、删除或
 在其中写入不应进入 repository 的本机私有内容、缓存或运行状态。需要共享配置与本机内容共存时，
 不要把该目录本身声明为 directory link；保持对应 target 目录为真实目录，分别声明其下具体文件的
 links 和需要在缺失时初始化的 locals。自动递归展开目录、tree folding 和共享文件复制不属于当前
-产品。
+产品。把已有 directory link 改为这些 leaf placements 时，必须使用
+[`planning.md` 的两阶段迁移](planning.md#两阶段-placement-迁移)，不能在一次 desired 变更中
+同时删除 parent link 并加入 descendants。
 
 #### 目录部署决策树
 
@@ -78,6 +80,9 @@ target = "~/.config/example/config.local"
   resolved target 及其变化对应的 action eligibility 分别由
   [`state-and-ownership.md`](state-and-ownership.md#ownership-规则) 和
   [`planning.md`](planning.md#link) 定义。
+- State-owned parent link 与本轮 active link ownership 的实际 traversal 约束由
+  [`planning.md`](planning.md#通用决策规则) 定义；只比较真实经过的 link 目录项，不因独立
+  alias 最终到达同一 destination 而建立关系。
 
 不额外探测 case sensitivity、Unicode alias、filesystem type 或 hard-link identity。
 

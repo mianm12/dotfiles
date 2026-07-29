@@ -72,6 +72,9 @@ func run(args []string, env environment) int {
 		return output.finish(exitUsage)
 	}
 	if err := root.Execute(); err != nil {
+		if errors.Is(err, errDryRunBlocked) {
+			return output.finish(exitError)
+		}
 		code := exitError
 		var usage usageError
 		if errors.As(err, &usage) {

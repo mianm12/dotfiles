@@ -23,8 +23,7 @@ func TestExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 	linkTarget := filepath.Join(fixture.home, ".config", "base", "config")
 	localTarget := filepath.Join(fixture.home, ".config", "base", "local")
 	request := fixture.request([]config.Module{{
-		ID:   "base",
-		Root: filepath.Join(fixture.repository, "modules", "base"),
+		ID: "base",
 		Links: []config.Link{{
 			ID:         "config",
 			SourcePath: linkSource,

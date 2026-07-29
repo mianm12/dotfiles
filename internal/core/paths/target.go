@@ -78,6 +78,17 @@ func (target Target) Resolved() string {
 	return target.resolved
 }
 
+// TargetParentTraversesLink reports whether resolving target's parent follows
+// the symlink entry at linkEntry. It distinguishes the actual resolution chain
+// from an independent alias that happens to reach the same final destination.
+func TargetParentTraversesLink(target Target, linkEntry string) (bool, error) {
+	watched, err := cleanAbsolute("link entry", linkEntry)
+	if err != nil {
+		return false, err
+	}
+	return pathTraversesLink(filepath.Dir(target.lexical), watched)
+}
+
 // ResolveTarget expands a ~/ target against an absolute logical HOME.
 func ResolveTarget(home, expression string) (Target, error) {
 	cleanHome, err := cleanAbsolute("HOME", home)
@@ -216,6 +227,105 @@ func resolveEntry(path string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(parent, filepath.Base(path)), nil
+}
+
+func pathTraversesLink(path, watched string) (bool, error) {
+	currentPath, err := cleanAbsolute("path", path)
+	if err != nil {
+		return false, err
+	}
+
+	rootLength := absoluteRootLength(currentPath)
+	resolved := currentPath[:rootLength]
+	linksWalked := 0
+	start := rootLength
+	for start < len(currentPath) {
+		for start < len(currentPath) && os.IsPathSeparator(currentPath[start]) {
+			start++
+		}
+		end := start
+		for end < len(currentPath) && !os.IsPathSeparator(currentPath[end]) {
+			end++
+		}
+		if end == start {
+			break
+		}
+
+		component := currentPath[start:end]
+		switch component {
+		case ".":
+			start = end
+			continue
+		case "..":
+			resolved = filepath.Dir(resolved)
+			start = end
+			continue
+		}
+		resolved = filepath.Join(resolved, component)
+
+		info, inspectErr := os.Lstat(resolved)
+		if errors.Is(inspectErr, fs.ErrNotExist) {
+			return false, nil
+		}
+		if inspectErr != nil {
+			detail := fmt.Errorf(
+				"inspect target parent component %q: %w",
+				resolved,
+				inspectErr,
+			)
+			return false, classifyFilesystemResolutionError(inspectErr, detail)
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			if !info.IsDir() {
+				return false, obstructedResolutionError(fmt.Errorf(
+					"%w: target parent component %q is not a directory",
+					ErrPathBlocked,
+					resolved,
+				))
+			}
+			start = end
+			continue
+		}
+		if filepath.Clean(resolved) == watched {
+			return true, nil
+		}
+
+		linksWalked++
+		if linksWalked > 255 {
+			return false, obstructedResolutionError(fmt.Errorf(
+				"%w: resolve target parent %q: too many symlinks",
+				ErrPathBlocked,
+				path,
+			))
+		}
+		destination, readErr := os.Readlink(resolved)
+		if readErr != nil {
+			return false, fmt.Errorf(
+				"read target parent symlink %q: %w",
+				resolved,
+				readErr,
+			)
+		}
+		currentPath = destination + currentPath[end:]
+		if filepath.IsAbs(destination) {
+			rootLength = absoluteRootLength(destination)
+			resolved = destination[:rootLength]
+			end = rootLength
+		} else {
+			resolved = filepath.Dir(resolved)
+			end = 0
+		}
+		start = end
+	}
+	return false, nil
+}
+
+func absoluteRootLength(path string) int {
+	rootLength := len(filepath.VolumeName(path))
+	if rootLength < len(path) && os.IsPathSeparator(path[rootLength]) {
+		rootLength++
+	}
+	return rootLength
 }
 
 // resolvePath follows every existing symlink in path. If a suffix is missing,

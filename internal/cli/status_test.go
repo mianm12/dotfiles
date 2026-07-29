@@ -155,6 +155,70 @@ target = "~/.pending"
 	assertCLIMissing(t, fixture.lock)
 }
 
+func TestStatusReportsCrossModuleUpdatePruneConflict(t *testing.T) {
+	topology := newParentUpdateStaleCLIEnv(t, "new")
+	fixture := topology.fixture
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("status")
+
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "stale  conflict") ||
+		!strings.Contains(
+			stdout,
+			"cleanup would be invalidated by active link update",
+		) {
+		t.Fatalf(
+			"status = (%d, %q, %q), want cross-module update/prune conflict",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	assertCLILink(t, topology.parentTarget, topology.oldSource)
+	assertCLILink(t, topology.staleActual, topology.staleSource)
+	assertCLIMissing(t, fixture.lock)
+}
+
+func TestStatusDelaysInactiveMalformedManifest(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	writeCLIFile(
+		t,
+		filepath.Join(fixture.repository, "modules", "broken", "module.toml"),
+		"unknown = true\n",
+	)
+	fixture.writeMachine(t, []string{"base"}, nil)
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK ||
+		!strings.Contains(stdout, "broken  inactive") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf(
+			"status = (%d, %q, %q), want unloaded inactive module",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.run("status", "broken")
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(stderr, `module "broken"`) {
+		t.Fatalf(
+			"status broken = (%d, %q, %q), want strict manifest failure",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+}
+
 func TestStatusReportsEveryPlacementConflict(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `

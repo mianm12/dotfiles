@@ -17,6 +17,10 @@ const (
 	PrivateDirectoryMode fs.FileMode = 0o700
 	// PrivateFileMode 是 state、lock 等私有控制文件的规范权限。
 	PrivateFileMode fs.FileMode = 0o600
+	privateModeMask fs.FileMode = fs.ModePerm |
+		fs.ModeSetuid |
+		fs.ModeSetgid |
+		fs.ModeSticky
 )
 
 type privateFile interface {
@@ -42,7 +46,7 @@ func ValidateRoot(path string) error {
 	if err != nil {
 		return fmt.Errorf("private root: %w", err)
 	}
-	_, err = inspectRoot(cleanPath)
+	_, _, err = inspectRoot(cleanPath)
 	return err
 }
 
@@ -74,7 +78,7 @@ func EnsureRoot(path string) error {
 		return fmt.Errorf("private root: %w", err)
 	}
 
-	exists, err := inspectRoot(cleanPath)
+	mode, exists, err := inspectRoot(cleanPath)
 	if err != nil {
 		return err
 	}
@@ -82,34 +86,35 @@ func EnsureRoot(path string) error {
 		if err := os.MkdirAll(cleanPath, PrivateDirectoryMode); err != nil {
 			return fmt.Errorf("create private root %q: %w", cleanPath, err)
 		}
-		if _, err := inspectRoot(cleanPath); err != nil {
+		mode, _, err = inspectRoot(cleanPath)
+		if err != nil {
 			return err
 		}
 	}
-	if err := os.Chmod(cleanPath, PrivateDirectoryMode); err != nil {
+	if err := chmodPrivateIfNeeded(cleanPath, mode, PrivateDirectoryMode); err != nil {
 		return fmt.Errorf("set private root permissions %q: %w", cleanPath, err)
 	}
 	return nil
 }
 
-func inspectRoot(cleanPath string) (bool, error) {
+func inspectRoot(cleanPath string) (fs.FileMode, bool, error) {
 	info, err := os.Lstat(cleanPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
+		return 0, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("inspect private root %q: %w", cleanPath, err)
+		return 0, false, fmt.Errorf("inspect private root %q: %w", cleanPath, err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
-		return false, fmt.Errorf(
+		return 0, false, fmt.Errorf(
 			"private root %q is a symbolic link; expected a directory",
 			cleanPath,
 		)
 	}
 	if !info.IsDir() {
-		return false, fmt.Errorf("private root %q is not a directory", cleanPath)
+		return 0, false, fmt.Errorf("private root %q is not a directory", cleanPath)
 	}
-	return true, nil
+	return info.Mode(), true, nil
 }
 
 // EnsurePrivateFile 建立私有普通文件，并把现存普通文件权限收敛为 0600。
@@ -132,7 +137,7 @@ func ensurePrivateFile(cleanPath string, openFile privateFileOpener) error {
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("private file %q is not a regular file", cleanPath)
 			}
-			if err := os.Chmod(cleanPath, PrivateFileMode); err != nil {
+			if err := chmodPrivateIfNeeded(cleanPath, info.Mode(), PrivateFileMode); err != nil {
 				return fmt.Errorf("set private file permissions %q: %w", cleanPath, err)
 			}
 			return nil
@@ -156,6 +161,13 @@ func ensurePrivateFile(cleanPath string, openFile privateFileOpener) error {
 		}
 		return nil
 	}
+}
+
+func chmodPrivateIfNeeded(path string, current, want fs.FileMode) error {
+	if current&privateModeMask == want {
+		return nil
+	}
+	return os.Chmod(path, want)
 }
 
 // PublishPrivateFile atomically publishes changed bytes through a private
