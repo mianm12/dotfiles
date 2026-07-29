@@ -41,4 +41,7 @@ jobs:
 
       - name: Run project checks
         # Makefile 是本地与 CI 的唯一门禁入口；构建产物无需保留在工作区。
+        # Hostile ambient GOWORK 验证仓库命令不会继承本机 workspace graph。
+        env:
+          GOWORK: ${{ runner.temp }}/nonexistent-go.work
         run: make check BINARY="$RUNNER_TEMP/dot"

@@ -92,7 +92,9 @@ storage / paths / state
 
 `golangci-lint` 与 `govulncheck` 通过 `tools/go.mod` 的 `tool` directive 固定版本，并从仓库
 根目录使用 `go tool -modfile=tools/go.mod` 调用。工具 module graph 与产品 module graph
-隔离，也不属于生产代码第三方 import allowlist。
+隔离，也不属于生产代码第三方 import allowlist。Makefile 拥有的 Go 命令固定使用
+`GOWORK=off`，包括解析 buildinfo package 的 module 查询；被忽略的本地或父目录 workspace
+不得改变门禁、生产构建 graph 或版本注入。
 
 Local 与新文件的不可覆盖发布不使用 rename：先写 `0600` 临时文件，再以 `os.Link` 发布到
 target；已存在时得到 `EEXIST`，同时保证内容完整、不可覆盖和原子出现。

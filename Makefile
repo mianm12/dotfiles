@@ -3,6 +3,9 @@ SHELL := /bin/sh
 
 # 工具和输出路径允许调用方覆盖，CI 无需复制本地构建命令。
 GO ?= go
+# 仓库命令只使用 go.mod/tools/go.mod；本机或父目录的 go.work 不得改变门禁与构建。
+override GOWORK := off
+export GOWORK
 BINARY ?= bin/dot
 FUZZ_TIME ?= 30s
 GO_TOOL = $(GO) tool -modfile=tools/go.mod
@@ -19,7 +22,8 @@ BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 BUILD_TIME := $(BUILD_TIME)
 
 # 从 module path 推导 -X 的完整包名，仓库迁移后无需同步硬编码路径。
-MODULE = $(shell $(GO) list -m)
+# GNU Make 3.81 的 $(shell ...) 不继承本 Makefile 新 export 的值，必须在此显式固定。
+MODULE = $(shell GOWORK=off $(GO) list -m)
 BUILDINFO_PACKAGE = $(MODULE)/internal/buildinfo
 # 集中构造 ldflags，确保 build、run 和 version 注入相同的构建信息。
 LDFLAGS = -X '$(BUILDINFO_PACKAGE).Version=$(VERSION)' \
