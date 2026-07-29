@@ -30,8 +30,9 @@ ownership/provenance，禁止 prune，不删除、替换或以其他 placement a
 当前命令 scope 内的记录；损坏 state、HOME 不匹配和未知 kind 等输入错误不得降级为 forget。
 
 Profile 选中的 module 已确定 not-applicable 时，其旧 state placements 视为退出 desired，
-继续按本文件的 stale prune/forget 规则规划 cleanup。Indeterminate module 不生成 placement
-或 cleanup action；其真实 mutation 阻断边界由
+继续按本文件的 stale prune/forget 规则规划 cleanup。Prospective effective indeterminate
+module 不生成 placement 或 cleanup action；已由 remove 移出 extra selection 的目标不再
+effective，其旧 state placements 仍按 stale prune/forget 规则处理。真实 mutation 阻断边界由
 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
 
 ## Link

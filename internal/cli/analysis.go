@@ -265,22 +265,6 @@ func analyzeRemove(
 				moduleID,
 			),
 		})
-	case knownAsExtra && !profileSelected &&
-		applicability.State == config.ApplicabilityNotApplicable:
-		blockers = append(blockers, AnalysisBlocker{
-			ModuleID: moduleID,
-			Reason:   fmt.Sprintf("module %q is not applicable", moduleID),
-		})
-	case knownAsExtra && !profileSelected &&
-		applicability.State == config.ApplicabilityIndeterminate:
-		blockers = append(blockers, AnalysisBlocker{
-			ModuleID: moduleID,
-			Reason: fmt.Sprintf(
-				"module %q applicability is indeterminate: %s",
-				moduleID,
-				applicability.Diagnostic,
-			),
-		})
 	case !exists && !knownAsExtra && !knownInState:
 		blockers = append(blockers, AnalysisBlocker{
 			ModuleID: moduleID,

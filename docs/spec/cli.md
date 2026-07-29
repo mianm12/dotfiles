@@ -63,9 +63,9 @@ dot help [COMMAND]
 - 对目标 module 投影 [`planning.md`](planning.md) 产生的 prune/forget action；CLI 不另行定义
   link 或 local cleanup eligibility。
 - Manifest 已删除但 extra/state 仍有 module 记录时允许清理。
-- Current selection 中仍是 extra 的 module，若 manifest 存在但已确定 not-applicable 或为
-  indeterminate，则按 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 的
-  selection 写入边界显示 blocker；先修复平台检测或 manifest。
+- 仅由 extra 选择的 module 即使当前已确定 not-applicable 或为 indeterminate，remove 仍可
+  收缩 selection，并只依据既有 state ownership 投影 cleanup。该 selection 写入与 mutation
+  边界由 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
 - 已 inactive 且无 state 时成功 no-op；完全未知的 module 失败。
 
 ## 命令 scope 与加载
@@ -135,7 +135,10 @@ dot help [COMMAND]
 | `1` | 配置、ownership、lock、文件系统或运行时失败 |
 | `2` | CLI 参数或用法错误 |
 
-真实 mutation 请求未知、不适用或 applicability indeterminate 的 module 时返回 `1`。
+真实 mutation 的 request-specific 未知 module、init/apply 请求的 not-applicable 或
+applicability indeterminate，以及 remove 的 profile-selected blocker 都返回 `1`。仅由
+extra 选择的 remove 目标按上文 selection contraction 规则处理；其他 prospective effective
+indeterminate module 仍返回 `1`。
 Status/dry-run 能把 request-specific 未知、不适用、indeterminate、profile-selected remove、
 已初始化 init 或路径 conflict 表达为完整 blocker 时返回 `0`；无效 module ID、active profile
 引用缺失 module、malformed manifest 与多个已确定 matching variants 仍是配置失败并返回

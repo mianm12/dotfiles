@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -288,11 +289,11 @@ target = "~/.extra"
 	assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
 }
 
-func TestRemoveRefusesUncertainCurrentExtraWithoutCleanup(t *testing.T) {
+func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 	tests := []struct {
-		name       string
-		platform   config.Platform
-		wantReason string
+		name     string
+		platform config.Platform
+		drift    bool
 	}{
 		{
 			name: "not applicable",
@@ -301,14 +302,13 @@ func TestRemoveRefusesUncertainCurrentExtraWithoutCleanup(t *testing.T) {
 				"gentoo",
 				"x86_64",
 			),
-			wantReason: "not applicable",
 		},
 		{
 			name: "indeterminate",
 			platform: cliIndeterminateLinuxPlatform(
 				"distribution cannot be determined",
 			),
-			wantReason: "applicability is indeterminate",
+			drift: true,
 		},
 	}
 	for _, test := range tests {
@@ -329,6 +329,16 @@ func TestRemoveRefusesUncertainCurrentExtraWithoutCleanup(t *testing.T) {
 			fixture.env.platform = func() config.Platform {
 				return test.platform
 			}
+			target := filepath.Join(fixture.home, ".gated")
+			userDestination := filepath.Join(fixture.root, "user", "gated")
+			if test.drift {
+				if err := os.Remove(target); err != nil {
+					t.Fatalf("os.Remove(owned target) error = %v", err)
+				}
+				if err := os.Symlink(userDestination, target); err != nil {
+					t.Fatalf("os.Symlink(user target) error = %v", err)
+				}
+			}
 			before := snapshotTree(t, fixture.root)
 
 			code, stdout, stderr := fixture.runInjected(
@@ -341,13 +351,12 @@ func TestRemoveRefusesUncertainCurrentExtraWithoutCleanup(t *testing.T) {
 					stdout,
 					"selection-delta remove-extra module=gated",
 				) ||
-				!strings.Contains(stdout, "blocked module=gated") ||
-				!strings.Contains(stdout, test.wantReason) ||
-				strings.Contains(stdout, "prune") ||
-				strings.Contains(stdout, "forget") ||
+				(!test.drift && !strings.Contains(stdout, "prune")) ||
+				(test.drift && !strings.Contains(stdout, "forget")) ||
+				strings.Contains(stdout, "blocked") ||
 				stderr != "" {
 				t.Fatalf(
-					"remove dry-run = (%d, %q, %q), want blocker without cleanup",
+					"remove dry-run = (%d, %q, %q), want selection contraction cleanup",
 					code,
 					stdout,
 					stderr,
@@ -356,35 +365,149 @@ func TestRemoveRefusesUncertainCurrentExtraWithoutCleanup(t *testing.T) {
 			assertSnapshotUnchanged(t, before)
 
 			code, stdout, stderr = fixture.runInjected("remove", "gated")
-			if code != exitError ||
-				stdout != "" ||
-				!strings.Contains(stderr, test.wantReason) {
+			if code != exitOK ||
+				!strings.Contains(stdout, "selection_changed=true") {
 				t.Fatalf(
-					"remove = (%d, %q, %q), want zero-write failure",
+					"remove = (%d, %q, %q), want successful selection contraction",
 					code,
 					stdout,
 					stderr,
 				)
 			}
-			assertSnapshotUnchanged(t, before)
-			if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
-				extras[0] != "gated" {
-				t.Fatalf(
-					"extra_modules = %v, want unchanged [gated]",
-					extras,
-				)
+			if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+				t.Fatalf("extra_modules = %v, want empty", extras)
 			}
-			assertCLILink(
-				t,
-				filepath.Join(fixture.home, ".gated"),
-				filepath.Join(
-					fixture.repository,
-					"modules",
-					"gated",
-					"config",
-				),
-			)
+			if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+				t.Fatalf("state modules = %#v, want empty", modules)
+			}
+			if test.drift {
+				assertCLILink(t, target, userDestination)
+			} else {
+				assertCLIMissing(t, target)
+			}
+			assertApplyNoMutation(t, fixture, fixture.runInjected)
 		})
+	}
+}
+
+func TestRemoveUncertainExtraForgetsLocalWithoutDeletingUserData(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	fixture.writeModule(t, "gated", `
+[match]
+os = ["linux"]
+distro = ["ubuntu"]
+
+[[locals]]
+id = "local"
+example = "local.example"
+target = "~/.gated.local"
+`, map[string]string{"local.example": "initial"})
+	fixture.writeMachine(t, []string{"base"}, []string{"gated"})
+	fixture.env.platform = func() config.Platform {
+		return cliTestPlatform("linux", "ubuntu", "x86_64")
+	}
+	if code, _, stderr := fixture.runInjected("apply"); code != exitOK {
+		t.Fatalf("initial apply = (%d, %q)", code, stderr)
+	}
+	target := filepath.Join(fixture.home, ".gated.local")
+	if err := os.WriteFile(target, []byte("user-owned"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(user local) error = %v", err)
+	}
+	fixture.env.platform = func() config.Platform {
+		return cliIndeterminateLinuxPlatform("distribution cannot be determined")
+	}
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runInjected("remove", "gated", "--dry-run")
+	if code != exitOK ||
+		!strings.Contains(stdout, "selection-delta remove-extra module=gated") ||
+		!strings.Contains(stdout, "forget") ||
+		strings.Contains(stdout, "blocked") ||
+		stderr != "" {
+		t.Fatalf(
+			"remove dry-run = (%d, %q, %q), want local forget",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.runInjected("remove", "gated")
+	if code != exitOK ||
+		!strings.Contains(stdout, "selection_changed=true") {
+		t.Fatalf(
+			"remove = (%d, %q, %q), want successful local forget",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "user-owned" {
+		t.Fatalf("local after remove = (%q, %v), want preserved user data", data, err)
+	}
+	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+		t.Fatalf("state modules = %#v, want empty", modules)
+	}
+	assertApplyNoMutation(t, fixture, fixture.runInjected)
+}
+
+func TestRemoveStillBlocksOtherEffectiveIndeterminateModule(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["uncertain"]`)
+	fixture.writeModule(t, "uncertain", `
+[match]
+os = ["linux"]
+distro = ["ubuntu"]
+`, nil)
+	fixture.writeModule(t, "extra", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.extra"
+`, map[string]string{"config": "extra"})
+	fixture.writeMachine(t, []string{"base"}, []string{"extra"})
+	fixture.env.platform = func() config.Platform {
+		return cliTestPlatform("linux", "ubuntu", "x86_64")
+	}
+	if code, _, stderr := fixture.runInjected("apply"); code != exitOK {
+		t.Fatalf("initial apply = (%d, %q)", code, stderr)
+	}
+	fixture.env.platform = func() config.Platform {
+		return cliIndeterminateLinuxPlatform("distribution is unavailable")
+	}
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runInjected("remove", "extra", "--dry-run")
+	if code != exitOK ||
+		!strings.Contains(stdout, "selection-delta remove-extra module=extra") ||
+		!strings.Contains(stdout, "blocked module=uncertain") ||
+		strings.Contains(stdout, "prune") ||
+		stderr != "" {
+		t.Fatalf(
+			"remove dry-run = (%d, %q, %q), want other effective blocker",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.runInjected("remove", "extra")
+	if code != exitError ||
+		stdout != "" ||
+		!strings.Contains(stderr, `module "uncertain" applicability is indeterminate`) {
+		t.Fatalf(
+			"remove = (%d, %q, %q), want zero-write effective blocker",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertSnapshotUnchanged(t, before)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
+		extras[0] != "extra" {
+		t.Fatalf("extra_modules = %v, want unchanged [extra]", extras)
 	}
 }
 
