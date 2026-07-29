@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
@@ -66,6 +67,126 @@ target = "~/.extra.local"
 		t.Fatalf("remove profiled = (%d, %q, %q), want refusal", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
+}
+
+func TestRemoveRedundantProfileExtraUsesProfileSelection(t *testing.T) {
+	t.Run("applicable keeps the profile module active", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "app"})
+		fixture.writeMachine(t, []string{"base"}, []string{"app"})
+		if code, _, stderr := fixture.run("apply"); code != exitOK {
+			t.Fatalf("initial apply = (%d, %q)", code, stderr)
+		}
+
+		code, _, stderr := fixture.run("remove", "app")
+
+		if code != exitOK {
+			t.Fatalf("remove profile+extra app = (%d, %q)", code, stderr)
+		}
+		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+			t.Fatalf("extra_modules = %v, want empty", extras)
+		}
+		assertCLILink(
+			t,
+			filepath.Join(fixture.home, ".app"),
+			filepath.Join(fixture.repository, "modules", "app", "config"),
+		)
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+
+	t.Run("not applicable cleans old profile ownership", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[match]
+os = ["macos"]
+
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "app"})
+		fixture.writeMachine(t, []string{"base"}, []string{"app"})
+		fixture.env.platform = func() config.Platform {
+			return cliTestPlatform("macos", "", "aarch64")
+		}
+		if code, _, stderr := fixture.runInjected("apply"); code != exitOK {
+			t.Fatalf("initial apply = (%d, %q)", code, stderr)
+		}
+		fixture.env.platform = func() config.Platform {
+			return cliTestPlatform("linux", "ubuntu", "x86_64")
+		}
+
+		code, _, stderr := fixture.runInjected("remove", "app")
+
+		if code != exitOK {
+			t.Fatalf("remove not-applicable profile+extra app = (%d, %q)", code, stderr)
+		}
+		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+			t.Fatalf("extra_modules = %v, want empty", extras)
+		}
+		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+			t.Fatalf("state modules = %#v, want empty", modules)
+		}
+		assertApplyNoMutation(t, fixture, fixture.runInjected)
+	})
+
+	t.Run("indeterminate remains zero-write", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", distroGatedLinkManifest, map[string]string{
+			"config": "app",
+		})
+		fixture.writeMachine(t, []string{"base"}, []string{"app"})
+		if code, _, stderr := fixture.runInjected("apply"); code != exitOK {
+			t.Fatalf("initial apply = (%d, %q)", code, stderr)
+		}
+		fixture.env.platform = func() config.Platform {
+			return cliIndeterminateLinuxPlatform("distribution is unavailable")
+		}
+		before := snapshotTree(t, fixture.root)
+
+		code, stdout, stderr := fixture.runInjected("remove", "app")
+
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "applicability is indeterminate") {
+			t.Fatalf(
+				"remove indeterminate profile+extra app = (%d, %q, %q), want blocker",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, before)
+	})
+
+	t.Run("invalid manifest remains zero-write", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", "unknown = true", nil)
+		fixture.writeMachine(t, []string{"base"}, []string{"app"})
+		before := snapshotTree(t, fixture.root)
+
+		code, stdout, stderr := fixture.run("remove", "app")
+
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "invalid configuration") {
+			t.Fatalf(
+				"remove invalid profile+extra app = (%d, %q, %q), want config failure",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, before)
+		assertCLIMissing(t, fixture.state)
+		assertCLIMissing(t, fixture.lock)
+	})
 }
 
 func TestApplyRejectsDeletedProfileModuleWithoutMutation(t *testing.T) {

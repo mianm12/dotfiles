@@ -21,7 +21,7 @@ target = "~/.app"
 		{"apply", "one", "two"},
 		{"remove"},
 		{"apply", "--unknown"},
-		{"init", fixture.repository},
+		{"init", fixture.repository, "extra"},
 		{"paths", "extra"},
 		{"version", "extra"},
 		{"help", "does-not-exist"},
@@ -96,5 +96,15 @@ func TestHelpListsOnlyPublicCommands(t *testing.T) {
 		if strings.Contains(stdout, "\n  "+removed+" ") {
 			t.Fatalf("help still lists %q:\n%s", removed, stdout)
 		}
+	}
+}
+
+func TestApplyHelpExplainsPersistentActivation(t *testing.T) {
+	fixture := newCLITestEnv(t, "")
+	code, stdout, stderr := fixture.run("help", "apply")
+	if code != exitOK ||
+		stderr != "" ||
+		!strings.Contains(stdout, "persistently activate MODULE when inactive") {
+		t.Fatalf("help apply = (%d, %q, %q), want persistent activation semantics", code, stdout, stderr)
 	}
 }

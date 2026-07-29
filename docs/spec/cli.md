@@ -1,7 +1,7 @@
 # Public CLI
 
 ```text
-dot init [REPOSITORY] --profile NAME... [--dry-run]
+dot init [REPOSITORY] [--profile NAME]... [--dry-run]
 dot status [MODULE]
 dot apply [MODULE] [--dry-run]
 dot remove MODULE [--dry-run]
@@ -25,11 +25,12 @@ dot help
 
 - Repository 省略时使用当前目录，并且必须存在有效 `dot.toml`。
 - Init 写入 repository 与 active profiles，然后执行首次全量收敛。
-- `--profile` 至少提供一个；要初始化为空机器时显式选中一个空 profile，而不是省略
-  `--profile`。
+- `--profile` 可重复；省略时初始化为空 selection，不要求仓库为此声明无意义的空 profile。
 - Preflight 失败时不写机器配置或 artifacts。
 - 机器配置提交后 apply 失败时保留 selection，用户通过 `dot apply` 重试。
 - 已初始化时拒绝再次 init，不提供 reconfigure/rebind。
+- First init 遇到缺失 state 属于预期路径；warning 先明确这一点，再以条件句提醒：如果同一 HOME
+  曾被 dot 管理，则无法发现已退出 desired 的旧 link。
 
 ## Apply
 
@@ -37,10 +38,16 @@ dot help
 - `dot apply <module>` 对 active module 做 scoped apply。
 - 未 active 的 module 在 preflight 成功后加入 `extra_modules` 再收敛。
 - Module 不存在、不适用或与其他 effective module/state target 冲突时，不修改 selection。
+- Scoped apply 在 selection 已提交后失败时提示重跑同一条 `dot apply <module>`；无参数 apply
+  仍提示 `dot apply`。
 
 ## Remove
 
-- Active profile 仍选择 module 时拒绝，不修改 selection 或文件系统。
+- 只有 active profile 选择且不在 `extra_modules` 中的 module 才拒绝 remove，不修改 selection
+  或文件系统。
+- 同时由 profile 与 `extra_modules` 选择时，remove 删除冗余 extra：applicable module 继续按
+  profile selection 收敛；not-applicable module 按既有 profile cleanup 规则处理；
+  indeterminate 或配置错误仍在 selection 写入前失败。
 - 要移除 profile 选中的 module，先在仓库 profile 删除引用，再 `dot apply` 收敛 prune。
 - Extra module 先从 prospective selection 移除，通过 preflight 后写回配置。
 - 对目标 module 投影 [`planning.md`](planning.md) 产生的 prune/forget action；CLI 不另行定义

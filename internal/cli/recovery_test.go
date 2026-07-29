@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -229,5 +230,83 @@ target = "~/.app"
 		}
 		assertCLINoMutationResult(t, stdout)
 		assertSnapshotUnchanged(t, before)
+	})
+}
+
+func TestScopedApplyFailureAdvisesScopedRerun(t *testing.T) {
+	newFixture := func(t *testing.T) *cliTestEnv {
+		t.Helper()
+		fixture := newCLITestEnv(t, `base = []`)
+		fixture.writeModule(t, "extra", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.extra"
+`, map[string]string{"config": "portable"})
+		fixture.writeMachine(t, []string{"base"}, nil)
+		return fixture
+	}
+
+	t.Run("selection publication interruption", func(t *testing.T) {
+		fixture := newFixture(t)
+		fixture.env.afterSelectionPublish = func() error {
+			return errors.New("synthetic interruption")
+		}
+
+		code, stdout, stderr := fixture.runInjected("apply", "extra")
+
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "rerun dot apply extra") {
+			t.Fatalf(
+				"scoped apply interruption = (%d, %q, %q), want scoped rerun",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
+			extras[0] != "extra" {
+			t.Fatalf("extra_modules = %v, want persisted [extra]", extras)
+		}
+		assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
+	})
+
+	t.Run("convergence failure", func(t *testing.T) {
+		fixture := newFixture(t)
+		target := filepath.Join(fixture.home, ".extra")
+		fixture.env.beforeExecution = func() {
+			writeCLIFile(t, target, "personal")
+		}
+
+		code, stdout, stderr := fixture.runInjected("apply", "extra")
+
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "rerun dot apply extra") {
+			t.Fatalf(
+				"scoped apply convergence failure = (%d, %q, %q), want scoped rerun",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
+			extras[0] != "extra" {
+			t.Fatalf("extra_modules = %v, want persisted [extra]", extras)
+		}
+	})
+
+	t.Run("result output failure", func(t *testing.T) {
+		fixture := newFixture(t)
+
+		stderr := runWithFailedStdout(t, []string{"apply", "extra"})
+
+		assertOutputFailure(t, stderr, "dot apply extra")
+		assertCLILink(
+			t,
+			filepath.Join(fixture.home, ".extra"),
+			filepath.Join(fixture.repository, "modules", "extra", "config"),
+		)
 	})
 }

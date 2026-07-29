@@ -11,6 +11,10 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
+const initMissingStateWarning = "state is missing; this is expected on first init; " +
+	"if this HOME was previously managed by dot, links removed from desired configuration " +
+	"cannot be discovered"
+
 // SelectionDeltaKind identifies one prospective machine-selection change.
 type SelectionDeltaKind string
 
@@ -134,7 +138,7 @@ func analyzeInit(
 		return OperationAnalysis{}, err
 	}
 	blockers = append(blockers, selectionBlockers...)
-	return buildMutationAnalysis(
+	analysis, err := buildMutationAnalysis(
 		context,
 		prospective,
 		SelectionDelta{Kind: SelectionDeltaCreate},
@@ -145,6 +149,13 @@ func analyzeInit(
 		observations,
 		blockers,
 	)
+	if err != nil {
+		return OperationAnalysis{}, err
+	}
+	if inputs.loaded.Missing {
+		analysis.Warnings = []string{initMissingStateWarning}
+	}
+	return analysis, nil
 }
 
 func analyzeApply(
@@ -245,7 +256,7 @@ func analyzeRemove(
 	}
 
 	switch {
-	case profileSelected:
+	case profileSelected && !knownAsExtra:
 		blockers = append(blockers, AnalysisBlocker{
 			ModuleID: moduleID,
 			Reason: fmt.Sprintf(
@@ -253,13 +264,13 @@ func analyzeRemove(
 				moduleID,
 			),
 		})
-	case knownAsExtra &&
+	case knownAsExtra && !profileSelected &&
 		applicability.State == config.ApplicabilityNotApplicable:
 		blockers = append(blockers, AnalysisBlocker{
 			ModuleID: moduleID,
 			Reason:   fmt.Sprintf("module %q is not applicable", moduleID),
 		})
-	case knownAsExtra &&
+	case knownAsExtra && !profileSelected &&
 		applicability.State == config.ApplicabilityIndeterminate:
 		blockers = append(blockers, AnalysisBlocker{
 			ModuleID: moduleID,
@@ -277,7 +288,7 @@ func analyzeRemove(
 	}
 
 	delta := SelectionDelta{Kind: SelectionDeltaNone}
-	if knownAsExtra && !profileSelected {
+	if knownAsExtra {
 		prospective.ExtraModules = slices.DeleteFunc(
 			append([]string(nil), prospective.ExtraModules...),
 			func(candidate string) bool { return candidate == moduleID },
