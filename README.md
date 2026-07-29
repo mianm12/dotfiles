@@ -48,8 +48,9 @@ make vuln
 ```
 
 `make test` 快速运行全部 Go 测试；`make check` 执行依赖整洁度、格式、静态分析、全量 race
-tests 和生产二进制构建，CI 在 macOS 与 Linux 上运行同一入口。其余目标分别验证 state、
-target expression 与 os-release 三个安全边界 fuzz，以及可达漏洞。变更风险分级和证据要求见
+tests，并构建生产二进制、校验 `version` 构建信息，CI 在 macOS 与 Linux 上运行同一入口。
+其余目标分别验证 state、target expression 与 os-release 三个安全边界 fuzz，以及可达漏洞。
+变更风险分级和证据要求见
 [贡献约定](CONTRIBUTING.md)。
 
 ## 文档

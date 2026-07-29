@@ -38,8 +38,8 @@ config、state 或 lock，也不执行 CLI 或 mutation。
 
 - Focused tests：开发期间快速验证变更 package 和直接消费者。
 - Fast tests：`make test` 快速运行全部 Go 测试。
-- Full gate：`make check` 验证 module checksum、tidy、format、lint、全量 race tests 和生产
-  二进制构建。
+- Full gate：`make check` 验证 module checksum、tidy、format、lint、全量 race tests，并
+  构建生产二进制、校验 `version` 构建信息。
 - Fuzz：`make fuzz` 持续攻击 state decoder、target expression 与 os-release ID parser
   安全边界。独立 workflow 只在每周计划或手动触发时运行，不响应 Pull Request，也不作为
   required check；Pull Request 继续只运行确定性门禁。Fuzz 失败时保留 Go 写出的最小失败

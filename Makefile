@@ -12,8 +12,11 @@ VERSION ?= $(shell status=$$(git status --porcelain --untracked-files=normal 2>/
 	&& test -z "$$status" \
 	&& git describe --tags --exact-match 2>/dev/null \
 	|| printf 'dev')
+VERSION := $(VERSION)
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')
+COMMIT := $(COMMIT)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+BUILD_TIME := $(BUILD_TIME)
 
 # 从 module path 推导 -X 的完整包名，仓库迁移后无需同步硬编码路径。
 MODULE = $(shell $(GO) list -m)
@@ -88,3 +91,11 @@ vuln:
 
 # 汇总当前平台的完整门禁，作为本地与 CI 的共同入口；任一失败都会立即停止。
 check: mod-verify tidy-check fmt-check lint test-race build
+	@actual=$$("$(BINARY)" version); status=$$?; \
+	expected=$$(printf 'version=%s\ncommit=%s\nbuild_time=%s' \
+		"$(VERSION)" "$(COMMIT)" "$(BUILD_TIME)"); \
+	if test "$$status" -ne 0 || test "$$actual" != "$$expected"; then \
+		printf 'built binary version check failed (exit %s)\n' "$$status" >&2; \
+		printf '%s\n%s\n%s\n%s\n' "expected:" "$$expected" "actual:" "$$actual" >&2; \
+		exit 1; \
+	fi

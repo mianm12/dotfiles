@@ -39,6 +39,10 @@ func TestTrackedRepositoryConfiguration(t *testing.T) {
 			name:     "linux-ubuntu-x86_64",
 			platform: testPlatform("linux", "ubuntu", "x86_64"),
 		},
+		{
+			name:     "linux-arch-x86_64",
+			platform: testPlatform("linux", "arch", "x86_64"),
+		},
 	}
 	applicable := make(map[string]bool, len(moduleIDs))
 	for _, platform := range platforms {
