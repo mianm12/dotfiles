@@ -26,8 +26,9 @@ read-only preflight
 - 配置与 manifest 的严格加载及命令 scope 由
   [`cli.md`](cli.md#命令-scope-与加载) 定义。
 - 初次只读 preflight 的 deterministic config、control topology、私有 control root/lock
-  目录项类型、path 或 ownership conflict 必须在获取 lock 前失败，零文件系统写入：不得创建
-  或 chmod config/state/lock root、lock、temporary file、selection、state、parent 或 target。
+  目录项类型、不受支持的路径编码、path 或 ownership conflict 必须在获取 lock 前失败，零文件
+  系统写入：不得创建或 chmod config/state/lock root、lock、temporary file、selection、state、
+  parent 或 target。
 - [`selection.md`](selection.md#platform-与-module) 定义的任意 prospective effective
   indeterminate、extra/explicit selection 的 not-applicable，或 remove current extra 时目标
   自身的 not-applicable/indeterminate，都属于同一 preflight 失败边界：整次真实 mutation 在

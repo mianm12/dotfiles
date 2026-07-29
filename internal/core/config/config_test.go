@@ -108,6 +108,19 @@ func TestOpenRepository_StrictRootManifest(t *testing.T) {
 	}
 }
 
+func TestOpenRepositoryRejectsInvalidUTF8Root(t *testing.T) {
+	root := filepath.Join(
+		string(filepath.Separator),
+		"repository-"+string([]byte{0xff}),
+	)
+	if _, err := coreconfig.OpenRepository(root); !errors.Is(
+		err,
+		coreconfig.ErrInvalidConfiguration,
+	) {
+		t.Fatalf("OpenRepository(invalid UTF-8) error = %v, want ErrInvalidConfiguration", err)
+	}
+}
+
 func TestProfileModules_ValidatesOnlySelectedProfileReferences(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `

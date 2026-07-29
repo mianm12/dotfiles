@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 type machineDocument struct {
@@ -46,9 +47,10 @@ func LoadMachine(path string) (Machine, bool, error) {
 	}
 	if document.Repository == nil || *document.Repository == "" ||
 		strings.ContainsRune(*document.Repository, '\x00') ||
+		!utf8.ValidString(*document.Repository) ||
 		!filepath.IsAbs(*document.Repository) {
 		return Machine{}, false, fmt.Errorf(
-			"%w: machine repository must be a non-empty absolute path",
+			"%w: machine repository must be a non-empty absolute path without NUL and with valid UTF-8",
 			ErrInvalidConfiguration,
 		)
 	}

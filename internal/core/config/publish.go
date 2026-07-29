@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/mianm12/dotfiles/internal/storage"
 	"github.com/pelletier/go-toml/v2"
@@ -62,9 +64,11 @@ func validateMachine(machine Machine) error {
 	}
 	if machine.Repository == "" ||
 		!filepath.IsAbs(machine.Repository) ||
+		strings.ContainsRune(machine.Repository, '\x00') ||
+		!utf8.ValidString(machine.Repository) ||
 		filepath.Clean(machine.Repository) != machine.Repository {
 		return fmt.Errorf(
-			"%w: machine repository must be a normalized absolute path",
+			"%w: machine repository must be a normalized absolute path without NUL and with valid UTF-8",
 			ErrInvalidConfiguration,
 		)
 	}

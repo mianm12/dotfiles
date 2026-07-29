@@ -162,6 +162,16 @@ func TestPathsRejectsArgumentsAndInvalidHome(t *testing.T) {
 			},
 			want: "error: current user HOME must be a non-empty absolute path\n",
 		},
+		{
+			name: "invalid UTF-8",
+			home: func() (string, error) {
+				return filepath.Join(
+					string(filepath.Separator),
+					"home-"+string([]byte{0xff}),
+				), nil
+			},
+			want: "error: current user HOME must be a non-empty absolute path without NUL and with valid UTF-8\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

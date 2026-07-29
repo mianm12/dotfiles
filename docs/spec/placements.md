@@ -63,6 +63,8 @@ target = "~/.config/example/config.local"
 
 ## 路径身份与边界
 
+- HOME、repository、target 以及进入 machine config 或 state 的解析后路径都必须是有效 UTF-8；
+  不支持只能用原始字节表示的文件系统路径，并在 mutation preflight 拒绝。
 - Target 先展开 HOME 并做词法规范化。
 - 对现存 ancestor symlink，解析到其实际父路径；missing suffix 按原名称追加。
 - CLI 按命令 scope 提供 participating placements；该集合中的任意两个 active desired

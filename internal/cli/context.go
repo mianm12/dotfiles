@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
@@ -30,6 +32,11 @@ func resolveControlContext(env environment) (controlContext, error) {
 	}
 	if home == "" || !filepath.IsAbs(home) {
 		return controlContext{}, fmt.Errorf("current user HOME must be a non-empty absolute path")
+	}
+	if strings.ContainsRune(home, '\x00') || !utf8.ValidString(home) {
+		return controlContext{}, fmt.Errorf(
+			"current user HOME must be a non-empty absolute path without NUL and with valid UTF-8",
+		)
 	}
 	home = filepath.Clean(home)
 	stateRoot := filepath.Join(home, ".local", "state", "dot")

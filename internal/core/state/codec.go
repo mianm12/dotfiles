@@ -326,15 +326,28 @@ func validateTarget(home, target string) error {
 }
 
 func cleanExpectedHome(home string) (string, error) {
-	if home == "" || strings.ContainsRune(home, '\x00') || !filepath.IsAbs(home) {
-		return "", invalidf("home %q must be a non-empty absolute path", home)
+	if home == "" ||
+		strings.ContainsRune(home, '\x00') ||
+		!utf8.ValidString(home) ||
+		!filepath.IsAbs(home) {
+		return "", invalidf(
+			"home %q must be a non-empty absolute path without NUL and with valid UTF-8",
+			home,
+		)
 	}
 	return filepath.Clean(home), nil
 }
 
 func cleanStoredAbsolute(name, value string) (string, error) {
-	if value == "" || strings.ContainsRune(value, '\x00') || !filepath.IsAbs(value) {
-		return "", invalidf("%s %q must be a non-empty absolute path", name, value)
+	if value == "" ||
+		strings.ContainsRune(value, '\x00') ||
+		!utf8.ValidString(value) ||
+		!filepath.IsAbs(value) {
+		return "", invalidf(
+			"%s %q must be a non-empty absolute path without NUL and with valid UTF-8",
+			name,
+			value,
+		)
 	}
 	cleaned := filepath.Clean(value)
 	if cleaned != value {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
@@ -117,13 +119,25 @@ func runLocked(request convergenceRequest, commit stateCommitter) (Result, error
 }
 
 func validateRequest(request convergenceRequest) error {
-	if request.Home == "" || !filepath.IsAbs(request.Home) {
-		return fmt.Errorf("executor HOME must be a non-empty absolute path")
+	if _, err := validateExecutorHome(request.Home); err != nil {
+		return err
 	}
 	if err := ValidateMutationControls(request.Controls); err != nil {
 		return fmt.Errorf("validate executor mutation controls: %w", err)
 	}
 	return nil
+}
+
+func validateExecutorHome(home string) (string, error) {
+	if home == "" ||
+		!filepath.IsAbs(home) ||
+		strings.ContainsRune(home, '\x00') ||
+		!utf8.ValidString(home) {
+		return "", fmt.Errorf(
+			"executor HOME must be a non-empty absolute path without NUL and with valid UTF-8",
+		)
+	}
+	return filepath.Clean(home), nil
 }
 
 func warnings(loaded state.Loaded) []string {

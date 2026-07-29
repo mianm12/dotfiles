@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 )
 
 var (
@@ -203,6 +204,9 @@ func cleanAbsolute(label, path string) (string, error) {
 	if strings.ContainsRune(path, '\x00') {
 		return "", fmt.Errorf("%w: %s contains NUL", ErrInvalidPath, label)
 	}
+	if !utf8.ValidString(path) {
+		return "", fmt.Errorf("%w: %s contains invalid UTF-8", ErrInvalidPath, label)
+	}
 	return filepath.Clean(path), nil
 }
 
@@ -265,7 +269,7 @@ func resolvePath(path string) (string, error) {
 			for index := len(missing) - 1; index >= 0; index-- {
 				resolved = filepath.Join(resolved, missing[index])
 			}
-			return filepath.Clean(resolved), nil
+			return cleanAbsolute("resolved path", resolved)
 		}
 		if !errors.Is(inspectErr, fs.ErrNotExist) {
 			detail := fmt.Errorf(

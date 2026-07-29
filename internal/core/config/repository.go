@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -36,9 +38,12 @@ type Repository struct {
 
 // OpenRepository loads dot.toml and discovers only recognized module entries.
 func OpenRepository(root string) (Repository, error) {
-	if root == "" || !filepath.IsAbs(root) {
+	if root == "" ||
+		!filepath.IsAbs(root) ||
+		strings.ContainsRune(root, '\x00') ||
+		!utf8.ValidString(root) {
 		return Repository{}, fmt.Errorf(
-			"%w: repository must be a non-empty absolute path",
+			"%w: repository must be a non-empty absolute path without NUL and with valid UTF-8",
 			ErrInvalidConfiguration,
 		)
 	}

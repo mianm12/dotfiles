@@ -33,10 +33,10 @@ type Session struct {
 // OpenSession validates the complete control boundary before acquiring its
 // single mutation lock.
 func OpenSession(home string, controls corepaths.Controls) (*Session, error) {
-	if home == "" || !filepath.IsAbs(home) {
-		return nil, fmt.Errorf("executor HOME must be a non-empty absolute path")
+	cleanHome, err := validateExecutorHome(home)
+	if err != nil {
+		return nil, err
 	}
-	home = filepath.Clean(home)
 	controls = cleanControls(controls)
 	if err := ValidateMutationControls(controls); err != nil {
 		return nil, fmt.Errorf("validate executor mutation controls: %w", err)
@@ -46,7 +46,7 @@ func OpenSession(home string, controls corepaths.Controls) (*Session, error) {
 		return nil, err
 	}
 	session := &Session{
-		home:     home,
+		home:     cleanHome,
 		controls: controls,
 		release:  owner.Release,
 	}

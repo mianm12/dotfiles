@@ -176,6 +176,42 @@ func TestOpenSessionRejectsControlTopologyBeforeLockMutation(t *testing.T) {
 	}
 }
 
+func TestOpenSessionRejectsInvalidUTF8HomeBeforeLockMutation(t *testing.T) {
+	root, _ := newExecutorRoot(t)
+	repository := filepath.Join(root, "repository")
+	if err := os.Mkdir(repository, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(repository) error = %v", err)
+	}
+	controls := corepaths.Controls{
+		Repository: repository,
+		Config:     filepath.Join(root, "config-control", "config.toml"),
+		State:      filepath.Join(root, "state-control", "state.json"),
+		Lock:       filepath.Join(root, "state-control", "lock"),
+	}
+	home := filepath.Join(root, "home-"+string([]byte{0xff}))
+	beforeEntries := c1ExecutionEntries(t, root)
+
+	session, err := OpenSession(home, controls)
+	if session != nil {
+		_ = session.Close()
+	}
+
+	if err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("OpenSession() = (%#v, %v), want invalid UTF-8 HOME failure", session, err)
+	}
+	afterEntries := c1ExecutionEntries(t, root)
+	if strings.Join(afterEntries, "\n") != strings.Join(beforeEntries, "\n") {
+		t.Fatalf(
+			"invalid HOME changed entries: before=%v after=%v",
+			beforeEntries,
+			afterEntries,
+		)
+	}
+	if _, statErr := os.Lstat(controls.Lock); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("lock path %q error = %v, want missing", controls.Lock, statErr)
+	}
+}
+
 func TestSessionConvergeRejectsActiveControlBoundary(t *testing.T) {
 	root, home := newExecutorRoot(t)
 	repository := filepath.Join(home, "repository")
