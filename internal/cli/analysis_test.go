@@ -23,11 +23,7 @@ target = "~/.extra"
 
 	code, stdout, stderr := fixture.runInjected("status", "extra")
 	if code != exitOK ||
-		!strings.Contains(
-			stdout,
-			"extra  inactive selection=none applicability=applicable "+
-				"convergence=- variant=portable reason=-",
-		) ||
+		stdout != "extra  inactive\n" ||
 		strings.Contains(stdout, "add-extra") ||
 		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
@@ -255,12 +251,7 @@ func TestStatusRendersSelectionSources(t *testing.T) {
 			code, stdout, _ := fixture.runInjected("status", "app")
 
 			if code != exitOK ||
-				!strings.Contains(stdout, "app  converged "+test.want) ||
-				!strings.Contains(
-					stdout,
-					"applicability=applicable convergence=converged "+
-						"variant=portable reason=-",
-				) {
+				stdout != "app  converged "+test.want+"\n" {
 				t.Fatalf("status source = (%d, %q), want %s", code, stdout, test.want)
 			}
 		})
@@ -361,8 +352,7 @@ os = ["macos"]
 		if code != exitOK ||
 			!strings.Contains(
 				stdout,
-				"missing  inactive selection=none applicability=- "+
-					"convergence=- variant=-",
+				`missing  inactive reason="unknown module \"missing\""`,
 			) ||
 			!strings.Contains(stdout, "blocked module=missing") ||
 			!strings.Contains(stdout, "unknown module") ||
@@ -407,8 +397,8 @@ target = "~/.app"
 		stderr != "" ||
 		!strings.Contains(
 			stdout,
-			"app  not-applicable selection=profile applicability=not-applicable "+
-				`convergence=pending-cleanup variant=- reason="prune"`,
+			"app  not-applicable selection=profile "+
+				`convergence=pending-cleanup reason="prune"`,
 		) {
 		t.Fatalf("status pending cleanup = (%d, %q, %q)", code, stdout, stderr)
 	}
@@ -463,8 +453,7 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 			if code != exitOK ||
 				!strings.Contains(
 					stdout,
-					"gone  conflict selection=extra applicability=- "+
-						"convergence=- variant=-",
+					"gone  conflict selection=extra ",
 				) ||
 				!strings.Contains(
 					stdout,
@@ -507,8 +496,7 @@ target = "~/.app"
 		if code != exitOK ||
 			!strings.Contains(
 				stdout,
-				"app  conflict selection=profile applicability=applicable "+
-					"convergence=- variant=portable",
+				"app  conflict selection=profile reason=",
 			) ||
 			!strings.Contains(stdout, `reason="control paths conflict:`) ||
 			!strings.Contains(stdout, "blocked") ||

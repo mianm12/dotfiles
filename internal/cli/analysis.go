@@ -748,7 +748,9 @@ func buildModuleAnalyses(
 			if action.Decision == planner.DecisionConflict {
 				analysis.Summary = "conflict"
 				analysis.Convergence = "conflict"
-				analysis.Reason = action.Reason
+				if !isConcretePlacementConflict(action) {
+					analysis.Reason = action.Reason
+				}
 				continue
 			}
 			if analysis.Convergence == "conflict" {
@@ -786,6 +788,12 @@ func buildModuleAnalyses(
 		result = append(result, analysis)
 	}
 	return result
+}
+
+func isConcretePlacementConflict(action planner.Action) bool {
+	return action.Decision == planner.DecisionConflict &&
+		action.PlacementID != "" &&
+		action.Target != ""
 }
 
 func analysisBlockerForModule(

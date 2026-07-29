@@ -79,27 +79,25 @@ dot help
   prospective machine selection、selection delta、module selection source、applicability、
   variant、convergence、placement actions、reason、输入 warning 与 blocker。
 - Status 保留第二列的 `converged`、`pending`、`conflict`、`not-applicable`、`inactive` 或
-  `stale` 摘要，并固定追加：
+  `stale` 摘要。每行固定从 `MODULE  SUMMARY` 开始，只追加有区分度的维度：
 
-  ```text
-  selection=<none|profile|extra|profile+extra>
-  applicability=<applicable|not-applicable|indeterminate|->
-  convergence=<converged|pending|pending-cleanup|conflict|->
-  variant=<portable|VARIANT|->
-  reason=<-|QUOTED_REASON>
-  ```
+  - selection 不是 `none` 时追加 `selection=<profile|extra|profile+extra>`；
+  - applicability 仅在不是 `applicable`/`-` 且未与 `not-applicable` 摘要重复时追加；
+  - convergence 不是 `-` 且未与摘要重复时追加；
+  - 只有具名 variant 才追加 `variant=VARIANT`，`portable` 与 `-` 省略；
+  - 只有非空 reason 才追加带双引号和转义的 `reason=QUOTED_REASON`。
 
-  `-` 表示当前分析未加载或不存在该维度，不是平台状态。Effective indeterminate module 的
-  第二列摘要为 `conflict`、convergence 为 `-`，reason 显示平台字段或 variant 歧义诊断，
+  Analysis 内部的 `-` 仍表示未加载或不存在该维度，不是平台状态。Effective indeterminate
+  module 的第二列摘要为 `conflict`，显示 applicability 与平台字段或 variant 歧义 reason，
   不生成 placement action；`status MODULE` 检查未选中的 indeterminate module 时仍显示
-  `inactive`，不产生 blocker。带空格或特殊字符的 reason 使用双引号和转义；conflict 或
-  module-specific blocker 的完整 reason 不得省略。Profile module 已确定 not-applicable 但仍有
-  旧 ownership action 时显示 `convergence=pending-cleanup`，reason 至少标出对应 cleanup
-  decision。
+  `inactive`，不产生 blocker。Concrete placement conflict 逐条显示结构化 action；module/path
+  级合成 conflict 不伪造 placement action，而在 module 行保留完整 reason。Profile module
+  已确定 not-applicable 但仍有旧 ownership action 时显示
+  `convergence=pending-cleanup`，reason 至少标出对应 cleanup decision。
 - Dry-run 在 placement actions 之前显示非空 selection delta：`create`、`add-extra` 或
   `remove-extra`；`add-extra`/`remove-extra` 同时显示 module ID。完整分析中的 blocker 写
   stdout 并包含 reason。Dry-run 和 status 都显示计划执行的 forget action 及其结构化
-  reason；输入 warning 仍写 stderr。
+  reason；status 还显示每条 concrete placement conflict；输入 warning 仍写 stderr。
 - Status 与 dry-run 只要形成完整 analysis 就返回成功，即使其中有 pending、conflict 或
   blocker；没有 `--check`。配置、manifest 或 state 无法解析、必要输入无法读取，或未分类的
   文件系统观察失败时 analysis 不完整并返回失败。

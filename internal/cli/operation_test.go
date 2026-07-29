@@ -187,7 +187,7 @@ func TestOperationAnalysisRendersEveryActionWithQuotedReason(t *testing.T) {
 	}
 }
 
-func TestStatusAnalysisAppendsOnlyForgetActions(t *testing.T) {
+func TestStatusAnalysisCompactsDefaultsAndAppendsDiagnosticActions(t *testing.T) {
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
@@ -214,6 +214,18 @@ func TestStatusAnalysisAppendsOnlyForgetActions(t *testing.T) {
 				Target:      "/tmp/home/.old",
 				Reason:      "stale target is absent",
 			},
+			{
+				ModuleID:    "app",
+				PlacementID: "config",
+				Decision:    planner.DecisionConflict,
+				Target:      "/tmp/home/.app",
+				Reason:      "actual target is regular file",
+			},
+			{
+				ModuleID: "global",
+				Decision: planner.DecisionConflict,
+				Reason:   "synthetic path conflict",
+			},
 		},
 	}
 
@@ -223,11 +235,67 @@ func TestStatusAnalysisAppendsOnlyForgetActions(t *testing.T) {
 
 	output := stdout.String()
 	if strings.Contains(output, "create-link") ||
+		!strings.Contains(output, "old  stale convergence=pending\n") ||
+		strings.Contains(output, "selection=none") ||
+		strings.Contains(output, "applicability=-") ||
+		strings.Contains(output, "variant=-") ||
+		strings.Contains(output, "reason=-") ||
 		!strings.Contains(output, "forget") ||
-		!strings.Contains(output, `reason="stale target is absent"`) {
+		!strings.Contains(output, `reason="stale target is absent"`) ||
+		!strings.Contains(output, "conflict     app/config /tmp/home/.app") ||
+		!strings.Contains(output, `reason="actual target is regular file"`) ||
+		strings.Contains(output, "global/") ||
+		strings.Contains(output, "synthetic path conflict") {
 		t.Fatalf(
-			"printStatusAnalysis() stdout = %q, want only appended forget action",
+			"printStatusAnalysis() stdout = %q, want compact module and diagnostic actions",
 			output,
 		)
+	}
+}
+
+func TestStatusAnalysisRendersOnlyDistinctDimensions(t *testing.T) {
+	var stdout bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	analysis := OperationAnalysis{Modules: []ModuleAnalysis{
+		{
+			ID:            "named",
+			Summary:       "converged",
+			Selection:     "profile",
+			Applicability: "applicable",
+			Convergence:   "converged",
+			Variant:       "ubuntu",
+		},
+		{
+			ID:            "gated",
+			Summary:       "conflict",
+			Selection:     "profile",
+			Applicability: "indeterminate",
+			Convergence:   "-",
+			Variant:       "-",
+			Reason:        "distribution is unavailable",
+		},
+		{
+			ID:            "skipped",
+			Summary:       "not-applicable",
+			Selection:     "profile",
+			Applicability: "not-applicable",
+			Convergence:   "pending-cleanup",
+			Variant:       "-",
+			Reason:        "prune",
+		},
+	}}
+
+	if err := printStatusAnalysis(command, analysis); err != nil {
+		t.Fatalf("printStatusAnalysis() error = %v", err)
+	}
+
+	want := "gated  conflict selection=profile applicability=indeterminate " +
+		"reason=\"distribution is unavailable\"\n" +
+		"named  converged selection=profile variant=ubuntu\n" +
+		"skipped  not-applicable selection=profile convergence=pending-cleanup " +
+		"reason=\"prune\"\n"
+	if output := stdout.String(); output != want {
+		t.Fatalf("printStatusAnalysis() stdout = %q, want %q", output, want)
 	}
 }

@@ -241,21 +241,26 @@ func printStatusAnalysis(
 		return strings.Compare(left.ID, right.ID)
 	})
 	for _, module := range modules {
-		reason := "-"
-		if module.Reason != "" {
-			reason = strconv.Quote(module.Reason)
+		line := module.ID + "  " + module.Summary
+		if module.Selection != "none" {
+			line += " selection=" + module.Selection
 		}
-		if _, err := fmt.Fprintf(
-			command.OutOrStdout(),
-			"%s  %s selection=%s applicability=%s convergence=%s variant=%s reason=%s\n",
-			module.ID,
-			module.Summary,
-			module.Selection,
-			module.Applicability,
-			module.Convergence,
-			module.Variant,
-			reason,
-		); err != nil {
+		if module.Applicability != "-" &&
+			module.Applicability != "applicable" &&
+			!(module.Summary == "not-applicable" &&
+				module.Applicability == "not-applicable") {
+			line += " applicability=" + module.Applicability
+		}
+		if module.Convergence != "-" && module.Convergence != module.Summary {
+			line += " convergence=" + module.Convergence
+		}
+		if module.Variant != "-" && module.Variant != "portable" {
+			line += " variant=" + module.Variant
+		}
+		if module.Reason != "" {
+			line += " reason=" + strconv.Quote(module.Reason)
+		}
+		if _, err := fmt.Fprintln(command.OutOrStdout(), line); err != nil {
 			return fmt.Errorf("write status: %w", err)
 		}
 	}
@@ -265,7 +270,8 @@ func printStatusAnalysis(
 		}
 	}
 	for _, action := range analysis.Actions {
-		if action.Decision != planner.DecisionForget {
+		if action.Decision != planner.DecisionForget &&
+			!isConcretePlacementConflict(action) {
 			continue
 		}
 		if err := printAction(command, action); err != nil {
