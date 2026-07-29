@@ -101,6 +101,73 @@ target = "~/.app-new"
 	})
 }
 
+func TestApplyMigratesDirectoryLinkToLeafPlacementsInTwoStages(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "tree"
+source = "tree"
+target = "~/.app"
+`, map[string]string{
+		"tree/shared":   "shared",
+		"local.example": "local",
+	})
+	fixture.writeMachine(t, []string{"base"}, nil)
+
+	code, _, stderr := fixture.run("apply")
+	if code != exitOK {
+		t.Fatalf("initial directory-link apply = (%d, %q)", code, stderr)
+	}
+	parent := filepath.Join(fixture.home, ".app")
+	assertCLILink(
+		t,
+		parent,
+		filepath.Join(fixture.repository, "modules", "app", "tree"),
+	)
+	assertApplyNoMutation(t, fixture, fixture.run)
+
+	writeModuleManifest(t, fixture, "app", "")
+	code, _, stderr = fixture.run("apply")
+	if code != exitOK {
+		t.Fatalf("phase-one apply = (%d, %q)", code, stderr)
+	}
+	assertCLIMissing(t, parent)
+	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+		t.Fatalf("state after phase one = %#v, want no placements", modules)
+	}
+	assertApplyNoMutation(t, fixture, fixture.run)
+
+	writeModuleManifest(t, fixture, "app", `
+[[links]]
+id = "shared"
+source = "tree/shared"
+target = "~/.app/shared"
+
+[[locals]]
+id = "local"
+example = "local.example"
+target = "~/.app/local"
+`)
+	code, _, stderr = fixture.run("apply")
+	if code != exitOK {
+		t.Fatalf("phase-two apply = (%d, %q)", code, stderr)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil || !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+		t.Fatalf("parent after phase two = (%v, %v), want real directory", info, err)
+	}
+	assertCLILink(
+		t,
+		filepath.Join(parent, "shared"),
+		filepath.Join(fixture.repository, "modules", "app", "tree", "shared"),
+	)
+	local, err := os.ReadFile(filepath.Join(parent, "local"))
+	if err != nil || string(local) != "local" {
+		t.Fatalf("local after phase two = (%q, %v), want initialized content", local, err)
+	}
+	assertApplyNoMutation(t, fixture, fixture.run)
+}
+
 func TestApplyCreatesNewTargetBeforePruningOldTarget(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `
@@ -303,7 +370,7 @@ target = "~/.app.local"
 	}
 }
 
-func TestApplyAdoptsMatchingLinkAndRejectsDriftOrKindChange(t *testing.T) {
+func TestApplyAdoptsMatchingLinkAndRequiresExplicitKindMigration(t *testing.T) {
 	t.Run("adopt then reject drift", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = ["app"]`)
 		fixture.writeModule(t, "app", `
@@ -345,7 +412,7 @@ target = "~/.app"
 		assertSnapshotUnchanged(t, before)
 	})
 
-	t.Run("kind change conflicts", func(t *testing.T) {
+	t.Run("local to link requires two-stage cleanup and user handling", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = ["app"]`)
 		fixture.writeModule(t, "app", `
 [[locals]]
@@ -375,6 +442,106 @@ target = "~/.shared"
 			t.Fatalf("apply after kind change = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
+
+		writeModuleManifest(t, fixture, "app", "")
+		code, _, stderr = fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("phase-one local cleanup = (%d, %q)", code, stderr)
+		}
+		target := filepath.Join(fixture.home, ".shared")
+		data, err := os.ReadFile(target)
+		if err != nil || string(data) != "local" {
+			t.Fatalf("local after phase one = (%q, %v), want preserved", data, err)
+		}
+		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+			t.Fatalf("state after phase one = %#v, want no placements", modules)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+
+		writeModuleManifest(t, fixture, "app", `
+[[links]]
+id = "shared"
+source = "config"
+target = "~/.shared"
+`)
+		before = snapshotTree(t, fixture.root)
+		code, stdout, stderr = fixture.run("apply")
+		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+			t.Fatalf(
+				"phase-two apply with retained local = (%d, %q, %q), want conflict",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, before)
+
+		preserved := filepath.Join(fixture.root, "preserved-local")
+		if err := os.Rename(target, preserved); err != nil {
+			t.Fatalf("os.Rename(local for user handling) error = %v", err)
+		}
+		code, _, stderr = fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("phase-two link apply = (%d, %q)", code, stderr)
+		}
+		assertCLILink(
+			t,
+			target,
+			filepath.Join(fixture.repository, "modules", "app", "config"),
+		)
+		data, err = os.ReadFile(preserved)
+		if err != nil || string(data) != "local" {
+			t.Fatalf("preserved local = (%q, %v), want original content", data, err)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
+
+	t.Run("link to local creates only after two-stage cleanup", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["app"]`)
+		fixture.writeModule(t, "app", `
+[[links]]
+id = "shared"
+source = "config"
+target = "~/.shared"
+`, map[string]string{
+			"config":        "config",
+			"local.example": "local",
+		})
+		fixture.writeMachine(t, []string{"base"}, nil)
+
+		code, _, stderr := fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("initial link apply = (%d, %q)", code, stderr)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+
+		writeModuleManifest(t, fixture, "app", "")
+		code, _, stderr = fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("phase-one link cleanup = (%d, %q)", code, stderr)
+		}
+		target := filepath.Join(fixture.home, ".shared")
+		assertCLIMissing(t, target)
+		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
+			t.Fatalf("state after phase one = %#v, want no placements", modules)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
+
+		writeModuleManifest(t, fixture, "app", `
+[[locals]]
+id = "shared"
+example = "local.example"
+target = "~/.shared"
+`)
+		code, _, stderr = fixture.run("apply")
+		if code != exitOK {
+			t.Fatalf("phase-two local apply = (%d, %q)", code, stderr)
+		}
+		data, err := os.ReadFile(target)
+		if err != nil || string(data) != "local" {
+			t.Fatalf("local after phase two = (%q, %v), want initialized", data, err)
+		}
+		assertApplyNoMutation(t, fixture, fixture.run)
 	})
 }
 

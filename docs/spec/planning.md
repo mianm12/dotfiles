@@ -12,8 +12,8 @@ Target 使用 `lstat` 区分 absent、symlink、regular file、directory 和 spe
 [`mutation-and-recovery.md`](mutation-and-recovery.md)。
 
 State 中 placement 的 kind 与当前 desired 的 kind 不一致（同一 ID 在 link 与 local 之间互换）
-是 conflict，不尝试自动收敛；恢复方式是改用新 placement ID，或先 `dot remove` 该 module 再
-修改 manifest。
+是 conflict，不尝试自动收敛。改用新 placement ID 仍受 actual target 与 ownership 规则约束，
+不是通用的类型转换方式；显式转换使用下文的[两阶段 placement 迁移](#两阶段-placement-迁移)。
 
 Active target 的父路径解析链经过一条仍有完整 state ownership 证据的 link 时为 conflict。
 该守卫包括 scope 外和仅存在于 state 的 link，避免 active action 先写入其当前 destination，
@@ -34,6 +34,31 @@ Profile 选中的 module 已确定 not-applicable 时，其旧 state placements 
 module 不生成 placement 或 cleanup action；已由 remove 移出 extra selection 的目标不再
 effective，其旧 state placements 仍按 stale prune/forget 规则处理。真实 mutation 阻断边界由
 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
+
+### 两阶段 placement 迁移
+
+同一 placement ID 在 link 与 local 之间变更 kind，或把一个 directory link 改为其 target 下的
+leaf placements，都不能在一次 desired 变更中自动迁移。每个受影响 HOME 必须分别完成：
+
+1. 阶段一的 desired 只删除旧 placement，不加入 replacement。Directory-link 迁移还要求所有
+   effective modules 都不声明父路径解析链经过旧 link 的 descendants。
+2. 运行覆盖旧 state record scope 的 `dot apply`；module 仍 active 且 applicable 时可以使用
+   `dot apply MODULE`。若 mutation 失败或提示可能部分完成，保持阶段一的 desired，并按
+   [`mutation-and-recovery.md`](mutation-and-recovery.md#中断恢复) 重跑到成功；不能仅凭 actual
+   target 已消失推断 state 已提交。
+3. 检查旧 target。Prune 只删除仍匹配 ownership 的 link；forget 和 local cleanup 都保留 actual。
+   进入阶段二前，用户必须先安全处理保留的数据或目录项。尤其 local 转 link 时，仍存在的 local
+   会让新 link conflict；link 转 local 时，阶段一保留的任意 actual 都会被 local 当作已有目录项
+   keep；directory-link 迁移时，旧 parent target 必须 absent 或是用户确认的真实目录。
+4. 阶段二再加入 replacement 或 descendants 并 apply；普通 target、ownership 与 conflict 规则
+   继续适用。
+
+若 module 已因 selection 移除或已确定 not-applicable 而退出 desired，按
+[`cli.md`](cli.md#apply) 与 [`cli.md`](cli.md#remove) 的 selection 来源规则选择全量 cleanup
+或 remove，不用显式 apply 把 inactive module 重新加入 extra selection。Indeterminate
+applicability 不表示退出 desired，仍按安全规则阻断；应先恢复平台判定或移除对应 selection
+来源，仅由 extra 选择时才可使用 remove contraction。多机仓库中每个仍有旧 record 的 HOME
+都不得跳过阶段一。
 
 ## Link
 
