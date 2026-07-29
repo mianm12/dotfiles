@@ -87,4 +87,4 @@ vuln:
 	$(GO_TOOL) govulncheck ./...
 
 # 汇总当前平台的完整门禁，作为本地与 CI 的共同入口；任一失败都会立即停止。
-check: mod-verify tidy-check fmt-check lint test-race
+check: mod-verify tidy-check fmt-check lint test-race build

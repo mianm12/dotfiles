@@ -247,8 +247,8 @@ func printStatusAnalysis(
 		}
 		if module.Applicability != "-" &&
 			module.Applicability != "applicable" &&
-			!(module.Summary == "not-applicable" &&
-				module.Applicability == "not-applicable") {
+			(module.Summary != "not-applicable" ||
+				module.Applicability != "not-applicable") {
 			line += " applicability=" + module.Applicability
 		}
 		if module.Convergence != "-" && module.Convergence != module.Summary {

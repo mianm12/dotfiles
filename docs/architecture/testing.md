@@ -27,6 +27,10 @@
 文件系统测试使用 `t.TempDir` 和绝对路径，显式隔离 HOME、repository、machine config、state
 和 lock。测试不得读取或写入真实 HOME、私人 modules、machine config、state 或 lock。
 
+唯一例外是 config package 的 tracked-repository smoke：它只读当前 checkout 的 `dot.toml`
+与 recognized modules，验证实际仓库配置可以在支持的平台矩阵中解析；不读取 HOME、machine
+config、state 或 lock，也不执行 CLI 或 mutation。
+
 每个成功 mutation 场景再次执行相同 apply，并断言没有新的文件系统 mutation。真实缺陷先
 转化为脱敏、最小、合成复现，再进入回归套件和永久门禁。
 
@@ -34,7 +38,8 @@
 
 - Focused tests：开发期间快速验证变更 package 和直接消费者。
 - Fast tests：`make test` 快速运行全部 Go 测试。
-- Full gate：`make check` 验证 module checksum、tidy、format、lint 和全量 race tests。
+- Full gate：`make check` 验证 module checksum、tidy、format、lint、全量 race tests 和生产
+  二进制构建。
 - Fuzz：`make fuzz` 持续攻击 state decoder、target expression 与 os-release ID parser
   安全边界。独立 workflow 只在每周计划或手动触发时运行，不响应 Pull Request，也不作为
   required check；Pull Request 继续只运行确定性门禁。Fuzz 失败时保留 Go 写出的最小失败
