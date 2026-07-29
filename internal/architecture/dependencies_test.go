@@ -36,6 +36,24 @@ var allowedThirdPartyImports = map[string]map[string]bool{
 	"github.com/spf13/cobra":          allow("internal/cli"),
 }
 
+type mutationReferenceOwner struct {
+	source   string
+	function string
+	receiver string
+}
+
+var sensitiveMutationOwners = map[string]mutationReferenceOwner{
+	"internal/lock.Acquire": {
+		source:   "internal/core/executor",
+		function: "OpenSession",
+	},
+	"internal/core/config.PublishMachine": {
+		source:   "internal/core/executor",
+		function: "PublishSelection",
+		receiver: "Session",
+	},
+}
+
 func TestProductionPackageDependenciesMatchArchitecture(t *testing.T) {
 	root := repositoryRoot(t)
 	actual := productionInternalImports(t, root)
@@ -120,6 +138,7 @@ func TestProductionSensitiveMutationReferencesHaveSingleOwner(t *testing.T) {
 	root := repositoryRoot(t)
 	modulePath := repositoryModulePath(t, root)
 	var failures []string
+	observed := make(map[string]bool, len(sensitiveMutationOwners))
 
 	walkProductionGoFiles(t, root, func(filename, source string) {
 		fileSet := token.NewFileSet()
@@ -129,9 +148,24 @@ func TestProductionSensitiveMutationReferencesHaveSingleOwner(t *testing.T) {
 		}
 		failures = append(
 			failures,
-			sensitiveMutationFailures(t, fileSet, file, source, modulePath)...,
+			sensitiveMutationFailures(
+				t,
+				fileSet,
+				file,
+				source,
+				modulePath,
+				observed,
+			)...,
 		)
 	})
+	for target := range sensitiveMutationOwners {
+		if !observed[target] {
+			failures = append(
+				failures,
+				"sensitive mutation owner table contains unused target "+target,
+			)
+		}
+	}
 
 	sort.Strings(failures)
 	if len(failures) != 0 {
@@ -144,30 +178,65 @@ func TestProductionSensitiveMutationReferencesHaveSingleOwner(t *testing.T) {
 
 func TestSensitiveMutationBoundaryRejectsIndirectReferences(t *testing.T) {
 	const modulePath = "example.com/dot"
-	tests := map[string]string{
-		"function value": `package sample
+	tests := map[string]struct {
+		sourcePackage string
+		code          string
+	}{
+		"function value": {
+			sourcePackage: "internal/cli",
+			code: `package sample
 import config "example.com/dot/internal/core/config"
 func bypass() {
 	publish := config.PublishMachine
 	_ = publish
 }
 `,
-		"package function value": `package sample
+		},
+		"package function value": {
+			sourcePackage: "internal/cli",
+			code: `package sample
 import config "example.com/dot/internal/core/config"
 var publish = config.PublishMachine
 `,
-		"dot import": `package sample
+		},
+		"nested function value": {
+			sourcePackage: "internal/cli",
+			code: `package sample
+import config "example.com/dot/internal/core/config"
+var publish = (&struct{ Value any }{Value: config.PublishMachine}).Value
+`,
+		},
+		"dot import": {
+			sourcePackage: "internal/cli",
+			code: `package sample
 import . "example.com/dot/internal/core/config"
 func bypass() {
 	_ = PublishMachine
 }
 `,
+		},
+		"config package wrapper": {
+			sourcePackage: "internal/core/config",
+			code: `package config
+func bypass() {
+	_ = PublishMachine
+}
+`,
+		},
+		"lock package wrapper": {
+			sourcePackage: "internal/lock",
+			code: `package lock
+func bypass() {
+	_ = Acquire
+}
+`,
+		},
 	}
 
-	for name, source := range tests {
+	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			fileSet := token.NewFileSet()
-			file, err := parser.ParseFile(fileSet, name+".go", source, 0)
+			file, err := parser.ParseFile(fileSet, name+".go", test.code, 0)
 			if err != nil {
 				t.Fatalf("parse synthetic source: %v", err)
 			}
@@ -175,11 +244,62 @@ func bypass() {
 				t,
 				fileSet,
 				file,
-				"internal/cli",
+				test.sourcePackage,
 				modulePath,
+				make(map[string]bool),
 			)
 			if len(failures) == 0 {
 				t.Fatal("indirect sensitive mutation reference was not rejected")
+			}
+		})
+	}
+}
+
+func TestSensitiveMutationBoundaryIgnoresLocalShadows(t *testing.T) {
+	const modulePath = "example.com/dot"
+	tests := map[string]struct {
+		sourcePackage string
+		code          string
+	}{
+		"import alias": {
+			sourcePackage: "internal/cli",
+			code: `package sample
+import config "example.com/dot/internal/core/config"
+var _ config.Machine
+func allowed() {
+	config := struct{ PublishMachine func() }{}
+	_ = config.PublishMachine
+}
+`,
+		},
+		"sensitive name": {
+			sourcePackage: "internal/core/config",
+			code: `package config
+func allowed() {
+	PublishMachine := func() {}
+	PublishMachine()
+}
+`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fileSet := token.NewFileSet()
+			file, err := parser.ParseFile(fileSet, "shadow.go", test.code, 0)
+			if err != nil {
+				t.Fatalf("parse synthetic source: %v", err)
+			}
+			failures := sensitiveMutationFailures(
+				t,
+				fileSet,
+				file,
+				test.sourcePackage,
+				modulePath,
+				make(map[string]bool),
+			)
+			if len(failures) != 0 {
+				t.Fatalf("local shadow produced failures: %v", failures)
 			}
 		})
 	}
@@ -478,6 +598,7 @@ func sensitiveMutationFailures(
 	file *ast.File,
 	source string,
 	modulePath string,
+	observed map[string]bool,
 ) []string {
 	t.Helper()
 	imports := importedPackageNames(t, file, modulePath)
@@ -491,8 +612,7 @@ func sensitiveMutationFailures(
 			t.Fatalf("unquote import %s: %v", importSpec.Path.Value, err)
 		}
 		internalPath := strings.TrimPrefix(importPath, modulePath+"/")
-		if internalPath != "internal/lock" &&
-			internalPath != "internal/core/config" {
+		if !sensitiveMutationPackage(internalPath) {
 			continue
 		}
 		failures = append(
@@ -502,42 +622,94 @@ func sensitiveMutationFailures(
 		)
 	}
 
-	inspectReferences := func(node ast.Node, function, receiver string) {
+	recordReference := func(position token.Pos, function, receiver, target string) {
+		owner, sensitive := sensitiveMutationOwners[target]
+		if !sensitive {
+			return
+		}
+		if owner.source == source &&
+			owner.function == function &&
+			owner.receiver == receiver {
+			observed[target] = true
+			return
+		}
+		failures = append(
+			failures,
+			fmtPosition(fileSet, position)+
+				": forbidden reference to "+target,
+		)
+	}
+	var inspectReferences func(ast.Node, string, string)
+	inspectReferences = func(node ast.Node, function, receiver string) {
 		ast.Inspect(node, func(node ast.Node) bool {
-			selector, ok := node.(*ast.SelectorExpr)
-			if !ok {
+			switch expression := node.(type) {
+			case *ast.SelectorExpr:
+				if target, ok := importedSelectorTarget(expression, imports); ok {
+					recordReference(expression.Pos(), function, receiver, target)
+				} else {
+					inspectReferences(expression.X, function, receiver)
+				}
+				return false
+			case *ast.Ident:
+				target, ok := localSensitiveMutationTarget(file, source, expression)
+				if ok {
+					recordReference(expression.Pos(), function, receiver, target)
+				}
+			default:
 				return true
 			}
-			target, ok := importedSelectorTarget(selector, imports)
-			if !ok || allowedMutationReference(
-				source,
-				function,
-				receiver,
-				target,
-			) {
-				return true
-			}
-			failures = append(
-				failures,
-				fmtPosition(fileSet, selector.Pos())+
-					": forbidden reference to "+target,
-			)
 			return true
 		})
 	}
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
-		if !ok {
-			inspectReferences(declaration, "", "")
+		if ok {
+			inspectReferences(
+				function.Body,
+				function.Name.Name,
+				receiverTypeName(function),
+			)
 			continue
 		}
-		inspectReferences(
-			function.Body,
-			function.Name.Name,
-			receiverTypeName(function),
-		)
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, specification := range general.Specs {
+			values, ok := specification.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, value := range values.Values {
+				inspectReferences(value, "", "")
+			}
+		}
 	}
 	return failures
+}
+
+func sensitiveMutationPackage(packagePath string) bool {
+	prefix := packagePath + "."
+	for target := range sensitiveMutationOwners {
+		if strings.HasPrefix(target, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func localSensitiveMutationTarget(
+	file *ast.File,
+	source string,
+	identifier *ast.Ident,
+) (string, bool) {
+	if identifier.Obj != nil &&
+		file.Scope.Lookup(identifier.Name) != identifier.Obj {
+		return "", false
+	}
+	target := source + "." + identifier.Name
+	_, exists := sensitiveMutationOwners[target]
+	return target, exists
 }
 
 func importedSelectorTarget(
@@ -545,7 +717,7 @@ func importedSelectorTarget(
 	imports map[string]string,
 ) (string, bool) {
 	qualifier, ok := selector.X.(*ast.Ident)
-	if !ok {
+	if !ok || qualifier.Obj != nil {
 		return "", false
 	}
 	importPath, ok := imports[qualifier.Name]
@@ -553,23 +725,6 @@ func importedSelectorTarget(
 		return "", false
 	}
 	return importPath + "." + selector.Sel.Name, true
-}
-
-func allowedMutationReference(
-	source, function, receiver, target string,
-) bool {
-	switch target {
-	case "internal/lock.Acquire":
-		return source == "internal/core/executor" &&
-			function == "OpenSession" &&
-			receiver == ""
-	case "internal/core/config.PublishMachine":
-		return source == "internal/core/executor" &&
-			function == "PublishSelection" &&
-			receiver == "Session"
-	default:
-		return true
-	}
 }
 
 func receiverTypeName(declaration *ast.FuncDecl) string {

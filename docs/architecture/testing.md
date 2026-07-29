@@ -52,9 +52,12 @@
 
 架构测试解析生产 Go 文件的 imports，并以显式允许边表约束
 [`overview.md`](overview.md) 定义的层次；同时机械限制 lock acquisition 与 machine selection
-publication 两个敏感 mutation API 的直接调用位置。CLI 不得依赖 lock 或直接发布 machine
+publication 两个敏感 mutation API 的直接引用位置。CLI 不得依赖 lock 或直接发布 machine
 selection，lock acquisition 只属于 executor Session。新增反向依赖、越层依赖或敏感 mutation
-调用位置必须先作为架构变更审查，不能靠测试白名单静默放行。
+引用位置必须先作为架构变更审查，不能靠测试白名单静默放行。
+该检查使用 parser 的词法绑定区分 internal import 与同名局部值，但不建设跨函数数据流或
+调用图分析。敏感 API 所在 package 也不得复用同名 struct 字段或表达式 key；语法门禁会保守
+拒绝这类歧义命名。
 
 同一测试还双向校验 [`overview.md`](overview.md) 定义的生产代码直接第三方依赖精确
 allowlist。未列出的第三方 import、错误 owner 和已经不存在的陈旧白名单边都必须失败；
