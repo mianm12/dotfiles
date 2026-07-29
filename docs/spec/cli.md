@@ -7,7 +7,7 @@ dot apply [MODULE] [--dry-run]
 dot remove MODULE [--dry-run]
 dot paths
 dot version
-dot help
+dot help [COMMAND]
 ```
 
 ## Paths
@@ -20,6 +20,14 @@ dot help
 - 命令不创建目录、文件、lock 或 temporary file，不执行修复，也不输出 repository 或文件内容。
 - 命令不接受位置参数；参数错误返回 `2`。HOME 无法取得、为空或不是绝对路径时返回 `1` 且
   stdout 为空；成功返回 `0`，正常结果只写 stdout。
+
+## Help 与 Version
+
+- `dot help` 显示公开命令；`dot help COMMAND` 显示一个公开命令的帮助。未知 topic 或多余参数
+  返回 `2`，命令不读取 repository、machine config、state 或 platform，也不执行 mutation。
+- `dot version` 不接受参数，按顺序输出
+  `version=<value>`、`commit=<value>`、`build_time=<value>` 三行。未注入构建信息的开发版本
+  使用 `dev`、`unknown`、`unknown`。
 
 ## Init
 

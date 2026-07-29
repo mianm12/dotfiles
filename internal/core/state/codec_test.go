@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	corestate "github.com/mianm12/dotfiles/internal/core/state"
@@ -252,6 +253,10 @@ func TestDecode_ClassifiesVersionsBeforeLegacySchema(t *testing.T) {
 			)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Decode(version %s) error = %v, want %v", test.version, err, test.want)
+			}
+			if errors.Is(err, corestate.ErrLegacyVersion) &&
+				!strings.Contains(err.Error(), "dot paths") {
+				t.Fatalf("Decode(version 1) error = %v, want dot paths recovery hint", err)
 			}
 		})
 	}

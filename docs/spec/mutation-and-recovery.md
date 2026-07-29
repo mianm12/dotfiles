@@ -51,7 +51,8 @@ read-only preflight
   必须在 lock 与 mutation 前完成校验；失败时不跟随、替换或 chmod 对应对象。
 - 不防御同一用户权限的其他进程在检查与 mutation 之间并发替换私有控制根。
 - 不建立通用 action snapshot 或 precondition 系统。
-- Local 和新 link 以 `0600`、完整且不可覆盖的方式发布；target 已出现时停止。
+- Local 以 `0600`、内容完整且不可覆盖的方式发布；新 link 以不可覆盖的 symlink create
+  发布；两者在 target 已出现时停止。
 - Update/prune 删除 symlink 前重新读取 resolved target 和 raw destination；与 state 不同则停止。
 - Update/prune 删除后重新读取 target；只有确认不存在才继续，重新出现或无法确认时停止且不推进
   state。

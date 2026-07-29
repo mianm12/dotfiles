@@ -27,7 +27,7 @@ Desired repository + Machine selection + State + Actual filesystem -> Plan
 - macOS 与 Linux；Linux 重点支持 Ubuntu 和 Arch。
 - profiles、modules、platform variants 和多个 placements。
 - 文件或目录 symlink。
-- `*.local.example` 到本机 local 文件的一次性复制。
+- 目标缺失时从 `*.local.example` 初始化本机 local 文件；已存在时不读取或覆盖。
 - `init`、`status`、`apply`、`remove`、`paths`、`version` 和 `help`。
 - mutation dry-run、最小 ownership state 和单进程锁。
 

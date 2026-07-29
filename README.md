@@ -1,7 +1,7 @@
 # dot
 
 `dot` 是个人使用的 macOS/Linux dotfiles 管理 CLI。它以 symlink 集中管理共享配置，并从
-`*.local.example` 一次性初始化不进入 Git 的本机内容。
+`*.local.example` 在目标缺失时初始化不进入 Git 的本机内容。
 
 ## 当前能力
 
@@ -15,7 +15,7 @@ placements、dry-run、ownership state 和单进程 mutation lock。
 
 ```sh
 make build
-bin/dot init /absolute/path/to/dotfiles --profile base
+bin/dot init /absolute/path/to/dotfiles
 bin/dot status
 ```
 
@@ -28,8 +28,7 @@ bin/dot paths
 
 该命令只显示路径，不读取或创建这些文件。
 
-当前仓库提供跨 macOS/Linux 的 `starship` module。它默认不在空 `base` profile 中，可按机器
-单独启用：
+当前仓库提供跨 macOS/Linux 的 `starship` module。初始 selection 为空，可按机器单独启用：
 
 ```sh
 bin/dot apply starship --dry-run

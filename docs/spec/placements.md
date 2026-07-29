@@ -15,6 +15,8 @@ target = "~/.config/example/config"
 - Source 相对于 portable root 或 selected variant root。
 - Source 必须存在，其顶层对象只能是普通文件或目录，不得是 symlink 或 special；否则为配置
   错误、零 mutation。该约束针对 desired source，与 dangling actual 链的规划规则正交。
+- Selected root 的解析身份必须位于 module root 内；source/example 经过现存 ancestor symlink
+  解析后的身份必须位于 selected root 内，否则为配置错误、零 mutation。
 - Source 目录内部不递归检查，内部 symlink 由用户负责。
 - Link desired identity 由 source 路径决定，不比较 source 内容；仅发生同一路径下内容变化时
   不要求重建 symlink 或更新 state。
@@ -32,7 +34,7 @@ symlink，不递归解释或记录其 descendants；source 内新增、删除或
 因此，目录 link 应仅用于封闭共享树：目录内所有内容都应由 repository 直接承载，并且应用不会
 在其中写入不应进入 repository 的本机私有内容、缓存或运行状态。需要共享配置与本机内容共存时，
 不要把该目录本身声明为 directory link；保持对应 target 目录为真实目录，分别声明其下具体文件的
-links 和需要一次性初始化的 locals。自动递归展开目录、tree folding 和共享文件复制不属于当前
+links 和需要在缺失时初始化的 locals。自动递归展开目录、tree folding 和共享文件复制不属于当前
 产品。
 
 #### 目录部署决策树

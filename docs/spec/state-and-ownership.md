@@ -43,7 +43,7 @@ device 都必须在读取内容前失败。
 }
 ```
 
-本检查点新增的兼容规则只针对空 module：合法 module ID 对应的 module object 若缺少
+空 module 兼容规则只针对合法 module ID 对应的 module object：若缺少
 `placements` 或其值为空 object，按非 canonical state v2 输入读取。加载时在内存中删除该空
 module，并保留下次成功 mutation 需要重写 state 的事实。Canonical state v2 不包含空 module；
 编码待发布 state 时若仍含空 module 必须拒绝，而不是静默删除或写出。不升级 state version。

@@ -108,3 +108,13 @@ func TestApplyHelpExplainsPersistentActivation(t *testing.T) {
 		t.Fatalf("help apply = (%d, %q, %q), want persistent activation semantics", code, stdout, stderr)
 	}
 }
+
+func TestVersionReportsBuildInformation(t *testing.T) {
+	fixture := newCLITestEnv(t, "")
+	code, stdout, stderr := fixture.runInjected("version")
+	if code != exitOK ||
+		stderr != "" ||
+		stdout != "version=test\ncommit=test\nbuild_time=test\n" {
+		t.Fatalf("version = (%d, %q, %q), want injected build information", code, stdout, stderr)
+	}
+}
