@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
-	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 )
 
 type controlContext struct {
@@ -62,11 +62,16 @@ func resolveContext(env environment) (commandContext, error) {
 	}, nil
 }
 
-func (context commandContext) controls(repository string) corepaths.Controls {
-	return corepaths.Controls{
-		Repository: filepath.Clean(repository),
-		Config:     context.configPath,
-		State:      context.statePath,
-		Lock:       context.lockPath,
+func (context commandContext) environment() converge.Environment {
+	return converge.Environment{
+		Home:       context.home,
+		ConfigPath: context.configPath,
+		StatePath:  context.statePath,
+		LockPath:   context.lockPath,
+		Platform:   context.platform,
 	}
+}
+
+func (context controlContext) environment() converge.Environment {
+	return commandContext{controlContext: context}.environment()
 }

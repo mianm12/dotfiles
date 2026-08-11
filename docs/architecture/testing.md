@@ -8,17 +8,16 @@
 - `internal/cli` 的跨层测试按 init、select、apply、status、analysis、placement、safety、
   recovery 和 full convergence 等用户行为域组织。
 - CLI 的命令语法、错误映射和输出格式由 `commands_test.go` 覆盖。
-- Config、paths、state、planner 和 executor 在各自 package 覆盖局部模型与失败边界，并以
-  具体行为命名。
+- Config、paths 与 state 在各自 package 覆盖局部模型与失败边界；converge 按 selection、
+  analysis、planning、execution、lock 与 recovery 的具体行为组织测试。
 - Storage 覆盖私有文件首次发布、相同内容精确 no-op、替换、权限与异常目录项；config/state
-  只覆盖各自编码和语义校验；mutation/executor 覆盖编码结果进入统一发布原语的调用边界。
-- Paths 覆盖确定阻塞与不可确定 I/O 的 typed resolution classification；planner 测试只验证
-  分类对应的 prune/forget 策略，不依赖 errno 或 `PathError` 包装形状。
-- Mutation 负责固定 controls、单次 lock ownership、selection publication、锁前完整 artifact
-  preflight、锁内重新解析的跨层测试；直接调用 `mutation.Apply` 的 deterministic blocker 必须
-  验证 state root 与 lock 均未创建。其 internal lock 只覆盖获取、释放、busy 和异常目录项。
-  Executor 覆盖共用只读 Analyze、锁内 fresh plan、plan 执行、changed-target 复核、state commit
-  与恢复事实。
+  只覆盖各自编码和语义校验；converge 覆盖编码结果进入统一发布原语的调用边界。
+- Paths 覆盖确定阻塞与不可确定 I/O 的 typed resolution classification；converge planning 测试
+  只验证分类对应的 prune/forget 策略，不依赖 errno 或 `PathError` 包装形状。
+- Converge 负责固定 Environment、单次 lock ownership、selection publication、锁前完整 artifact
+  preflight、锁内重新分析与 fresh Plan 的跨层测试；直接调用 `converge.Apply` 的 deterministic
+  blocker 必须验证 state root 与 lock 均未创建。Lock 测试覆盖获取、释放、busy 和异常目录项；
+  execution 测试覆盖 plan 执行、changed-target 复核、state commit 与恢复事实。
 - `cmd/dot` 只保留最小进程级 smoke；完整公开行为通过 `cli.Run` 测试。
 - CLI 合成环境集中在 `internal/cli/testenv_test.go`，不创建跨 package 通用测试框架。
 - CLI 分别验证 status/dry-run 的当前 selection forget、成功 state commit 后的过去式 forget
@@ -58,9 +57,9 @@ config、state 或 lock，也不执行 CLI 或 mutation。
 ## 架构约束
 
 架构测试只解析生产 Go 文件的 imports，并以显式允许边表约束
-[`overview.md`](overview.md) 定义的层次。Lock 实现位于 mutation 私有的 Go `internal`
-package；machine selection 没有公开 publication API，由 mutation 组合 config 编码与 storage
-发布。因此 ownership 由 package/API 结构表达，不再维护按函数名扫描 AST 的第二套白名单。
+[`overview.md`](overview.md) 定义的层次。Lock、target mutation、machine selection publication
+和 state commit 都由 `internal/core/converge` 单独拥有；machine selection 没有公开 publication
+API。因此 ownership 由 package/API 结构表达，不再维护按函数名扫描 AST 的第二套白名单。
 新增反向依赖或越层依赖必须先作为架构变更审查，不能靠测试白名单静默放行。
 
 同一测试还双向校验 [`overview.md`](overview.md) 定义的生产代码直接第三方依赖精确

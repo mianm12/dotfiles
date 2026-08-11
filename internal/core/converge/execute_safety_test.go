@@ -1,4 +1,4 @@
-package executor
+package converge
 
 import (
 	"errors"
@@ -10,11 +10,10 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
-	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestExecutorCreationNeverClobbersChangedTargets(t *testing.T) {
+func TestExecutionCreationNeverClobbersChangedTargets(t *testing.T) {
 	t.Run("link", func(t *testing.T) {
 		root, home := newExecutorRoot(t)
 		target := filepath.Join(home, ".link")
@@ -55,10 +54,10 @@ func TestExecutorCreationNeverClobbersChangedTargets(t *testing.T) {
 	})
 }
 
-func TestExecutorUpdateAndPruneRecheckRawDestination(t *testing.T) {
-	for _, decision := range []planner.Decision{
-		planner.DecisionUpdate,
-		planner.DecisionPrune,
+func TestExecutionUpdateAndPruneRecheckRawDestination(t *testing.T) {
+	for _, decision := range []Decision{
+		DecisionUpdate,
+		DecisionPrune,
 	} {
 		t.Run(string(decision), func(t *testing.T) {
 			root, home := newExecutorRoot(t)
@@ -75,7 +74,7 @@ func TestExecutorUpdateAndPruneRecheckRawDestination(t *testing.T) {
 			before := snapshotExecutorPath(t, target)
 
 			run := mutationRun{home: home}
-			err = run.removeOwnedLink(planner.Step{
+			err = run.removeOwnedLink(Step{
 				Decision:                decision,
 				Target:                  target,
 				ExpectedResolvedTarget:  resolved.Resolved(),
@@ -89,7 +88,7 @@ func TestExecutorUpdateAndPruneRecheckRawDestination(t *testing.T) {
 	}
 }
 
-func TestExecutorUpdateRechecksResolvedParent(t *testing.T) {
+func TestExecutionUpdateRechecksResolvedParent(t *testing.T) {
 	root, home := newExecutorRoot(t)
 	first := filepath.Join(root, "first")
 	second := filepath.Join(root, "second")
@@ -124,8 +123,8 @@ func TestExecutorUpdateRechecksResolvedParent(t *testing.T) {
 	secondBefore := snapshotExecutorPath(t, filepath.Join(second, "owned"))
 
 	run := mutationRun{home: home}
-	err = run.removeOwnedLink(planner.Step{
-		Decision:                planner.DecisionUpdate,
+	err = run.removeOwnedLink(Step{
+		Decision:                DecisionUpdate,
 		Target:                  target,
 		ExpectedResolvedTarget:  resolved.Resolved(),
 		ExpectedLinkDestination: destination,
@@ -162,7 +161,7 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 	source := filepath.Join(repository, "modules", "app", "config")
 	writeExecutorFile(t, source, "config")
 	target := filepath.Join(home, ".app")
-	request := Request{
+	request := planRequest{
 		Home: home,
 		Controls: corepaths.Controls{
 			Repository: repository,
@@ -180,7 +179,8 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 		}},
 	}
 
-	first, err := runLocked(request, func(string, state.Snapshot) error {
+	plan, loaded := prepareExecution(t, request)
+	first, err := executePlan(request.Home, request.Controls.State, plan, loaded, func(string, state.Snapshot) error {
 		return errors.New("injected state commit failure")
 	})
 	if err == nil ||
@@ -188,26 +188,28 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 		!strings.Contains(err.Error(), "partially applied") ||
 		!first.TargetsChanged ||
 		first.StateChanged {
-		t.Fatalf("runLocked(failing commit) = (%#v, %v), want recoverable partial failure", first, err)
+		t.Fatalf("executePlan(failing commit) = (%#v, %v), want recoverable partial failure", first, err)
 	}
 	assertExecutorLink(t, target, source)
 	if _, err := os.Lstat(request.Controls.State); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("state after failed commit error = %v, want missing", err)
 	}
 
-	second, err := runLocked(request, commitState)
+	plan, loaded = prepareExecution(t, request)
+	second, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
 	if err != nil ||
 		second.TargetsChanged ||
 		!second.StateChanged {
-		t.Fatalf("runLocked(recovery) = (%#v, %v), want state-only recovery", second, err)
+		t.Fatalf("executePlan(recovery) = (%#v, %v), want state-only recovery", second, err)
 	}
 	assertExecutorLink(t, target, source)
 	beforeTarget := snapshotExecutorPath(t, target)
 	beforeState := snapshotExecutorPath(t, request.Controls.State)
 
-	third, err := runLocked(request, commitState)
+	plan, loaded = prepareExecution(t, request)
+	third, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
 	if err != nil || third.TargetsChanged || third.StateChanged {
-		t.Fatalf("runLocked(repeat) = (%#v, %v), want zero mutation", third, err)
+		t.Fatalf("executePlan(repeat) = (%#v, %v), want zero mutation", third, err)
 	}
 	assertExecutorPathUnchanged(t, beforeTarget)
 	assertExecutorPathUnchanged(t, beforeState)
@@ -231,8 +233,13 @@ func TestForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.T) {
 	beforeTarget := snapshotExecutorPath(t, target)
 	beforeState := snapshotExecutorPath(t, fixture.state)
 
-	result, err := runLocked(
-		fixture.request(nil),
+	request := fixture.request(nil)
+	plan, loaded := prepareExecution(t, request)
+	result, err := executePlan(
+		request.Home,
+		request.Controls.State,
+		plan,
+		loaded,
 		func(string, state.Snapshot) error {
 			return errors.New("injected forget commit failure")
 		},
@@ -241,16 +248,16 @@ func TestForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.T) {
 	if err == nil ||
 		!strings.Contains(err.Error(), "injected forget commit failure") ||
 		!strings.Contains(err.Error(), "state was not committed") ||
-		!strings.Contains(err.Error(), "rerun to converge") {
-		t.Fatalf("runLocked(failing forget commit) error = %v, want retry guidance", err)
+		!errors.Is(err, ErrPartial) {
+		t.Fatalf("executePlan(failing forget commit) error = %v, want partial classification", err)
 	}
 	if result.TargetsChanged || result.StateChanged {
-		t.Fatalf("runLocked(failing forget commit) result = %#v, want no completed change", result)
+		t.Fatalf("executePlan(failing forget commit) result = %#v, want no completed change", result)
 	}
-	if len(result.Plan.Steps) != 1 ||
-		result.Plan.Steps[0].Decision != planner.DecisionForget ||
-		result.Plan.Steps[0].Reason == "" {
-		t.Fatalf("runLocked(failing forget commit) plan = %#v, want structured forget", result.Plan)
+	if len(plan.Steps) != 1 ||
+		plan.Steps[0].Decision != DecisionForget ||
+		plan.Steps[0].Reason == "" {
+		t.Fatalf("buildPlan() = %#v, want structured forget", plan)
 	}
 	assertExecutorPathUnchanged(t, beforeTarget)
 	assertExecutorPathUnchanged(t, beforeState)

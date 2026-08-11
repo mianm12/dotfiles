@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/mianm12/dotfiles/internal/core/mutation"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
@@ -30,27 +30,13 @@ func runApply(
 	}
 	rerun := "dot apply"
 	if dryRun {
-		machine, err := loadRequiredMachine(context)
+		report, err := converge.Analyze(context.environment())
 		if err != nil {
-			return err
+			return withCoreRecovery(err)
 		}
-		analysis, err := analyzeApply(context, machine)
-		if err != nil {
-			return err
-		}
-		return printDryRunAnalysis(command, analysis)
+		return printDryRunAnalysis(command, report)
 	}
 
-	machine, err := loadRequiredMachine(context)
-	if err != nil {
-		return err
-	}
-	result, runErr := mutation.Apply(mutation.ApplyRequest{
-		Home:      context.home,
-		Controls:  context.controls(machine.Repository),
-		Machine:   machine,
-		Platform:  context.platform,
-		RerunHint: rerun,
-	})
+	result, runErr := converge.Apply(context.environment())
 	return finishMutation(command, result, runErr, rerun)
 }

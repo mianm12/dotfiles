@@ -3,13 +3,14 @@
 ## 执行顺序
 
 ```text
-artifact read-only preflight
+converge.Analyze read-only preflight
   -> strict load config/state 与全部 effective manifests
   -> resolve desired and observe actual
   -> validate control topology and supported path conflicts
   -> build candidate plan
   -> revalidate complete control topology and acquire mutation lock
-  -> strict reload, re-resolve, revalidate and replan
+  -> converge.Analyze again: strict reload, re-resolve, revalidate and replan
+  -> reject machine semantic fingerprint drift
   -> create parents
   -> create missing locals and new links
   -> update owned links
@@ -31,16 +32,19 @@ artifact read-only preflight
   任意 extra not-applicable，都属于同一 preflight 失败边界：整次真实 mutation 在获取 lock 前
   失败，零写入。Profile not-applicable cleanup 是否存在只由
   [`planning.md`](planning.md#通用决策规则) 决定。
-- 只有只读 preflight 成功后才能获取 lock；锁内必须重新加载、验证和规划，不执行保存的
-  preflight plan。锁内复核失败只可以留下 advisory-lock bookkeeping，不得写 target 或 state。
+- 只有只读 preflight 成功后才能获取 lock；锁内必须通过同一 Analyze 实现重新加载、验证和规划，
+  不执行保存的 preflight plan。锁内复核失败只可以留下 advisory-lock bookkeeping，不得写 target
+  或 state。
 - 一次真实 mutation 从获取到释放 lock 必须使用同一个固定 HOME、repository、config、state
   和 lock 路径；只获取一次 lock，也只释放一次，不建立嵌套 guard 或复用计数。获取 lock
   之前必须完成整组 control topology 与现存 control entry 的只读校验。
-- 锁内复核发现 machine repository 漂移时失败，不切换到新 repository 继续执行。
-- Artifact convergence 使用固定 HOME 和 controls，再次只读校验 controls、重新加载最新
-  state、重新规划、执行、复核 changed targets 并提交 state；不得接收或执行锁前、锁内
-  analysis 保存的 plan。
-- Lock 释放失败属于 mutation 失败；已经发布的 selection、target 或 state 不回滚。
+- 锁内复核发现 machine semantic fingerprint 漂移时失败，不切换到新 repository 或新 selection
+  继续执行。
+- Artifact convergence 使用固定 HOME 和 controls；只执行锁内 fresh analysis 生成的 Plan，随后
+  复核 changed targets 并提交该次 analysis 加载的 state。锁前 Report、Plan、resolved modules
+  和 state 均不得进入执行。
+- Lock 释放失败属于 partial mutation 失败；state commit 失败同样返回 partial。已经发布的
+  selection、target 或 state 不回滚，具体重跑文案由 CLI 投影。
 - [`placements.md`](placements.md#control-path-topology) 定义的私有 control root 路径边界
   必须在 lock 与 mutation 前完成校验；失败时不跟随、替换或 chmod 对应对象。
 - 不防御同一用户权限的其他进程在检查与 mutation 之间并发替换私有控制根。

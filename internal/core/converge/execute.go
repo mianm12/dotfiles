@@ -1,4 +1,4 @@
-package executor
+package converge
 
 import (
 	"errors"
@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
-	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -19,11 +18,11 @@ type mutationRun struct {
 	changed bool
 }
 
-func (run *mutationRun) apply(plan planner.Plan, snapshot *state.Snapshot) error {
+func (run *mutationRun) apply(plan Plan, snapshot *state.Snapshot) error {
 	active := make(map[actionKey]bool)
 	for _, action := range plan.Steps {
-		if action.Decision != planner.DecisionCreateLocal &&
-			action.Decision != planner.DecisionCreateLink {
+		if action.Decision != DecisionCreateLocal &&
+			action.Decision != DecisionCreateLink {
 			continue
 		}
 		if err := run.ensureParent(action.Target); err != nil {
@@ -31,8 +30,8 @@ func (run *mutationRun) apply(plan planner.Plan, snapshot *state.Snapshot) error
 		}
 	}
 	for _, action := range plan.Steps {
-		if action.Decision != planner.DecisionCreateLocal &&
-			action.Decision != planner.DecisionCreateLink {
+		if action.Decision != DecisionCreateLocal &&
+			action.Decision != DecisionCreateLink {
 			continue
 		}
 		if err := run.applyAndRecord(action, snapshot, active); err != nil {
@@ -40,7 +39,7 @@ func (run *mutationRun) apply(plan planner.Plan, snapshot *state.Snapshot) error
 		}
 	}
 	for _, action := range plan.Steps {
-		if action.Decision != planner.DecisionUpdate {
+		if action.Decision != DecisionUpdate {
 			continue
 		}
 		if err := run.applyAndRecord(action, snapshot, active); err != nil {
@@ -48,9 +47,9 @@ func (run *mutationRun) apply(plan planner.Plan, snapshot *state.Snapshot) error
 		}
 	}
 	for _, action := range plan.Steps {
-		if action.Decision != planner.DecisionAdopt &&
-			action.Decision != planner.DecisionKeep &&
-			action.Decision != planner.DecisionRepairState {
+		if action.Decision != DecisionAdopt &&
+			action.Decision != DecisionKeep &&
+			action.Decision != DecisionRepairState {
 			continue
 		}
 		if err := run.applyAndRecord(action, snapshot, active); err != nil {
@@ -59,11 +58,11 @@ func (run *mutationRun) apply(plan planner.Plan, snapshot *state.Snapshot) error
 	}
 
 	for _, action := range plan.Steps {
-		if action.Decision != planner.DecisionPrune &&
-			action.Decision != planner.DecisionForget {
+		if action.Decision != DecisionPrune &&
+			action.Decision != DecisionForget {
 			continue
 		}
-		if action.Decision == planner.DecisionPrune {
+		if action.Decision == DecisionPrune {
 			if err := run.removeOwnedLink(action); err != nil {
 				return actionError(action, err)
 			}
@@ -76,7 +75,7 @@ func (run *mutationRun) apply(plan planner.Plan, snapshot *state.Snapshot) error
 }
 
 func (run *mutationRun) applyAndRecord(
-	action planner.Step,
+	action Step,
 	snapshot *state.Snapshot,
 	active map[actionKey]bool,
 ) error {
@@ -93,19 +92,19 @@ type actionKey struct {
 	placementID string
 }
 
-func (run *mutationRun) applyActive(action planner.Step) error {
+func (run *mutationRun) applyActive(action Step) error {
 	switch action.Decision {
-	case planner.DecisionCreateLocal:
+	case DecisionCreateLocal:
 		if err := run.createLocal(action.Source, action.Target); err != nil {
 			return err
 		}
 		return verifyLocal(action.Target)
-	case planner.DecisionCreateLink:
+	case DecisionCreateLink:
 		if err := run.createLink(action.LinkDestination, action.Target); err != nil {
 			return err
 		}
 		return run.verifyLink(action)
-	case planner.DecisionUpdate:
+	case DecisionUpdate:
 		if err := run.removeOwnedLink(action); err != nil {
 			return err
 		}
@@ -113,7 +112,7 @@ func (run *mutationRun) applyActive(action planner.Step) error {
 			return err
 		}
 		return run.verifyLink(action)
-	case planner.DecisionAdopt, planner.DecisionKeep, planner.DecisionRepairState:
+	case DecisionAdopt, DecisionKeep, DecisionRepairState:
 		return nil
 	default:
 		return fmt.Errorf("unsupported active decision %q", action.Decision)
@@ -188,7 +187,7 @@ func (run *mutationRun) createLocal(source, target string) (err error) {
 	return nil
 }
 
-func (run *mutationRun) removeOwnedLink(action planner.Step) error {
+func (run *mutationRun) removeOwnedLink(action Step) error {
 	resolved, err := run.resolveTarget(action.Target)
 	if err != nil {
 		return err
@@ -239,7 +238,7 @@ func verifyAbsent(target string) error {
 	}
 }
 
-func (run *mutationRun) verifyLink(action planner.Step) error {
+func (run *mutationRun) verifyLink(action Step) error {
 	resolved, err := run.resolveTarget(action.Target)
 	if err != nil {
 		return err
@@ -284,7 +283,7 @@ func (run *mutationRun) wrapError(err error) error {
 	if !run.started {
 		return err
 	}
-	return fmt.Errorf("%w; this run may be partially applied, rerun to converge", err)
+	return fmt.Errorf("%w: %w", ErrPartial, err)
 }
 
 func verifyLocal(target string) error {
@@ -298,7 +297,7 @@ func verifyLocal(target string) error {
 	return nil
 }
 
-func actionError(action planner.Step, err error) error {
+func actionError(action Step, err error) error {
 	return fmt.Errorf(
 		"%s %s/%s target %q: %w",
 		action.Decision,
@@ -309,9 +308,9 @@ func actionError(action planner.Step, err error) error {
 	)
 }
 
-func applyState(snapshot *state.Snapshot, action planner.Step) {
+func applyState(snapshot *state.Snapshot, action Step) {
 	switch action.Decision {
-	case planner.DecisionPrune, planner.DecisionForget:
+	case DecisionPrune, DecisionForget:
 		removePlacement(snapshot, action.ModuleID, action.PlacementID)
 	default:
 		module := snapshot.Modules[action.ModuleID]

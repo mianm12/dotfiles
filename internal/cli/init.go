@@ -4,8 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/mianm12/dotfiles/internal/core/config"
-	"github.com/mianm12/dotfiles/internal/core/mutation"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
@@ -41,24 +40,13 @@ func runInit(
 	if err != nil {
 		return err
 	}
-	machine := config.Machine{
-		Version:      1,
-		Repository:   repository,
-		Profiles:     append([]string(nil), profiles...),
-		ExtraModules: []string{},
-	}
-
-	context := commandContext{controlContext: control}
-	request := mutation.SelectionRequest{
-		Home:      context.home,
-		Controls:  context.controls(machine.Repository),
-		Operation: mutation.SelectionInitialize,
-		Machine:   machine,
-		RerunHint: "dot init",
-	}
-	result, runErr := mutation.UpdateSelection(request)
+	result, runErr := converge.Initialize(
+		control.environment(),
+		repository,
+		profiles,
+	)
 	if runErr != nil {
-		return runErr
+		return finishSelectionMutation(runErr, "dot init")
 	}
 	return printSelectionResult(
 		command,

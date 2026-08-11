@@ -15,22 +15,18 @@ import (
 )
 
 var allowedInternalImports = map[string]map[string]bool{
-	"internal/buildinfo":                   {},
-	"internal/storage":                     {},
-	"internal/core/paths":                  {},
-	"internal/core/state":                  {},
-	"internal/core/config":                 allow("internal/core/paths"),
-	"internal/core/selection":              allow("internal/core/config"),
-	"internal/core/planner":                allow("internal/core/config", "internal/core/paths", "internal/core/state"),
-	"internal/core/executor":               allow("internal/core/config", "internal/core/paths", "internal/core/planner", "internal/core/state", "internal/storage"),
-	"internal/core/mutation/internal/lock": allow("internal/storage"),
-	"internal/core/mutation":               allow("internal/core/config", "internal/core/executor", "internal/core/mutation/internal/lock", "internal/core/paths", "internal/core/selection", "internal/storage"),
-	"internal/cli":                         allow("internal/buildinfo", "internal/core/config", "internal/core/mutation", "internal/core/paths", "internal/core/planner", "internal/core/selection", "internal/core/state"),
-	"cmd/dot":                              allow("internal/cli"),
+	"internal/buildinfo":     {},
+	"internal/storage":       {},
+	"internal/core/paths":    {},
+	"internal/core/state":    {},
+	"internal/core/config":   allow("internal/core/paths"),
+	"internal/core/converge": allow("internal/core/config", "internal/core/paths", "internal/core/state", "internal/storage"),
+	"internal/cli":           allow("internal/buildinfo", "internal/core/config", "internal/core/converge"),
+	"cmd/dot":                allow("internal/cli"),
 }
 
 var allowedThirdPartyImports = map[string]map[string]bool{
-	"github.com/gofrs/flock":          allow("internal/core/mutation/internal/lock"),
+	"github.com/gofrs/flock":          allow("internal/core/converge"),
 	"github.com/google/renameio/v2":   allow("internal/storage"),
 	"github.com/pelletier/go-toml/v2": allow("internal/core/config"),
 	"github.com/spf13/cobra":          allow("internal/cli"),

@@ -7,43 +7,63 @@
 
 ```text
 repository desired + machine selection + state + actual filesystem
-  -> status / dry-run: CLI OperationAnalysis (module projection + Plan{Complete, Steps, Issues})
-  -> apply: mutation.Apply
-       -> resolve selection + executor.Analyze (full read-only preflight)
+  -> status / dry-run: converge.Analyze -> Report
+  -> apply: converge.Apply
+       -> converge.Analyze (full read-only preflight)
        -> acquire lock
-       -> reload machine/repository + resolve selection
-       -> executor.Execute (fresh analysis + execute + verify + commit state)
+       -> converge.Analyze (fresh locked inputs and Plan)
+       -> compare machine semantic fingerprint
+       -> execute fresh locked Plan + verify changed targets + commit state
   -> release lock
-  -> CLI mutation result projection
+  -> CLI Report / typed-error projection
 
-init/select -> mutation.UpdateSelection
-            -> preflight + lock + reload + atomic config publication + release
+init/select -> converge.Initialize / SelectAdd / SelectRemove
+            -> operation-specific preflight + lock + reload + atomic config publication + release
 ```
 
 核心业务逻辑与 CLI、文件发布和进程退出分离。`cmd/dot` 只把进程 IO/环境交给 `cli.Run` 并以
-其结果退出。CLI OperationAnalysis 只服务 status 与 dry-run：它是只读观察结果，只保存 module
-投影、`Plan{Complete, Steps, Issues}` 与输入 warning，不夹带 resolved modules 或 loaded state
-供执行使用，也不是 executor 输入。
-Status 对一次请求只调用 planner 一次；path validation error 自带受影响 placement labels，不靠
-逐 module probe 定位。`mutation.Apply` 直接拥有一次 artifact mutation：锁前解析 selection 并
-调用 `executor.Analyze` 完成 state、actual 与 planner 的完整零写入检查；成功后获取单次 lock，
-锁内重新加载 machine/repository、重新解析 selection，再由 `executor.Execute` 调用同一私有分析
-实现重新加载最新 state、重新规划、执行并提交 state。锁前 analysis 不传入 executor 执行。
-`UpdateSelection` 独立拥有 config-only mutation；两条路径不通过 Session 或 callback 组合。
-Status 与 dry-run 始终投影完整 inventory，并对全部 effective modules 与全部 state-only stale
-records 运行同一次 planner。Selection、control topology 或 target-set blocker 使
+其结果退出。CLI 只构造 `converge.Environment`、调用公开函数并投影 `Report` 或 typed error；不
+解析 selection、不规划、不读取 state、不拥有 lock，也不提交 target 或 state。
+
+`converge.Analyze` 是唯一完整只读分析入口。其私有 analysis 保存 machine、repository、resolved
+selection、loaded state、control paths 和 machine semantic fingerprint；公开 `Report` 只包含
+module 投影、`Plan{Complete, Steps, Issues}` 与 warnings。`converge.Apply` 在锁前调用同一分析
+实现完成完整零写入检查；成功后获取单次 lock，再次调用同一实现，并且只执行锁内新生成的
+Plan。锁前 Plan、resolved modules 和 state 不进入执行；fingerprint 只用于拒绝锁前后 machine
+selection 漂移。
+
+Status 与 dry-run 对全部 effective modules 与全部 state-only stale records 运行同一次全量规划。
+Selection、control topology 或 target-set blocker 使
 `Plan.Complete=false` 且 Steps 为空；不会过滤 blocked module 后再次局部规划。
 
-公开给 CLI 的 mutation 写入口只有：
+公开给 CLI 的 core 接口是：
 
 ```go
-mutation.UpdateSelection(request)
-mutation.Apply(request)
+type Environment struct {
+    Home       string
+    ConfigPath string
+    StatePath  string
+    LockPath   string
+    Platform   config.Platform
+}
+
+type Report struct {
+    Modules  []ModuleReport
+    Plan     Plan
+    Warnings []string
+}
+
+func Analyze(Environment) (Report, error)
+func Apply(Environment) (ApplyResult, error)
+func Initialize(Environment, string, []string) (SelectionResult, error)
+func SelectAdd(Environment, string) (SelectionResult, error)
+func SelectRemove(Environment, string) (SelectionResult, error)
 ```
 
-CLI 不直接获取、复用或释放 lock，也不直接发布 machine selection。Mutation 函数以单次调用
-固定 HOME 与 controls，并通过词法 `defer` 释放内部 lock；不存在可复制、可复用或需要 closing
-状态的 Session/Ownership 对象。Lock release 失败与 mutation 错误合并报告，已完成写入不回滚。
+这些函数以单次调用固定 HOME 与 control paths，并通过词法 `defer` 释放内部 lock；不存在
+可复制、可复用或需要 closing 状态的 Session/Ownership 对象，也不通过通用 request enum 或
+callback workflow 组合 selection 操作。Lock release 失败与 mutation 错误合并为窄 typed
+error，已完成写入不回滚；重跑命令文案由 CLI 决定。
 
 ## Package 职责
 
@@ -53,21 +73,16 @@ CLI 不直接获取、复用或释放 lock，也不直接发布 machine selectio
 | `internal/core/paths` | HOME target、source、控制路径边界和路径解析结果分类 |
 | `internal/core/state` | ownership state 模型与编解码 |
 | `internal/core/config` | repository、machine 和 module 配置解析 |
-| `internal/core/selection` | machine selection 的纯 resolution 与 typed issue |
-| `internal/core/planner` | desired、state 与 actual 的纯全量计划决策；输出 `Plan{Complete, Steps, Issues}` |
-| `internal/core/executor` | artifact 的只读分析、锁内重新规划、执行、changed-target 复核与 state 提交 |
-| `internal/core/mutation` | UpdateSelection/Apply、完整锁前 preflight、control 校验与 lock ownership |
-| `internal/core/mutation/internal/lock` | mutation 私有的 advisory lock 实现 |
-| `internal/cli` | 命令、只读 operation analysis、完整 inventory、输出和退出码 |
+| `internal/core/converge` | selection resolution、完整分析、全量规划、lock、target mutation、changed-target 复核与 state/config commit 的唯一 owner |
+| `internal/cli` | 命令参数、Environment 构造、Report/typed-error 输出和退出码 |
 | `cmd/dot` | 进程入口 |
 
 允许的依赖总体从左向右推进：
 
 ```text
 storage / paths / state
-        -> config -> selection
-        -> planner -> executor
-        -> mutation
+        -> config
+        -> converge
         -> cli -> cmd/dot
 ```
 
@@ -79,7 +94,7 @@ storage / paths / state
 | 第三方 package | 唯一 owner |
 | --- | --- |
 | `github.com/google/renameio/v2` | `internal/storage` |
-| `github.com/gofrs/flock` | `internal/core/mutation/internal/lock` |
+| `github.com/gofrs/flock` | `internal/core/converge` |
 | `github.com/pelletier/go-toml/v2` | `internal/core/config` |
 | `github.com/spf13/cobra` | `internal/cli` |
 
@@ -105,12 +120,12 @@ storage / paths / state
 Local 与新文件的不可覆盖发布不使用 rename：先写 `0600` 临时文件，再以 `os.Link` 发布到
 target；已存在时得到 `EEXIST`，同时保证内容完整、不可覆盖和原子出现。
 
-Config 与 state 各自负责编码和语义校验；mutation 发布 machine config、executor 提交
-ownership snapshot 时统一调用 `storage.PublishPrivateFile(path, data)`。该函数在相同内容时执行
+Config 与 state 各自负责编码和语义校验；converge 发布 machine config 和提交 ownership
+snapshot 时统一调用 `storage.PublishPrivateFile(path, data)`。该函数在相同内容时执行
 零 metadata 写入的严格 no-op，在实际发布时负责 `0700/0600` 权限、renameio 原子替换和
 temporary file cleanup。
-Paths 在系统调用边界把解析失败分类为确定的 namespace 阻塞或不可确定的 I/O 失败，planner
-只消费 typed classification，不检查 `PathError` 包装或平台 errno。
+Paths 在系统调用边界把解析失败分类为确定的 namespace 阻塞或不可确定的 I/O 失败；converge
+中的规划代码只消费 typed classification，不检查 `PathError` 包装或平台 errno。
 
 不引入 Viper、虚拟文件系统、DI、事务、workflow、state-machine、日志、color/TUI 或通用
 dotfiles framework。Distro 检测解析 `/etc/os-release`，HOME 使用 `os.UserHomeDir`，state

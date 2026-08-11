@@ -6,14 +6,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mianm12/dotfiles/internal/core/mutation"
-	"github.com/mianm12/dotfiles/internal/core/planner"
-	"github.com/mianm12/dotfiles/internal/core/state"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
-func printPlan(command *cobra.Command, plan planner.Plan, warnings []string) error {
-	if err := printWarnings(command, warnings); err != nil {
+func printPlan(command *cobra.Command, plan converge.Plan, warnings []string) error {
+	if err := printWarnings(command, projectWarnings(plan, warnings)); err != nil {
 		return err
 	}
 	if len(plan.Steps) == 0 && len(plan.Issues) == 0 {
@@ -30,7 +28,7 @@ func printPlan(command *cobra.Command, plan planner.Plan, warnings []string) err
 	return nil
 }
 
-func printAction(command *cobra.Command, action planner.Step) error {
+func printAction(command *cobra.Command, action converge.Step) error {
 	if _, err := fmt.Fprintf(
 		command.OutOrStdout(),
 		"%-12s %s/%s %s",
@@ -63,21 +61,21 @@ func printWarnings(command *cobra.Command, warnings []string) error {
 	return nil
 }
 
-func printOperationAnalysis(
+func printOperationReport(
 	command *cobra.Command,
-	analysis OperationAnalysis,
+	report converge.Report,
 ) error {
-	if err := printWarnings(command, analysis.Warnings); err != nil {
+	if err := printWarnings(command, projectWarnings(report.Plan, report.Warnings)); err != nil {
 		return err
 	}
 	printed := false
-	for _, action := range analysis.Plan.Steps {
+	for _, action := range report.Plan.Steps {
 		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write operation action: %w", err)
 		}
 		printed = true
 	}
-	for _, issue := range analysis.Plan.Issues {
+	for _, issue := range report.Plan.Issues {
 		if err := printIssue(command, issue); err != nil {
 			return fmt.Errorf("write operation issue: %w", err)
 		}
@@ -91,7 +89,12 @@ func printOperationAnalysis(
 	return nil
 }
 
-func printIssue(command *cobra.Command, issue planner.Issue) error {
+func printIssue(command *cobra.Command, issue converge.Issue) error {
+	reason := issue.Reason
+	if issue.Code == converge.IssueCodeControlTopology ||
+		issue.Code == converge.IssueCodeControlBoundary {
+		reason += "; run `dot paths`"
+	}
 	if isConcretePlacementIssue(issue) {
 		if _, err := fmt.Fprintf(
 			command.OutOrStdout(),
@@ -106,7 +109,7 @@ func printIssue(command *cobra.Command, issue planner.Issue) error {
 		_, err := fmt.Fprintf(
 			command.OutOrStdout(),
 			" reason=%s\n",
-			strconv.Quote(issue.Reason),
+			strconv.Quote(reason),
 		)
 		return err
 	}
@@ -128,19 +131,23 @@ func printIssue(command *cobra.Command, issue planner.Issue) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(command.OutOrStdout(), " reason=%s\n", strconv.Quote(issue.Reason))
+	_, err := fmt.Fprintf(command.OutOrStdout(), " reason=%s\n", strconv.Quote(reason))
 	return err
+}
+
+func isConcretePlacementIssue(issue converge.Issue) bool {
+	return issue.PlacementID != "" && issue.Target != ""
 }
 
 func printResult(
 	command *cobra.Command,
-	result mutation.Result,
+	result converge.ApplyResult,
 ) error {
-	if err := printPlan(command, result.Plan, result.Warnings); err != nil {
+	if err := printPlan(command, result.Report.Plan, result.Report.Warnings); err != nil {
 		return err
 	}
 	if result.StateChanged {
-		if err := printForgotOwnership(command, result.Plan.Steps); err != nil {
+		if err := printForgotOwnership(command, result.Report.Plan.Steps); err != nil {
 			return err
 		}
 	}
@@ -158,14 +165,14 @@ func printResult(
 
 func printForgotOwnership(
 	command *cobra.Command,
-	actions []planner.Step,
+	actions []converge.Step,
 ) error {
 	for _, action := range actions {
-		if action.Decision != planner.DecisionForget {
+		if action.Decision != converge.DecisionForget {
 			continue
 		}
 		evidence := "ownership"
-		if action.Kind == state.KindLocal {
+		if action.Kind == converge.KindLocal {
 			evidence = "provenance"
 		}
 		if _, err := fmt.Fprintf(
@@ -196,7 +203,7 @@ func printForgotOwnership(
 
 func printMutationResult(
 	command *cobra.Command,
-	result mutation.Result,
+	result converge.ApplyResult,
 	rerun string,
 ) error {
 	err := printResult(command, result)
@@ -211,33 +218,15 @@ func printMutationResult(
 	)
 }
 
-func keepStateRecorded(snapshot state.Snapshot, action planner.Step) bool {
-	module, exists := snapshot.Modules[action.ModuleID]
-	if !exists {
-		return false
-	}
-	placement, exists := module.Placements[action.PlacementID]
-	if !exists ||
-		placement.Kind != action.Kind ||
-		placement.Target != action.Target {
-		return false
-	}
-	if action.Kind == state.KindLink {
-		return placement.ResolvedTarget == action.ResolvedTarget &&
-			placement.LinkDestination == action.LinkDestination
-	}
-	return true
-}
-
 func printStatusAnalysis(
 	command *cobra.Command,
-	analysis OperationAnalysis,
+	report converge.Report,
 ) error {
-	if err := printWarnings(command, analysis.Warnings); err != nil {
+	if err := printWarnings(command, projectWarnings(report.Plan, report.Warnings)); err != nil {
 		return fmt.Errorf("write status warning: %w", err)
 	}
-	modules := append([]ModuleAnalysis(nil), analysis.Modules...)
-	slices.SortFunc(modules, func(left, right ModuleAnalysis) int {
+	modules := append([]converge.ModuleReport(nil), report.Modules...)
+	slices.SortFunc(modules, func(left, right converge.ModuleReport) int {
 		return strings.Compare(left.ID, right.ID)
 	})
 	for _, module := range modules {
@@ -269,18 +258,32 @@ func printStatusAnalysis(
 			return fmt.Errorf("write status: %w", err)
 		}
 	}
-	for _, action := range analysis.Plan.Steps {
-		if action.Decision != planner.DecisionForget {
+	for _, action := range report.Plan.Steps {
+		if action.Decision != converge.DecisionForget {
 			continue
 		}
 		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write status action: %w", err)
 		}
 	}
-	for _, issue := range analysis.Plan.Issues {
+	for _, issue := range report.Plan.Issues {
 		if err := printIssue(command, issue); err != nil {
 			return fmt.Errorf("write status issue: %w", err)
 		}
 	}
 	return nil
+}
+
+func projectWarnings(plan converge.Plan, warnings []string) []string {
+	projected := append([]string(nil), warnings...)
+	for index, warning := range projected {
+		for _, issue := range plan.Issues {
+			if issue.Code == converge.IssueCodeControlBoundary &&
+				issue.Reason == warning {
+				projected[index] += "; run `dot paths`"
+				break
+			}
+		}
+	}
+	return projected
 }

@@ -1,10 +1,78 @@
-// Package planner builds read-only convergence plans for dot.
-package planner
+// Package converge owns selection, analysis, planning, execution, locking,
+// and state commit for one complete dot convergence operation.
+package converge
 
 import (
+	"errors"
+
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
+)
+
+var (
+	// ErrBlocked reports a fully expressed safety blocker or a changed preflight.
+	ErrBlocked = errors.New("convergence blocked")
+	// ErrPartial reports that a mutation may have changed targets or control data.
+	ErrPartial = errors.New("convergence may be partially applied")
+	// ErrUninitialized reports that no machine selection exists yet.
+	ErrUninitialized = errors.New("machine is not initialized")
+	// ErrControl reports that control paths or entries cannot be used safely.
+	ErrControl = errors.New("invalid convergence control")
+	// ErrState reports that ownership state cannot be read reliably.
+	ErrState = errors.New("unreadable convergence state")
+)
+
+// Environment fixes every machine-specific input for one convergence call.
+type Environment struct {
+	Home       string
+	ConfigPath string
+	StatePath  string
+	LockPath   string
+	Platform   config.Platform
+}
+
+// ModuleReport is the orthogonal status projection for one inventory module.
+type ModuleReport struct {
+	ID            string
+	Summary       string
+	Selection     string
+	Applicability string
+	Convergence   string
+	Variant       string
+	NamedVariant  bool
+	Reason        string
+}
+
+// Report is one complete read-only convergence result.
+type Report struct {
+	Modules  []ModuleReport
+	Plan     Plan
+	Warnings []string
+}
+
+// ApplyResult reports a successfully committed convergence run.
+type ApplyResult struct {
+	Report         Report
+	TargetsChanged bool
+	StateChanged   bool
+}
+
+// SelectionResult reports one config-only selection mutation.
+type SelectionResult struct {
+	Machine         config.Machine
+	Changed         bool
+	ProfileSelected bool
+}
+
+// Kind exposes placement kinds needed to project committed cleanup results.
+type Kind = state.Kind
+
+const (
+	// KindLink identifies a managed symbolic-link placement.
+	KindLink = state.KindLink
+	// KindLocal identifies a user-owned local-file placement.
+	KindLocal = state.KindLocal
 )
 
 // Decision is the result of applying the ordered planning rules to one desired
@@ -38,13 +106,15 @@ const (
 )
 
 const (
+	// IssueCodeControlTopology identifies overlapping control families.
+	IssueCodeControlTopology IssueCode = "control-topology"
 	// IssueCodeControlBoundary identifies a placement/control path overlap.
 	IssueCodeControlBoundary IssueCode = "control-boundary"
 )
 
-// Request contains the complete desired set and ownership snapshot for one
+// planRequest contains the complete desired set and ownership snapshot for one
 // read-only planning pass.
-type Request struct {
+type planRequest struct {
 	Home     string
 	Controls corepaths.Controls
 	Modules  []config.Module
@@ -93,11 +163,4 @@ type Plan struct {
 // Executable reports whether the complete plan is safe to execute.
 func (plan Plan) Executable() bool {
 	return plan.Complete && len(plan.Issues) == 0
-}
-
-// HasIssues reports whether the plan contains an expressed blocker or conflict.
-// Callers deciding execution must use Executable so incomplete plans are also
-// rejected.
-func (plan Plan) HasIssues() bool {
-	return len(plan.Issues) != 0
 }

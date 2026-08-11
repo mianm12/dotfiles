@@ -1,4 +1,4 @@
-package selection
+package converge
 
 import (
 	"os"
@@ -29,25 +29,25 @@ os = ["macos"]
 		Arch:   config.KnownPlatformField("x86_64"),
 	}
 
-	profile, err := Resolve(repository, config.Machine{
+	profile, err := resolveSelection(repository, config.Machine{
 		Version:    1,
 		Repository: root,
 		Profiles:   []string{"base"},
 	}, platform)
-	if err != nil || len(profile.Issues) != 0 || len(profile.Modules) != 0 {
+	if err != nil || len(profile.issues) != 0 || len(profile.modules) != 0 {
 		t.Fatalf("Resolve(profile not-applicable) = (%#v, %v)", profile, err)
 	}
-	if observation := profile.Observations["gated"]; !observation.Loaded ||
-		observation.Applicability.State != config.ApplicabilityNotApplicable {
+	if observation := profile.observations["gated"]; !observation.loaded ||
+		observation.applicability.State != config.ApplicabilityNotApplicable {
 		t.Fatalf("profile observation = %#v", observation)
 	}
 
-	direct, err := Resolve(repository, config.Machine{
+	direct, err := resolveSelection(repository, config.Machine{
 		Version:      1,
 		Repository:   root,
 		ExtraModules: []string{"gated"},
 	}, platform)
-	if err != nil || len(direct.Issues) != 1 || direct.Issues[0].ModuleID != "gated" {
+	if err != nil || len(direct.issues) != 1 || direct.issues[0].moduleID != "gated" {
 		t.Fatalf("Resolve(direct not-applicable) = (%#v, %v)", direct, err)
 	}
 }
@@ -59,12 +59,12 @@ func TestResolveReportsMissingDirectModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
-	result, err := Resolve(repository, config.Machine{
+	result, err := resolveSelection(repository, config.Machine{
 		Version:      1,
 		Repository:   root,
 		ExtraModules: []string{"gone"},
 	}, config.Platform{})
-	if err != nil || len(result.Issues) != 1 || result.Issues[0].ModuleID != "gone" {
+	if err != nil || len(result.issues) != 1 || result.issues[0].moduleID != "gone" {
 		t.Fatalf("Resolve(missing extra) = (%#v, %v)", result, err)
 	}
 }

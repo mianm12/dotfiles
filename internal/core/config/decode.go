@@ -13,6 +13,12 @@ import (
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
+// ValidateModuleID validates one module identifier without constructing a
+// machine configuration or consulting the repository.
+func ValidateModuleID(id string) error {
+	return validateID("module", id)
+}
+
 func decodeStrict(path string, destination any) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
