@@ -11,9 +11,10 @@ import (
 
 func FuzzDecode(f *testing.F) {
 	home := filepath.Join(f.TempDir(), "home")
-	f.Add([]byte(fmt.Sprintf(`{"version":2,"home":%q,"modules":{}}`, home)))
+	f.Add([]byte(fmt.Sprintf(`{"version":3,"home":%q,"records":[]}`, home)))
 	f.Add([]byte(`{"version":1,"entries":{}}`))
-	f.Add([]byte(`{"version":2`))
+	f.Add([]byte(`{"version":2,"modules":{}}`))
+	f.Add([]byte(`{"version":3`))
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {

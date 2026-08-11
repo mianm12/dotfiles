@@ -1,4 +1,4 @@
-// Package state defines the ownership state model and its strict version 2
+// Package state defines the ownership state model and its strict version 3
 // persistence format.
 package state
 
@@ -6,7 +6,7 @@ import "errors"
 
 const (
 	// Version is the only supported state format version.
-	Version = 2
+	Version = 3
 	// MissingWarning explains the recovery limitation when no state file exists.
 	MissingWarning = "state is missing; links removed from desired configuration cannot be discovered"
 )
@@ -14,7 +14,7 @@ const (
 var (
 	// ErrInvalid reports malformed or semantically unsafe state.
 	ErrInvalid = errors.New("invalid state")
-	// ErrLegacyVersion reports the incompatible legacy version 1 format.
+	// ErrLegacyVersion reports an incompatible state version older than v3.
 	ErrLegacyVersion = errors.New("legacy state version")
 	// ErrTooNew reports a state version newer than this binary supports.
 	ErrTooNew = errors.New("state version is newer than this binary")
@@ -32,20 +32,21 @@ const (
 	KindLocal Kind = "local"
 )
 
-// Snapshot is one complete state v2 value.
+// Key is the stable identity of one ownership or provenance record.
+type Key struct {
+	ModuleID    string
+	PlacementID string
+}
+
+// Snapshot is one complete state v3 value.
 type Snapshot struct {
 	Home    string
-	Modules map[string]Module
+	Records map[Key]Record
 }
 
-// Module contains placement records keyed by placement ID.
-type Module struct {
-	Placements map[string]Placement
-}
-
-// Placement contains the minimum ownership or provenance evidence for one
-// placement. ResolvedTarget and LinkDestination are set only for links.
-type Placement struct {
+// Record contains the minimum ownership or provenance evidence for one key.
+// ResolvedTarget and LinkDestination are set only for links.
+type Record struct {
 	Kind            Kind
 	Target          string
 	ResolvedTarget  string
@@ -53,13 +54,11 @@ type Placement struct {
 }
 
 // Loaded is the result of reading a state path. Missing state contains a valid
-// empty Snapshot and a warning instead of an error. NeedsRewrite marks a
-// compatible non-canonical document without writing it during load.
+// empty Snapshot and a warning instead of an error.
 type Loaded struct {
-	Snapshot     Snapshot
-	Missing      bool
-	NeedsRewrite bool
-	Warning      string
+	Snapshot Snapshot
+	Missing  bool
+	Warning  string
 }
 
 // New returns an empty state bound to home.
@@ -70,6 +69,6 @@ func New(home string) (Snapshot, error) {
 	}
 	return Snapshot{
 		Home:    cleanHome,
-		Modules: make(map[string]Module),
+		Records: make(map[Key]Record),
 	}, nil
 }

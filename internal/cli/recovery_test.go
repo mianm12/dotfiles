@@ -76,7 +76,7 @@ target = "~/.app.local"
 			stderr == "" {
 			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
 		}
-		if record := loadTestState(t, fixture).Modules["app"].Placements["local"]; record.Kind != state.KindLocal {
+		if record := loadTestState(t, fixture).Records[state.Key{ModuleID: "app", PlacementID: "local"}]; record.Kind != state.KindLocal {
 			t.Fatalf("local state record = %#v, want local provenance", record)
 		}
 		if data, err := os.ReadFile(target); err != nil || string(data) != "personal" {
@@ -111,7 +111,7 @@ target = "~/.app"
 			stderr != "" {
 			t.Fatalf("repair-state apply = (%d, %q, %q)", code, stdout, stderr)
 		}
-		record := loadTestState(t, fixture).Modules["app"].Placements["config"]
+		record := loadTestState(t, fixture).Records[state.Key{ModuleID: "app", PlacementID: "config"}]
 		if record.LinkDestination != newDestination {
 			t.Fatalf("state destination = %q, want %q", record.LinkDestination, newDestination)
 		}
@@ -158,8 +158,8 @@ target = "~/.app"
 		if code != exitOK {
 			t.Fatalf("recovery apply = (%d, %q)", code, stderr)
 		}
-		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-			t.Fatalf("state modules = %#v, want stale record forgotten", modules)
+		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+			t.Fatalf("state records = %#v, want stale record forgotten", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
 	})
@@ -177,7 +177,7 @@ func TestApplyUsesTwoStagesForParentUpdateAndTraversedStaleCleanup(
 	}
 	assertCLILink(t, topology.parentTarget, topology.oldSource)
 	assertCLIMissing(t, topology.staleActual)
-	if _, exists := loadTestState(t, fixture).Modules["stale"]; exists {
+	if _, exists := loadTestState(t, fixture).Records[state.Key{ModuleID: "stale", PlacementID: "child"}]; exists {
 		t.Fatal("stage-one apply retained stale ownership")
 	}
 	assertApplyNoMutation(t, fixture, fixture.run)
@@ -240,21 +240,19 @@ func TestApplyPrunesTraversedStaleLinksChildFirst(t *testing.T) {
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Modules: map[string]state.Module{
-			"stale": {Placements: map[string]state.Placement{
-				"a-parent": {
-					Kind:            state.KindLink,
-					Target:          parentTarget,
-					ResolvedTarget:  resolvedParent.Resolved(),
-					LinkDestination: parentSource,
-				},
-				"z-child": {
-					Kind:            state.KindLink,
-					Target:          childTarget,
-					ResolvedTarget:  resolvedChild.Resolved(),
-					LinkDestination: childSource,
-				},
-			}},
+		Records: map[state.Key]state.Record{
+			{ModuleID: "stale", PlacementID: "a-parent"}: {
+				Kind:            state.KindLink,
+				Target:          parentTarget,
+				ResolvedTarget:  resolvedParent.Resolved(),
+				LinkDestination: parentSource,
+			},
+			{ModuleID: "stale", PlacementID: "z-child"}: {
+				Kind:            state.KindLink,
+				Target:          childTarget,
+				ResolvedTarget:  resolvedChild.Resolved(),
+				LinkDestination: childSource,
+			},
 		},
 	})
 	if err := os.Remove(access); err != nil {
@@ -281,8 +279,8 @@ func TestApplyPrunesTraversedStaleLinksChildFirst(t *testing.T) {
 	}
 	assertCLIMissing(t, childActual)
 	assertCLIMissing(t, parentTarget)
-	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-		t.Fatalf("state modules = %#v, want both stale records removed", modules)
+	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		t.Fatalf("state records = %#v, want both stale records removed", records)
 	}
 	assertApplyNoMutation(t, fixture, fixture.run)
 }
@@ -315,23 +313,19 @@ func TestDuplicateStaleOwnershipAcrossStatusDryRunAndApply(t *testing.T) {
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Modules: map[string]state.Module{
-			"stale-a": {Placements: map[string]state.Placement{
-				"config": {
-					Kind:            state.KindLink,
-					Target:          firstTarget,
-					ResolvedTarget:  resolved.Resolved(),
-					LinkDestination: source,
-				},
-			}},
-			"stale-b": {Placements: map[string]state.Placement{
-				"config": {
-					Kind:            state.KindLink,
-					Target:          secondTarget,
-					ResolvedTarget:  resolved.Resolved(),
-					LinkDestination: source,
-				},
-			}},
+		Records: map[state.Key]state.Record{
+			{ModuleID: "stale-a", PlacementID: "config"}: {
+				Kind:            state.KindLink,
+				Target:          firstTarget,
+				ResolvedTarget:  resolved.Resolved(),
+				LinkDestination: source,
+			},
+			{ModuleID: "stale-b", PlacementID: "config"}: {
+				Kind:            state.KindLink,
+				Target:          secondTarget,
+				ResolvedTarget:  resolved.Resolved(),
+				LinkDestination: source,
+			},
 		},
 	})
 	before := snapshotTree(t, fixture.root)
@@ -372,8 +366,8 @@ func TestDuplicateStaleOwnershipAcrossStatusDryRunAndApply(t *testing.T) {
 		t.Fatalf("apply = (%d, %q), want duplicate cleanup", code, stderr)
 	}
 	assertCLIMissing(t, actual)
-	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-		t.Fatalf("state modules = %#v, want duplicate records removed", modules)
+	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		t.Fatalf("state records = %#v, want duplicate records removed", records)
 	}
 	assertApplyNoMutation(t, fixture, fixture.run)
 }

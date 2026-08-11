@@ -461,23 +461,19 @@ target = "~/owned"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Modules: map[string]state.Module{
-			"parent": {Placements: map[string]state.Placement{
-				"tree": {
-					Kind:            state.KindLink,
-					Target:          parentTarget,
-					ResolvedTarget:  resolvedParent.Resolved(),
-					LinkDestination: oldSource,
-				},
-			}},
-			"stale": {Placements: map[string]state.Placement{
-				"child": {
-					Kind:            state.KindLink,
-					Target:          staleTarget,
-					ResolvedTarget:  resolvedStale.Resolved(),
-					LinkDestination: staleSource,
-				},
-			}},
+		Records: map[state.Key]state.Record{
+			{ModuleID: "parent", PlacementID: "tree"}: {
+				Kind:            state.KindLink,
+				Target:          parentTarget,
+				ResolvedTarget:  resolvedParent.Resolved(),
+				LinkDestination: oldSource,
+			},
+			{ModuleID: "stale", PlacementID: "child"}: {
+				Kind:            state.KindLink,
+				Target:          staleTarget,
+				ResolvedTarget:  resolvedStale.Resolved(),
+				LinkDestination: staleSource,
+			},
 		},
 	})
 	return parentUpdateStaleCLIEnv{
@@ -769,7 +765,7 @@ func TestApplyForgetsStaleTargetOverlappingControlPath(t *testing.T) {
 			)
 			fixture.writeMachine(t, []string{"base"}, nil)
 			target := fixture.repository
-			record := state.Placement{
+			record := state.Record{
 				Kind:   kind,
 				Target: target,
 			}
@@ -783,10 +779,8 @@ func TestApplyForgetsStaleTargetOverlappingControlPath(t *testing.T) {
 			}
 			fixture.writeState(t, state.Snapshot{
 				Home: fixture.home,
-				Modules: map[string]state.Module{
-					"old": {Placements: map[string]state.Placement{
-						"stale": record,
-					}},
+				Records: map[state.Key]state.Record{
+					{ModuleID: "old", PlacementID: "stale"}: record,
 				},
 			})
 			beforeTarget := snapshotTree(t, target)
@@ -805,8 +799,8 @@ func TestApplyForgetsStaleTargetOverlappingControlPath(t *testing.T) {
 				)
 			}
 			assertSnapshotUnchanged(t, beforeTarget)
-			if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-				t.Fatalf("state modules after forget = %#v, want empty", modules)
+			if records := loadTestState(t, fixture).Records; len(records) != 0 {
+				t.Fatalf("state records after forget = %#v, want empty", records)
 			}
 
 			assertApplyNoMutation(t, fixture, fixture.run)
@@ -823,7 +817,7 @@ func TestApplyForgetsStaleTargetContainingStateRootWithoutChangingEntry(t *testi
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				t.Fatalf("os.MkdirAll(target) error = %v", err)
 			}
-			record := state.Placement{
+			record := state.Record{
 				Kind:   kind,
 				Target: target,
 			}
@@ -837,10 +831,8 @@ func TestApplyForgetsStaleTargetContainingStateRootWithoutChangingEntry(t *testi
 			}
 			fixture.writeState(t, state.Snapshot{
 				Home: fixture.home,
-				Modules: map[string]state.Module{
-					"old": {Placements: map[string]state.Placement{
-						"stale": record,
-					}},
+				Records: map[state.Key]state.Record{
+					{ModuleID: "old", PlacementID: "stale"}: record,
 				},
 			})
 			beforeTarget := snapshotPaths(t, target)
@@ -859,8 +851,8 @@ func TestApplyForgetsStaleTargetContainingStateRootWithoutChangingEntry(t *testi
 				)
 			}
 			assertSnapshotUnchanged(t, beforeTarget)
-			if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-				t.Fatalf("state modules after forget = %#v, want empty", modules)
+			if records := loadTestState(t, fixture).Records; len(records) != 0 {
+				t.Fatalf("state records after forget = %#v, want empty", records)
 			}
 
 			assertApplyNoMutation(t, fixture, fixture.run)
@@ -877,7 +869,7 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 			}
 			fixture := newCLITestEnv(t, `base = []`)
 			fixture.writeMachine(t, []string{"base"}, nil)
-			record := state.Placement{
+			record := state.Record{
 				Kind:   kind,
 				Target: fixture.lock,
 			}
@@ -894,10 +886,8 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 			}
 			fixture.writeState(t, state.Snapshot{
 				Home: fixture.home,
-				Modules: map[string]state.Module{
-					"old": {Placements: map[string]state.Placement{
-						"stale": record,
-					}},
+				Records: map[state.Key]state.Record{
+					{ModuleID: "old", PlacementID: "stale"}: record,
 				},
 			})
 			assertCLIMissing(t, fixture.lock)
@@ -954,8 +944,8 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 			if lockInfo.Mode()&fs.ModeSymlink != 0 {
 				t.Fatalf("lock mode = %v, want direct regular file", lockInfo.Mode())
 			}
-			if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-				t.Fatalf("state modules after forget = %#v, want empty", modules)
+			if records := loadTestState(t, fixture).Records; len(records) != 0 {
+				t.Fatalf("state records after forget = %#v, want empty", records)
 			}
 
 			assertApplyNoMutation(t, fixture, fixture.run)
@@ -977,7 +967,13 @@ func TestApplyRejectsInvalidStateWithoutMutation(t *testing.T) {
 			want:         "legacy state version",
 			wantPathHint: true,
 		},
-		{name: "too new", document: `{"version":3}`, want: "state version is newer"},
+		{
+			name:         "legacy v2",
+			document:     `{"version":2,"home":"/old","modules":{}}`,
+			want:         "legacy state version",
+			wantPathHint: true,
+		},
+		{name: "too new", document: `{"version":4}`, want: "state version is newer"},
 	}
 
 	for _, test := range tests {

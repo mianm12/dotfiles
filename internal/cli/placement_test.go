@@ -94,8 +94,8 @@ target = "~/.app-new"
 			filepath.Join(fixture.repository, "modules", "app", "new"),
 		)
 		loaded := loadTestState(t, fixture)
-		if placements := loaded.Modules["app"].Placements; len(placements) != 1 {
-			t.Fatalf("state placements = %#v, want only new placement", placements)
+		if records := loaded.Records; len(records) != 1 {
+			t.Fatalf("state records = %#v, want only new placement", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
 	})
@@ -132,8 +132,8 @@ target = "~/.app"
 		t.Fatalf("phase-one apply = (%d, %q)", code, stderr)
 	}
 	assertCLIMissing(t, parent)
-	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-		t.Fatalf("state after phase one = %#v, want no placements", modules)
+	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		t.Fatalf("state after phase one = %#v, want no records", records)
 	}
 	assertApplyNoMutation(t, fixture, fixture.run)
 
@@ -400,8 +400,8 @@ target = "~/.shared"
 		if err != nil || string(data) != "local" {
 			t.Fatalf("local after phase one = (%q, %v), want preserved", data, err)
 		}
-		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-			t.Fatalf("state after phase one = %#v, want no placements", modules)
+		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+			t.Fatalf("state after phase one = %#v, want no records", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
 
@@ -469,8 +469,8 @@ target = "~/.shared"
 		}
 		target := filepath.Join(fixture.home, ".shared")
 		assertCLIMissing(t, target)
-		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-			t.Fatalf("state after phase one = %#v, want no placements", modules)
+		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+			t.Fatalf("state after phase one = %#v, want no records", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
 
@@ -563,8 +563,8 @@ target = "~/alias/config"
 		}
 		assertCLILink(t, filepath.Join(firstParent, "config"), destination)
 		assertCLILink(t, filepath.Join(secondParent, "config"), destination)
-		if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-			t.Fatalf("state modules = %#v, want stale ownership forgotten", modules)
+		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+			t.Fatalf("state records = %#v, want stale ownership forgotten", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
 	})

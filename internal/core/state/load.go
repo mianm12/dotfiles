@@ -43,11 +43,11 @@ func Load(path, home string) (Loaded, error) {
 	if err != nil {
 		return Loaded{}, fmt.Errorf("read state %q: %w", path, err)
 	}
-	snapshot, needsRewrite, err := decode(data, empty.Home)
+	snapshot, err := decode(data, empty.Home)
 	if err != nil {
 		return Loaded{}, fmt.Errorf("load state %q: %w", path, err)
 	}
-	return Loaded{Snapshot: snapshot, NeedsRewrite: needsRewrite}, nil
+	return Loaded{Snapshot: snapshot}, nil
 }
 
 func statePathMissing(path string, inspectErr error) bool {

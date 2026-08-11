@@ -7,8 +7,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-
-	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
 func TestFIFOInputsFailBeforeMutation(t *testing.T) {
@@ -135,25 +133,29 @@ target = "~/.good"
 	assertSnapshotUnchanged(t, beforeRepeat)
 }
 
-func TestReadOnlyCommandsDoNotRewriteEmptyStateModules(t *testing.T) {
+func TestCommandsRejectLegacyStateWithoutMutation(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeMachine(t, []string{"base"}, nil)
 	writeCLIFile(t, fixture.state, fmt.Sprintf(
-		`{"version":2,"home":%q,"modules":{"empty":{"placements":{}}}}`,
+		`{"version":2,"home":%q,"modules":{}}`,
 		fixture.home,
 	))
 
 	for _, args := range [][]string{
 		{"status"},
 		{"apply", "--dry-run"},
+		{"apply"},
 	} {
 		before := snapshotTree(t, fixture.root)
 
 		code, stdout, stderr := fixture.runInjected(args...)
 
-		if code != exitOK || stderr != "" || strings.Contains(stdout, "empty") {
+		if code != exitError ||
+			stdout != "" ||
+			!strings.Contains(stderr, "legacy state version") ||
+			!strings.Contains(stderr, "version 2 is unsupported") {
 			t.Fatalf(
-				"%v = (%d, %q, %q), want read-only in-memory cleanup",
+				"%v = (%d, %q, %q), want fail-closed legacy-state error",
 				args,
 				code,
 				stdout,
@@ -162,22 +164,4 @@ func TestReadOnlyCommandsDoNotRewriteEmptyStateModules(t *testing.T) {
 		}
 		assertSnapshotUnchanged(t, before)
 	}
-
-	code, stdout, stderr := fixture.runInjected("apply")
-	if code != exitOK ||
-		stderr != "" ||
-		!strings.Contains(
-			stdout,
-			"targets_changed=false state_changed=true",
-		) {
-		t.Fatalf("apply canonical rewrite = (%d, %q, %q)", code, stdout, stderr)
-	}
-	loaded, err := state.Load(fixture.state, fixture.home)
-	if err != nil {
-		t.Fatalf("state.Load(canonical) error = %v", err)
-	}
-	if loaded.NeedsRewrite || len(loaded.Snapshot.Modules) != 0 {
-		t.Fatalf("canonical loaded state = %#v", loaded)
-	}
-	assertApplyNoMutation(t, fixture, fixture.runInjected)
 }

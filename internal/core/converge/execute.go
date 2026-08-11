@@ -313,32 +313,24 @@ func applyState(snapshot *state.Snapshot, action Step) {
 	case DecisionPrune, DecisionForget:
 		removePlacement(snapshot, action.ModuleID, action.PlacementID)
 	default:
-		module := snapshot.Modules[action.ModuleID]
-		if module.Placements == nil {
-			module.Placements = make(map[string]state.Placement)
-		}
-		placement := state.Placement{
+		record := state.Record{
 			Kind:   action.Kind,
 			Target: action.Target,
 		}
 		if action.Kind == state.KindLink {
-			placement.ResolvedTarget = action.ResolvedTarget
-			placement.LinkDestination = action.LinkDestination
+			record.ResolvedTarget = action.ResolvedTarget
+			record.LinkDestination = action.LinkDestination
 		}
-		module.Placements[action.PlacementID] = placement
-		snapshot.Modules[action.ModuleID] = module
+		snapshot.Records[state.Key{
+			ModuleID:    action.ModuleID,
+			PlacementID: action.PlacementID,
+		}] = record
 	}
 }
 
 func removePlacement(snapshot *state.Snapshot, moduleID, placementID string) {
-	module, exists := snapshot.Modules[moduleID]
-	if !exists {
-		return
-	}
-	delete(module.Placements, placementID)
-	if len(module.Placements) == 0 {
-		delete(snapshot.Modules, moduleID)
-		return
-	}
-	snapshot.Modules[moduleID] = module
+	delete(snapshot.Records, state.Key{
+		ModuleID:    moduleID,
+		PlacementID: placementID,
+	})
 }

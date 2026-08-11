@@ -330,7 +330,7 @@ func planLocal(base Step, exists bool) Step {
 func planLink(
 	base Step,
 	actual actual,
-	record state.Placement,
+	record state.Record,
 	hasState bool,
 ) candidate {
 	if actual.kind != actualAbsent && actual.kind != actualSymlink {
@@ -527,7 +527,7 @@ func planOneStale(
 	desired []desiredPlacement,
 	active []Step,
 	key placementKey,
-	record state.Placement,
+	record state.Record,
 ) (candidate, error) {
 	switch record.Kind {
 	case state.KindLink, state.KindLocal:
@@ -674,7 +674,7 @@ func planOneStale(
 func staleDriftReason(
 	actual actual,
 	resolved string,
-	record state.Placement,
+	record state.Record,
 ) string {
 	if actual.kind != actualSymlink {
 		return fmt.Sprintf("stale target is now %s", actual.kind)
@@ -787,7 +787,7 @@ func activeLinkNeedsProspectiveGuard(
 
 func stateRecordOwnsLink(
 	home string,
-	record state.Placement,
+	record state.Record,
 ) (bool, error) {
 	current, err := resolveStateTarget(home, record.Target)
 	if err != nil {
@@ -807,7 +807,7 @@ func stateRecordOwnsLink(
 }
 
 func stateOwnsLink(
-	record state.Placement,
+	record state.Record,
 	current corepaths.Target,
 	actual actual,
 ) bool {
@@ -817,7 +817,7 @@ func stateOwnsLink(
 }
 
 func stateLinkTargetMatches(
-	record state.Placement,
+	record state.Record,
 	current corepaths.Target,
 ) bool {
 	return current.Resolved() == record.ResolvedTarget
@@ -825,7 +825,7 @@ func stateLinkTargetMatches(
 
 func samePlacementTarget(
 	desired desiredPlacement,
-	record state.Placement,
+	record state.Record,
 ) bool {
 	return desired.target.Lexical() == record.Target ||
 		(record.Kind == state.KindLink &&
@@ -904,24 +904,21 @@ func isSafeStaleResolutionDrift(err error) bool {
 func statePlacement(
 	snapshot state.Snapshot,
 	key placementKey,
-) (state.Placement, bool) {
-	module, exists := snapshot.Modules[key.moduleID]
-	if !exists {
-		return state.Placement{}, false
-	}
-	placement, exists := module.Placements[key.placementID]
-	return placement, exists
+) (state.Record, bool) {
+	record, exists := snapshot.Records[state.Key{
+		ModuleID:    key.moduleID,
+		PlacementID: key.placementID,
+	}]
+	return record, exists
 }
 
 func stateKeys(snapshot state.Snapshot) []placementKey {
-	keys := make([]placementKey, 0)
-	for moduleID, module := range snapshot.Modules {
-		for placementID := range module.Placements {
-			keys = append(keys, placementKey{
-				moduleID:    moduleID,
-				placementID: placementID,
-			})
-		}
+	keys := make([]placementKey, 0, len(snapshot.Records))
+	for key := range snapshot.Records {
+		keys = append(keys, placementKey{
+			moduleID:    key.ModuleID,
+			placementID: key.PlacementID,
+		})
 	}
 	slices.SortFunc(keys, func(left, right placementKey) int {
 		if byModule := strings.Compare(left.moduleID, right.moduleID); byModule != 0 {
