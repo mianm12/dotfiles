@@ -30,7 +30,7 @@ type analysis struct {
 }
 
 // Analyze reloads every convergence input and returns one complete read-only
-// report. Expressible selection and path blockers are reported in Plan.Issues.
+// report. Expressible selection and path blockers are reported as Problems.
 func Analyze(environment Environment) (Report, error) {
 	prepared, err := analyzeEnvironment(environment)
 	if err != nil {
@@ -52,15 +52,15 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 		return analysis{}, err
 	}
 	controlPaths := environmentControls(environment, machine.Repository)
-	issues := make([]Issue, 0, 1)
+	problems := make([]Problem, 0, 1)
 	controls, err := resolveControls(controlPaths)
 	if err != nil {
 		if !errors.Is(err, corepaths.ErrControlTopology) {
 			return analysis{}, err
 		}
-		issues = append(issues, Issue{
-			Kind:   IssueBlocked,
-			Code:   IssueCodeControlTopology,
+		problems = append(problems, Problem{
+			Kind:   ProblemBlocked,
+			Code:   ProblemCodeControlTopology,
 			Reason: err.Error(),
 		})
 	}
@@ -73,8 +73,8 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 		return analysis{}, err
 	}
 	for _, issue := range selection.issues {
-		issues = append(issues, Issue{
-			Kind:     IssueBlocked,
+		problems = append(problems, Problem{
+			Kind:     ProblemBlocked,
 			ModuleID: issue.moduleID,
 			Reason:   issue.reason,
 		})
@@ -88,7 +88,7 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 		controls,
 		selection.modules,
 		loaded.Snapshot,
-		issues,
+		problems,
 	)
 	if err != nil {
 		return analysis{}, err
@@ -118,12 +118,12 @@ func buildAnalysisPlan(
 	controls corepaths.ResolvedControls,
 	resolvedModules []config.Module,
 	snapshot state.Snapshot,
-	issues []Issue,
+	problems []Problem,
 ) (Plan, []string, error) {
-	if len(issues) != 0 {
+	if len(problems) != 0 {
 		return Plan{
-			Complete: false,
-			Issues:   append([]Issue(nil), issues...),
+			Problems:   append([]Problem(nil), problems...),
+			finalState: cloneSnapshot(snapshot),
 		}, nil, nil
 	}
 
@@ -137,10 +137,10 @@ func buildAnalysisPlan(
 		return Plan{}, nil, err
 	}
 	warnings := make([]string, 0)
-	for _, issue := range plan.Issues {
-		if issue.Code == IssueCodeControlBoundary &&
-			!slices.Contains(warnings, issue.Reason) {
-			warnings = append(warnings, issue.Reason)
+	for _, problem := range plan.Problems {
+		if problem.Code == ProblemCodeControlBoundary &&
+			!slices.Contains(warnings, problem.Reason) {
+			warnings = append(warnings, problem.Reason)
 		}
 	}
 	return plan, warnings, nil
@@ -155,182 +155,46 @@ func newReport(
 	moduleIDs []string,
 ) Report {
 	return Report{
-		Modules: buildModuleReports(
+		Facts: buildModuleFacts(
 			moduleIDs,
 			sources,
 			observations,
 			snapshot,
-			plan,
 		),
-		Plan: Plan{
-			Complete: plan.Complete,
-			Steps:    append([]Step(nil), plan.Steps...),
-			Issues:   append([]Issue(nil), plan.Issues...),
-		},
+		Plan:     clonePlan(plan),
 		Warnings: append([]string(nil), warnings...),
 	}
 }
 
-func buildModuleReports(
+func buildModuleFacts(
 	moduleIDs []string,
 	sources map[string]selectionSource,
 	observations map[string]moduleObservation,
 	snapshot state.Snapshot,
-	plan Plan,
-) []ModuleReport {
-	result := make([]ModuleReport, 0, len(moduleIDs))
+) []ModuleFact {
+	result := make([]ModuleFact, 0, len(moduleIDs))
 	for _, moduleID := range moduleIDs {
 		source := sources[moduleID]
 		observation := observations[moduleID]
-		statePresent := stateHasModule(snapshot, moduleID)
-		issueReason, directIssue := analysisIssueForModule(
-			moduleID,
-			source != (selectionSource{}) || statePresent,
-			plan.Issues,
-		)
-		analysis := ModuleReport{
-			ID:            moduleID,
-			Summary:       "inactive",
-			Selection:     source.label(),
-			Applicability: "-",
-			Convergence:   "-",
-			Variant:       "-",
-			Reason:        "",
+		fact := ModuleFact{
+			ID:             moduleID,
+			Selection:      source.label(),
+			ManifestLoaded: observation.loaded,
+			StatePresent:   stateHasModule(snapshot, moduleID),
 		}
 		if observation.loaded {
-			analysis.Applicability = string(observation.applicability.State)
+			fact.Applicability = string(observation.applicability.State)
+			fact.Diagnostic = observation.applicability.Diagnostic
 			if observation.applicability.State == config.ApplicabilityApplicable {
-				analysis.Variant = observation.variant
-				analysis.NamedVariant = observation.variant != ""
-				if analysis.Variant == "" {
-					analysis.Variant = "portable"
+				fact.Variant = observation.variant
+				if fact.Variant == "" {
+					fact.Variant = "portable"
 				}
 			}
 		}
-
-		switch {
-		case observation.loaded &&
-			observation.applicability.State == config.ApplicabilityNotApplicable &&
-			source != (selectionSource{}):
-			analysis.Summary = "not-applicable"
-		case source != (selectionSource{}):
-			if plan.Complete {
-				analysis.Summary = "converged"
-				analysis.Convergence = "converged"
-			} else {
-				analysis.Summary = "pending"
-				analysis.Convergence = "unknown"
-			}
-		case statePresent:
-			if plan.Complete {
-				analysis.Summary = "stale"
-				analysis.Convergence = "pending"
-			} else {
-				analysis.Summary = "stale"
-				analysis.Convergence = "unknown"
-			}
-		}
-		if !plan.Complete && directIssue {
-			analysis.Summary = "conflict"
-			analysis.Convergence = "conflict"
-		} else if !plan.Complete &&
-			(source != (selectionSource{}) || statePresent) {
-			analysis.Convergence = "unknown"
-		}
-
-		for _, issue := range plan.Issues {
-			if issue.ModuleID != moduleID {
-				continue
-			}
-			if issue.Kind == IssueConflict || !plan.Complete {
-				analysis.Summary = "conflict"
-				analysis.Convergence = "conflict"
-				if !isConcretePlacementIssue(issue) {
-					analysis.Reason = issue.Reason
-				}
-			}
-		}
-		for _, action := range plan.Steps {
-			if action.ModuleID != moduleID {
-				continue
-			}
-			if analysis.Convergence == "conflict" {
-				continue
-			}
-			if source != (selectionSource{}) &&
-				observation.applicability.State == config.ApplicabilityApplicable &&
-				action.Decision == DecisionKeep &&
-				keepStateRecorded(snapshot, action) {
-				continue
-			}
-			if analysis.Summary == "not-applicable" {
-				analysis.Convergence = "pending-cleanup"
-			} else {
-				analysis.Convergence = "pending"
-			}
-			if analysis.Summary != "stale" &&
-				analysis.Summary != "not-applicable" {
-				analysis.Summary = "pending"
-			}
-			if analysis.Reason == "" && action.Reason != "" {
-				analysis.Reason = action.Reason
-			} else if analysis.Reason == "" &&
-				analysis.Summary == "not-applicable" {
-				analysis.Reason = string(action.Decision)
-			}
-		}
-		if analysis.Reason == "" && directIssue {
-			analysis.Reason = issueReason
-		}
-		if analysis.Reason == "" &&
-			observation.applicability.State == config.ApplicabilityIndeterminate {
-			analysis.Reason = observation.applicability.Diagnostic
-		}
-		result = append(result, analysis)
+		result = append(result, fact)
 	}
 	return result
-}
-
-func keepStateRecorded(snapshot state.Snapshot, action Step) bool {
-	record, exists := snapshot.Records[state.Key{
-		ModuleID:    action.ModuleID,
-		PlacementID: action.PlacementID,
-	}]
-	if !exists || record.Kind != action.Kind || record.Target != action.Target {
-		return false
-	}
-	if action.Kind == state.KindLink {
-		return record.ResolvedTarget == action.ResolvedTarget &&
-			record.LinkDestination == action.LinkDestination
-	}
-	return true
-}
-
-func isConcretePlacementIssue(issue Issue) bool {
-	return issue.PlacementID != "" && issue.Target != ""
-}
-
-func analysisIssueForModule(
-	moduleID string,
-	includeGlobal bool,
-	issues []Issue,
-) (string, bool) {
-	for _, issue := range issues {
-		if issue.ModuleID == moduleID {
-			if issue.Kind == IssueConflict && isConcretePlacementIssue(issue) {
-				continue
-			}
-			return issue.Reason, true
-		}
-	}
-	if includeGlobal {
-		for _, issue := range issues {
-			if issue.ModuleID == "" {
-				return issue.Reason, false
-			}
-		}
-	}
-	return "", false
 }
 
 func statusModuleIDs(
@@ -379,12 +243,24 @@ func appendWarning(warning string, warnings []string) []string {
 
 func cloneReport(report Report) Report {
 	return Report{
-		Modules: append([]ModuleReport(nil), report.Modules...),
-		Plan: Plan{
-			Complete: report.Plan.Complete,
-			Steps:    append([]Step(nil), report.Plan.Steps...),
-			Issues:   append([]Issue(nil), report.Plan.Issues...),
-		},
+		Facts:    append([]ModuleFact(nil), report.Facts...),
+		Plan:     clonePlan(report.Plan),
 		Warnings: append([]string(nil), report.Warnings...),
 	}
+}
+
+func clonePlan(plan Plan) Plan {
+	cloned := Plan{
+		Transitions: make([]Transition, len(plan.Transitions)),
+		Problems:    append([]Problem(nil), plan.Problems...),
+		finalState:  cloneSnapshot(plan.finalState),
+	}
+	for index, transition := range plan.Transitions {
+		cloned.Transitions[index] = transition
+		cloned.Transitions[index].Actions = append(
+			[]Action(nil),
+			transition.Actions...,
+		)
+	}
+	return cloned
 }

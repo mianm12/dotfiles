@@ -51,10 +51,10 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 		stderr != "" ||
 		!strings.Contains(
 			stdout,
-			"gated  conflict selection=profile applicability=indeterminate ",
+			"fact module=gated selection=profile state=present applicability=indeterminate ",
 		) ||
 		!strings.Contains(stdout, "synthetic os-release failure") ||
-		!strings.Contains(stdout, "blocked module=gated") ||
+		!strings.Contains(stdout, "problem kind=blocked module=gated") ||
 		strings.Contains(stdout, "prune") ||
 		strings.Contains(stdout, "forget") {
 		t.Fatalf(
@@ -69,7 +69,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 	code, stdout, stderr = fixture.runInjected("apply", "--dry-run")
 	if code != exitError ||
 		stderr != "" ||
-		!strings.Contains(stdout, "blocked module=gated") ||
+		!strings.Contains(stdout, "problem kind=blocked module=gated") ||
 		!strings.Contains(stdout, "synthetic os-release failure") ||
 		strings.Contains(stdout, "prune") ||
 		strings.Contains(stdout, "forget") {
@@ -118,7 +118,7 @@ func TestInactiveIndeterminateModuleIsNotResolvedByStatus(t *testing.T) {
 
 	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
-		stdout != "gated  inactive\n" ||
+		stdout != "fact module=gated selection=none state=absent\n" ||
 		strings.Contains(stdout, "blocked") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(

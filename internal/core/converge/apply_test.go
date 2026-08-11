@@ -181,7 +181,7 @@ target = "~/.app"
 	writeMutationFile(t, target, "private")
 
 	result, err := Apply(fixture.environment())
-	if err == nil || len(result.Report.Plan.Issues) == 0 || result.TargetsChanged || result.StateChanged {
+	if err == nil || len(result.Report.Plan.Problems) == 0 || result.TargetsChanged || result.StateChanged {
 		t.Fatalf("Apply(ordinary file) = (%#v, %v), want read-only conflict", result, err)
 	}
 	if contents, readErr := os.ReadFile(target); readErr != nil || string(contents) != "private" {
@@ -250,7 +250,7 @@ target = "~/.config/app/child"
 	)
 
 	result, err := Apply(fixture.environment())
-	if err == nil || len(result.Report.Plan.Issues) == 0 || result.TargetsChanged || result.StateChanged {
+	if err == nil || len(result.Report.Plan.Problems) == 0 || result.TargetsChanged || result.StateChanged {
 		t.Fatalf("Apply(target topology) = (%#v, %v), want read-only blocker", result, err)
 	}
 	assertApplyBookkeepingMissing(t, fixture)
@@ -375,11 +375,11 @@ target = "~/.app"
 	)
 	environment := fixture.environment()
 	report, err := Analyze(environment)
-	if err != nil || !report.Plan.Executable() || len(report.Plan.Steps) != 1 {
-		t.Fatalf("Analyze() = (%#v, %v), want one executable preflight step", report, err)
+	if err != nil || !report.Plan.Executable() || len(report.Plan.Actions()) != 1 {
+		t.Fatalf("Analyze() = (%#v, %v), want one executable preflight action", report, err)
 	}
 	preflight, result, err := prepareApply(environment)
-	if err != nil || len(result.Report.Plan.Steps) != 0 {
+	if err != nil || len(result.Report.Plan.Actions()) != 0 {
 		t.Fatalf("prepareApply() = (%#v, %#v, %v), want executable preflight", preflight, result, err)
 	}
 	release, err := acquire(preflight.controls)
@@ -455,8 +455,8 @@ target = "~/.app"
 	)
 	environment := fixture.environment()
 	report, err := Analyze(environment)
-	if err != nil || !report.Plan.Executable() || len(report.Plan.Steps) != 1 {
-		t.Fatalf("Analyze() = (%#v, %v), want one executable preflight step", report, err)
+	if err != nil || !report.Plan.Executable() || len(report.Plan.Actions()) != 1 {
+		t.Fatalf("Analyze() = (%#v, %v), want one executable preflight action", report, err)
 	}
 	preflight, _, err := prepareApply(environment)
 	if err != nil {
@@ -476,7 +476,7 @@ target = "~/.app"
 	writeMutationFile(t, target, "arrived while locked")
 	result, err := applyLocked(environment, preflight.fingerprint)
 	if !errors.Is(err, ErrBlocked) ||
-		len(result.Report.Plan.Issues) != 1 ||
+		len(result.Report.Plan.Problems) != 1 ||
 		result.TargetsChanged || result.StateChanged {
 		t.Fatalf("applyLocked(filesystem drift) = (%#v, %v), want fresh conflict", result, err)
 	}
@@ -531,8 +531,8 @@ target = "~/.second"
 		t.Fatalf("analyzeEnvironment() error = %v", err)
 	}
 	firstTarget := filepath.Join(fixture.home, ".first")
-	if len(preflight.report.Plan.Steps) != 1 ||
-		preflight.report.Plan.Steps[0].Target != firstTarget {
+	if len(preflight.report.Plan.Actions()) != 1 ||
+		preflight.report.Plan.Actions()[0].Target != firstTarget {
 		t.Fatalf("preflight plan = %#v, want first-repository target", preflight.report.Plan)
 	}
 	preflightPaths, err := preflight.controls.Paths()

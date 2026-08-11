@@ -77,9 +77,9 @@ func withCoreRecovery(err error) error {
 }
 
 func hasControlIssue(plan converge.Plan) bool {
-	for _, issue := range plan.Issues {
-		if issue.Code == converge.IssueCodeControlTopology ||
-			issue.Code == converge.IssueCodeControlBoundary {
+	for _, problem := range plan.Problems {
+		if problem.Code == converge.ProblemCodeControlTopology ||
+			problem.Code == converge.ProblemCodeControlBoundary {
 			return true
 		}
 	}
@@ -90,24 +90,24 @@ func rejectAnalysis(report converge.Report) error {
 	if report.Plan.Executable() {
 		return nil
 	}
-	if len(report.Plan.Issues) != 0 {
-		issue := report.Plan.Issues[0]
-		if issue.Kind == converge.IssueConflict && issue.PlacementID != "" {
+	if len(report.Plan.Problems) != 0 {
+		problem := report.Plan.Problems[0]
+		if problem.Kind == converge.ProblemConflict && problem.PlacementID != "" {
 			return fmt.Errorf(
 				"plan conflict for %s/%s: %s",
-				issue.ModuleID,
-				issue.PlacementID,
-				issue.Reason,
+				problem.ModuleID,
+				problem.PlacementID,
+				problem.Reason,
 			)
 		}
-		if issue.ModuleID != "" {
+		if problem.ModuleID != "" {
 			return fmt.Errorf(
 				"operation blocked for module %q: %s",
-				issue.ModuleID,
-				issue.Reason,
+				problem.ModuleID,
+				problem.Reason,
 			)
 		}
-		return fmt.Errorf("operation blocked: %s", issue.Reason)
+		return fmt.Errorf("operation blocked: %s", problem.Reason)
 	}
-	return fmt.Errorf("operation blocked: convergence planning is incomplete")
+	return fmt.Errorf("operation blocked: convergence plan is not executable")
 }

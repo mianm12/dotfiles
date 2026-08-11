@@ -7,7 +7,7 @@ converge.Analyze read-only preflight
   -> strict load config/state 与全部 effective manifests
   -> resolve desired and observe actual
   -> validate control topology and supported path conflicts
-  -> build candidate plan
+  -> build Transitions, Actions, Problems and one immutable FinalState
   -> revalidate complete control topology and acquire mutation lock
   -> converge.Analyze again: strict reload, re-resolve, revalidate and replan
   -> reject machine semantic fingerprint drift
@@ -40,28 +40,28 @@ converge.Analyze read-only preflight
   之前必须完成整组 control topology 与现存 control entry 的只读校验。
 - 锁内复核发现 machine semantic fingerprint 漂移时失败，不切换到新 repository 或新 selection
   继续执行。
-- Artifact convergence 使用固定 HOME 和 controls；只执行锁内 fresh analysis 生成的 Plan，随后
-  复核 changed targets 并提交该次 analysis 加载的 state。锁前 Report、Plan、resolved modules
+- Artifact convergence 使用固定 HOME 和 controls；只执行锁内 fresh analysis 生成的 Actions，
+  随后复核 changed targets 并提交同一 Plan 已计算好的 FinalState。Executor 不从 Action 顺序
+  增量推导或修补 ownership state。锁前 Report、Plan、resolved modules
   和 state 均不得进入执行。
 - Lock 释放失败属于 partial mutation 失败；state commit 失败同样返回 partial。已经发布的
   selection、target 或 state 不回滚，具体重跑文案由 CLI 投影。
 - [`placements.md`](placements.md#control-path-topology) 定义的私有 control root 路径边界
   必须在 lock 与 mutation 前完成校验；失败时不跟随、替换或 chmod 对应对象。
 - 不防御同一用户权限的其他进程在检查与 mutation 之间并发替换私有控制根。
-- 不建立通用 step snapshot 或 precondition 系统。
+- 不建立通用 Action snapshot 或 precondition framework；Update/Prune Action 只携带删除前必须
+  复核的 resolved target 与 raw destination 两项窄事实。
 - Local 以 `0600`、内容完整且不可覆盖的方式发布；新 link 以不可覆盖的 symlink create
   发布；两者在 target 已出现时停止。
 - Update/prune 删除 symlink 前重新读取 resolved target 和 raw destination；与 state 不同则停止。
 - Update/prune 删除后重新读取 target；只有确认不存在才继续，重新出现或无法确认时停止且不推进
   state。
 - 新 target 创建和 update 全部成功后才开始 prune；Prune 按
-  [`planning.md`](planning.md#link) 生成的 step 顺序执行。
-- Changed target 重新读取符合预期后才进入 state；不建设独立 postcondition framework。
+  [`planning.md`](planning.md#link) 生成的 Action 顺序执行。
+- Changed target 重新读取符合预期后才允许提交 FinalState；不建设独立 postcondition framework。
 - State 最后原子提交；state commit 和 lock release 均成功才构成 mutation 成功。公开成功或
-  未完成结果的投影只由 [`cli.md`](cli.md#status-与-dry-run) 定义。加载时若发现兼容的非
-  canonical 空 module，任意成功真实 mutation 都提交 canonical state，即使 selection、target
-  和 ownership step 均为 no-op。Preflight、规划、mutation 或 state commit 失败时不得为
-  canonicalization 单独写盘。
+  未完成结果的投影只由 [`cli.md`](cli.md#status-与-dry-run) 定义。Preflight、规划、mutation
+  或 state commit 失败时不得单独推进 FinalState。
 - 不提供 rollback。失败时保留已经完成的安全动作，报告可能部分应用并要求用户重跑。
 - Mutation commands 使用同一把稳定 advisory file lock。Lock busy 作为普通运行时失败。
 

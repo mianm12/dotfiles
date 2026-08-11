@@ -26,9 +26,9 @@ func executePlan(
 		return executionResult{}, conflictError(plan)
 	}
 
-	next := cloneSnapshot(loaded.Snapshot)
+	next := plan.finalSnapshot()
 	mutation := mutationRun{home: filepath.Clean(home)}
-	if err := mutation.apply(plan, &next); err != nil {
+	if err := mutation.apply(plan); err != nil {
 		return executionResult{
 			TargetsChanged: mutation.changed,
 		}, mutation.wrapError(err)
@@ -61,17 +61,17 @@ func loadState(path, home string) (state.Loaded, error) {
 }
 
 func conflictError(plan Plan) error {
-	if len(plan.Issues) != 0 {
-		issue := plan.Issues[0]
+	if len(plan.Problems) != 0 {
+		problem := plan.Problems[0]
 		return fmt.Errorf(
 			"plan %s for %s/%s: %s",
-			issue.Kind,
-			issue.ModuleID,
-			issue.PlacementID,
-			issue.Reason,
+			problem.Kind,
+			problem.ModuleID,
+			problem.PlacementID,
+			problem.Reason,
 		)
 	}
-	return fmt.Errorf("convergence plan is incomplete")
+	return fmt.Errorf("convergence plan is not executable")
 }
 
 func cloneSnapshot(snapshot state.Snapshot) state.Snapshot {

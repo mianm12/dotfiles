@@ -26,12 +26,12 @@ type desiredPlacement struct {
 }
 
 type stalePrune struct {
-	step   Step
+	action Action
 	target corepaths.Target
 }
 
 type candidate struct {
-	step     Step
+	action   Action
 	conflict bool
 }
 
@@ -46,7 +46,10 @@ func buildPlan(request planRequest) (Plan, error) {
 	desired, err := resolveDesired(home, request.Controls, request.Modules)
 	if err != nil {
 		if isPlanningIssue(err) {
-			return Plan{Complete: false, Issues: pathIssues(err)}, nil
+			return Plan{
+				Problems:   pathProblems(err),
+				finalState: cloneSnapshot(request.State),
+			}, nil
 		}
 		return Plan{}, err
 	}
@@ -69,41 +72,41 @@ func buildPlan(request planRequest) (Plan, error) {
 			}
 			if owned {
 				planned.conflict = true
-				planned.step.Reason = fmt.Sprintf(
+				planned.action.Reason = fmt.Sprintf(
 					"target traverses state-owned link from module %q placement %q",
 					owner.moduleID,
 					owner.placementID,
 				)
 			}
 		}
-		if !planned.conflict && planned.step.Kind == state.KindLink {
+		if !planned.conflict && planned.action.Kind == state.KindLink {
 			dependent, traversed, traversalErr := desiredTraversingLink(
 				desired,
-				planned.step.ResolvedTarget,
+				planned.action.ResolvedTarget,
 			)
 			if traversalErr != nil {
 				return Plan{}, fmt.Errorf(
 					"compare active link %s with desired targets: %w",
-					placementLabel(planned.step.ModuleID, planned.step.PlacementID),
+					placementLabel(planned.action.ModuleID, planned.action.PlacementID),
 					traversalErr,
 				)
 			}
 			if traversed {
 				guard, guardErr := activeLinkNeedsProspectiveGuard(
 					home,
-					planned.step,
+					planned.action,
 					request.State,
 				)
 				if guardErr != nil {
 					return Plan{}, fmt.Errorf(
 						"inspect current ownership for active link %s: %w",
-						placementLabel(planned.step.ModuleID, planned.step.PlacementID),
+						placementLabel(planned.action.ModuleID, planned.action.PlacementID),
 						guardErr,
 					)
 				}
 				if guard {
 					planned.conflict = true
-					planned.step.Reason = fmt.Sprintf(
+					planned.action.Reason = fmt.Sprintf(
 						"active link cannot be owned or changed while traversed by "+
 							"effective module %q placement %q",
 						dependent.moduleID,
@@ -117,7 +120,7 @@ func buildPlan(request planRequest) (Plan, error) {
 		}
 		candidates = append(candidates, planned)
 	}
-	active := executableSteps(candidates)
+	active := executableActions(candidates)
 
 	cleanup, err := planStale(
 		home,
@@ -131,7 +134,7 @@ func buildPlan(request planRequest) (Plan, error) {
 		return Plan{}, err
 	}
 	candidates = append(candidates, cleanup...)
-	return finalize(candidates), nil
+	return finalize(request.State, desired, candidates), nil
 }
 
 func isPlanningIssue(err error) bool {
@@ -140,67 +143,142 @@ func isPlanningIssue(err error) bool {
 		errors.Is(err, corepaths.ErrControlTopology)
 }
 
-func pathIssues(err error) []Issue {
+func pathProblems(err error) []Problem {
 	labels := corepaths.PlacementLabels(err)
 	if len(labels) == 0 {
-		return []Issue{{
-			Kind:   IssueBlocked,
-			Code:   pathIssueCode(err),
+		return []Problem{{
+			Kind:   ProblemBlocked,
+			Code:   pathProblemCode(err),
 			Reason: err.Error(),
 		}}
 	}
-	issues := make([]Issue, 0, len(labels))
+	problems := make([]Problem, 0, len(labels))
 	for _, label := range labels {
 		moduleID, placementID, _ := strings.Cut(label, "/")
-		issues = append(issues, Issue{
-			Kind:        IssueBlocked,
-			Code:        pathIssueCode(err),
+		problems = append(problems, Problem{
+			Kind:        ProblemBlocked,
+			Code:        pathProblemCode(err),
 			ModuleID:    moduleID,
 			PlacementID: placementID,
 			Reason:      err.Error(),
 		})
 	}
-	return issues
+	return problems
 }
 
-func pathIssueCode(err error) IssueCode {
+func pathProblemCode(err error) ProblemCode {
 	if errors.Is(err, corepaths.ErrControlBoundary) {
-		return IssueCodeControlBoundary
+		return ProblemCodeControlBoundary
 	}
 	return ""
 }
 
-func executableSteps(candidates []candidate) []Step {
-	steps := make([]Step, 0, len(candidates))
+func executableActions(candidates []candidate) []Action {
+	actions := make([]Action, 0, len(candidates))
 	for _, planned := range candidates {
 		if planned.conflict {
 			continue
 		}
-		steps = append(steps, planned.step)
+		actions = append(actions, planned.action)
 	}
-	return steps
+	return actions
 }
 
-func finalize(candidates []candidate) Plan {
-	plan := Plan{
-		Complete: true,
-		Steps:    make([]Step, 0, len(candidates)),
-		Issues:   make([]Issue, 0),
+func finalize(
+	snapshot state.Snapshot,
+	desired []desiredPlacement,
+	candidates []candidate,
+) Plan {
+	desiredByKey := make(map[placementKey]desiredPlacement, len(desired))
+	for _, placement := range desired {
+		desiredByKey[placement.key] = placement
 	}
-	for _, planned := range candidates {
+	plan := Plan{
+		Transitions: make([]Transition, 0, len(candidates)),
+		Problems:    make([]Problem, 0),
+	}
+	transitionByKey := make(map[placementKey]int, len(candidates))
+	for sequence, planned := range candidates {
+		key := placementKey{
+			moduleID:    planned.action.ModuleID,
+			placementID: planned.action.PlacementID,
+		}
+		index, exists := transitionByKey[key]
+		if !exists {
+			transition := Transition{
+				ModuleID:    key.moduleID,
+				PlacementID: key.placementID,
+			}
+			if placement, desiredExists := desiredByKey[key]; desiredExists {
+				transition.Desired = true
+				transition.FinalRecord = recordForDesired(placement)
+			}
+			plan.Transitions = append(plan.Transitions, transition)
+			index = len(plan.Transitions) - 1
+			transitionByKey[key] = index
+		}
 		if planned.conflict {
-			plan.Issues = append(plan.Issues, Issue{
-				Kind:        IssueConflict,
-				ModuleID:    planned.step.ModuleID,
-				PlacementID: planned.step.PlacementID,
-				Target:      planned.step.Target,
-				Reason:      planned.step.Reason,
+			plan.Problems = append(plan.Problems, Problem{
+				Kind:        ProblemConflict,
+				ModuleID:    planned.action.ModuleID,
+				PlacementID: planned.action.PlacementID,
+				Target:      planned.action.Target,
+				Reason:      planned.action.Reason,
 			})
 			continue
 		}
-		plan.Steps = append(plan.Steps, planned.step)
+		if planned.action.Decision == DecisionKeep &&
+			stateAlreadyFinal(snapshot, key, plan.Transitions[index].FinalRecord) {
+			continue
+		}
+		planned.action.Order = sequence
+		plan.Transitions[index].Actions = append(
+			plan.Transitions[index].Actions,
+			planned.action,
+		)
 	}
+	plan.finalState = finalState(snapshot, plan.Transitions)
 	return plan
+}
+
+func stateAlreadyFinal(
+	snapshot state.Snapshot,
+	key placementKey,
+	record state.Record,
+) bool {
+	current, exists := snapshot.Records[state.Key{
+		ModuleID:    key.moduleID,
+		PlacementID: key.placementID,
+	}]
+	return exists && current == record
+}
+
+func recordForDesired(desired desiredPlacement) state.Record {
+	record := state.Record{
+		Kind:   desired.kind,
+		Target: desired.target.Lexical(),
+	}
+	if desired.kind == state.KindLink {
+		record.ResolvedTarget = desired.target.Resolved()
+		record.LinkDestination = desired.destination
+	}
+	return record
+}
+
+func finalState(snapshot state.Snapshot, transitions []Transition) state.Snapshot {
+	result := cloneSnapshot(snapshot)
+	for _, transition := range transitions {
+		key := state.Key{
+			ModuleID:    transition.ModuleID,
+			PlacementID: transition.PlacementID,
+		}
+		if transition.Desired {
+			result.Records[key] = transition.FinalRecord
+			continue
+		}
+		delete(result.Records, key)
+	}
+	return result
 }
 
 func validatePlanRequest(request planRequest) (string, error) {
@@ -288,7 +366,7 @@ func planActive(
 				owner.moduleID,
 				owner.placementID,
 			)
-			return candidate{step: base, conflict: true}, false, nil
+			return candidate{action: base, conflict: true}, false, nil
 		}
 	}
 
@@ -299,7 +377,7 @@ func planActive(
 			record.Kind,
 			desired.kind,
 		)
-		return candidate{step: base, conflict: true}, true, nil
+		return candidate{action: base, conflict: true}, true, nil
 	}
 
 	recordApplies := exists && samePlacementTarget(desired, record)
@@ -308,7 +386,7 @@ func planActive(
 		if err != nil {
 			return candidate{}, false, err
 		}
-		return candidate{step: planLocal(base, exists)}, recordApplies, nil
+		return candidate{action: planLocal(base, exists)}, recordApplies, nil
 	}
 
 	actual, err := observeLink(desired.target.Lexical())
@@ -318,7 +396,7 @@ func planActive(
 	return planLink(base, actual, record, recordApplies), recordApplies, nil
 }
 
-func planLocal(base Step, exists bool) Step {
+func planLocal(base Action, exists bool) Action {
 	if !exists {
 		base.Decision = DecisionCreateLocal
 		return base
@@ -328,18 +406,18 @@ func planLocal(base Step, exists bool) Step {
 }
 
 func planLink(
-	base Step,
+	base Action,
 	actual actual,
 	record state.Record,
 	hasState bool,
 ) candidate {
 	if actual.kind != actualAbsent && actual.kind != actualSymlink {
 		base.Reason = fmt.Sprintf("actual target is %s", actual.kind)
-		return candidate{step: base, conflict: true}
+		return candidate{action: base, conflict: true}
 	}
 	if actual.kind == actualAbsent {
 		base.Decision = DecisionCreateLink
-		return candidate{step: base}
+		return candidate{action: base}
 	}
 
 	if actual.linkDestination == base.LinkDestination {
@@ -351,29 +429,29 @@ func planLink(
 		default:
 			base.Decision = DecisionRepairState
 		}
-		return candidate{step: base}
+		return candidate{action: base}
 	}
 
 	if !hasState || actual.linkDestination != record.LinkDestination {
 		base.Reason = "actual symlink is not explained by desired or state"
-		return candidate{step: base, conflict: true}
+		return candidate{action: base, conflict: true}
 	}
 	if base.ResolvedTarget != record.ResolvedTarget {
 		base.Reason = "resolved target changed since state was recorded"
-		return candidate{step: base, conflict: true}
+		return candidate{action: base, conflict: true}
 	}
 
 	base.Decision = DecisionUpdate
 	base.ExpectedResolvedTarget = record.ResolvedTarget
 	base.ExpectedLinkDestination = record.LinkDestination
-	return candidate{step: base}
+	return candidate{action: base}
 }
 
 func planStale(
 	home string,
 	controls corepaths.ResolvedControls,
 	desired []desiredPlacement,
-	active []Step,
+	active []Action,
 	snapshot state.Snapshot,
 	used map[placementKey]bool,
 ) ([]candidate, error) {
@@ -407,21 +485,21 @@ func normalizeStalePrunes(
 	slots := make([]int, 0)
 	prunes := make([]stalePrune, 0)
 	for index := range results {
-		if results[index].step.Decision != DecisionPrune {
+		if results[index].action.Decision != DecisionPrune {
 			continue
 		}
-		current, err := resolveStateTarget(home, results[index].step.Target)
+		current, err := resolveStateTarget(home, results[index].action.Target)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"re-resolve stale prune %s: %w",
-				placementLabel(results[index].step.ModuleID, results[index].step.PlacementID),
+				placementLabel(results[index].action.ModuleID, results[index].action.PlacementID),
 				err,
 			)
 		}
-		if current.Resolved() != results[index].step.ResolvedTarget {
+		if current.Resolved() != results[index].action.ResolvedTarget {
 			return nil, fmt.Errorf(
 				"stale prune %s changed resolved target while ordering",
-				placementLabel(results[index].step.ModuleID, results[index].step.PlacementID),
+				placementLabel(results[index].action.ModuleID, results[index].action.PlacementID),
 			)
 		}
 
@@ -429,19 +507,19 @@ func normalizeStalePrunes(
 			return corepaths.TargetsEqual(current, candidate.target)
 		})
 		if duplicate >= 0 {
-			representative := prunes[duplicate].step
-			if results[index].step.ExpectedLinkDestination !=
+			representative := prunes[duplicate].action
+			if results[index].action.ExpectedLinkDestination !=
 				representative.ExpectedLinkDestination {
 				return nil, fmt.Errorf(
 					"duplicate stale prune %s has inconsistent link destination",
 					placementLabel(
-						results[index].step.ModuleID,
-						results[index].step.PlacementID,
+						results[index].action.ModuleID,
+						results[index].action.PlacementID,
 					),
 				)
 			}
-			results[index].step.Decision = DecisionForget
-			results[index].step.Reason = fmt.Sprintf(
+			results[index].action.Decision = DecisionForget
+			results[index].action.Reason = fmt.Sprintf(
 				"stale target shares ownership with module %q placement %q; "+
 					"that action represents cleanup",
 				representative.ModuleID,
@@ -451,7 +529,7 @@ func normalizeStalePrunes(
 		}
 		slots = append(slots, index)
 		prunes = append(prunes, stalePrune{
-			step:   results[index].step,
+			action: results[index].action,
 			target: current,
 		})
 	}
@@ -461,7 +539,7 @@ func normalizeStalePrunes(
 		return nil, err
 	}
 	for index, slot := range slots {
-		results[slot].step = ordered[index].step
+		results[slot].action = ordered[index].action
 	}
 	return results, nil
 }
@@ -476,18 +554,18 @@ func orderStalePrunes(prunes []stalePrune) ([]stalePrune, error) {
 			}
 			traverses, err := corepaths.TargetParentTraversesLink(
 				prunes[child].target,
-				prunes[parent].step.ResolvedTarget,
+				prunes[parent].action.ResolvedTarget,
 			)
 			if err != nil {
 				return nil, fmt.Errorf(
 					"compare stale prunes %s and %s: %w",
 					placementLabel(
-						prunes[child].step.ModuleID,
-						prunes[child].step.PlacementID,
+						prunes[child].action.ModuleID,
+						prunes[child].action.PlacementID,
 					),
 					placementLabel(
-						prunes[parent].step.ModuleID,
-						prunes[parent].step.PlacementID,
+						prunes[parent].action.ModuleID,
+						prunes[parent].action.PlacementID,
 					),
 					err,
 				)
@@ -525,7 +603,7 @@ func planOneStale(
 	home string,
 	controls corepaths.ResolvedControls,
 	desired []desiredPlacement,
-	active []Step,
+	active []Action,
 	key placementKey,
 	record state.Record,
 ) (candidate, error) {
@@ -540,7 +618,7 @@ func planOneStale(
 		)
 	}
 
-	base := Step{
+	base := Action{
 		ModuleID:                key.moduleID,
 		PlacementID:             key.placementID,
 		Kind:                    record.Kind,
@@ -569,12 +647,12 @@ func planOneStale(
 			if overlaps {
 				base.Decision = DecisionForget
 				base.Reason = "stale target overlaps a protected control path"
-				return candidate{step: base}, nil
+				return candidate{action: base}, nil
 			}
 		}
 		base.Decision = DecisionForget
 		base.Reason = "local left desired; local targets are never pruned"
-		return candidate{step: base}, nil
+		return candidate{action: base}, nil
 	}
 
 	current, err := resolveStateTarget(home, record.Target)
@@ -588,7 +666,7 @@ func planOneStale(
 		}
 		base.Decision = DecisionForget
 		base.Reason = "stale target cannot be resolved safely"
-		return candidate{step: base}, nil
+		return candidate{action: base}, nil
 	}
 	base.ResolvedTarget = current.Resolved()
 	overlaps, err := controls.TargetOverlaps(current)
@@ -598,18 +676,18 @@ func planOneStale(
 	if overlaps {
 		base.Decision = DecisionForget
 		base.Reason = "stale target overlaps a protected control path"
-		return candidate{step: base}, nil
+		return candidate{action: base}, nil
 	}
 
 	if targetUsedByDesired(current, desired) {
 		base.Decision = DecisionForget
 		base.Reason = "stale target is reused by desired configuration"
-		return candidate{step: base}, nil
+		return candidate{action: base}, nil
 	}
 	if current.Resolved() != record.ResolvedTarget {
 		base.Decision = DecisionForget
 		base.Reason = "stale resolved target changed"
-		return candidate{step: base}, nil
+		return candidate{action: base}, nil
 	}
 
 	actual, err := observeLink(current.Lexical())
@@ -623,7 +701,7 @@ func planOneStale(
 	if actual.kind == actualAbsent {
 		base.Decision = DecisionForget
 		base.Reason = "stale target is absent"
-		return candidate{step: base}, nil
+		return candidate{action: base}, nil
 	}
 	if stateOwnsLink(record, current, actual) {
 		dependent, traversed, err := desiredTraversingLink(
@@ -643,7 +721,7 @@ func planOneStale(
 				dependent.moduleID,
 				dependent.placementID,
 			)
-			return candidate{step: base, conflict: true}, nil
+			return candidate{action: base, conflict: true}, nil
 		}
 		parent, traversed, err := updatedParentLink(current, active)
 		if err != nil {
@@ -660,15 +738,15 @@ func planOneStale(
 				parent.moduleID,
 				parent.placementID,
 			)
-			return candidate{step: base, conflict: true}, nil
+			return candidate{action: base, conflict: true}, nil
 		}
 		base.Decision = DecisionPrune
-		return candidate{step: base}, nil
+		return candidate{action: base}, nil
 	}
 
 	base.Decision = DecisionForget
 	base.Reason = staleDriftReason(actual, current.Resolved(), record)
-	return candidate{step: base}, nil
+	return candidate{action: base}, nil
 }
 
 func staleDriftReason(
@@ -688,8 +766,8 @@ func staleDriftReason(
 	return "stale ownership evidence no longer matches"
 }
 
-func actionForDesired(desired desiredPlacement) Step {
-	return Step{
+func actionForDesired(desired desiredPlacement) Action {
+	return Action{
 		ModuleID:        desired.key.moduleID,
 		PlacementID:     desired.key.placementID,
 		Kind:            desired.kind,
@@ -758,7 +836,7 @@ func stateOwnedParentLink(
 
 func activeLinkNeedsProspectiveGuard(
 	home string,
-	action Step,
+	action Action,
 	snapshot state.Snapshot,
 ) (bool, error) {
 	if action.Decision != DecisionKeep {
@@ -862,7 +940,7 @@ func desiredTraversingLink(
 
 func updatedParentLink(
 	target corepaths.Target,
-	active []Step,
+	active []Action,
 ) (placementKey, bool, error) {
 	for _, action := range active {
 		if action.Decision != DecisionUpdate || action.Kind != state.KindLink {

@@ -74,7 +74,7 @@ func TestExecutionUpdateAndPruneRecheckRawDestination(t *testing.T) {
 			before := snapshotExecutorPath(t, target)
 
 			run := mutationRun{home: home}
-			err = run.removeOwnedLink(Step{
+			err = run.removeOwnedLink(Action{
 				Decision:                decision,
 				Target:                  target,
 				ExpectedResolvedTarget:  resolved.Resolved(),
@@ -123,7 +123,7 @@ func TestExecutionUpdateRechecksResolvedParent(t *testing.T) {
 	secondBefore := snapshotExecutorPath(t, filepath.Join(second, "owned"))
 
 	run := mutationRun{home: home}
-	err = run.removeOwnedLink(Step{
+	err = run.removeOwnedLink(Action{
 		Decision:                DecisionUpdate,
 		Target:                  target,
 		ExpectedResolvedTarget:  resolved.Resolved(),
@@ -253,9 +253,10 @@ func TestForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.T) {
 	if result.TargetsChanged || result.StateChanged {
 		t.Fatalf("executePlan(failing forget commit) result = %#v, want no completed change", result)
 	}
-	if len(plan.Steps) != 1 ||
-		plan.Steps[0].Decision != DecisionForget ||
-		plan.Steps[0].Reason == "" {
+	actions := plan.Actions()
+	if len(actions) != 1 ||
+		actions[0].Decision != DecisionForget ||
+		actions[0].Reason == "" {
 		t.Fatalf("buildPlan() = %#v, want structured forget", plan)
 	}
 	assertExecutorPathUnchanged(t, beforeTarget)

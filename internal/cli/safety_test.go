@@ -725,7 +725,8 @@ target = "~/.config/dot/managed"
 
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
-		!strings.Contains(stdout, "app  conflict") ||
+		!strings.Contains(stdout, "fact module=app selection=profile") ||
+		!strings.Contains(stdout, "problem kind=blocked code=control-boundary module=app placement=config") ||
 		!strings.Contains(stderr, "state is missing") ||
 		!strings.Contains(stderr, target) ||
 		!strings.Contains(stderr, filepath.Dir(fixture.config)) ||
@@ -895,7 +896,7 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 
 			code, stdout, stderr := fixture.run("status")
 			if code != exitOK ||
-				!strings.Contains(stdout, "old  stale") ||
+				!strings.Contains(stdout, "fact module=old selection=none state=present") ||
 				!strings.Contains(stdout, "forget") ||
 				!strings.Contains(stdout, "overlaps a protected control path") ||
 				stderr != "" {

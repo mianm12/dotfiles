@@ -11,7 +11,7 @@ import (
 )
 
 func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
-	forget := converge.Step{
+	forget := converge.Action{
 		ModuleID:    "old",
 		PlacementID: "config",
 		Kind:        converge.KindLink,
@@ -21,7 +21,11 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 	}
 	result := converge.ApplyResult{
 		Report: converge.Report{
-			Plan:     converge.Plan{Steps: []converge.Step{forget}},
+			Plan: converge.Plan{Transitions: []converge.Transition{{
+				ModuleID:    forget.ModuleID,
+				PlacementID: forget.PlacementID,
+				Actions:     []converge.Action{forget},
+			}}},
 			Warnings: []string{"synthetic input warning"},
 		},
 		StateChanged: true,
@@ -74,7 +78,7 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 		}
 		quotedReason := `reason="stale destination \"changed\""`
 		if !strings.Contains(stdout.String(), "forget") ||
-			!strings.Contains(stdout.String(), "old/config") ||
+			!strings.Contains(stdout.String(), "module=old placement=config") ||
 			!strings.Contains(stdout.String(), quotedReason) {
 			t.Fatalf(
 				"finishMutation() stdout = %q, want structured forget action",
@@ -97,20 +101,20 @@ func TestOperationReportRendersEveryActionWithQuotedReason(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
 	analysis := converge.Report{
-		Plan: converge.Plan{Steps: []converge.Step{
-			{
+		Plan: converge.Plan{Transitions: []converge.Transition{
+			{ModuleID: "app", PlacementID: "new", Actions: []converge.Action{{
 				ModuleID:    "app",
 				PlacementID: "new",
 				Decision:    converge.DecisionCreateLink,
 				Target:      "/tmp/home/.new",
-			},
-			{
+			}}},
+			{ModuleID: "old", PlacementID: "stale", Actions: []converge.Action{{
 				ModuleID:    "old",
 				PlacementID: "stale",
 				Decision:    converge.DecisionForget,
 				Target:      "/tmp/home/.old",
 				Reason:      `actual target is "user-owned"`,
-			},
+			}}},
 		}},
 	}
 
@@ -132,43 +136,40 @@ func TestOperationReportRendersEveryActionWithQuotedReason(t *testing.T) {
 	}
 }
 
-func TestStatusAnalysisCompactsDefaultsAndAppendsDiagnosticActions(t *testing.T) {
+func TestStatusAnalysisProjectsFactsActionsAndProblems(t *testing.T) {
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
 	analysis := converge.Report{
-		Modules: []converge.ModuleReport{{
-			ID:            "old",
-			Summary:       "stale",
-			Selection:     "none",
-			Applicability: "-",
-			Convergence:   "pending",
-			Variant:       "-",
+		Facts: []converge.ModuleFact{{
+			ID:           "old",
+			Selection:    "none",
+			StatePresent: true,
 		}},
-		Plan: converge.Plan{Steps: []converge.Step{
-			{
+		Plan: converge.Plan{Transitions: []converge.Transition{
+			{ModuleID: "app", PlacementID: "new", Actions: []converge.Action{{
 				ModuleID:    "app",
 				PlacementID: "new",
 				Decision:    converge.DecisionCreateLink,
 				Target:      "/tmp/home/.new",
-			},
-			{
+			}}},
+			{ModuleID: "old", PlacementID: "stale", Actions: []converge.Action{{
 				ModuleID:    "old",
 				PlacementID: "stale",
 				Decision:    converge.DecisionForget,
 				Target:      "/tmp/home/.old",
 				Reason:      "stale target is absent",
-			},
-		}, Issues: []converge.Issue{
+			}}},
+		}, Problems: []converge.Problem{
 			{
-				Kind:        converge.IssueConflict,
+				Kind:        converge.ProblemConflict,
 				ModuleID:    "app",
 				PlacementID: "config",
 				Target:      "/tmp/home/.app",
 				Reason:      "actual target is regular file",
 			},
 			{
-				Kind:     converge.IssueBlocked,
+				Kind:     converge.ProblemBlocked,
 				ModuleID: "global",
 				Reason:   "synthetic path conflict",
 			},
@@ -180,55 +181,45 @@ func TestStatusAnalysisCompactsDefaultsAndAppendsDiagnosticActions(t *testing.T)
 	}
 
 	output := stdout.String()
-	if strings.Contains(output, "create-link") ||
-		!strings.Contains(output, "old  stale convergence=pending\n") ||
-		strings.Contains(output, "selection=none") ||
-		strings.Contains(output, "applicability=-") ||
-		strings.Contains(output, "variant=-") ||
-		strings.Contains(output, "reason=-") ||
+	if !strings.Contains(output, "fact module=old selection=none state=present\n") ||
+		!strings.Contains(output, "action kind=create-link module=app placement=new") ||
 		!strings.Contains(output, "forget") ||
 		!strings.Contains(output, `reason="stale target is absent"`) ||
-		!strings.Contains(output, "conflict     app/config /tmp/home/.app") ||
+		!strings.Contains(output, "problem kind=conflict module=app placement=config") ||
 		!strings.Contains(output, `reason="actual target is regular file"`) ||
-		!strings.Contains(output, `blocked module=global reason="synthetic path conflict"`) {
+		!strings.Contains(output, `problem kind=blocked module=global reason="synthetic path conflict"`) {
 		t.Fatalf(
-			"printStatusAnalysis() stdout = %q, want compact module and diagnostic actions",
+			"printStatusAnalysis() stdout = %q, want facts, actions, and problems",
 			output,
 		)
 	}
 }
 
-func TestStatusAnalysisRendersOnlyDistinctDimensions(t *testing.T) {
+func TestStatusAnalysisRendersObjectiveModuleFacts(t *testing.T) {
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
-	analysis := converge.Report{Modules: []converge.ModuleReport{
+	analysis := converge.Report{Facts: []converge.ModuleFact{
 		{
-			ID:            "named",
-			Summary:       "converged",
-			Selection:     "profile",
-			Applicability: "applicable",
-			Convergence:   "converged",
-			Variant:       "ubuntu",
-			NamedVariant:  true,
+			ID:             "named",
+			Selection:      "profile",
+			ManifestLoaded: true,
+			Applicability:  "applicable",
+			Variant:        "ubuntu",
 		},
 		{
-			ID:            "gated",
-			Summary:       "conflict",
-			Selection:     "profile",
-			Applicability: "indeterminate",
-			Convergence:   "-",
-			Variant:       "-",
-			Reason:        "distribution is unavailable",
+			ID:             "gated",
+			Selection:      "profile",
+			ManifestLoaded: true,
+			Applicability:  "indeterminate",
+			Diagnostic:     "distribution is unavailable",
 		},
 		{
-			ID:            "skipped",
-			Summary:       "not-applicable",
-			Selection:     "profile",
-			Applicability: "not-applicable",
-			Convergence:   "pending-cleanup",
-			Variant:       "-",
-			Reason:        "prune",
+			ID:             "skipped",
+			Selection:      "profile",
+			ManifestLoaded: true,
+			Applicability:  "not-applicable",
+			StatePresent:   true,
 		},
 	}}
 
@@ -236,11 +227,10 @@ func TestStatusAnalysisRendersOnlyDistinctDimensions(t *testing.T) {
 		t.Fatalf("printStatusAnalysis() error = %v", err)
 	}
 
-	want := "gated  conflict selection=profile applicability=indeterminate " +
+	want := "fact module=gated selection=profile state=absent applicability=indeterminate " +
 		"reason=\"distribution is unavailable\"\n" +
-		"named  converged selection=profile variant=ubuntu\n" +
-		"skipped  not-applicable selection=profile convergence=pending-cleanup " +
-		"reason=\"prune\"\n"
+		"fact module=named selection=profile state=absent applicability=applicable variant=ubuntu\n" +
+		"fact module=skipped selection=profile state=present applicability=not-applicable\n"
 	if output := stdout.String(); output != want {
 		t.Fatalf("printStatusAnalysis() stdout = %q, want %q", output, want)
 	}

@@ -42,8 +42,8 @@ target = "~/.gated"
 	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
 		stderr != "" ||
-		!strings.Contains(stdout, "portable  converged") ||
-		!strings.Contains(stdout, "gated  not-applicable") {
+		!strings.Contains(stdout, "fact module=portable selection=profile state=present applicability=applicable") ||
+		!strings.Contains(stdout, "fact module=gated selection=profile state=absent applicability=not-applicable") {
 		t.Fatalf("status = (%d, %q, %q), want converged portable and skipped gated", code, stdout, stderr)
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)
@@ -171,8 +171,8 @@ os = ["freebsd"]
 	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
 		stderr != "" ||
-		!strings.Contains(stdout, "portable  converged") ||
-		!strings.Contains(stdout, "gated  not-applicable") {
+		!strings.Contains(stdout, "fact module=portable selection=profile state=present applicability=applicable") ||
+		!strings.Contains(stdout, "fact module=gated selection=profile state=absent applicability=not-applicable") {
 		t.Fatalf("known-mismatch status = (%d, %q, %q)", code, stdout, stderr)
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)

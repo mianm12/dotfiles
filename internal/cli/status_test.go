@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -22,7 +23,8 @@ target = "~/.app.local"
 	beforeStatus := snapshotPaths(t, fixture.config, target)
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
-		!strings.Contains(stdout, "app  pending") ||
+		!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
+		!strings.Contains(stdout, "action kind=keep module=app placement=local") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf("status before provenance = (%d, %q, %q), want pending", code, stdout, stderr)
 	}
@@ -42,7 +44,9 @@ target = "~/.app.local"
 
 	beforeRepeat := snapshotPaths(t, fixture.config, fixture.state, fixture.lock, target)
 	code, stdout, stderr = fixture.run("status")
-	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  converged") {
+	if code != exitOK || stderr != "" ||
+		!strings.Contains(stdout, "fact module=app selection=profile state=present") ||
+		strings.Contains(stdout, "action kind=") {
 		t.Fatalf("status after provenance = (%d, %q, %q), want converged", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, beforeRepeat)
@@ -100,7 +104,9 @@ target = "~/current/config"
 		newTarget,
 	)
 	code, stdout, stderr := fixture.run("status")
-	if code != exitOK || stderr != "" || !strings.Contains(stdout, "app  pending") {
+	if code != exitOK || stderr != "" ||
+		!strings.Contains(stdout, "fact module=app selection=profile state=present") ||
+		!strings.Contains(stdout, "action kind=keep module=app placement=config") {
 		t.Fatalf("status before state refresh = (%d, %q, %q), want pending", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, beforeStatus)
@@ -139,9 +145,11 @@ target = "~/.pending"
 
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
-		!strings.Contains(stdout, "first  conflict") ||
-		!strings.Contains(stdout, "second  conflict") ||
-		!strings.Contains(stdout, "pending  pending") ||
+		!strings.Contains(stdout, "fact module=first selection=profile") ||
+		!strings.Contains(stdout, "fact module=second selection=profile") ||
+		!strings.Contains(stdout, "fact module=pending selection=profile") ||
+		!strings.Contains(stdout, "problem kind=blocked module=first placement=config") ||
+		!strings.Contains(stdout, "problem kind=blocked module=second placement=config") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"status = (%d, %q, %q), want conflict plus independent pending status",
@@ -164,7 +172,8 @@ func TestStatusReportsCrossModuleUpdatePruneConflict(t *testing.T) {
 
 	if code != exitOK ||
 		stderr != "" ||
-		!strings.Contains(stdout, "stale  conflict") ||
+		!strings.Contains(stdout, "fact module=stale selection=none state=present") ||
+		!strings.Contains(stdout, "problem kind=conflict module=stale placement=child") ||
 		!strings.Contains(
 			stdout,
 			"cleanup would be invalidated by active link update",
@@ -194,7 +203,7 @@ func TestStatusDelaysInactiveMalformedManifest(t *testing.T) {
 
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
-		!strings.Contains(stdout, "broken  inactive") ||
+		!strings.Contains(stdout, "fact module=broken selection=none state=absent") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"status = (%d, %q, %q), want unloaded inactive module",
@@ -232,9 +241,9 @@ target = "~/.second"
 	code, stdout, stderr := fixture.run("status")
 
 	if code != exitOK ||
-		!strings.Contains(stdout, "app  conflict selection=profile\n") ||
-		!strings.Contains(stdout, "conflict     app/first "+first) ||
-		!strings.Contains(stdout, "conflict     app/second "+second) ||
+		!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
+		!strings.Contains(stdout, "problem kind=conflict module=app placement=first target="+strconv.Quote(first)) ||
+		!strings.Contains(stdout, "problem kind=conflict module=app placement=second target="+strconv.Quote(second)) ||
 		strings.Count(stdout, `reason="actual target is regular file"`) != 2 ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
@@ -266,7 +275,8 @@ target = "~/.app"
 	code, stdout, stderr := fixture.runInjected("status")
 
 	if code != exitOK ||
-		!strings.Contains(stdout, "app  pending selection=profile variant=portable\n") ||
+		!strings.Contains(stdout, "fact module=app selection=profile state=absent applicability=applicable variant=portable") ||
+		!strings.Contains(stdout, "action kind=create-link module=app placement=config") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"status named portable variant = (%d, %q, %q), want explicit variant",

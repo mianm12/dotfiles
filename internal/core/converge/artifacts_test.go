@@ -278,7 +278,7 @@ func TestExecutionRejectsConflictBeforeArtifactOrStateMutation(t *testing.T) {
 	before := snapshotFiles(t, target)
 	plan, loaded := prepareExecution(t, request)
 	result, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
-	if err == nil || len(plan.Issues) == 0 {
+	if err == nil || len(plan.Problems) == 0 {
 		t.Fatalf("executePlan() = (%#v, %v), plan %#v; want deterministic conflict", result, err, plan)
 	}
 	assertFilesUnchanged(t, before)
@@ -304,7 +304,7 @@ func TestExecutionRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
 			t.Fatalf("ResolveTarget() error = %v", err)
 		}
 		run := mutationRun{home: fixture.home}
-		err = run.removeOwnedLink(Step{
+		err = run.removeOwnedLink(Action{
 			Target:                  target,
 			ExpectedResolvedTarget:  resolved.Resolved(),
 			ExpectedLinkDestination: oldDestination,
@@ -334,7 +334,7 @@ func TestExecutionRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
 			t.Fatalf("os.Symlink(target) error = %v", err)
 		}
 		run := mutationRun{home: fixture.home}
-		err := run.removeOwnedLink(Step{
+		err := run.removeOwnedLink(Action{
 			Target:                  target,
 			ExpectedResolvedTarget:  filepath.Join(realOne, "owned"),
 			ExpectedLinkDestination: destination,

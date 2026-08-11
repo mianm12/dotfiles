@@ -13,21 +13,19 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestPlanExecutableRequiresCompletePlanWithoutIssues(t *testing.T) {
+func TestPlanExecutableRejectsProblems(t *testing.T) {
 	tests := []struct {
 		name string
 		plan Plan
 		want bool
 	}{
-		{name: "incomplete", plan: Plan{}},
+		{name: "no problems", plan: Plan{}, want: true},
 		{
-			name: "complete with issue",
+			name: "problem",
 			plan: Plan{
-				Complete: true,
-				Issues:   []Issue{{Kind: IssueConflict}},
+				Problems: []Problem{{Kind: ProblemConflict}},
 			},
 		},
-		{name: "complete", plan: Plan{Complete: true}, want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -119,7 +117,7 @@ func TestOrderedLinkDecisionRules(t *testing.T) {
 				})
 				return linkModule("app", "config", source, "~/.config/app/config"), snapshot
 			},
-			want: DecisionKeep,
+			want: "",
 		},
 		{
 			name: "correct symlink repairs lagging state",
@@ -213,7 +211,7 @@ func TestUpdateAndPruneCarryStateRecheckFacts(t *testing.T) {
 			snapshot,
 		)
 
-		action := plan.Steps[0]
+		action := plan.Actions()[0]
 		if action.Decision != DecisionUpdate ||
 			action.ExpectedResolvedTarget != resolved ||
 			action.ExpectedLinkDestination != oldSource {
@@ -234,7 +232,7 @@ func TestUpdateAndPruneCarryStateRecheckFacts(t *testing.T) {
 		plan := fixture.build(t, nil, snapshot)
 
 		assertDecisions(t, plan, DecisionPrune)
-		action := plan.Steps[0]
+		action := plan.Actions()[0]
 		if action.ExpectedResolvedTarget != resolved ||
 			action.ExpectedLinkDestination != missingDestination {
 			t.Fatalf("prune action = %#v, want dangling-link recheck facts", action)
@@ -257,7 +255,7 @@ func TestStaleLocalForgetsWithoutInspectingContent(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, DecisionForget)
-	if got := plan.Steps[0].Reason; !strings.Contains(got, "local") {
+	if got := plan.Actions()[0].Reason; !strings.Contains(got, "local") {
 		t.Fatalf("forget reason = %q, want local retention reason", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -278,7 +276,7 @@ func TestStaleLocalBlockedAncestorForgets(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, DecisionForget)
-	if got := plan.Steps[0].Reason; !strings.Contains(got, "local") {
+	if got := plan.Actions()[0].Reason; !strings.Contains(got, "local") {
 		t.Fatalf("forget reason = %q, want local retention reason", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -297,7 +295,7 @@ func TestStaleNonSymlinkForgets(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, DecisionForget)
-	if len(plan.Issues) != 0 {
+	if len(plan.Problems) != 0 {
 		t.Fatalf("Build() = %#v, want non-blocking forget", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -323,8 +321,9 @@ func TestStateMapOrderDoesNotChangePlan(t *testing.T) {
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("Build() is not deterministic\nfirst=%#v\nsecond=%#v", first, second)
 	}
-	if first.Steps[0].PlacementID != "a" || first.Steps[1].PlacementID != "b" {
-		t.Fatalf("Build() state order = %#v, want placement IDs a, b", first.Steps)
+	actions := first.Actions()
+	if actions[0].PlacementID != "a" || actions[1].PlacementID != "b" {
+		t.Fatalf("Build() state order = %#v, want placement IDs a, b", actions)
 	}
 }
 
@@ -364,10 +363,10 @@ func TestStaleTargetReuseDoesNotOverrideActiveOwnershipConflict(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, DecisionForget)
-	if len(plan.Issues) == 0 {
+	if len(plan.Problems) == 0 {
 		t.Fatal("Build() HasIssues() = false, want active ownership conflict")
 	}
-	if got := plan.Steps[0].Reason; got != "stale target is reused by desired configuration" {
+	if got := plan.Actions()[0].Reason; got != "stale target is reused by desired configuration" {
 		t.Fatalf("stale reuse reason = %q", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -425,11 +424,11 @@ func TestBuildRejectsNestedTargetsForEveryPlacementKindCombination(t *testing.T)
 				Modules:  []config.Module{module},
 				State:    fixture.snapshot(nil),
 			})
-			if err != nil || len(plan.Issues) == 0 || plan.Complete {
-				t.Fatalf("Build() = (%#v, %v), want incomplete target issue", plan, err)
+			if err != nil || len(plan.Problems) == 0 || plan.Executable() {
+				t.Fatalf("Build() = (%#v, %v), want target problem", plan, err)
 			}
-			if len(plan.Steps) != 0 {
-				t.Fatalf("Build() returned executable steps %#v", plan)
+			if len(plan.Actions()) != 0 {
+				t.Fatalf("Build() returned executable actions %#v", plan)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -498,7 +497,7 @@ func TestBuildPropagatesStaleFilesystemErrorWithoutPartialPlan(t *testing.T) {
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("Build() error = %v, want permission error", err)
 	}
-	if plan.Steps != nil || plan.Issues != nil {
+	if plan.Transitions != nil || plan.Problems != nil {
 		t.Fatalf("Build() returned partial plan %#v", plan)
 	}
 }
@@ -522,7 +521,7 @@ func TestStaleDanglingAncestorForgets(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, DecisionForget)
-	if got := plan.Steps[0].Reason; got != "stale target cannot be resolved safely" {
+	if got := plan.Actions()[0].Reason; got != "stale target cannot be resolved safely" {
 		t.Fatalf("forget reason = %q, want safe-resolution reason", got)
 	}
 }
@@ -547,7 +546,7 @@ func TestStaleLoopedAncestorForgets(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, DecisionForget)
-	if got := plan.Steps[0].Reason; got != "stale target cannot be resolved safely" {
+	if got := plan.Actions()[0].Reason; got != "stale target cannot be resolved safely" {
 		t.Fatalf("forget reason = %q, want safe-resolution reason", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -569,13 +568,13 @@ func TestActiveTargetAndStaleParentBothProjectTraversalConflict(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, conflictDecision)
-	if len(plan.Issues) == 0 {
+	if len(plan.Problems) == 0 {
 		t.Fatal("Build() HasIssues() = false, want traversal conflicts")
 	}
-	if got := plan.Issues[0].Reason; !strings.Contains(got, "traverses state-owned link") {
+	if got := plan.Problems[0].Reason; !strings.Contains(got, "traverses state-owned link") {
 		t.Fatalf("active target conflict reason = %q", got)
 	}
-	if got := plan.Issues[1].Reason; !strings.Contains(
+	if got := plan.Problems[1].Reason; !strings.Contains(
 		got,
 		"state-owned link is traversed by active module",
 	) {
@@ -607,7 +606,7 @@ func TestStaleTargetBlockedByRegularAncestorForgets(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Issues) != 0 {
+	if len(plan.Problems) != 0 {
 		t.Fatalf("Build() = %#v, want non-blocking stale takeover", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)

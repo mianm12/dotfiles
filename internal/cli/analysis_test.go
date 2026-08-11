@@ -22,7 +22,7 @@ target = "~/.extra"
 
 	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
-		stdout != "extra  inactive\n" ||
+		stdout != "fact module=extra selection=none state=absent\n" ||
 		strings.Contains(stdout, "add-extra") ||
 		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
@@ -70,16 +70,17 @@ target = "~/.app"
 	if err != nil {
 		t.Fatalf("analyzeStatus() error = %v", err)
 	}
-	if len(analysis.Modules) != 1 ||
-		analysis.Modules[0].ID != "app" ||
-		analysis.Modules[0].Selection != "profile+extra" ||
-		len(analysis.Plan.Steps) != 1 ||
-		analysis.Plan.Steps[0].ModuleID != "app" ||
-		analysis.Plan.Steps[0].PlacementID != "config" {
+	actions := analysis.Plan.Actions()
+	if len(analysis.Facts) != 1 ||
+		analysis.Facts[0].ID != "app" ||
+		analysis.Facts[0].Selection != "profile+extra" ||
+		len(actions) != 1 ||
+		actions[0].ModuleID != "app" ||
+		actions[0].PlacementID != "config" {
 		t.Fatalf(
 			"analysis = %#v, actions = %#v; want one profile+extra app action",
-			analysis.Modules,
-			analysis.Plan.Steps,
+			analysis.Facts,
+			actions,
 		)
 	}
 }
@@ -98,14 +99,14 @@ func TestFullMutationAnalysisCompleteness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}
-		if !analysis.Plan.Complete || len(analysis.Modules) != 2 ||
-			analysis.Modules[0].ID != "base" ||
-			analysis.Modules[0].Convergence != "converged" ||
-			analysis.Modules[1].ID != "extra" ||
-			analysis.Modules[1].Convergence != "converged" {
+		if !analysis.Plan.Executable() || len(analysis.Facts) != 2 ||
+			analysis.Facts[0].ID != "base" ||
+			analysis.Facts[0].Selection != "profile" ||
+			analysis.Facts[1].ID != "extra" ||
+			analysis.Facts[1].Selection != "extra" {
 			t.Fatalf(
 				"full modules = %#v, want converged base and extra",
-				analysis.Modules,
+				analysis.Facts,
 			)
 		}
 	})
@@ -122,17 +123,17 @@ func TestFullMutationAnalysisCompleteness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}
-		if analysis.Plan.Complete || len(analysis.Plan.Steps) != 0 ||
-			len(analysis.Modules) != 2 ||
-			analysis.Modules[0].ID != "extra" ||
-			analysis.Modules[0].Summary != "pending" ||
-			analysis.Modules[0].Convergence != "unknown" ||
-			analysis.Modules[1].ID != "gone" ||
-			analysis.Modules[1].Summary != "conflict" ||
-			analysis.Modules[1].Convergence != "conflict" {
+		if analysis.Plan.Executable() || len(analysis.Plan.Actions()) != 0 ||
+			len(analysis.Facts) != 2 ||
+			analysis.Facts[0].ID != "extra" ||
+			analysis.Facts[0].Selection != "extra" ||
+			analysis.Facts[1].ID != "gone" ||
+			analysis.Facts[1].Selection != "extra" ||
+			len(analysis.Plan.Problems) != 1 ||
+			analysis.Plan.Problems[0].ModuleID != "gone" {
 			t.Fatalf(
 				"incomplete full modules = %#v, want unknown peer plus blocker",
-				analysis.Modules,
+				analysis.Facts,
 			)
 		}
 	})
@@ -172,7 +173,7 @@ func TestStatusRendersSelectionSources(t *testing.T) {
 			code, stdout, _ := fixture.runInjected("status")
 
 			if code != exitOK ||
-				stdout != "app  converged "+test.want+"\n" {
+				!strings.Contains(stdout, "fact module=app "+test.want+" state=absent") {
 				t.Fatalf("status source = (%d, %q), want %s", code, stdout, test.want)
 			}
 		})
@@ -216,7 +217,7 @@ os = ["macos"]
 		code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 
 		if code != exitError ||
-			!strings.Contains(stdout, "blocked module=gated") ||
+			!strings.Contains(stdout, "problem kind=blocked module=gated") ||
 			!strings.Contains(stdout, "not applicable") ||
 			!strings.Contains(stderr, "state is missing") ||
 			strings.Contains(stderr, "error:") {
@@ -258,11 +259,8 @@ target = "~/.app"
 	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
 		stderr != "" ||
-		!strings.Contains(
-			stdout,
-			"app  not-applicable selection=profile "+
-				`convergence=pending-cleanup reason="prune"`,
-		) {
+		!strings.Contains(stdout, "fact module=app selection=profile state=present applicability=not-applicable") ||
+		!strings.Contains(stdout, "action kind=prune module=app placement=config") {
 		t.Fatalf("status pending cleanup = (%d, %q, %q)", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
@@ -312,16 +310,12 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 			code, stdout, _ := fixture.runInjected("status")
 
 			if code != exitOK ||
-				!strings.Contains(
-					stdout,
-					"gone  conflict selection=extra ",
-				) ||
+				!strings.Contains(stdout, "fact module=gone selection=extra state=") ||
 				!strings.Contains(
 					stdout,
 					`reason="selected module \"gone\" does not exist"`,
 				) ||
-				!strings.Contains(stdout, "blocked module=gone") ||
-				strings.Contains(stdout, "gone  converged") {
+				!strings.Contains(stdout, "problem kind=blocked module=gone") {
 				t.Fatalf(
 					"status missing selected module = (%d, %q), want blocked unknown convergence",
 					code,
@@ -355,13 +349,9 @@ target = "~/.app"
 		code, stdout, _ := fixture.runInjected("status")
 
 		if code != exitOK ||
-			!strings.Contains(
-				stdout,
-				"app  pending selection=profile convergence=unknown",
-			) ||
+			!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
 			!strings.Contains(stdout, `reason="control paths conflict:`) ||
-			!strings.Contains(stdout, "blocked") ||
-			strings.Contains(stdout, "app  converged") {
+			!strings.Contains(stdout, "problem kind=blocked") {
 			t.Fatalf(
 				"status topology blocker = (%d, %q), want blocked unknown convergence",
 				code,
