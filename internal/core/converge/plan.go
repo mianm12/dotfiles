@@ -220,7 +220,7 @@ func validatePlanRequest(request planRequest) (string, error) {
 
 func resolveDesired(
 	home string,
-	controls corepaths.Controls,
+	controls corepaths.ResolvedControls,
 	modules []config.Module,
 ) ([]desiredPlacement, error) {
 	pathInputs := make([]corepaths.Placement, 0)
@@ -241,7 +241,7 @@ func resolveDesired(
 		}
 	}
 
-	resolved, err := corepaths.Validate(home, controls, pathInputs)
+	resolved, err := controls.Validate(home, pathInputs)
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +371,7 @@ func planLink(
 
 func planStale(
 	home string,
-	controls corepaths.Controls,
+	controls corepaths.ResolvedControls,
 	desired []desiredPlacement,
 	active []Step,
 	snapshot state.Snapshot,
@@ -523,7 +523,7 @@ func orderStalePrunes(prunes []stalePrune) ([]stalePrune, error) {
 
 func planOneStale(
 	home string,
-	controls corepaths.Controls,
+	controls corepaths.ResolvedControls,
 	desired []desiredPlacement,
 	active []Step,
 	key placementKey,
@@ -562,7 +562,7 @@ func planOneStale(
 				)
 			}
 		} else {
-			overlaps, overlapErr := corepaths.TargetOverlapsControls(controls, current)
+			overlaps, overlapErr := controls.TargetOverlaps(current)
 			if overlapErr != nil {
 				return candidate{}, overlapErr
 			}
@@ -591,7 +591,7 @@ func planOneStale(
 		return candidate{step: base}, nil
 	}
 	base.ResolvedTarget = current.Resolved()
-	overlaps, err := corepaths.TargetOverlapsControls(controls, current)
+	overlaps, err := controls.TargetOverlaps(current)
 	if err != nil {
 		return candidate{}, err
 	}

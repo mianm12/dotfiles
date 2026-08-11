@@ -332,7 +332,7 @@ func TestBuildRejectsStateBoundToDifferentHome(t *testing.T) {
 	fixture := newPlanFixture(t)
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: fixture.controls,
+		Controls: resolveTestControls(t, fixture.controls),
 		State: state.Snapshot{
 			Home:    filepath.Join(fixture.root, "other-home"),
 			Records: map[state.Key]state.Record{},
@@ -421,7 +421,7 @@ func TestBuildRejectsNestedTargetsForEveryPlacementKindCombination(t *testing.T)
 			before := snapshotTree(t, fixture.root)
 			plan, err := buildPlan(planRequest{
 				Home:     fixture.home,
-				Controls: fixture.controls,
+				Controls: resolveTestControls(t, fixture.controls),
 				Modules:  []config.Module{module},
 				State:    fixture.snapshot(nil),
 			})
@@ -455,7 +455,7 @@ func TestFullPlanIncludesStateOnlyStaleRecords(t *testing.T) {
 
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: fixture.controls,
+		Controls: resolveTestControls(t, fixture.controls),
 		Modules: []config.Module{
 			linkModule("app", "config", appSource, "~/.config/app"),
 		},
@@ -489,7 +489,7 @@ func TestBuildPropagatesStaleFilesystemErrorWithoutPartialPlan(t *testing.T) {
 
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: fixture.controls,
+		Controls: resolveTestControls(t, fixture.controls),
 		State:    snapshot,
 	})
 	if err == nil {

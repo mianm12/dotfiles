@@ -34,7 +34,7 @@ func TestExecutionRepeatApplyDoesNotMutate(t *testing.T) {
 	}})
 
 	plan, loaded := prepareExecution(t, request)
-	first, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	first, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(first) error = %v", err)
 	}
@@ -48,7 +48,7 @@ func TestExecutionRepeatApplyDoesNotMutate(t *testing.T) {
 
 	before := snapshotFiles(t, linkTarget, localTarget, fixture.state)
 	plan, loaded = prepareExecution(t, request)
-	second, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	second, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(second) error = %v", err)
 	}
@@ -63,7 +63,7 @@ func TestEmptySelectionCommitsStateOnce(t *testing.T) {
 	request := fixture.request(nil)
 
 	plan, loaded := prepareExecution(t, request)
-	first, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	first, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(first) error = %v", err)
 	}
@@ -72,7 +72,7 @@ func TestEmptySelectionCommitsStateOnce(t *testing.T) {
 	}
 	before := snapshotFiles(t, fixture.state)
 	plan, loaded = prepareExecution(t, request)
-	second, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	second, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(second) error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestExecutionDoesNotPruneUntilAllActiveCreatesSucceed(t *testing.T) {
 		}},
 	}})
 	plan, loaded := prepareExecution(t, request)
-	_, err = executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	_, err = executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err == nil {
 		t.Fatal("executePlan() error = nil, want changed-target verification failure")
 	}
@@ -158,7 +158,7 @@ func TestExecutionDoesNotUpdateUntilAllCreatesSucceed(t *testing.T) {
 		},
 	})
 	plan, loaded := prepareExecution(t, request)
-	_, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	_, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err == nil {
 		t.Fatal("executePlan() error = nil, want create failure")
 	}
@@ -184,7 +184,7 @@ func TestExecutionMovesTargetBeforePruning(t *testing.T) {
 
 	request := fixture.linkRequest(source, "~/.new")
 	plan, loaded := prepareExecution(t, request)
-	first, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	first, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(first) error = %v", err)
 	}
@@ -206,7 +206,7 @@ func TestExecutionMovesTargetBeforePruning(t *testing.T) {
 
 	before := snapshotFiles(t, newTarget, fixture.state)
 	plan, loaded = prepareExecution(t, request)
-	second, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	second, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(second) error = %v", err)
 	}
@@ -228,7 +228,7 @@ func TestExecutionUpdatesOwnedLinkAndCommitsVerifiedState(t *testing.T) {
 
 	request := fixture.linkRequest(newSource, "~/.file")
 	plan, loaded := prepareExecution(t, request)
-	first, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	first, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(first) error = %v", err)
 	}
@@ -246,7 +246,7 @@ func TestExecutionUpdatesOwnedLinkAndCommitsVerifiedState(t *testing.T) {
 
 	before := snapshotFiles(t, target, fixture.state)
 	plan, loaded = prepareExecution(t, request)
-	second, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	second, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(second) error = %v", err)
 	}
@@ -277,7 +277,7 @@ func TestExecutionRejectsConflictBeforeArtifactOrStateMutation(t *testing.T) {
 
 	before := snapshotFiles(t, target)
 	plan, loaded := prepareExecution(t, request)
-	result, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	result, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err == nil || len(plan.Issues) == 0 {
 		t.Fatalf("executePlan() = (%#v, %v), plan %#v; want deterministic conflict", result, err, plan)
 	}
@@ -410,7 +410,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 			fixture := newFixture(t)
 			request := test.prepare(t, fixture)
 			plan, loaded := prepareExecution(t, request)
-			first, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+			first, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 			if err != nil {
 				t.Fatalf("executePlan(first) error = %v", err)
 			}
@@ -419,7 +419,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 			}
 			before := snapshotExistingControlAndTargets(t, fixture)
 			plan, loaded = prepareExecution(t, request)
-			second, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+			second, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 			if err != nil {
 				t.Fatalf("executePlan(second) error = %v", err)
 			}
@@ -437,7 +437,7 @@ func TestStateCommitFailureLeavesSafeArtifactForRerun(t *testing.T) {
 	request := fixture.linkRequest(source, "~/.file")
 
 	plan, loaded := prepareExecution(t, request)
-	result, err := executePlan(request.Home, request.Controls.State, plan, loaded, func(string, state.Snapshot) error {
+	result, err := executePlan(request.Home, fixture.state, plan, loaded, func(string, state.Snapshot) error {
 		return errors.New("injected commit failure")
 	})
 	if err == nil || !strings.Contains(err.Error(), "partially applied") {
@@ -449,7 +449,7 @@ func TestStateCommitFailureLeavesSafeArtifactForRerun(t *testing.T) {
 	}
 
 	plan, loaded = prepareExecution(t, request)
-	recovered, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	recovered, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(recovery) error = %v", err)
 	}
@@ -458,7 +458,7 @@ func TestStateCommitFailureLeavesSafeArtifactForRerun(t *testing.T) {
 	}
 	before := snapshotFiles(t, filepath.Join(fixture.home, ".file"), fixture.state)
 	plan, loaded = prepareExecution(t, request)
-	repeated, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	repeated, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(repeated) error = %v", err)
 	}
@@ -475,7 +475,7 @@ func TestLocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
 	request := fixture.localRequest(source, "~/.local")
 
 	plan, loaded := prepareExecution(t, request)
-	result, err := executePlan(request.Home, request.Controls.State, plan, loaded, func(string, state.Snapshot) error {
+	result, err := executePlan(request.Home, fixture.state, plan, loaded, func(string, state.Snapshot) error {
 		return errors.New("injected commit failure")
 	})
 	if err == nil || !strings.Contains(err.Error(), "partially applied") {
@@ -499,7 +499,7 @@ func TestLocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
 	}
 
 	plan, loaded = prepareExecution(t, request)
-	recovered, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	recovered, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(recovery) error = %v", err)
 	}
@@ -508,7 +508,7 @@ func TestLocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
 	}
 	before := snapshotFiles(t, target, fixture.state)
 	plan, loaded = prepareExecution(t, request)
-	repeated, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	repeated, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(repeated) error = %v", err)
 	}
@@ -564,7 +564,7 @@ func TestFullExecutionRepeatApplyDoesNotMutateSettledTargets(t *testing.T) {
 		},
 	})
 	plan, loaded := prepareExecution(t, request)
-	first, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	first, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(first) error = %v", err)
 	}
@@ -582,7 +582,7 @@ func TestFullExecutionRepeatApplyDoesNotMutateSettledTargets(t *testing.T) {
 
 	before := snapshotFiles(t, baseTarget, extraTarget, fixture.state)
 	plan, loaded = prepareExecution(t, request)
-	second, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	second, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err != nil {
 		t.Fatalf("executePlan(second) error = %v", err)
 	}
@@ -669,6 +669,7 @@ type fixture struct {
 	config     string
 	state      string
 	lock       string
+	controls   corepaths.ResolvedControls
 }
 
 func newFixture(t *testing.T) fixture {
@@ -687,12 +688,26 @@ func newFixture(t *testing.T) fixture {
 			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
 		}
 	}
+	controls, err := corepaths.ResolveControls(corepaths.Controls{
+		Repository: fixture.repository,
+		Config:     fixture.config,
+		State:      fixture.state,
+		Lock:       fixture.lock,
+	})
+	if err != nil {
+		t.Fatalf("ResolveControls() error = %v", err)
+	}
+	fixture.controls = controls
 	return fixture
 }
 
 func prepareExecution(t *testing.T, request planRequest) (Plan, state.Loaded) {
 	t.Helper()
-	loaded, err := loadState(request.Controls.State, request.Home)
+	controlPaths, err := request.Controls.Paths()
+	if err != nil {
+		t.Fatalf("ResolvedControls.Paths() error = %v", err)
+	}
+	loaded, err := loadState(controlPaths.State, request.Home)
 	if err != nil {
 		t.Fatalf("loadState() error = %v", err)
 	}
@@ -706,14 +721,9 @@ func prepareExecution(t *testing.T, request planRequest) (Plan, state.Loaded) {
 
 func (fixture fixture) request(modules []config.Module) planRequest {
 	return planRequest{
-		Home: fixture.home,
-		Controls: corepaths.Controls{
-			Repository: fixture.repository,
-			Config:     fixture.config,
-			State:      fixture.state,
-			Lock:       fixture.lock,
-		},
-		Modules: modules,
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules:  modules,
 	}
 }
 

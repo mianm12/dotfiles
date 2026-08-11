@@ -21,7 +21,7 @@ func Apply(environment Environment) (result ApplyResult, err error) {
 	if err != nil {
 		return blockedResult, err
 	}
-	release, err := acquire(environment, preflight.controls)
+	release, err := acquire(preflight.controls)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -30,7 +30,7 @@ func Apply(environment Environment) (result ApplyResult, err error) {
 }
 
 type applyPreflight struct {
-	controls    corepaths.Controls
+	controls    corepaths.ResolvedControls
 	fingerprint []byte
 }
 
@@ -63,9 +63,13 @@ func applyLocked(environment Environment, expectedFingerprint []byte) (ApplyResu
 	if !locked.report.Plan.Executable() {
 		return ApplyResult{Report: cloneReport(locked.report)}, blockedError(locked.report.Plan)
 	}
+	controlPaths, err := locked.controls.Paths()
+	if err != nil {
+		return ApplyResult{}, err
+	}
 	execution, runErr := executePlan(
 		locked.loaded.Snapshot.Home,
-		locked.controls.State,
+		controlPaths.State,
 		locked.report.Plan,
 		locked.loaded,
 		commitState,
@@ -128,12 +132,19 @@ func environmentControls(environment Environment, repository string) corepaths.C
 	}
 }
 
-func validateControls(controls corepaths.Controls) error {
-	controls = cleanControls(controls)
-	if err := validateControlTopology(controls); err != nil {
-		return err
+func validateControls(controls corepaths.Controls) (corepaths.ResolvedControls, error) {
+	resolved, err := resolveControls(controls)
+	if err != nil {
+		return corepaths.ResolvedControls{}, err
 	}
-	return validateControlEntries(controls.Config, controls.State, controls.Lock)
+	paths, err := resolved.Paths()
+	if err != nil {
+		return corepaths.ResolvedControls{}, err
+	}
+	if err := validateControlEntries(paths.Config, paths.State, paths.Lock); err != nil {
+		return corepaths.ResolvedControls{}, err
+	}
+	return resolved, nil
 }
 
 func validateEnvironmentControls(environment Environment) error {
@@ -144,11 +155,12 @@ func validateEnvironmentControls(environment Environment) error {
 	)
 }
 
-func validateControlTopology(controls corepaths.Controls) error {
-	if err := corepaths.ValidateControlTopology(controls); err != nil {
-		return controlError{cause: err}
+func resolveControls(controls corepaths.Controls) (corepaths.ResolvedControls, error) {
+	resolved, err := corepaths.ResolveControls(controls)
+	if err != nil {
+		return corepaths.ResolvedControls{}, controlError{cause: err}
 	}
-	return nil
+	return resolved, nil
 }
 
 func validateControlEntries(configPath, statePath, lockPath string) error {
@@ -185,12 +197,12 @@ func (err controlError) Is(target error) bool {
 	return target == ErrControl
 }
 
-func acquire(environment Environment, controls corepaths.Controls) (func() error, error) {
-	if _, err := normalizeEnvironment(environment); err != nil {
+func acquire(controls corepaths.ResolvedControls) (func() error, error) {
+	paths, err := controls.Paths()
+	if err != nil {
 		return nil, err
 	}
-	controls = cleanControls(controls)
-	return acquireLock(filepath.Dir(controls.Lock), controls.Lock)
+	return acquireLock(filepath.Dir(paths.Lock), paths.Lock)
 }
 
 func requireMachine(path string) (config.Machine, error) {
@@ -224,22 +236,6 @@ func cloneMachine(machine config.Machine) config.Machine {
 		Profiles:     append([]string(nil), machine.Profiles...),
 		ExtraModules: append([]string(nil), machine.ExtraModules...),
 	}
-}
-
-func cleanControls(controls corepaths.Controls) corepaths.Controls {
-	return corepaths.Controls{
-		Repository: cleanPath(controls.Repository),
-		Config:     cleanPath(controls.Config),
-		State:      cleanPath(controls.State),
-		Lock:       cleanPath(controls.Lock),
-	}
-}
-
-func cleanPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	return filepath.Clean(path)
 }
 
 func joinReleaseError(runErr, releaseErr error) error {

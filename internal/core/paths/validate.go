@@ -46,6 +46,15 @@ type Controls struct {
 	Lock       string
 }
 
+// ResolvedControls is one immutable control-path topology snapshot. Its path
+// identities are resolved exactly once and reused for every target check in
+// the same assessment.
+type ResolvedControls struct {
+	paths    Controls
+	topology controlTopology
+	valid    bool
+}
+
 // Placement is the path information needed before manifest/planner construction.
 type Placement struct {
 	Label  string
@@ -75,27 +84,53 @@ type controlTopology struct {
 	lock     pathIdentity
 }
 
-// Validate resolves and validates a complete placement set. It is read-only and
-// returns no partial result when any path is invalid or conflicting.
-func Validate(home string, controls Controls, placements []Placement) ([]ResolvedPlacement, error) {
-	return validate(home, controls, placements)
-}
-
-// ValidateControlTopology validates the control families without resolving any
-// placement targets. It is read-only and safe to call before lock acquisition.
-func ValidateControlTopology(controls Controls) error {
-	_, err := resolveControlTopology(controls)
-	return err
-}
-
-// TargetOverlapsControls reports whether target intersects a protected control
-// family. Invalid control topology is returned as an error.
-func TargetOverlapsControls(controls Controls, target Target) (bool, error) {
+// ResolveControls resolves and validates one control topology without resolving
+// placement targets. The returned snapshot owns the resolved identities used by
+// later validation and overlap checks.
+func ResolveControls(controls Controls) (ResolvedControls, error) {
 	topology, err := resolveControlTopology(controls)
 	if err != nil {
+		return ResolvedControls{}, err
+	}
+	return ResolvedControls{
+		paths: Controls{
+			Repository: filepath.Clean(controls.Repository),
+			Config:     filepath.Clean(controls.Config),
+			State:      filepath.Clean(controls.State),
+			Lock:       filepath.Clean(controls.Lock),
+		},
+		topology: topology,
+		valid:    true,
+	}, nil
+}
+
+// Paths returns the cleaned lexical paths captured by this snapshot.
+func (controls ResolvedControls) Paths() (Controls, error) {
+	if err := controls.validate(); err != nil {
+		return Controls{}, err
+	}
+	return controls.paths, nil
+}
+
+// Validate resolves and validates a complete placement set against this
+// snapshot. It does not re-resolve the control topology.
+func (controls ResolvedControls) Validate(
+	home string,
+	placements []Placement,
+) ([]ResolvedPlacement, error) {
+	if err := controls.validate(); err != nil {
+		return nil, err
+	}
+	return validatePlacements(home, controls.topology, placements)
+}
+
+// TargetOverlaps reports whether target intersects a protected control family
+// captured by this snapshot. It does not consult the filesystem.
+func (controls ResolvedControls) TargetOverlaps(target Target) (bool, error) {
+	if err := controls.validate(); err != nil {
 		return false, err
 	}
-	for _, family := range topology.families {
+	for _, family := range controls.topology.families {
 		for _, control := range family.paths {
 			if identityOverlapsTarget(control, target) {
 				return true, nil
@@ -105,15 +140,18 @@ func TargetOverlapsControls(controls Controls, target Target) (bool, error) {
 	return false, nil
 }
 
-func validate(
+func (controls ResolvedControls) validate() error {
+	if !controls.valid {
+		return fmt.Errorf("%w: control snapshot is unresolved", ErrControlTopology)
+	}
+	return nil
+}
+
+func validatePlacements(
 	home string,
-	controls Controls,
+	topology controlTopology,
 	placements []Placement,
 ) ([]ResolvedPlacement, error) {
-	topology, err := resolveControlTopology(controls)
-	if err != nil {
-		return nil, err
-	}
 	cleanHome, err := cleanAbsolute("HOME", home)
 	if err != nil {
 		return nil, err

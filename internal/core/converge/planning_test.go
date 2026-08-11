@@ -158,7 +158,7 @@ func TestPlanRejectsActiveTargetTraversingStateOwnedParentLink(t *testing.T) {
 
 			plan, err := buildPlan(planRequest{
 				Home:     fixture.home,
-				Controls: fixture.controls,
+				Controls: resolveTestControls(t, fixture.controls),
 				Modules:  []config.Module{module},
 				State:    snapshot,
 			})
@@ -351,7 +351,7 @@ func TestFullPlanRejectsLinkUpdateTraversedByDesiredTarget(t *testing.T) {
 
 			plan, err := buildPlan(planRequest{
 				Home:     fixture.home,
-				Controls: fixture.controls,
+				Controls: resolveTestControls(t, fixture.controls),
 				Modules:  []config.Module{parent, child},
 				State:    snapshot,
 			})
@@ -396,7 +396,7 @@ func TestFullPlanAllowsFullyOwnedKeepTraversedByDesired(
 
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: fixture.controls,
+		Controls: resolveTestControls(t, fixture.controls),
 		Modules: []config.Module{
 			linkModule("parent", "tree", parentSource, "~/owned"),
 			linkModule("child", "config", childSource, "~/access/child"),
@@ -470,7 +470,7 @@ func TestFullPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 
 			plan, err := buildPlan(planRequest{
 				Home:     fixture.home,
-				Controls: fixture.controls,
+				Controls: resolveTestControls(t, fixture.controls),
 				Modules: []config.Module{
 					linkModule(
 						"parent",
@@ -559,7 +559,7 @@ func TestFullPlanRejectsStaleCleanupTraversedByDesired(
 
 			plan, err := buildPlan(planRequest{
 				Home:     fixture.home,
-				Controls: fixture.controls,
+				Controls: resolveTestControls(t, fixture.controls),
 				Modules:  []config.Module{module},
 				State:    snapshot,
 			})
@@ -934,7 +934,7 @@ func TestFullPlanRejectsUpdateWithStaleDependency(t *testing.T) {
 
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: fixture.controls,
+		Controls: resolveTestControls(t, fixture.controls),
 		Modules: []config.Module{
 			linkModule("parent", "tree", newSource, "~/owned"),
 		},
@@ -970,7 +970,7 @@ func TestPlanDoesNotTreatDriftedParentLinkAsStateOwned(t *testing.T) {
 
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: fixture.controls,
+		Controls: resolveTestControls(t, fixture.controls),
 		Modules:  []config.Module{module},
 		State:    snapshot,
 	})
@@ -1017,7 +1017,7 @@ func TestPlanDoesNotTreatResolvedParentDriftAsStateOwned(t *testing.T) {
 
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: fixture.controls,
+		Controls: resolveTestControls(t, fixture.controls),
 		Modules:  []config.Module{module},
 		State:    snapshot,
 	})
@@ -1071,7 +1071,7 @@ func TestPlanStaleLinkInsideControlPathIsForgotten(t *testing.T) {
 
 			plan, err := buildPlan(planRequest{
 				Home:     fixture.home,
-				Controls: controls,
+				Controls: resolveTestControls(t, controls),
 				State:    snapshot,
 			})
 			if err != nil {
@@ -1103,7 +1103,7 @@ func TestPlanRejectsUnknownStaleKindBeforeControlOverlapFallback(t *testing.T) {
 
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: controls,
+		Controls: resolveTestControls(t, controls),
 		State:    snapshot,
 	})
 
@@ -1150,7 +1150,7 @@ func TestPlanStaleLinkContainingControlPathIsForgotten(t *testing.T) {
 
 			plan, err := buildPlan(planRequest{
 				Home:     fixture.home,
-				Controls: controls,
+				Controls: resolveTestControls(t, controls),
 				State:    snapshot,
 			})
 			if err != nil {
@@ -1194,7 +1194,7 @@ func TestPlanStaleLocalContainingControlPathIsForgotten(t *testing.T) {
 
 			plan, err := buildPlan(planRequest{
 				Home:     fixture.home,
-				Controls: controls,
+				Controls: resolveTestControls(t, controls),
 				State:    snapshot,
 			})
 			if err != nil {
@@ -1238,31 +1238,16 @@ func TestPlanStaleResolvedAliasOverlappingControlPathIsForgotten(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanInvalidControlTopologyPrecedesStaleForget(t *testing.T) {
+func TestResolveControlsRejectsInvalidTopologyBeforePlanning(t *testing.T) {
 	fixture := newPlanFixture(t)
 	controls := fixture.controls
 	controls.State = filepath.Join(fixture.repo, "state.json")
 	controls.Lock = filepath.Join(fixture.repo, "lock")
-	target := fixture.target("stale")
-	snapshot := fixture.snapshot(map[string]state.Record{
-		"stale": {
-			Kind:   state.KindLocal,
-			Target: target,
-		},
-	})
 	before := snapshotTree(t, fixture.root)
 
-	plan, err := buildPlan(planRequest{
-		Home:     fixture.home,
-		Controls: controls,
-		State:    snapshot,
-	})
-
-	if err != nil || len(plan.Issues) == 0 {
-		t.Fatalf("Build() = (%#v, %v), want control topology issue", plan, err)
-	}
-	if len(plan.Steps) != 0 {
-		t.Fatalf("Build() returned executable steps %#v", plan)
+	_, err := resolveControls(controls)
+	if !errors.Is(err, corepaths.ErrControlTopology) {
+		t.Fatalf("resolveControls() error = %v, want control topology issue", err)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1626,6 +1611,15 @@ func newPlanFixture(t *testing.T) *planFixture {
 	}
 }
 
+func resolveTestControls(t testing.TB, controls corepaths.Controls) corepaths.ResolvedControls {
+	t.Helper()
+	resolved, err := corepaths.ResolveControls(controls)
+	if err != nil {
+		t.Fatalf("ResolveControls() error = %v", err)
+	}
+	return resolved
+}
+
 func (fixture *planFixture) build(
 	t *testing.T,
 	modules []config.Module,
@@ -1634,7 +1628,7 @@ func (fixture *planFixture) build(
 	t.Helper()
 	plan, err := buildPlan(planRequest{
 		Home:     fixture.home,
-		Controls: fixture.controls,
+		Controls: resolveTestControls(t, fixture.controls),
 		Modules:  modules,
 		State:    snapshot,
 	})

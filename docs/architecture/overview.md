@@ -7,11 +7,13 @@
 
 ```text
 repository desired + machine selection + state + actual filesystem
-  -> status / dry-run: converge.Analyze -> Report
+  -> status / dry-run: converge.Analyze
+       -> resolve one immutable ResolvedControls snapshot
+       -> resolve selection + state + targets against that snapshot -> Report
   -> apply: converge.Apply
        -> converge.Analyze (full read-only preflight)
-       -> acquire lock
-       -> converge.Analyze (fresh locked inputs and Plan)
+       -> acquire the lock path captured by the preflight snapshot
+       -> converge.Analyze (fresh locked inputs, fresh ResolvedControls and Plan)
        -> compare machine semantic fingerprint
        -> execute fresh locked Plan + verify changed targets + commit state
   -> release lock
@@ -25,12 +27,18 @@ init/select -> converge.Initialize / SelectAdd / SelectRemove
 其结果退出。CLI 只构造 `converge.Environment`、调用公开函数并投影 `Report` 或 typed error；不
 解析 selection、不规划、不读取 state、不拥有 lock，也不提交 target 或 state。
 
-`converge.Analyze` 是唯一完整只读分析入口。其私有 analysis 保存 machine、repository、resolved
-selection、loaded state、control paths 和 machine semantic fingerprint；公开 `Report` 只包含
-module 投影、`Plan{Complete, Steps, Issues}` 与 warnings。`converge.Apply` 在锁前调用同一分析
-实现完成完整零写入检查；成功后获取单次 lock，再次调用同一实现，并且只执行锁内新生成的
-Plan。锁前 Plan、resolved modules 和 state 不进入执行；fingerprint 只用于拒绝锁前后 machine
-selection 漂移。
+`converge.Analyze` 是唯一完整只读分析入口。每次 analysis 先把 repository、machine config、state
+和 lock 的词法路径及解析身份固定为一个不可变 `paths.ResolvedControls`。Selection 与 platform
+只解析一次；planner 的完整 target-set 校验和全部 stale control-boundary 判断只消费该快照，
+不能接收 raw controls，也不能重新解析 control topology。私有 analysis 最终只保留 Report、
+loaded state、ResolvedControls 和 machine semantic fingerprint；公开 `Report` 只包含 module 投影、
+`Plan{Complete, Steps, Issues}` 与 warnings。
+
+`converge.Apply` 在锁前调用同一分析实现完成完整零写入检查，并使用该次快照固定的 lock 路径
+获取单次 lock。锁内再次调用同一实现，生成一份 fresh ResolvedControls 和 fresh Plan；只执行这份
+锁内结果。锁前 Plan、resolved modules 和 state 不进入执行；fingerprint 只用于拒绝锁前后
+machine selection 漂移。这里的“一次解析”以单次 analysis 为边界，不会把锁前 filesystem 身份
+错误复用到锁内重分析。
 
 Status 与 dry-run 对全部 effective modules 与全部 state-only stale records 运行同一次全量规划。
 Selection、control topology 或 target-set blocker 使
@@ -70,7 +78,7 @@ error，已完成写入不回滚；重跑命令文案由 CLI 决定。
 | Package | 职责 |
 | --- | --- |
 | `internal/storage` | 私有控制目录边界，以及私有控制文件的唯一原子覆盖发布原语 |
-| `internal/core/paths` | HOME target、source、控制路径边界和路径解析结果分类 |
+| `internal/core/paths` | HOME target、source、不可变 ResolvedControls、控制路径边界和路径解析结果分类 |
 | `internal/core/state` | ownership state 模型与编解码 |
 | `internal/core/config` | repository、machine 和 module 配置解析 |
 | `internal/core/converge` | selection resolution、完整分析、全量规划、lock、target mutation、changed-target 复核与 state/config commit 的唯一 owner |
@@ -126,6 +134,9 @@ snapshot 时统一调用 `storage.PublishPrivateFile(path, data)`。该函数在
 temporary file cleanup。
 Paths 在系统调用边界把解析失败分类为确定的 namespace 阻塞或不可确定的 I/O 失败；converge
 中的规划代码只消费 typed classification，不检查 `PathError` 包装或平台 errno。
+`paths.ResolveControls` 是 control topology 的唯一构造入口。其返回值封装已解析身份，只暴露
+cleaned lexical paths、整组 placement 校验和单 target overlap 判断；零值 fail closed。Converge
+不会保留与该快照并行的 raw-control planner 路径。
 
 不引入 Viper、虚拟文件系统、DI、事务、workflow、state-machine、日志、color/TUI 或通用
 dotfiles framework。Distro 检测解析 `/etc/os-release`，HOME 使用 `os.UserHomeDir`，state

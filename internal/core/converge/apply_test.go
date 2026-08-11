@@ -382,7 +382,7 @@ target = "~/.app"
 	if err != nil || len(result.Report.Plan.Steps) != 0 {
 		t.Fatalf("prepareApply() = (%#v, %#v, %v), want executable preflight", preflight, result, err)
 	}
-	release, err := acquire(environment, preflight.controls)
+	release, err := acquire(preflight.controls)
 	if err != nil {
 		t.Fatalf("acquire() error = %v", err)
 	}
@@ -462,7 +462,7 @@ target = "~/.app"
 	if err != nil {
 		t.Fatalf("prepareApply() error = %v", err)
 	}
-	release, err := acquire(environment, preflight.controls)
+	release, err := acquire(preflight.controls)
 	if err != nil {
 		t.Fatalf("acquire() error = %v", err)
 	}
@@ -485,6 +485,91 @@ target = "~/.app"
 	}
 	if _, statErr := os.Lstat(fixture.controls.State); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("state error = %v, want missing", statErr)
+	}
+}
+
+func TestApplyLockedRefreshesResolvedControls(t *testing.T) {
+	fixture := newMutationFixture(t, `base = ["app"]`)
+	secondRepository := filepath.Join(fixture.root, "second-repository")
+	writeMutationFile(
+		t,
+		filepath.Join(secondRepository, "dot.toml"),
+		"version = 1\n[profiles]\nbase = [\"app\"]\n",
+	)
+	repositoryAlias := filepath.Join(fixture.root, "repository-alias")
+	if err := os.Symlink(fixture.repository, repositoryAlias); err != nil {
+		t.Fatalf("os.Symlink(first repository) error = %v", err)
+	}
+	machine := fixture.machine([]string{"base"}, nil)
+	machine.Repository = repositoryAlias
+	publishMutationMachine(t, fixture.controls.Config, machine)
+	writeMutationFile(t, filepath.Join(fixture.repository, "modules", "app", "module.toml"), `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.first"
+`)
+	writeMutationFile(
+		t,
+		filepath.Join(fixture.repository, "modules", "app", "config"),
+		"first",
+	)
+	writeMutationFile(t, filepath.Join(secondRepository, "modules", "app", "module.toml"), `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.second"
+`)
+	writeMutationFile(
+		t,
+		filepath.Join(secondRepository, "modules", "app", "config"),
+		"second",
+	)
+	environment := fixture.environment()
+	preflight, err := analyzeEnvironment(environment)
+	if err != nil {
+		t.Fatalf("analyzeEnvironment() error = %v", err)
+	}
+	firstTarget := filepath.Join(fixture.home, ".first")
+	if len(preflight.report.Plan.Steps) != 1 ||
+		preflight.report.Plan.Steps[0].Target != firstTarget {
+		t.Fatalf("preflight plan = %#v, want first-repository target", preflight.report.Plan)
+	}
+	preflightPaths, err := preflight.controls.Paths()
+	if err != nil || preflightPaths.Repository != repositoryAlias {
+		t.Fatalf(
+			"preflight controls = (%#v, %v), want repository %q",
+			preflightPaths,
+			err,
+			repositoryAlias,
+		)
+	}
+	release, err := acquire(preflight.controls)
+	if err != nil {
+		t.Fatalf("acquire() error = %v", err)
+	}
+	defer func() {
+		if err := release(); err != nil {
+			t.Errorf("release() error = %v", err)
+		}
+	}()
+	if err := os.Remove(repositoryAlias); err != nil {
+		t.Fatalf("os.Remove(repository alias) error = %v", err)
+	}
+	if err := os.Symlink(secondRepository, repositoryAlias); err != nil {
+		t.Fatalf("os.Symlink(second repository) error = %v", err)
+	}
+
+	result, err := applyLocked(environment, preflight.fingerprint)
+	if err != nil || !result.TargetsChanged || !result.StateChanged {
+		t.Fatalf("applyLocked() = (%#v, %v), want fresh second-repository plan", result, err)
+	}
+	if _, err := os.Lstat(firstTarget); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preflight target error = %v, want missing", err)
+	}
+	wantSource := filepath.Join(repositoryAlias, "modules", "app", "config")
+	if destination, err := os.Readlink(filepath.Join(fixture.home, ".second")); err != nil || destination != wantSource {
+		t.Fatalf("locked target = (%q, %v), want %q", destination, err, wantSource)
 	}
 }
 

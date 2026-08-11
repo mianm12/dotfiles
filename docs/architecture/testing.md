@@ -14,6 +14,8 @@
   只覆盖各自编码和语义校验；converge 覆盖编码结果进入统一发布原语的调用边界。
 - Paths 覆盖确定阻塞与不可确定 I/O 的 typed resolution classification；converge planning 测试
   只验证分类对应的 prune/forget 策略，不依赖 errno 或 `PathError` 包装形状。
+- Paths 覆盖 `ResolvedControls` 零值 fail closed、单次 topology 快照和 target overlap 复用；
+  converge 覆盖 planner 只接收该快照，以及锁内 assessment 会重新解析而不复用锁前身份。
 - Converge 负责固定 Environment、单次 lock ownership、selection publication、锁前完整 artifact
   preflight、锁内重新分析与 fresh Plan 的跨层测试；直接调用 `converge.Apply` 的 deterministic
   blocker 必须验证 state root 与 lock 均未创建。Lock 测试覆盖获取、释放、busy 和异常目录项；

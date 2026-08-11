@@ -116,7 +116,7 @@ const (
 // read-only planning pass.
 type planRequest struct {
 	Home     string
-	Controls corepaths.Controls
+	Controls corepaths.ResolvedControls
 	Modules  []config.Module
 	State    state.Snapshot
 }
