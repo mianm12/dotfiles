@@ -24,11 +24,8 @@ func (source selectionSource) label() string {
 
 type analysis struct {
 	report      Report
-	machine     config.Machine
-	repository  config.Repository
-	selection   selectionResolution
 	loaded      state.Loaded
-	controls    corepaths.Controls
+	controls    corepaths.ResolvedControls
 	fingerprint []byte
 }
 
@@ -54,9 +51,10 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
-	controls := environmentControls(environment, machine.Repository)
+	controlPaths := environmentControls(environment, machine.Repository)
 	issues := make([]Issue, 0, 1)
-	if err := validateControlTopology(controls); err != nil {
+	controls, err := resolveControls(controlPaths)
+	if err != nil {
 		if !errors.Is(err, corepaths.ErrControlTopology) {
 			return analysis{}, err
 		}
@@ -86,7 +84,7 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 		return analysis{}, err
 	}
 	plan, inputWarnings, err := buildAnalysisPlan(
-		environment,
+		environment.Home,
 		controls,
 		selection.modules,
 		loaded.Snapshot,
@@ -109,9 +107,6 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 	}
 	return analysis{
 		report:      report,
-		machine:     cloneMachine(machine),
-		repository:  repository,
-		selection:   selection,
 		loaded:      loaded,
 		controls:    controls,
 		fingerprint: fingerprint,
@@ -119,8 +114,8 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 }
 
 func buildAnalysisPlan(
-	environment Environment,
-	controls corepaths.Controls,
+	home string,
+	controls corepaths.ResolvedControls,
 	resolvedModules []config.Module,
 	snapshot state.Snapshot,
 	issues []Issue,
@@ -133,7 +128,7 @@ func buildAnalysisPlan(
 	}
 
 	plan, err := buildPlan(planRequest{
-		Home:     environment.Home,
+		Home:     home,
 		Controls: controls,
 		Modules:  resolvedModules,
 		State:    snapshot,

@@ -161,14 +161,15 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 	source := filepath.Join(repository, "modules", "app", "config")
 	writeExecutorFile(t, source, "config")
 	target := filepath.Join(home, ".app")
+	controlPaths := corepaths.Controls{
+		Repository: repository,
+		Config:     filepath.Join(home, ".config", "dot", "config.toml"),
+		State:      filepath.Join(home, ".local", "state", "dot", "state.json"),
+		Lock:       filepath.Join(home, ".local", "state", "dot", "lock"),
+	}
 	request := planRequest{
-		Home: home,
-		Controls: corepaths.Controls{
-			Repository: repository,
-			Config:     filepath.Join(home, ".config", "dot", "config.toml"),
-			State:      filepath.Join(home, ".local", "state", "dot", "state.json"),
-			Lock:       filepath.Join(home, ".local", "state", "dot", "lock"),
-		},
+		Home:     home,
+		Controls: resolveTestControls(t, controlPaths),
 		Modules: []config.Module{{
 			ID: "app",
 			Links: []config.Link{{
@@ -180,7 +181,7 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 	}
 
 	plan, loaded := prepareExecution(t, request)
-	first, err := executePlan(request.Home, request.Controls.State, plan, loaded, func(string, state.Snapshot) error {
+	first, err := executePlan(request.Home, controlPaths.State, plan, loaded, func(string, state.Snapshot) error {
 		return errors.New("injected state commit failure")
 	})
 	if err == nil ||
@@ -191,12 +192,12 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 		t.Fatalf("executePlan(failing commit) = (%#v, %v), want recoverable partial failure", first, err)
 	}
 	assertExecutorLink(t, target, source)
-	if _, err := os.Lstat(request.Controls.State); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Lstat(controlPaths.State); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("state after failed commit error = %v, want missing", err)
 	}
 
 	plan, loaded = prepareExecution(t, request)
-	second, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	second, err := executePlan(request.Home, controlPaths.State, plan, loaded, commitState)
 	if err != nil ||
 		second.TargetsChanged ||
 		!second.StateChanged {
@@ -204,10 +205,10 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 	}
 	assertExecutorLink(t, target, source)
 	beforeTarget := snapshotExecutorPath(t, target)
-	beforeState := snapshotExecutorPath(t, request.Controls.State)
+	beforeState := snapshotExecutorPath(t, controlPaths.State)
 
 	plan, loaded = prepareExecution(t, request)
-	third, err := executePlan(request.Home, request.Controls.State, plan, loaded, commitState)
+	third, err := executePlan(request.Home, controlPaths.State, plan, loaded, commitState)
 	if err != nil || third.TargetsChanged || third.StateChanged {
 		t.Fatalf("executePlan(repeat) = (%#v, %v), want zero mutation", third, err)
 	}
@@ -235,7 +236,7 @@ func TestForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.T) {
 	plan, loaded := prepareExecution(t, request)
 	result, err := executePlan(
 		request.Home,
-		request.Controls.State,
+		fixture.state,
 		plan,
 		loaded,
 		func(string, state.Snapshot) error {

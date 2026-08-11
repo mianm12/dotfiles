@@ -455,7 +455,11 @@ func TestValidate_DoesNotInventCaseUnicodeOrHardLinkAliases(t *testing.T) {
 		{Label: "hard-link-first", Target: "~/first"},
 		{Label: "hard-link-second", Target: "~/second"},
 	}
-	resolved, err := Validate(home, controlsOutsideFixture(root), placements)
+	controls, err := ResolveControls(controlsOutsideFixture(root))
+	if err != nil {
+		t.Fatalf("ResolveControls() error = %v", err)
+	}
+	resolved, err := controls.Validate(home, placements)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}

@@ -12,7 +12,7 @@ import (
 
 type checkedSelection struct {
 	result      SelectionResult
-	controls    corepaths.Controls
+	controls    corepaths.ResolvedControls
 	fingerprint []byte
 }
 
@@ -40,7 +40,7 @@ func Initialize(
 	if err != nil {
 		return SelectionResult{}, err
 	}
-	release, err := acquire(environment, preflight.controls)
+	release, err := acquire(preflight.controls)
 	if err != nil {
 		return SelectionResult{}, err
 	}
@@ -66,7 +66,7 @@ func SelectAdd(environment Environment, moduleID string) (result SelectionResult
 	if err != nil {
 		return SelectionResult{}, err
 	}
-	release, err := acquire(environment, preflight.controls)
+	release, err := acquire(preflight.controls)
 	if err != nil {
 		return SelectionResult{}, err
 	}
@@ -95,7 +95,7 @@ func SelectRemove(environment Environment, moduleID string) (result SelectionRes
 	if err != nil {
 		return SelectionResult{}, err
 	}
-	release, err := acquire(environment, preflight.controls)
+	release, err := acquire(preflight.controls)
 	if err != nil {
 		return SelectionResult{}, err
 	}
@@ -129,7 +129,8 @@ func checkInitialize(
 		return checkedSelection{}, err
 	}
 	controls := environmentControls(environment, machine.Repository)
-	if err := validateControls(controls); err != nil {
+	resolvedControls, err := validateControls(controls)
+	if err != nil {
 		return checkedSelection{}, err
 	}
 	_, exists, err := config.LoadMachine(environment.ConfigPath)
@@ -151,7 +152,7 @@ func checkInitialize(
 	}
 	return checkedSelection{
 		result:   SelectionResult{Machine: cloneMachine(machine), Changed: true},
-		controls: controls,
+		controls: resolvedControls,
 	}, nil
 }
 
@@ -222,7 +223,8 @@ func checkCurrentSelection(
 		return checkedSelection{}, config.Repository{}, err
 	}
 	controls := environmentControls(environment, machine.Repository)
-	if err := validateControlTopology(controls); err != nil {
+	resolvedControls, err := resolveControls(controls)
+	if err != nil {
 		return checkedSelection{}, config.Repository{}, err
 	}
 	repository, err := config.OpenRepository(machine.Repository)
@@ -242,7 +244,7 @@ func checkCurrentSelection(
 			Machine:         cloneMachine(machine),
 			ProfileSelected: slices.Contains(profileModules, moduleID),
 		},
-		controls:    controls,
+		controls:    resolvedControls,
 		fingerprint: fingerprint,
 	}, repository, nil
 }

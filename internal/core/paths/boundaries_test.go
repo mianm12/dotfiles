@@ -270,7 +270,7 @@ func TestValidateRejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
 			}
 			controls, placements := test.setup(t, root, home)
 			before := snapshotTree(t, root)
-			resolved, err := corepaths.Validate(home, controls, placements)
+			resolved, err := validatePathSet(home, controls, placements)
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("Validate() = (%#v, %v), want %v", resolved, err, test.wantErr)
 			}
@@ -358,7 +358,7 @@ func TestValidateRejectsControlPathsContainedByTarget(t *testing.T) {
 			test.configure(t, root, home, &controls)
 			before := snapshotTree(t, root)
 
-			resolved, err := corepaths.Validate(
+			resolved, err := validatePathSet(
 				home,
 				controls,
 				[]corepaths.Placement{{Label: "container", Target: test.target}},
@@ -377,7 +377,7 @@ func TestValidateRejectsControlPathsContainedByTarget(t *testing.T) {
 	}
 }
 
-func TestValidateControlTopologyRejectsRootRelationshipsReadOnly(t *testing.T) {
+func TestResolveControlsRejectsRootRelationshipsReadOnly(t *testing.T) {
 	pairs := []struct {
 		name        string
 		left, right int
@@ -425,15 +425,15 @@ func TestValidateControlTopologyRejectsRootRelationshipsReadOnly(t *testing.T) {
 				controls := controlsFromRoots(roots[0], roots[1], roots[2])
 				before := snapshotTree(t, root)
 
-				err := corepaths.ValidateControlTopology(controls)
+				_, err := corepaths.ResolveControls(controls)
 				if !errors.Is(err, corepaths.ErrControlTopology) {
-					t.Fatalf("ValidateControlTopology() error = %v, want topology conflict", err)
+					t.Fatalf("ResolveControls() error = %v, want topology conflict", err)
 				}
 				if !containsAll(err.Error(), roots[pair.left], roots[pair.right]) {
 					t.Fatalf("topology error = %q, want both paths", err)
 				}
 
-				resolved, validateErr := corepaths.Validate(
+				resolved, validateErr := validatePathSet(
 					filepath.Join(root, "home"),
 					controls,
 					nil,
@@ -453,7 +453,7 @@ func TestValidateControlTopologyRejectsRootRelationshipsReadOnly(t *testing.T) {
 	}
 }
 
-func TestValidateControlTopologyRejectsResolvedControlAliases(t *testing.T) {
+func TestResolveControlsRejectsResolvedControlAliases(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(*testing.T, string) corepaths.Controls
@@ -528,10 +528,10 @@ func TestValidateControlTopologyRejectsResolvedControlAliases(t *testing.T) {
 			controls := test.setup(t, root)
 			before := snapshotTree(t, root)
 
-			err := corepaths.ValidateControlTopology(controls)
+			_, err := corepaths.ResolveControls(controls)
 
 			if !errors.Is(err, corepaths.ErrControlTopology) {
-				t.Fatalf("ValidateControlTopology() error = %v, want resolved conflict", err)
+				t.Fatalf("ResolveControls() error = %v, want resolved conflict", err)
 			}
 			if err == nil || !containsAll(err.Error(), "resolved") {
 				t.Fatalf("topology error = %q, want resolved paths", err)
@@ -543,7 +543,79 @@ func TestValidateControlTopologyRejectsResolvedControlAliases(t *testing.T) {
 	}
 }
 
-func TestValidateControlTopologyReportsLexicalOverlapBeforeBlockedResolution(t *testing.T) {
+func TestResolvedControlsKeepOneTopologySnapshot(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	firstRepository := filepath.Join(root, "first-repository")
+	secondRepository := filepath.Join(root, "second-repository")
+	for _, path := range []string{
+		home,
+		firstRepository,
+		secondRepository,
+		filepath.Join(root, "config-control"),
+		filepath.Join(root, "state-control"),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("os.MkdirAll(%q) error = %v", path, err)
+		}
+	}
+	repositoryAlias := filepath.Join(root, "repository")
+	if err := os.Symlink(firstRepository, repositoryAlias); err != nil {
+		t.Fatalf("os.Symlink(first repository) error = %v", err)
+	}
+	targetAlias := filepath.Join(home, "managed")
+	if err := os.Symlink(firstRepository, targetAlias); err != nil {
+		t.Fatalf("os.Symlink(target alias) error = %v", err)
+	}
+	controls := corepaths.Controls{
+		Repository: repositoryAlias,
+		Config:     filepath.Join(root, "config-control", "machine.toml"),
+		State:      filepath.Join(root, "state-control", "state.json"),
+		Lock:       filepath.Join(root, "state-control", "dot.lock"),
+	}
+	resolvedControls, err := corepaths.ResolveControls(controls)
+	if err != nil {
+		t.Fatalf("ResolveControls() error = %v", err)
+	}
+	target, err := corepaths.ResolveTarget(home, "~/managed/file")
+	if err != nil {
+		t.Fatalf("ResolveTarget() error = %v", err)
+	}
+	if err := os.Remove(repositoryAlias); err != nil {
+		t.Fatalf("os.Remove(repository alias) error = %v", err)
+	}
+	if err := os.Symlink(secondRepository, repositoryAlias); err != nil {
+		t.Fatalf("os.Symlink(second repository) error = %v", err)
+	}
+
+	overlaps, err := resolvedControls.TargetOverlaps(target)
+	if err != nil || !overlaps {
+		t.Fatalf("ResolvedControls.TargetOverlaps() = (%t, %v), want frozen overlap", overlaps, err)
+	}
+	freshControls, err := corepaths.ResolveControls(controls)
+	if err != nil {
+		t.Fatalf("ResolveControls(fresh) error = %v", err)
+	}
+	freshOverlap, err := freshControls.TargetOverlaps(target)
+	if err != nil || freshOverlap {
+		t.Fatalf("ResolvedControls.TargetOverlaps(fresh) = (%t, %v), want retargeted topology", freshOverlap, err)
+	}
+}
+
+func TestResolvedControlsZeroValueFailsClosed(t *testing.T) {
+	var controls corepaths.ResolvedControls
+	if _, err := controls.Paths(); !errors.Is(err, corepaths.ErrControlTopology) {
+		t.Fatalf("ResolvedControls.Paths() error = %v, want ErrControlTopology", err)
+	}
+	if resolved, err := controls.Validate("/home", nil); !errors.Is(err, corepaths.ErrControlTopology) || resolved != nil {
+		t.Fatalf("ResolvedControls.Validate() = (%#v, %v), want fail closed", resolved, err)
+	}
+	if overlaps, err := controls.TargetOverlaps(corepaths.Target{}); !errors.Is(err, corepaths.ErrControlTopology) || overlaps {
+		t.Fatalf("ResolvedControls.TargetOverlaps() = (%t, %v), want fail closed", overlaps, err)
+	}
+}
+
+func TestResolveControlsReportsLexicalOverlapBeforeBlockedResolution(t *testing.T) {
 	root := t.TempDir()
 	repository := filepath.Join(root, "repository")
 	if err := os.WriteFile(repository, []byte("not a directory"), 0o600); err != nil {
@@ -557,13 +629,13 @@ func TestValidateControlTopologyReportsLexicalOverlapBeforeBlockedResolution(t *
 	}
 	before := snapshotTree(t, root)
 
-	err := corepaths.ValidateControlTopology(controls)
+	_, err := corepaths.ResolveControls(controls)
 
 	if !errors.Is(err, corepaths.ErrControlTopology) {
-		t.Fatalf("ValidateControlTopology() error = %v, want lexical topology conflict", err)
+		t.Fatalf("ResolveControls() error = %v, want lexical topology conflict", err)
 	}
 	if errors.Is(err, corepaths.ErrPathBlocked) {
-		t.Fatalf("ValidateControlTopology() error = %v, want topology diagnosed before resolution", err)
+		t.Fatalf("ResolveControls() error = %v, want topology diagnosed before resolution", err)
 	}
 	if !containsAll(err.Error(), repository, "machine config root") {
 		t.Fatalf("topology error = %q, want root identities", err)
@@ -573,7 +645,7 @@ func TestValidateControlTopologyReportsLexicalOverlapBeforeBlockedResolution(t *
 	}
 }
 
-func TestValidateControlTopologyRequiresDistinctStateSiblings(t *testing.T) {
+func TestResolveControlsRequiresDistinctStateSiblings(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(*testing.T, string, *corepaths.Controls)
@@ -617,10 +689,10 @@ func TestValidateControlTopologyRequiresDistinctStateSiblings(t *testing.T) {
 			test.setup(t, root, &controls)
 			before := snapshotTree(t, root)
 
-			err := corepaths.ValidateControlTopology(controls)
+			_, err := corepaths.ResolveControls(controls)
 
 			if !errors.Is(err, corepaths.ErrControlTopology) {
-				t.Fatalf("ValidateControlTopology() error = %v, want sibling conflict", err)
+				t.Fatalf("ResolveControls() error = %v, want sibling conflict", err)
 			}
 			if err == nil || !containsAll(err.Error(), controls.State, controls.Lock) {
 				t.Fatalf("topology error = %q, want state and lock", err)
@@ -632,7 +704,7 @@ func TestValidateControlTopologyRequiresDistinctStateSiblings(t *testing.T) {
 	}
 }
 
-func TestValidateControlTopologyAllowsSeparatedSiblingRoots(t *testing.T) {
+func TestResolveControlsAllowsSeparatedSiblingRoots(t *testing.T) {
 	root := t.TempDir()
 	shared := filepath.Join(root, "shared")
 	actual := filepath.Join(root, "actual")
@@ -652,8 +724,8 @@ func TestValidateControlTopologyAllowsSeparatedSiblingRoots(t *testing.T) {
 	)
 	before := snapshotTree(t, root)
 
-	if err := corepaths.ValidateControlTopology(controls); err != nil {
-		t.Fatalf("ValidateControlTopology() error = %v", err)
+	if _, err := corepaths.ResolveControls(controls); err != nil {
+		t.Fatalf("ResolveControls() error = %v", err)
 	}
 	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
@@ -667,6 +739,18 @@ func controlsFromRoots(repository, configRoot, stateRoot string) corepaths.Contr
 		State:      filepath.Join(stateRoot, "state.json"),
 		Lock:       filepath.Join(stateRoot, "lock"),
 	}
+}
+
+func validatePathSet(
+	home string,
+	controls corepaths.Controls,
+	placements []corepaths.Placement,
+) ([]corepaths.ResolvedPlacement, error) {
+	resolvedControls, err := corepaths.ResolveControls(controls)
+	if err != nil {
+		return nil, err
+	}
+	return resolvedControls.Validate(home, placements)
 }
 
 func containsAll(text string, values ...string) bool {
