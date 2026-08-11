@@ -69,7 +69,9 @@ type SelectionResult struct {
 type Kind = state.Kind
 
 const (
-	KindLink  = state.KindLink
+	// KindLink identifies a managed symbolic-link placement.
+	KindLink = state.KindLink
+	// KindLocal identifies a user-owned local-file placement.
 	KindLocal = state.KindLocal
 )
 
