@@ -14,7 +14,7 @@
 | [`selection.md`](selection.md) | 仓库 desired、机器选择、profile、platform applicability 与 module resolution | product |
 | [`placements.md`](placements.md) | link/local 声明、source、target、路径关系与 control-path topology | product、selection |
 | [`state-and-ownership.md`](state-and-ownership.md) | state schema、版本、安全字段和 ownership 证据 | product、placements |
-| [`planning.md`](planning.md) | 实际文件系统观察与 create/update/prune/keep/forget action eligibility | selection、placements、state |
+| [`planning.md`](planning.md) | 实际文件系统观察与 create/update/prune/keep/forget step eligibility | selection、placements、state |
 | [`mutation-and-recovery.md`](mutation-and-recovery.md) | mutation 顺序、锁、完成边界、提交和中断恢复 | planning、state |
 | [`cli.md`](cli.md) | 公开命令、命令 scope、公开投影和退出码 | selection、planning、mutation |
 

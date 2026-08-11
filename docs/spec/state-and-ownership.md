@@ -63,7 +63,7 @@ ownership 或 provenance，内存删除后不进入 module inventory。
 - State 成功后的内容必须反映本轮已验证结果；内部使用重建或局部更新不属于契约。
 - State 的提交时机由 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
   删除 scope 外空 module 是整个文档的 canonical representation 整理，不是 scope 外
-  ownership action。
+  ownership step。
 - Unknown field、缺失安全字段、损坏结构或过新版本拒绝 mutation。安全字段指顶层 `version`、
   `home`，以及每个 placement 的 `kind`、`target`；link 另需 `resolved_target` 与
   `link_destination`。其余为可选诊断字段。

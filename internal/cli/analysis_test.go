@@ -1,16 +1,14 @@
 package cli
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/mianm12/dotfiles/internal/core/config"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestStatusUsesCurrentSelectionWhileApplyDryRunUsesProspectiveSelection(t *testing.T) {
+func TestStatusAndApplyDryRunUseCurrentSelection(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "extra", `
 [[links]]
@@ -32,12 +30,13 @@ target = "~/.extra"
 	assertSnapshotUnchanged(t, before)
 
 	code, stdout, stderr = fixture.runInjected("apply", "extra", "--dry-run")
-	if code != exitOK ||
-		!strings.Contains(stdout, "selection-delta add-extra module=extra") ||
-		!strings.Contains(stdout, "create-link") ||
+	if code != exitError ||
+		!strings.Contains(stdout, "not selected") ||
+		!strings.Contains(stdout, "dot select add extra") ||
+		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
-			"apply extra --dry-run = (%d, %q, %q), want prospective analysis",
+			"apply extra --dry-run = (%d, %q, %q), want current-selection blocker",
 			code,
 			stdout,
 			stderr,
@@ -47,31 +46,6 @@ target = "~/.extra"
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 		t.Fatalf("extra_modules = %v, want unchanged", extras)
 	}
-}
-
-func TestInitializedInitDryRunKeepsGeneralMissingStateWarning(t *testing.T) {
-	fixture := newCLITestEnv(t, "")
-	fixture.writeMachine(t, nil, nil)
-	before := snapshotTree(t, fixture.root)
-
-	code, stdout, stderr := fixture.runInjected(
-		"init",
-		fixture.repository,
-		"--dry-run",
-	)
-
-	if code != exitError ||
-		!strings.Contains(stdout, "machine is already initialized") ||
-		stderr != "warning: "+state.MissingWarning+"\n" ||
-		strings.Contains(stderr, "expected on first init") {
-		t.Fatalf(
-			"initialized init --dry-run = (%d, %q, %q), want blocker and general missing-state warning",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertSnapshotUnchanged(t, before)
 }
 
 func TestOperationAnalysisTreatsMachineSelectionsAsSets(t *testing.T) {
@@ -99,13 +73,13 @@ target = "~/.app"
 	if len(analysis.Modules) != 1 ||
 		analysis.Modules[0].ID != "app" ||
 		analysis.Modules[0].Selection != "profile+extra" ||
-		len(analysis.Actions) != 1 ||
-		analysis.Actions[0].ModuleID != "app" ||
-		analysis.Actions[0].PlacementID != "config" {
+		len(analysis.Plan.Steps) != 1 ||
+		analysis.Plan.Steps[0].ModuleID != "app" ||
+		analysis.Plan.Steps[0].PlacementID != "config" {
 		t.Fatalf(
 			"analysis = %#v, actions = %#v; want one profile+extra app action",
 			analysis.Modules,
-			analysis.Actions,
+			analysis.Plan.Steps,
 		)
 	}
 }
@@ -115,7 +89,7 @@ func TestScopedMutationAnalysisProjectsOnlyScopeAndModuleBlockers(t *testing.T) 
 		fixture := newCLITestEnv(t, `base = ["base"]`)
 		fixture.writeModule(t, "base", "", nil)
 		fixture.writeModule(t, "extra", "", nil)
-		fixture.writeMachine(t, []string{"base"}, nil)
+		fixture.writeMachine(t, []string{"base"}, []string{"extra"})
 		context, err := resolveContext(fixture.env)
 		if err != nil {
 			t.Fatalf("resolveContext() error = %v", err)
@@ -143,7 +117,7 @@ func TestScopedMutationAnalysisProjectsOnlyScopeAndModuleBlockers(t *testing.T) 
 	t.Run("unrelated module blocker", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = []`)
 		fixture.writeModule(t, "extra", "", nil)
-		fixture.writeMachine(t, []string{"base"}, []string{"gone"})
+		fixture.writeMachine(t, []string{"base"}, []string{"extra", "gone"})
 		context, err := resolveContext(fixture.env)
 		if err != nil {
 			t.Fatalf("resolveContext() error = %v", err)
@@ -170,75 +144,6 @@ func TestScopedMutationAnalysisProjectsOnlyScopeAndModuleBlockers(t *testing.T) 
 				analysis.Modules,
 			)
 		}
-	})
-}
-
-func TestSelectionOnlyDryRunsRenderDelta(t *testing.T) {
-	t.Run("create selection", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = []`)
-		before := snapshotTree(t, fixture.root)
-
-		code, stdout, stderr := fixture.runInjected(
-			"init",
-			fixture.repository,
-			"--profile",
-			"base",
-			"--dry-run",
-		)
-
-		assertSelectionOnlyAnalysis(
-			t,
-			code,
-			stdout,
-			stderr,
-			"selection-delta create",
-		)
-		assertSnapshotUnchanged(t, before)
-		assertCLIMissing(t, fixture.config)
-	})
-
-	t.Run("add extra", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = []`)
-		fixture.writeModule(t, "empty", "", nil)
-		fixture.writeMachine(t, []string{"base"}, nil)
-		before := snapshotTree(t, fixture.root)
-
-		code, stdout, stderr := fixture.runInjected(
-			"apply",
-			"empty",
-			"--dry-run",
-		)
-
-		assertSelectionOnlyAnalysis(
-			t,
-			code,
-			stdout,
-			stderr,
-			"selection-delta add-extra module=empty",
-		)
-		assertSnapshotUnchanged(t, before)
-	})
-
-	t.Run("remove extra", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = []`)
-		fixture.writeModule(t, "empty", "", nil)
-		fixture.writeMachine(t, []string{"base"}, []string{"empty"})
-		before := snapshotTree(t, fixture.root)
-
-		code, stdout, stderr := fixture.runInjected(
-			"remove",
-			"empty",
-			"--dry-run",
-		)
-
-		assertSelectionOnlyAnalysis(
-			t,
-			code,
-			stdout,
-			stderr,
-			"selection-delta remove-extra module=empty",
-		)
-		assertSnapshotUnchanged(t, before)
 	})
 }
 
@@ -314,7 +219,7 @@ target = "~/.app"
 [match]
 os = ["macos"]
 `, nil)
-		fixture.writeMachine(t, []string{"base"}, nil)
+		fixture.writeMachine(t, []string{"base"}, []string{"gated"})
 		before := snapshotTree(t, fixture.root)
 
 		code, stdout, stderr := fixture.runInjected(
@@ -324,34 +229,11 @@ os = ["macos"]
 		)
 
 		if code != exitError ||
-			!strings.Contains(stdout, "selection-delta add-extra module=gated") ||
 			!strings.Contains(stdout, "blocked module=gated") ||
 			!strings.Contains(stdout, "not applicable") ||
 			!strings.Contains(stderr, "state is missing") ||
 			strings.Contains(stderr, "error:") {
 			t.Fatalf("not-applicable dry-run = (%d, %q, %q)", code, stdout, stderr)
-		}
-		assertSnapshotUnchanged(t, before)
-	})
-
-	t.Run("profile selected remove", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = ["app"]`)
-		fixture.writeModule(t, "app", "", nil)
-		fixture.writeMachine(t, []string{"base"}, nil)
-		before := snapshotTree(t, fixture.root)
-
-		code, stdout, stderr := fixture.runInjected(
-			"remove",
-			"app",
-			"--dry-run",
-		)
-
-		if code != exitError ||
-			!strings.Contains(stdout, "blocked module=app") ||
-			!strings.Contains(stdout, "selected by an active profile") ||
-			!strings.Contains(stderr, "state is missing") ||
-			strings.Contains(stderr, "error:") {
-			t.Fatalf("profile remove dry-run = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
 	})
@@ -368,9 +250,8 @@ os = ["macos"]
 		)
 
 		if code != exitError ||
-			!strings.Contains(stdout, "selection-delta add-extra module=missing") ||
 			!strings.Contains(stdout, "blocked module=missing") ||
-			!strings.Contains(stdout, "does not exist") ||
+			!strings.Contains(stdout, "not selected") ||
 			!strings.Contains(stderr, "state is missing") ||
 			strings.Contains(stderr, "error:") {
 			t.Fatalf("unknown dry-run = (%d, %q, %q)", code, stdout, stderr)
@@ -517,7 +398,7 @@ id = "config"
 source = "config"
 target = "~/.app"
 `, map[string]string{"config": "portable"})
-		fixture.writeMachine(t, []string{"base"}, nil)
+		fixture.writeMachine(t, []string{"base"}, []string{"extra"})
 		before := snapshotTree(t, fixture.root)
 
 		code, stdout, _ := fixture.runInjected("status", "app")
@@ -539,168 +420,4 @@ target = "~/.app"
 		assertSnapshotUnchanged(t, before)
 		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
 	})
-}
-
-func TestMutationReanalyzesInputsInsideLock(t *testing.T) {
-	t.Run("init", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = []`)
-		fixture.env.afterPreflight = func() {
-			corruptRootManifest(t, fixture)
-		}
-
-		code, stdout, stderr := fixture.runInjected(
-			"init",
-			fixture.repository,
-			"--profile",
-			"base",
-		)
-
-		assertLockedReanalysisFailure(t, code, stdout, stderr)
-		assertCLIMissing(t, fixture.config)
-		assertCLIMissing(t, fixture.state)
-	})
-
-	t.Run("apply", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = []`)
-		fixture.writeModule(t, "extra", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.extra"
-`, map[string]string{"config": "portable"})
-		fixture.writeMachine(t, []string{"base"}, nil)
-		fixture.env.afterPreflight = func() {
-			corruptRootManifest(t, fixture)
-		}
-
-		code, stdout, stderr := fixture.runInjected("apply", "extra")
-
-		assertLockedReanalysisFailure(t, code, stdout, stderr)
-		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-			t.Fatalf("extra_modules = %v, want unchanged", extras)
-		}
-		assertCLIMissing(t, fixture.state)
-		assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
-	})
-
-	t.Run("remove", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = []`)
-		fixture.writeModule(t, "extra", "", nil)
-		fixture.writeMachine(t, []string{"base"}, []string{"extra"})
-		fixture.env.afterPreflight = func() {
-			corruptRootManifest(t, fixture)
-		}
-
-		code, stdout, stderr := fixture.runInjected("remove", "extra")
-
-		assertLockedReanalysisFailure(t, code, stdout, stderr)
-		extras := fixture.loadMachine(t).ExtraModules
-		if len(extras) != 1 || extras[0] != "extra" {
-			t.Fatalf("extra_modules = %v, want unchanged [extra]", extras)
-		}
-		assertCLIMissing(t, fixture.state)
-	})
-
-	t.Run("repository drift", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = []`)
-		fixture.writeModule(t, "extra", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.extra"
-`, map[string]string{"config": "old"})
-		fixture.writeMachine(t, []string{"base"}, nil)
-
-		otherRepository := filepath.Join(fixture.root, "other-repository")
-		writeCLIFile(
-			t,
-			filepath.Join(otherRepository, "dot.toml"),
-			"version = 1\n[profiles]\nbase = []\n",
-		)
-		writeCLIFile(
-			t,
-			filepath.Join(otherRepository, "modules", "extra", "module.toml"),
-			"[[links]]\nid = \"config\"\nsource = \"config\"\ntarget = \"~/.extra\"\n",
-		)
-		writeCLIFile(
-			t,
-			filepath.Join(otherRepository, "modules", "extra", "config"),
-			"new",
-		)
-		fixture.env.afterPreflight = func() {
-			if _, err := config.PublishMachine(fixture.config, config.Machine{
-				Version:      1,
-				Repository:   otherRepository,
-				Profiles:     []string{"base"},
-				ExtraModules: []string{},
-			}); err != nil {
-				t.Fatalf("PublishMachine(repository drift) error = %v", err)
-			}
-		}
-
-		code, stdout, stderr := fixture.runInjected("apply", "extra")
-
-		if code != exitError ||
-			stdout != "" ||
-			!strings.Contains(stderr, "does not match mutation session repository") {
-			t.Fatalf(
-				"apply after repository drift = (%d, %q, %q), want fixed-session failure",
-				code,
-				stdout,
-				stderr,
-			)
-		}
-		machine := fixture.loadMachine(t)
-		if machine.Repository != otherRepository || len(machine.ExtraModules) != 0 {
-			t.Fatalf("machine after repository drift = %#v, want external edit only", machine)
-		}
-		assertCLIMissing(t, fixture.state)
-		assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
-	})
-}
-
-func assertSelectionOnlyAnalysis(
-	t *testing.T,
-	code int,
-	stdout, stderr, delta string,
-) {
-	t.Helper()
-	if code != exitOK ||
-		!strings.Contains(stdout, delta) ||
-		strings.Contains(stdout, "converged") ||
-		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf(
-			"selection-only analysis = (%d, %q, %q), want %q",
-			code,
-			stdout,
-			stderr,
-			delta,
-		)
-	}
-}
-
-func corruptRootManifest(t *testing.T, fixture *cliTestEnv) {
-	t.Helper()
-	path := filepath.Join(fixture.repository, "dot.toml")
-	if err := os.WriteFile(path, []byte("version = [\n"), 0o600); err != nil {
-		t.Fatalf("os.WriteFile(corrupt root manifest) error = %v", err)
-	}
-}
-
-func assertLockedReanalysisFailure(
-	t *testing.T,
-	code int,
-	stdout, stderr string,
-) {
-	t.Helper()
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "root manifest") {
-		t.Fatalf(
-			"locked reanalysis = (%d, %q, %q), want fatal refreshed input",
-			code,
-			stdout,
-			stderr,
-		)
-	}
 }

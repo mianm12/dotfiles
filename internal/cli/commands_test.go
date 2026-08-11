@@ -19,7 +19,9 @@ target = "~/.app"
 
 	for _, args := range [][]string{
 		{"apply", "one", "two"},
-		{"remove"},
+		{"select"},
+		{"select", "add"},
+		{"select", "remove"},
 		{"apply", "--unknown"},
 		{"init", fixture.repository, "extra"},
 		{"paths", "extra"},
@@ -48,6 +50,8 @@ func TestEmptyOptionalModuleIsRejectedWithoutMutation(t *testing.T) {
 		{"apply", ""},
 		{"apply", "", "--dry-run"},
 		{"status", ""},
+		{"select", "add", ""},
+		{"select", "remove", ""},
 	} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			fixture := newCLITestEnv(t, `base = ["app"]`)
@@ -87,38 +91,38 @@ func TestHelpListsOnlyPublicCommands(t *testing.T) {
 	if code != exitOK || stderr != "" {
 		t.Fatalf("help = (%d, %q)", code, stderr)
 	}
-	for _, command := range []string{"init", "status", "apply", "remove", "paths", "version"} {
+	for _, command := range []string{"init", "select", "status", "apply", "paths", "version"} {
 		if !strings.Contains(stdout, command) {
 			t.Fatalf("help missing %q:\n%s", command, stdout)
 		}
 	}
-	for _, removed := range []string{"add", "doctor", "diff"} {
+	for _, removed := range []string{"remove", "add", "doctor", "diff"} {
 		if strings.Contains(stdout, "\n  "+removed+" ") {
 			t.Fatalf("help still lists %q:\n%s", removed, stdout)
 		}
 	}
 }
 
-func TestApplyHelpExplainsPersistentActivation(t *testing.T) {
+func TestApplyHelpExplainsCurrentSelection(t *testing.T) {
 	fixture := newCLITestEnv(t, "")
 	code, stdout, stderr := fixture.run("help", "apply")
 	if code != exitOK ||
 		stderr != "" ||
-		!strings.Contains(stdout, "persistently activate MODULE when inactive") {
-		t.Fatalf("help apply = (%d, %q, %q), want persistent activation semantics", code, stdout, stderr)
+		!strings.Contains(stdout, "current effective selection") {
+		t.Fatalf("help apply = (%d, %q, %q), want convergence-only semantics", code, stdout, stderr)
 	}
 }
 
-func TestRemoveHelpExplainsExtraSelection(t *testing.T) {
+func TestSelectHelpExplainsConfigOnlySelection(t *testing.T) {
 	fixture := newCLITestEnv(t, "")
-	code, stdout, stderr := fixture.run("help", "remove")
+	code, stdout, stderr := fixture.run("help", "select")
 	if code != exitOK ||
 		stderr != "" ||
 		!strings.Contains(
 			stdout,
-			"Remove MODULE from extra selection and converge managed targets",
+			"Change direct module selection without converging targets",
 		) {
-		t.Fatalf("help remove = (%d, %q, %q), want extra-selection semantics", code, stdout, stderr)
+		t.Fatalf("help select = (%d, %q, %q), want config-only semantics", code, stdout, stderr)
 	}
 }
 

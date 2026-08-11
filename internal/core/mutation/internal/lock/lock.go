@@ -1,4 +1,4 @@
-// Package lock 提供 dot mutation 使用的进程间非阻塞排他锁。
+// Package lock owns the process lock used by core mutation entrypoints.
 package lock
 
 import (
@@ -10,25 +10,15 @@ import (
 )
 
 var (
-	// ErrBusy 表示另一进程已经持有同一个 dot mutation 锁。
+	// ErrBusy reports that another mutation currently owns the advisory lock.
 	ErrBusy = errors.New("another dot process is running")
-	// ErrIO 表示准备、获取或释放进程锁时发生文件系统错误。
+	// ErrIO reports a failure while accessing the advisory lock.
 	ErrIO = errors.New("process lock I/O failure")
-	// ErrOwnership 表示锁所有权无效或已经释放。
-	ErrOwnership = errors.New("invalid lock ownership")
 )
 
-// Ownership 表示一次 mutation 周期持有的排他锁所有权。
-// 它只支持同一指针的串行使用；值副本和零值无效，并发调用不受支持。
-type Ownership struct {
-	self    *Ownership
-	backend backend
-	path    string
-}
-
-// Acquire 建立 state root 与 lock 文件，并尝试立即取得进程间排他锁。
-// state root 与 lock 路径必须是绝对路径，且 lock 必须直接位于 state root 内。
-func Acquire(root, path string) (*Ownership, error) {
+// Acquire prepares and acquires the non-blocking exclusive lock. The returned
+// release function is owned by the caller and must be invoked exactly once.
+func Acquire(root, path string) (func() error, error) {
 	cleanRoot, cleanPath, err := cleanPair(root, path)
 	if err != nil {
 		return nil, err
@@ -51,10 +41,19 @@ func Acquire(root, path string) (*Ownership, error) {
 	if !locked {
 		return nil, fmt.Errorf("%w: %q", ErrBusy, cleanPath)
 	}
-	return newOwnership(fileLock, cleanPath), nil
+	return releaseBackend(fileLock, cleanPath), nil
 }
 
-// Validate read-only validates the lock root and existing lock entry.
+func releaseBackend(fileLock backend, path string) func() error {
+	return func() error {
+		if err := fileLock.Unlock(); err != nil {
+			return fmt.Errorf("%w: release process lock %q: %w", ErrIO, path, err)
+		}
+		return nil
+	}
+}
+
+// Validate performs the read-only validation used before lock acquisition.
 func Validate(root, path string) error {
 	cleanRoot, cleanPath, err := cleanPair(root, path)
 	if err != nil {
@@ -73,28 +72,6 @@ func validateEntries(root, path string) error {
 	return nil
 }
 
-func newOwnership(fileLock backend, path string) *Ownership {
-	owner := &Ownership{
-		backend: fileLock,
-		path:    path,
-	}
-	owner.self = owner
-	return owner
-}
-
-// Release 释放锁；同一次所有权只能成功释放一次。
-func (owner *Ownership) Release() error {
-	if owner == nil || owner.self != owner || owner.backend == nil {
-		return ErrOwnership
-	}
-	if err := owner.backend.Unlock(); err != nil {
-		return fmt.Errorf("%w: release process lock %q: %w", ErrIO, owner.path, err)
-	}
-	owner.backend = nil
-	owner.self = nil
-	return nil
-}
-
 func cleanPair(root, path string) (string, string, error) {
 	if root == "" || !filepath.IsAbs(root) {
 		return "", "", fmt.Errorf("process lock root must be a non-empty absolute path")
@@ -105,7 +82,11 @@ func cleanPair(root, path string) (string, string, error) {
 	cleanRoot := filepath.Clean(root)
 	cleanPath := filepath.Clean(path)
 	if filepath.Dir(cleanPath) != cleanRoot {
-		return "", "", fmt.Errorf("process lock path %q must be directly inside root %q", cleanPath, cleanRoot)
+		return "", "", fmt.Errorf(
+			"process lock path %q must be directly inside root %q",
+			cleanPath,
+			cleanRoot,
+		)
 	}
 	return cleanRoot, cleanPath, nil
 }

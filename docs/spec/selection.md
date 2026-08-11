@@ -4,10 +4,13 @@
 
 仓库中的 `dot.toml`、`modules/<id>/module.toml` 和配置内容描述共享期望。
 
-`dot.toml` 与当前命令 scope 内加载的 `module.toml` 必须是 regular file，或最终解析为 regular
-file 的 symlink。Directory、FIFO、socket、device、dangling symlink 和 symlink loop 必须在
-读取内容前失败；manifest symlink 的目标不要求位于 repository 内。Scope 外 module manifest
-继续按 [`cli.md`](cli.md#命令-scope-与加载) 延迟类型检查、读取和解析。
+执行 apply/status/dry-run convergence analysis 时，`dot.toml` 与全部 current effective
+`module.toml` 必须是 regular file，或最终解析为 regular file 的 symlink。Directory、FIFO、
+socket、device、dangling symlink 和 symlink loop 必须在读取内容前失败；manifest symlink 的
+目标不要求位于 repository 内。Inactive module manifest 继续按
+[`cli.md`](cli.md#命令-scope-与加载) 延迟类型检查、读取和解析；显式 status 可加载请求的
+inactive module。Init 与 select 只按 [`cli.md`](cli.md#init) 和 [`cli.md`](cli.md#select) 的
+selection-only 规则加载必要 manifest。
 
 ## Machine config
 
@@ -26,8 +29,9 @@ extra_modules = ["tmux"]
 modules(active profiles) union extra_modules
 ```
 
-Profile 内容只在仓库中人工维护。`init` 写入 profiles；`apply <module>` 和
-`remove <module>` 可以确定性重写 `extra_modules`。CLI 重写机器配置时不承诺保留注释和空行。
+Profile 内容只在仓库中人工维护。`init` 写入 profiles；`select add <module>` 和
+`select remove <module>` 可以确定性重写 `extra_modules`。`apply` 不修改 machine selection。
+CLI 重写机器配置时不承诺保留注释和空行。
 
 Machine config 不存在表示机器未初始化；一旦存在，其最终目录项本身必须是 regular file。
 类型检查不跟随最终 symlink，因此 symlink-to-regular、dangling symlink、directory、FIFO、
@@ -105,8 +109,8 @@ arch = ["x86_64", "aarch64"]
   - 所有受约束字段都 known 且匹配时，结果为 applicable。
 - 不支持否定、正则、优先级、fallback 或 capability 表达式。
 - Profile 选中的 module 无匹配 variant 时，resolution 结果是 not-applicable；这是合法的
-  非配置错误结果。Extra module 或显式 `apply <module>` 无匹配 variant 时得到相同
-  applicability 结果。
+  非配置错误结果。Extra module 或 `select add <module>` 检查的 module 无匹配 variant 时得到
+  相同 applicability 结果。
 - Profile not-applicable 的旧 ownership cleanup 只由
   [`planning.md`](planning.md#通用决策规则) 定义；indeterminate 和 extra/explicit
   not-applicable 的 mutation 边界只由

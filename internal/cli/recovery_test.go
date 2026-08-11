@@ -1,13 +1,11 @@
 package cli
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
@@ -394,10 +392,16 @@ target = "~/.app"
 			t,
 			[]string{"init", fixture.repository, "--profile", "base"},
 		)
-		assertOutputFailure(t, stderr, "dot apply")
+		if !strings.Contains(stderr, "selection may already be updated") ||
+			!strings.Contains(stderr, "rerun dot init") {
+			t.Fatalf("stderr = %q, want init selection recovery advice", stderr)
+		}
 		target := filepath.Join(fixture.home, ".app")
+		assertCLIMissing(t, target)
+		if code, _, applyErr := fixture.run("apply"); code != exitOK {
+			t.Fatalf("apply after init output failure = (%d, %q)", code, applyErr)
+		}
 		assertCLILink(t, target, filepath.Join(fixture.repository, "modules", "app", "config"))
-		assertApplyNoMutation(t, fixture, fixture.run)
 	})
 
 	t.Run("apply", func(t *testing.T) {
@@ -417,7 +421,7 @@ target = "~/.app"
 		assertApplyNoMutation(t, fixture, fixture.run)
 	})
 
-	t.Run("remove", func(t *testing.T) {
+	t.Run("select remove", func(t *testing.T) {
 		fixture := newCLITestEnv(t, "base = []")
 		fixture.writeModule(t, "app", `
 [[links]]
@@ -431,81 +435,26 @@ target = "~/.app"
 			t.Fatalf("initial apply = (%d, %q)", code, stderr)
 		}
 
-		stderr = runWithFailedStdout(t, []string{"remove", "app"})
-		assertOutputFailure(t, stderr, "dot apply")
-		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+		stderr = runWithFailedStdout(t, []string{"select", "remove", "app"})
+		if !strings.Contains(stderr, "selection may already be updated") ||
+			!strings.Contains(stderr, "rerun dot select remove app") {
+			t.Fatalf("stderr = %q, want select remove recovery advice", stderr)
+		}
+		assertCLILink(
+			t,
+			filepath.Join(fixture.home, ".app"),
+			filepath.Join(fixture.repository, "modules", "app", "config"),
+		)
 		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 			t.Fatalf("extra_modules = %v, want empty", extras)
 		}
 
-		before := snapshotPaths(t, fixture.config, fixture.state, fixture.lock)
 		code, stdout, stderr := fixture.run("apply")
 		if code != exitOK || stderr != "" {
 			t.Fatalf("recovery apply = (%d, %q, %q)", code, stdout, stderr)
 		}
-		assertCLINoMutationResult(t, stdout)
-		assertSnapshotUnchanged(t, before)
+		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
 	})
-}
-
-func TestProfileExtraRemoveInterruptionAdvisesApply(t *testing.T) {
-	fixture := newCLITestEnv(t, `base = ["app"]`)
-	fixture.writeModule(t, "app", `
-[match]
-os = ["macos"]
-
-[[links]]
-id = "config"
-source = "config"
-target = "~/.app"
-`, map[string]string{"config": "app"})
-	fixture.writeMachine(t, []string{"base"}, []string{"app"})
-	fixture.env.platform = func() config.Platform {
-		return cliTestPlatform("macos", "", "aarch64")
-	}
-	if code, _, stderr := fixture.runInjected("apply"); code != exitOK {
-		t.Fatalf("initial apply = (%d, %q)", code, stderr)
-	}
-	target := filepath.Join(fixture.home, ".app")
-	fixture.env.platform = func() config.Platform {
-		return cliTestPlatform("linux", "ubuntu", "x86_64")
-	}
-	fixture.env.afterSelectionPublish = func() error {
-		return errors.New("synthetic interruption")
-	}
-
-	code, stdout, stderr := fixture.runInjected("remove", "app")
-
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "rerun dot apply") ||
-		strings.Contains(stderr, "rerun dot remove") {
-		t.Fatalf(
-			"profile+extra remove interruption = (%d, %q, %q), want apply recovery",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules = %v, want persisted empty selection", extras)
-	}
-	assertCLILink(
-		t,
-		target,
-		filepath.Join(fixture.repository, "modules", "app", "config"),
-	)
-
-	fixture.env.afterSelectionPublish = nil
-	code, _, stderr = fixture.runInjected("apply")
-	if code != exitOK {
-		t.Fatalf("recovery apply = (%d, %q)", code, stderr)
-	}
-	assertCLIMissing(t, target)
-	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-		t.Fatalf("state modules = %#v, want empty after recovery", modules)
-	}
-	assertApplyNoMutation(t, fixture, fixture.runInjected)
 }
 
 func TestScopedApplyFailureAdvisesScopedRerun(t *testing.T) {
@@ -518,59 +467,9 @@ id = "config"
 source = "config"
 target = "~/.extra"
 `, map[string]string{"config": "portable"})
-		fixture.writeMachine(t, []string{"base"}, nil)
+		fixture.writeMachine(t, []string{"base"}, []string{"extra"})
 		return fixture
 	}
-
-	t.Run("selection publication interruption", func(t *testing.T) {
-		fixture := newFixture(t)
-		fixture.env.afterSelectionPublish = func() error {
-			return errors.New("synthetic interruption")
-		}
-
-		code, stdout, stderr := fixture.runInjected("apply", "extra")
-
-		if code != exitError ||
-			stdout != "" ||
-			!strings.Contains(stderr, "rerun dot apply extra") {
-			t.Fatalf(
-				"scoped apply interruption = (%d, %q, %q), want scoped rerun",
-				code,
-				stdout,
-				stderr,
-			)
-		}
-		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
-			extras[0] != "extra" {
-			t.Fatalf("extra_modules = %v, want persisted [extra]", extras)
-		}
-		assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
-	})
-
-	t.Run("convergence failure", func(t *testing.T) {
-		fixture := newFixture(t)
-		target := filepath.Join(fixture.home, ".extra")
-		fixture.env.beforeExecution = func() {
-			writeCLIFile(t, target, "personal")
-		}
-
-		code, stdout, stderr := fixture.runInjected("apply", "extra")
-
-		if code != exitError ||
-			stdout != "" ||
-			!strings.Contains(stderr, "rerun dot apply extra") {
-			t.Fatalf(
-				"scoped apply convergence failure = (%d, %q, %q), want scoped rerun",
-				code,
-				stdout,
-				stderr,
-			)
-		}
-		if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
-			extras[0] != "extra" {
-			t.Fatalf("extra_modules = %v, want persisted [extra]", extras)
-		}
-	})
 
 	t.Run("result output failure", func(t *testing.T) {
 		fixture := newFixture(t)

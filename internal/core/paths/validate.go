@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 )
 
 var (
@@ -14,6 +15,28 @@ var (
 	// ErrControlTopology reports control families that are not isolated.
 	ErrControlTopology = errors.New("control paths conflict")
 )
+
+type placementError struct {
+	err    error
+	labels []string
+}
+
+func (err *placementError) Error() string { return err.err.Error() }
+
+func (err *placementError) Unwrap() error { return err.err }
+
+// PlacementLabels returns the placement labels attached to a validation error.
+func PlacementLabels(err error) []string {
+	var placed *placementError
+	if !errors.As(err, &placed) {
+		return nil
+	}
+	return slices.Clone(placed.labels)
+}
+
+func withPlacementLabels(err error, labels ...string) error {
+	return &placementError{err: err, labels: slices.Clone(labels)}
+}
 
 // Controls contains the protected paths named by the placement specification.
 type Controls struct {
@@ -331,34 +354,34 @@ func validateTargetSet(
 				continue
 			}
 			if TargetsEqual(left.Target, right.Target) {
-				return fmt.Errorf(
+				return withPlacementLabels(fmt.Errorf(
 					"%w: placements %q target %q and %q target %q resolve to the same target",
 					ErrTargetConflict,
 					left.Label,
 					left.Target.Lexical(),
 					right.Label,
 					right.Target.Lexical(),
-				)
+				), left.Label, right.Label)
 			}
 			if TargetStrictlyContains(left.Target, right.Target) {
-				return fmt.Errorf(
+				return withPlacementLabels(fmt.Errorf(
 					"%w: placement %q target %q contains placement %q target %q",
 					ErrTargetConflict,
 					left.Label,
 					left.Target.Lexical(),
 					right.Label,
 					right.Target.Lexical(),
-				)
+				), left.Label, right.Label)
 			}
 			if TargetStrictlyContains(right.Target, left.Target) {
-				return fmt.Errorf(
+				return withPlacementLabels(fmt.Errorf(
 					"%w: placement %q target %q contains placement %q target %q",
 					ErrTargetConflict,
 					right.Label,
 					right.Target.Lexical(),
 					left.Label,
 					left.Target.Lexical(),
-				)
+				), right.Label, left.Label)
 			}
 		}
 	}
@@ -390,7 +413,7 @@ func validateControlBoundaries(
 		for _, family := range topology.families {
 			for _, control := range family.paths {
 				if identityOverlapsTarget(control, placement.Target) {
-					return fmt.Errorf(
+					return withPlacementLabels(fmt.Errorf(
 						"%w: placement %q target %q overlaps %s %q; %s",
 						ErrControlBoundary,
 						placement.Label,
@@ -398,7 +421,7 @@ func validateControlBoundaries(
 						control.label,
 						filepath.Clean(control.lexical),
 						controlPathHint,
-					)
+					), placement.Label)
 				}
 			}
 		}

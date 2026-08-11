@@ -7,38 +7,44 @@
 
 ```text
 repository desired + machine selection + state + actual filesystem
-  -> CLI OperationAnalysis (selection delta + resolve + plan)
-  -> status / dry-run projection
-  -> executor OpenSession (fixed HOME + controls + lock ownership)
-  -> rebuild OperationAnalysis
-  -> Session.PublishSelection
-  -> Session.Converge (reload state + replan + execute + verify + commit state)
-  -> Session.Close
+  -> status / dry-run: CLI OperationAnalysis (module projection + Plan{Steps, Issues})
+  -> apply: mutation.Apply
+       -> resolve selection + executor.Analyze (full read-only preflight)
+       -> acquire lock
+       -> reload machine/repository + resolve selection
+       -> executor.Execute (fresh analysis + execute + verify + commit state)
+  -> release lock
   -> CLI mutation result projection
+
+init/select -> mutation.UpdateSelection
+            -> preflight + lock + reload + atomic config publication + release
 ```
 
 核心业务逻辑与 CLI、文件发布和进程退出分离。`cmd/dot` 只把进程 IO/环境交给 `cli.Run` 并以
-其结果退出。OperationAnalysis 是只读观察结果，不是 executor 输入；真实 mutation 在锁内
-重新分析后，只把 prospective machine、已解析 module 集合和 scope 交给持锁 Session；
-Session 固定 HOME 与 controls，selection 发布和 artifact convergence 都不能替换这组边界。
-Converge 再次加载 state 并重新规划。Scoped mutation 的 module 投影只包含请求 scope 和具有
-module-specific blocker 的 module；完整 prospective selection 仍保存在 machine 中，其他
+其结果退出。CLI OperationAnalysis 只服务 status 与 dry-run：它是只读观察结果，只保存 module
+投影、`Plan{Steps, Issues}` 与输入 warning，不夹带 resolved modules、scope 或 loaded state
+供执行使用，也不是 executor 输入。
+Status 对一次请求只调用 planner 一次；path validation error 自带受影响 placement labels，不靠
+逐 module probe 定位。`mutation.Apply` 直接拥有一次 artifact mutation：锁前解析 selection 并
+调用 `executor.Analyze` 完成 state、actual 与 planner 的完整零写入检查；成功后获取单次 lock，
+锁内重新加载 machine/repository、重新解析 selection，再由 `executor.Execute` 调用同一私有分析
+实现重新加载最新 state、重新规划、执行并提交 state。锁前 analysis 不传入 executor 执行。
+`UpdateSelection` 独立
+拥有 config-only mutation；两条路径不通过 Session 或 callback 组合。Scoped mutation 的 module
+投影只包含请求 scope 和具有 module-specific blocker 的 module；完整 current selection 仍保存
+在 machine 中，其他
 effective modules 继续通过已解析 module 集合参与 target topology 校验。
 
-唯一内部 mutation 生命周期是：
+公开给 CLI 的 mutation 写入口只有：
 
 ```go
-OpenSession(home, controls)
-Session.PublishSelection(machine)
-Session.Converge(modules, scope)
-Session.Close()
+mutation.UpdateSelection(request)
+mutation.Apply(request)
 ```
 
-CLI 不直接获取、复用或释放 lock，也不直接发布 machine selection。Session 只表达这一条
-线性生命周期，不引入通用 workflow、事务或 rollback。Session 和 lock ownership 都只支持
-同一指针的串行使用，值副本会被拒绝，并发调用不受支持。Close 失败表示 lock 尚未确认释放；
-Session 不再接受 selection 或 artifact mutation，只允许重试 Close。成功释放后，同一
-ownership 不得再次释放。
+CLI 不直接获取、复用或释放 lock，也不直接发布 machine selection。Mutation 函数以单次调用
+固定 HOME 与 controls，并通过词法 `defer` 释放内部 lock；不存在可复制、可复用或需要 closing
+状态的 Session/Ownership 对象。Lock release 失败与 mutation 错误合并报告，已完成写入不回滚。
 
 ## Package 职责
 
@@ -48,9 +54,11 @@ ownership 不得再次释放。
 | `internal/core/paths` | HOME target、source、控制路径边界和路径解析结果分类 |
 | `internal/core/state` | ownership state 模型与编解码 |
 | `internal/core/config` | repository、machine 和 module 配置解析 |
-| `internal/lock` | mutation advisory lock |
-| `internal/core/planner` | desired、state 与 actual 的纯计划决策；action 保存结构化 forget 原因 |
-| `internal/core/executor` | Session、lock ownership、selection 发布调度、mutation 顺序、复核和恢复语义 |
+| `internal/core/selection` | machine selection 的纯 resolution 与 typed issue |
+| `internal/core/planner` | desired、state 与 actual 的纯计划决策；输出 `Plan{Steps, Issues}` |
+| `internal/core/executor` | artifact 的只读分析、锁内重新规划、执行、changed-target 复核与 state 提交 |
+| `internal/core/mutation` | UpdateSelection/Apply、完整锁前 preflight、control 校验与 lock ownership |
+| `internal/core/mutation/internal/lock` | mutation 私有的 advisory lock 实现 |
 | `internal/cli` | 命令、只读 operation analysis、scope、输出和退出码 |
 | `cmd/dot` | 进程入口 |
 
@@ -58,11 +66,10 @@ ownership 不得再次释放。
 
 ```text
 storage / paths / state
-        -> config / lock
-        -> planner
-        -> executor
-        -> cli
-        -> cmd/dot
+        -> config -> selection
+        -> planner -> executor
+        -> mutation
+        -> cli -> cmd/dot
 ```
 
 实际允许边由架构测试中的显式表固定。生产 package 不得反向依赖，也不得为了省事越过该表；
@@ -73,7 +80,7 @@ storage / paths / state
 | 第三方 package | 唯一 owner |
 | --- | --- |
 | `github.com/google/renameio/v2` | `internal/storage` |
-| `github.com/gofrs/flock` | `internal/lock` |
+| `github.com/gofrs/flock` | `internal/core/mutation/internal/lock` |
 | `github.com/pelletier/go-toml/v2` | `internal/core/config` |
 | `github.com/spf13/cobra` | `internal/cli` |
 
@@ -99,9 +106,10 @@ storage / paths / state
 Local 与新文件的不可覆盖发布不使用 rename：先写 `0600` 临时文件，再以 `os.Link` 发布到
 target；已存在时得到 `EEXIST`，同时保证内容完整、不可覆盖和原子出现。
 
-机器配置与 state 各自负责编码和语义校验，再统一调用
-`storage.PublishPrivateFile(path, data)`；该函数在相同内容时执行零 metadata 写入的严格
-no-op，在实际发布时负责 `0700/0600` 权限、renameio 原子替换和 temporary file cleanup。
+Config 与 state 各自负责编码和语义校验；mutation 发布 machine config、executor 提交
+ownership snapshot 时统一调用 `storage.PublishPrivateFile(path, data)`。该函数在相同内容时执行
+零 metadata 写入的严格 no-op，在实际发布时负责 `0700/0600` 权限、renameio 原子替换和
+temporary file cleanup。
 Paths 在系统调用边界把解析失败分类为确定的 namespace 阻塞或不可确定的 I/O 失败，planner
 只消费 typed classification，不检查 `PathError` 包装或平台 errno。
 

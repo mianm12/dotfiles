@@ -31,16 +31,13 @@ func usagef(format string, arguments ...any) error {
 }
 
 type environment struct {
-	stdin                 io.Reader
-	stdout                io.Writer
-	stderr                io.Writer
-	userHomeDir           func() (string, error)
-	getwd                 func() (string, error)
-	platform              func() config.Platform
-	afterPreflight        func()
-	afterSelectionPublish func() error
-	beforeExecution       func()
-	build                 buildinfo.Info
+	stdin       io.Reader
+	stdout      io.Writer
+	stderr      io.Writer
+	userHomeDir func() (string, error)
+	getwd       func() (string, error)
+	platform    func() config.Platform
+	build       buildinfo.Info
 }
 
 // Run executes dot with arguments that exclude the program name.
@@ -102,9 +99,9 @@ func newRootCommand(env environment) *cobra.Command {
 	})
 	root.AddCommand(
 		newInitCommand(env),
+		newSelectCommand(env),
 		newStatusCommand(env),
 		newApplyCommand(env),
-		newRemoveCommand(env),
 		newPathsCommand(env),
 		newVersionCommand(env),
 	)

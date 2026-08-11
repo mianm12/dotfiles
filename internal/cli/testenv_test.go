@@ -16,6 +16,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
+	"github.com/mianm12/dotfiles/internal/storage"
 )
 
 type cliTestEnv struct {
@@ -170,13 +171,22 @@ func (fixture *cliTestEnv) writeMachine(
 	profiles, extras []string,
 ) {
 	t.Helper()
-	if _, err := config.PublishMachine(fixture.config, config.Machine{
+	publishTestMachine(t, fixture.config, config.Machine{
 		Version:      1,
 		Repository:   fixture.repository,
 		Profiles:     append([]string(nil), profiles...),
 		ExtraModules: append([]string(nil), extras...),
-	}); err != nil {
-		t.Fatalf("PublishMachine() error = %v", err)
+	})
+}
+
+func publishTestMachine(t *testing.T, path string, machine config.Machine) {
+	t.Helper()
+	data, err := config.MarshalMachine(machine)
+	if err != nil {
+		t.Fatalf("MarshalMachine() error = %v", err)
+	}
+	if _, err := storage.PublishPrivateFile(path, data); err != nil {
+		t.Fatalf("PublishPrivateFile(machine) error = %v", err)
 	}
 }
 
@@ -392,7 +402,7 @@ func assertApplyNoMutation(
 
 func assertCLINoMutationResult(t *testing.T, stdout string) {
 	t.Helper()
-	const noMutation = "selection_changed=false targets_changed=false state_changed=false"
+	const noMutation = "targets_changed=false state_changed=false"
 	if !strings.Contains(stdout, noMutation) {
 		t.Fatalf("stdout = %q, want %q", stdout, noMutation)
 	}

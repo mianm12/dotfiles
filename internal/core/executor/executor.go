@@ -13,11 +13,11 @@ import (
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
-	"github.com/mianm12/dotfiles/internal/lock"
-	"github.com/mianm12/dotfiles/internal/storage"
 )
 
-type convergenceRequest struct {
+// Request contains the already resolved desired modules for one artifact
+// analysis or execution pass.
+type Request struct {
 	Home     string
 	Controls corepaths.Controls
 	Modules  []config.Module
@@ -34,58 +34,95 @@ type Result struct {
 	Warnings       []string
 }
 
-type stateCommitter func(string, state.Snapshot) error
-
-// ValidateMutationControls performs every read-only control check required
-// before lock acquisition.
-func ValidateMutationControls(controls corepaths.Controls) error {
-	if err := corepaths.ValidateControlTopology(controls); err != nil {
-		return err
-	}
-	configRoot := filepath.Dir(filepath.Clean(controls.Config))
-	if err := storage.ValidateRoot(configRoot); err != nil {
-		return fmt.Errorf(
-			"validate machine config root %q before mutation: %w; "+
-				"run `dot paths` to inspect the active control paths",
-			configRoot,
-			err,
-		)
-	}
-	if err := storage.ValidatePrivateFile(controls.Config); err != nil {
-		return fmt.Errorf(
-			"validate machine config %q before mutation: %w; "+
-				"run `dot paths` to inspect the active control paths",
-			controls.Config,
-			err,
-		)
-	}
-	stateRoot := filepath.Dir(filepath.Clean(controls.State))
-	if err := lock.Validate(stateRoot, controls.Lock); err != nil {
-		return fmt.Errorf(
-			"validate state root and lock %q before mutation: %w; "+
-				"run `dot paths` to inspect the active control paths",
-			controls.Lock,
-			err,
-		)
-	}
-	if err := storage.ValidatePrivateFile(controls.State); err != nil {
-		return fmt.Errorf(
-			"validate state %q before mutation: %w; "+
-				"run `dot paths` to inspect the active control paths",
-			controls.State,
-			err,
-		)
-	}
-	return nil
+// Analysis is the complete read-only artifact analysis for one request.
+type Analysis struct {
+	Plan     planner.Plan
+	Warnings []string
 }
 
-func runLocked(request convergenceRequest, commit stateCommitter) (Result, error) {
-	if err := validateRequest(request); err != nil {
+// BlockingError reports the first issue that makes this analysis unsafe to execute.
+func (analysis Analysis) BlockingError() error {
+	if !analysis.Plan.HasIssues() {
+		return nil
+	}
+	return conflictError(analysis.Plan)
+}
+
+type stateCommitter func(string, state.Snapshot) error
+
+type preparedAnalysis struct {
+	report Analysis
+	loaded state.Loaded
+}
+
+// Analyze loads current state and builds a plan without mutating controls,
+// targets, or ownership state.
+func Analyze(request Request) (Analysis, error) {
+	prepared, err := analyze(request)
+	if err != nil {
+		return Analysis{}, err
+	}
+	return prepared.report, nil
+}
+
+// Execute applies a plan and commits state. The mutation package owns control
+// validation and lock lifetime before calling this lower-level engine.
+func Execute(request Request) (Result, error) {
+	return runLocked(request, commitState)
+}
+
+func runLocked(request Request, commit stateCommitter) (Result, error) {
+	prepared, err := analyze(request)
+	if err != nil {
 		return Result{}, err
+	}
+	if blocked := prepared.report.BlockingError(); blocked != nil {
+		return Result{
+			Plan:     prepared.report.Plan,
+			Warnings: prepared.report.Warnings,
+		}, blocked
+	}
+
+	next := cloneSnapshot(prepared.loaded.Snapshot)
+	mutation := mutationRun{home: filepath.Clean(request.Home)}
+	if err := mutation.apply(prepared.report.Plan, &next); err != nil {
+		return Result{
+			Plan:           prepared.report.Plan,
+			TargetsChanged: mutation.changed,
+			Warnings:       prepared.report.Warnings,
+		}, mutation.wrapError(err)
+	}
+
+	stateChanged := prepared.loaded.Missing ||
+		prepared.loaded.NeedsRewrite ||
+		!reflect.DeepEqual(prepared.loaded.Snapshot, next)
+	if stateChanged {
+		if err := commit(request.Controls.State, next); err != nil {
+			return Result{
+					Plan:           prepared.report.Plan,
+					TargetsChanged: mutation.changed,
+					Warnings:       prepared.report.Warnings,
+				}, mutation.wrapError(fmt.Errorf(
+					"commit state: %w; state was not committed, rerun to converge",
+					err,
+				))
+		}
+	}
+	return Result{
+		Plan:           prepared.report.Plan,
+		TargetsChanged: mutation.changed,
+		StateChanged:   stateChanged,
+		Warnings:       prepared.report.Warnings,
+	}, nil
+}
+
+func analyze(request Request) (preparedAnalysis, error) {
+	if err := validateRequest(request); err != nil {
+		return preparedAnalysis{}, err
 	}
 	loaded, err := state.Load(request.Controls.State, request.Home)
 	if err != nil {
-		return Result{}, err
+		return preparedAnalysis{}, err
 	}
 	plan, err := planner.Build(planner.Request{
 		Home:     request.Home,
@@ -95,51 +132,20 @@ func runLocked(request convergenceRequest, commit stateCommitter) (Result, error
 		State:    loaded.Snapshot,
 	})
 	if err != nil {
-		return Result{}, err
+		return preparedAnalysis{}, err
 	}
-	if plan.HasConflicts() {
-		return Result{Plan: plan, Warnings: warnings(loaded)}, conflictError(plan)
-	}
-
-	next := cloneSnapshot(loaded.Snapshot)
-	mutation := mutationRun{home: filepath.Clean(request.Home)}
-	if err := mutation.apply(plan, &next); err != nil {
-		return Result{
-			Plan:           plan,
-			TargetsChanged: mutation.changed,
-			Warnings:       warnings(loaded),
-		}, mutation.wrapError(err)
-	}
-
-	stateChanged := loaded.Missing ||
-		loaded.NeedsRewrite ||
-		!reflect.DeepEqual(loaded.Snapshot, next)
-	if stateChanged {
-		if err := commit(request.Controls.State, next); err != nil {
-			return Result{
-					Plan:           plan,
-					TargetsChanged: mutation.changed,
-					Warnings:       warnings(loaded),
-				}, mutation.wrapError(fmt.Errorf(
-					"commit state: %w; state was not committed, rerun to converge",
-					err,
-				))
-		}
-	}
-	return Result{
-		Plan:           plan,
-		TargetsChanged: mutation.changed,
-		StateChanged:   stateChanged,
-		Warnings:       warnings(loaded),
+	return preparedAnalysis{
+		report: Analysis{
+			Plan:     plan,
+			Warnings: warnings(loaded),
+		},
+		loaded: loaded,
 	}, nil
 }
 
-func validateRequest(request convergenceRequest) error {
+func validateRequest(request Request) error {
 	if _, err := validateExecutorHome(request.Home); err != nil {
 		return err
-	}
-	if err := ValidateMutationControls(request.Controls); err != nil {
-		return fmt.Errorf("validate executor mutation controls: %w", err)
 	}
 	return nil
 }
@@ -164,17 +170,17 @@ func warnings(loaded state.Loaded) []string {
 }
 
 func conflictError(plan planner.Plan) error {
-	for _, action := range plan.Actions {
-		if action.Decision == planner.DecisionConflict {
-			return fmt.Errorf(
-				"plan conflict for %s/%s: %s",
-				action.ModuleID,
-				action.PlacementID,
-				action.Reason,
-			)
-		}
+	if len(plan.Issues) != 0 {
+		issue := plan.Issues[0]
+		return fmt.Errorf(
+			"plan %s for %s/%s: %s",
+			issue.Kind,
+			issue.ModuleID,
+			issue.PlacementID,
+			issue.Reason,
+		)
 	}
-	return fmt.Errorf("plan contains a conflict")
+	return fmt.Errorf("plan contains an issue")
 }
 
 func cloneSnapshot(snapshot state.Snapshot) state.Snapshot {

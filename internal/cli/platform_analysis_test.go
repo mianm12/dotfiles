@@ -140,9 +140,8 @@ func TestExplicitIndeterminateModuleShowsAnalysisButDoesNotChangeSelection(t *te
 		"--dry-run",
 	)
 	if code != exitError ||
-		!strings.Contains(stdout, "selection-delta add-extra module=gated") ||
 		!strings.Contains(stdout, "blocked module=gated") ||
-		!strings.Contains(stdout, "distribution is unreadable") ||
+		!strings.Contains(stdout, "not selected") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"explicit indeterminate dry-run = (%d, %q, %q)",
@@ -153,7 +152,7 @@ func TestExplicitIndeterminateModuleShowsAnalysisButDoesNotChangeSelection(t *te
 	}
 	assertSnapshotUnchanged(t, before)
 
-	code, stdout, stderr = fixture.runInjected("apply", "gated")
+	code, stdout, stderr = fixture.runInjected("select", "add", "gated")
 	if code != exitError ||
 		stdout != "" ||
 		!strings.Contains(stderr, "applicability is indeterminate") {
@@ -173,7 +172,7 @@ func TestExplicitIndeterminateModuleShowsAnalysisButDoesNotChangeSelection(t *te
 	assertCLIMissing(t, filepath.Join(fixture.home, ".gated"))
 }
 
-func TestInitWithIndeterminateProfileDoesNotPublishSelection(t *testing.T) {
+func TestInitDoesNotResolveIndeterminateProfile(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["gated"]`)
 	fixture.writeModule(
 		t,
@@ -191,43 +190,23 @@ func TestInitWithIndeterminateProfileDoesNotPublishSelection(t *testing.T) {
 		fixture.repository,
 		"--profile",
 		"base",
-		"--dry-run",
 	)
-	if code != exitError ||
-		!strings.Contains(stdout, "selection-delta create") ||
-		!strings.Contains(stdout, "blocked module=gated") ||
-		!strings.Contains(stdout, "distribution is unavailable") ||
-		strings.Contains(stdout, "create-link") ||
-		!strings.Contains(stderr, "state is missing") {
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "run dot apply") {
 		t.Fatalf(
-			"indeterminate init dry-run = (%d, %q, %q)",
+			"indeterminate init = (%d, %q, %q), want config-only success",
 			code,
 			stdout,
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
-
-	code, stdout, stderr = fixture.runInjected(
-		"init",
-		fixture.repository,
-		"--profile",
-		"base",
-	)
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, `module "gated" applicability is indeterminate`) {
-		t.Fatalf(
-			"indeterminate init = (%d, %q, %q), want zero-write failure",
-			code,
-			stdout,
-			stderr,
-		)
+	if before.root == "" {
+		t.Fatal("synthetic snapshot unexpectedly missing root")
 	}
-	assertSnapshotUnchanged(t, before)
-	assertCLIMissing(t, fixture.config)
+	if profiles := fixture.loadMachine(t).Profiles; len(profiles) != 1 || profiles[0] != "base" {
+		t.Fatalf("profiles = %v, want [base]", profiles)
+	}
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
+	assertCLIMissing(t, filepath.Join(fixture.home, ".gated"))
 	assertCLIMissing(t, filepath.Join(fixture.home, ".gated"))
 }
 
@@ -244,7 +223,7 @@ id = "config"
 source = "config"
 target = "~/.extra"
 `, map[string]string{"config": "extra"})
-	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeMachine(t, []string{"base"}, []string{"extra"})
 	fixture.env.platform = func() config.Platform {
 		return cliIndeterminateLinuxPlatform("distribution is unavailable")
 	}
@@ -256,7 +235,6 @@ target = "~/.extra"
 		"--dry-run",
 	)
 	if code != exitError ||
-		!strings.Contains(stdout, "selection-delta add-extra module=extra") ||
 		!strings.Contains(stdout, "blocked module=uncertain") ||
 		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
@@ -281,8 +259,8 @@ target = "~/.extra"
 		)
 	}
 	assertSnapshotUnchanged(t, before)
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "extra" {
+		t.Fatalf("extra_modules = %v, want unchanged [extra] selection", extras)
 	}
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
@@ -339,36 +317,32 @@ func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 					t.Fatalf("os.Symlink(user target) error = %v", err)
 				}
 			}
-			before := snapshotTree(t, fixture.root)
-
-			code, stdout, stderr := fixture.runInjected(
-				"remove",
-				"gated",
-				"--dry-run",
-			)
+			code, stdout, stderr := fixture.runInjected("select", "remove", "gated")
 			if code != exitOK ||
-				!strings.Contains(
-					stdout,
-					"selection-delta remove-extra module=gated",
-				) ||
-				(!test.drift && !strings.Contains(stdout, "prune")) ||
-				(test.drift && !strings.Contains(stdout, "forget")) ||
-				strings.Contains(stdout, "blocked") ||
+				!strings.Contains(stdout, "selection_changed=true") ||
 				stderr != "" {
 				t.Fatalf(
-					"remove dry-run = (%d, %q, %q), want selection contraction cleanup",
+					"select remove = (%d, %q, %q), want selection-only contraction",
 					code,
 					stdout,
 					stderr,
 				)
 			}
-			assertSnapshotUnchanged(t, before)
+			if test.drift {
+				assertCLILink(t, target, userDestination)
+			} else {
+				assertCLILink(
+					t,
+					target,
+					filepath.Join(fixture.repository, "modules", "gated", "config"),
+				)
+			}
 
-			code, stdout, stderr = fixture.runInjected("remove", "gated")
+			code, stdout, stderr = fixture.runInjected("apply")
 			if code != exitOK ||
-				!strings.Contains(stdout, "selection_changed=true") {
+				!strings.Contains(stdout, "state_changed=true") {
 				t.Fatalf(
-					"remove = (%d, %q, %q), want successful selection contraction",
+					"apply after select remove = (%d, %q, %q), want cleanup",
 					code,
 					stdout,
 					stderr,
@@ -416,34 +390,33 @@ target = "~/.gated.local"
 	fixture.env.platform = func() config.Platform {
 		return cliIndeterminateLinuxPlatform("distribution cannot be determined")
 	}
-	before := snapshotTree(t, fixture.root)
-
-	code, stdout, stderr := fixture.runInjected("remove", "gated", "--dry-run")
+	code, stdout, stderr := fixture.runInjected("select", "remove", "gated")
 	if code != exitOK ||
-		!strings.Contains(stdout, "selection-delta remove-extra module=gated") ||
-		!strings.Contains(stdout, "forget") ||
-		strings.Contains(stdout, "blocked") ||
+		!strings.Contains(stdout, "selection_changed=true") ||
 		stderr != "" {
 		t.Fatalf(
-			"remove dry-run = (%d, %q, %q), want local forget",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertSnapshotUnchanged(t, before)
-
-	code, stdout, stderr = fixture.runInjected("remove", "gated")
-	if code != exitOK ||
-		!strings.Contains(stdout, "selection_changed=true") {
-		t.Fatalf(
-			"remove = (%d, %q, %q), want successful local forget",
+			"select remove = (%d, %q, %q), want selection contraction",
 			code,
 			stdout,
 			stderr,
 		)
 	}
 	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "user-owned" {
+		t.Fatalf("local after select remove = (%q, %v), want preserved user data", data, err)
+	}
+
+	code, stdout, stderr = fixture.runInjected("apply")
+	if code != exitOK ||
+		!strings.Contains(stdout, "state_changed=true") {
+		t.Fatalf(
+			"apply after select remove = (%d, %q, %q), want local forget",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	data, err = os.ReadFile(target)
 	if err != nil || string(data) != "user-owned" {
 		t.Fatalf("local after remove = (%q, %v), want preserved user data", data, err)
 	}
@@ -476,38 +449,29 @@ target = "~/.extra"
 	fixture.env.platform = func() config.Platform {
 		return cliIndeterminateLinuxPlatform("distribution is unavailable")
 	}
-	before := snapshotTree(t, fixture.root)
-
-	code, stdout, stderr := fixture.runInjected("remove", "extra", "--dry-run")
-	if code != exitError ||
-		!strings.Contains(stdout, "selection-delta remove-extra module=extra") ||
-		!strings.Contains(stdout, "blocked module=uncertain") ||
-		strings.Contains(stdout, "prune") ||
-		stderr != "" {
+	code, stdout, stderr := fixture.runInjected("select", "remove", "extra")
+	if code != exitOK || !strings.Contains(stdout, "selection_changed=true") || stderr != "" {
 		t.Fatalf(
-			"remove dry-run = (%d, %q, %q), want other effective blocker",
+			"select remove = (%d, %q, %q), want independent selection contraction",
 			code,
 			stdout,
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
 
-	code, stdout, stderr = fixture.runInjected("remove", "extra")
+	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitError ||
 		stdout != "" ||
 		!strings.Contains(stderr, `module "uncertain" applicability is indeterminate`) {
 		t.Fatalf(
-			"remove = (%d, %q, %q), want zero-write effective blocker",
+			"apply = (%d, %q, %q), want effective blocker after selection contraction",
 			code,
 			stdout,
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
-		extras[0] != "extra" {
-		t.Fatalf("extra_modules = %v, want unchanged [extra]", extras)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
+		t.Fatalf("extra_modules = %v, want contracted selection", extras)
 	}
 }
 
