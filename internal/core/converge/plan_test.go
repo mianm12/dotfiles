@@ -364,7 +364,7 @@ func TestStaleTargetReuseDoesNotOverrideActiveOwnershipConflict(t *testing.T) {
 
 	assertDecisions(t, plan, conflictDecision, DecisionForget)
 	if len(plan.Problems) == 0 {
-		t.Fatal("Build() HasIssues() = false, want active ownership conflict")
+		t.Fatal("Build() Problems is empty, want active ownership conflict")
 	}
 	if got := plan.Actions()[0].Reason; got != "stale target is reused by desired configuration" {
 		t.Fatalf("stale reuse reason = %q", got)
@@ -569,7 +569,7 @@ func TestActiveTargetAndStaleParentBothProjectTraversalConflict(t *testing.T) {
 
 	assertDecisions(t, plan, conflictDecision, conflictDecision)
 	if len(plan.Problems) == 0 {
-		t.Fatal("Build() HasIssues() = false, want traversal conflicts")
+		t.Fatal("Build() Problems is empty, want traversal conflicts")
 	}
 	if got := plan.Problems[0].Reason; !strings.Contains(got, "traverses state-owned link") {
 		t.Fatalf("active target conflict reason = %q", got)
