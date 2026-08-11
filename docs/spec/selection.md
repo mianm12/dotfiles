@@ -8,8 +8,8 @@
 `module.toml` 必须是 regular file，或最终解析为 regular file 的 symlink。Directory、FIFO、
 socket、device、dangling symlink 和 symlink loop 必须在读取内容前失败；manifest symlink 的
 目标不要求位于 repository 内。Inactive module manifest 继续按
-[`cli.md`](cli.md#命令-scope-与加载) 延迟类型检查、读取和解析；显式 status 可加载请求的
-inactive module。Init 与 select 只按 [`cli.md`](cli.md#init) 和 [`cli.md`](cli.md#select) 的
+[`cli.md`](cli.md#全量收敛与加载) 延迟类型检查、读取和解析；status 可在不读取 manifest 的情况下
+将其列入 inventory。Init 与 select 只按 [`cli.md`](cli.md#init) 和 [`cli.md`](cli.md#select) 的
 selection-only 规则加载必要 manifest。
 
 ## Machine config
