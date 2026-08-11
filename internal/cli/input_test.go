@@ -75,7 +75,7 @@ target = "~/.app"
 	}
 }
 
-func TestScopedDryRunDefersOutOfScopeFIFOManifest(t *testing.T) {
+func TestFullReadOnlyAnalysisDefersInactiveFIFOManifest(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["good"]`)
 	fixture.writeModule(t, "good", `
 [[links]]
@@ -93,25 +93,21 @@ target = "~/.good"
 	fixture.writeMachine(t, []string{"base"}, nil)
 	before := snapshotTree(t, fixture.root)
 
-	code, _, stderr := fixture.runProcess("apply", "good", "--dry-run")
-	if code != exitOK {
-		t.Fatalf("scoped good dry-run = (%d, %q), want success", code, stderr)
+	for _, args := range [][]string{{"apply", "--dry-run"}, {"status"}} {
+		code, stdout, stderr := fixture.runProcess(args...)
+		if code != exitOK ||
+			strings.Contains(stdout, "regular file") ||
+			!strings.Contains(stderr, "state is missing") {
+			t.Fatalf(
+				"%v = (%d, %q, %q), want inactive manifest deferral",
+				args,
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, before)
 	}
-	assertSnapshotUnchanged(t, before)
-
-	code, stdout, stderr := fixture.runProcess("apply", "bad", "--dry-run")
-	if code != exitError ||
-		!strings.Contains(stdout, "not selected") ||
-		strings.Contains(stdout, "regular file") ||
-		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf(
-			"scoped bad dry-run = (%d, %q, %q), want inactive-selection blocker without manifest load",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertSnapshotUnchanged(t, before)
 }
 
 func TestReadOnlyCommandsDoNotRewriteEmptyStateModules(t *testing.T) {

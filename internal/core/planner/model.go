@@ -48,11 +48,7 @@ type Request struct {
 	Home     string
 	Controls corepaths.Controls
 	Modules  []config.Module
-	// Scope limits active and stale decisions to the named modules while still
-	// comparing their targets with every module in Modules. Nil means a full
-	// plan, including state-only stale modules.
-	Scope []string
-	State state.Snapshot
+	State    state.Snapshot
 }
 
 // Step describes one ordered executable planner decision. LinkDestination is the
@@ -85,14 +81,23 @@ type Issue struct {
 }
 
 // Plan is the single planning report: executable Steps and blocking Issues.
-// Steps preserve active-before-stale ordering. Step.Reason is the single source
-// of truth for why an executable step was selected.
+// Complete reports whether every desired placement and stale state record
+// received a decision. Steps preserve active-before-stale ordering. Step.Reason
+// is the single source of truth for why an executable step was selected.
 type Plan struct {
-	Steps  []Step
-	Issues []Issue
+	Complete bool
+	Steps    []Step
+	Issues   []Issue
 }
 
-// HasIssues reports whether the plan is unsafe to execute.
+// Executable reports whether the complete plan is safe to execute.
+func (plan Plan) Executable() bool {
+	return plan.Complete && len(plan.Issues) == 0
+}
+
+// HasIssues reports whether the plan contains an expressed blocker or conflict.
+// Callers deciding execution must use Executable so incomplete plans are also
+// rejected.
 func (plan Plan) HasIssues() bool {
 	return len(plan.Issues) != 0
 }

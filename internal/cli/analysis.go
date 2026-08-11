@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
@@ -67,7 +66,6 @@ type analysisInputs struct {
 func analyzeApply(
 	context commandContext,
 	current config.Machine,
-	moduleID *string,
 ) (OperationAnalysis, error) {
 	current = cloneMachine(current)
 	inputs, err := loadAnalysisInputs(context, current)
@@ -75,119 +73,20 @@ func analyzeApply(
 		return OperationAnalysis{}, err
 	}
 
-	var required map[string]bool
-	issues := append([]planner.Issue(nil), inputs.issues...)
-	var plannerScope []string
-	if moduleID != nil {
-		requested := *moduleID
-		if err := validateModuleID(current.Repository, requested); err != nil {
-			return OperationAnalysis{}, err
-		}
-		profileModules, profileErr := inputs.repository.ProfileModules(current.Profiles)
-		if profileErr != nil {
-			return OperationAnalysis{}, profileErr
-		}
-		if !slices.Contains(profileModules, requested) &&
-			!slices.Contains(current.ExtraModules, requested) {
-			issues = append(issues, planner.Issue{
-				Kind:     planner.IssueBlocked,
-				ModuleID: requested,
-				Reason: fmt.Sprintf(
-					"module %q is not selected; run dot select add %s",
-					requested,
-					requested,
-				),
-			})
-		} else {
-			required = map[string]bool{requested: true}
-		}
-		plannerScope = []string{requested}
-	}
-
 	resolvedModules, sources, observations, selectionBlockers, err := resolveSelection(
 		inputs.repository,
 		current,
 		context.platform,
-		required,
 	)
 	if err != nil {
 		return OperationAnalysis{}, err
 	}
-	issues = append(issues, selectionBlockers...)
-	return buildMutationAnalysis(
-		context,
-		current,
-		plannerScope,
-		inputs.loaded,
-		resolvedModules,
-		sources,
-		observations,
-		issues,
-	)
-}
-
-func analyzeStatus(
-	context commandContext,
-	current config.Machine,
-	moduleID *string,
-) (OperationAnalysis, error) {
-	current = cloneMachine(current)
-	inputs, err := loadAnalysisInputs(context, current)
-	if err != nil {
-		return OperationAnalysis{}, err
-	}
-	resolvedModules, sources, observations, selectionBlockers, err := resolveSelection(
-		inputs.repository,
-		current,
-		context.platform,
-		nil,
-	)
-	if err != nil {
-		return OperationAnalysis{}, err
-	}
-	issues := append(
-		append([]planner.Issue(nil), inputs.issues...),
-		selectionBlockers...,
-	)
-	ids := statusModuleIDs(
-		moduleID,
-		inputs.repository,
-		current,
-		inputs.loaded.Snapshot,
-	)
-	if moduleID != nil {
-		requested := *moduleID
-		if _, inspected := observations[requested]; !inspected {
-			module, exists, applicability, inspectErr := inputs.repository.InspectModule(
-				requested,
-				context.platform,
-			)
-			if inspectErr != nil {
-				return OperationAnalysis{}, inspectErr
-			}
-			if exists {
-				observations[requested] = moduleObservation{
-					loaded:        true,
-					applicability: applicability,
-					variant:       module.Variant,
-				}
-			} else if _, stateKnown := inputs.loaded.Snapshot.Modules[requested]; !stateKnown &&
-				sources[requested] == (selectionSource{}) {
-				issues = append(issues, planner.Issue{
-					Kind:     planner.IssueBlocked,
-					ModuleID: requested,
-					Reason:   fmt.Sprintf("unknown module %q", requested),
-				})
-			}
-		}
-	}
-
-	plan, inputWarnings, planned, err := buildStatusPlan(
+	issues := append(append([]planner.Issue(nil), inputs.issues...), selectionBlockers...)
+	plan, inputWarnings, err := buildAnalysisPlan(
 		context,
 		current,
 		resolvedModules,
 		inputs.loaded.Snapshot,
-		ids,
 		issues,
 	)
 	if err != nil {
@@ -200,8 +99,49 @@ func analyzeStatus(
 		observations,
 		plan,
 		appendWarning(inputs.loaded.Warning, inputWarnings),
-		ids,
-		planned,
+		analysisModuleIDs(sources, inputs.loaded.Snapshot, plan.Issues),
+	), nil
+}
+
+func analyzeStatus(
+	context commandContext,
+	current config.Machine,
+) (OperationAnalysis, error) {
+	current = cloneMachine(current)
+	inputs, err := loadAnalysisInputs(context, current)
+	if err != nil {
+		return OperationAnalysis{}, err
+	}
+	resolvedModules, sources, observations, selectionBlockers, err := resolveSelection(
+		inputs.repository,
+		current,
+		context.platform,
+	)
+	if err != nil {
+		return OperationAnalysis{}, err
+	}
+	issues := append(
+		append([]planner.Issue(nil), inputs.issues...),
+		selectionBlockers...,
+	)
+	plan, inputWarnings, err := buildAnalysisPlan(
+		context,
+		current,
+		resolvedModules,
+		inputs.loaded.Snapshot,
+		issues,
+	)
+	if err != nil {
+		return OperationAnalysis{}, err
+	}
+	return newOperationAnalysis(
+		current,
+		inputs.loaded.Snapshot,
+		sources,
+		observations,
+		plan,
+		appendWarning(inputs.loaded.Warning, inputWarnings),
+		statusModuleIDs(inputs.repository, current, inputs.loaded.Snapshot),
 	), nil
 }
 
@@ -235,7 +175,6 @@ func resolveSelection(
 	repository config.Repository,
 	machine config.Machine,
 	platform config.Platform,
-	required map[string]bool,
 ) (
 	[]config.Module,
 	map[string]selectionSource,
@@ -243,7 +182,7 @@ func resolveSelection(
 	[]planner.Issue,
 	error,
 ) {
-	resolved, err := coreselection.Resolve(repository, machine, platform, required)
+	resolved, err := coreselection.Resolve(repository, machine, platform)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -270,123 +209,37 @@ func resolveSelection(
 	return resolved.Modules, sources, observations, issues, nil
 }
 
-func buildMutationAnalysis(
-	context commandContext,
-	machine config.Machine,
-	scope []string,
-	loaded state.Loaded,
-	resolvedModules []config.Module,
-	sources map[string]selectionSource,
-	observations map[string]moduleObservation,
-	issues []planner.Issue,
-) (OperationAnalysis, error) {
-	plan := planner.Plan{}
-	planningComplete := false
-	if len(issues) == 0 {
-		built, err := planner.Build(planner.Request{
-			Home:     context.home,
-			Controls: context.controls(machine.Repository),
-			Modules:  resolvedModules,
-			Scope:    scope,
-			State:    loaded.Snapshot,
-		})
-		if err != nil {
-			return OperationAnalysis{}, err
-		}
-		plan = built
-		planningComplete = true
-	}
-	plan.Issues = append(plan.Issues, issues...)
-	ids := analysisModuleIDs(sources, loaded.Snapshot, plan.Issues, scope)
-	planned := make(map[string]bool)
-	if planningComplete {
-		if len(scope) == 0 {
-			for _, moduleID := range ids {
-				planned[moduleID] = true
-			}
-		} else {
-			for _, moduleID := range scope {
-				planned[moduleID] = true
-			}
-		}
-		markIssueModulesUnplanned(planned, plan.Issues)
-	}
-	return newOperationAnalysis(
-		machine,
-		loaded.Snapshot,
-		sources,
-		observations,
-		plan,
-		appendWarning(loaded.Warning, nil),
-		ids,
-		planned,
-	), nil
-}
-
-func buildStatusPlan(
+func buildAnalysisPlan(
 	context commandContext,
 	machine config.Machine,
 	resolvedModules []config.Module,
 	snapshot state.Snapshot,
-	moduleIDs []string,
 	issues []planner.Issue,
-) (planner.Plan, []string, map[string]bool, error) {
-	blocked := make(map[string]bool)
-	globalBlocker := false
-	for _, issue := range issues {
-		if issue.ModuleID == "" {
-			globalBlocker = true
-			continue
-		}
-		blocked[issue.ModuleID] = true
-	}
-	if globalBlocker {
-		return planner.Plan{Issues: append([]planner.Issue(nil), issues...)}, nil, map[string]bool{}, nil
+) (planner.Plan, []string, error) {
+	if len(issues) != 0 {
+		return planner.Plan{
+			Complete: false,
+			Issues:   append([]planner.Issue(nil), issues...),
+		}, nil, nil
 	}
 
+	plan, err := planner.Build(planner.Request{
+		Home:     context.home,
+		Controls: context.controls(machine.Repository),
+		Modules:  resolvedModules,
+		State:    snapshot,
+	})
+	if err != nil {
+		return planner.Plan{}, nil, err
+	}
 	warnings := make([]string, 0)
-	planned := make(map[string]bool)
-	plannable := make([]string, 0, len(moduleIDs))
-	for _, moduleID := range moduleIDs {
-		if blocked[moduleID] {
-			continue
-		}
-		plannable = append(plannable, moduleID)
-		planned[moduleID] = true
-	}
-
-	plan := planner.Plan{Issues: append([]planner.Issue(nil), issues...)}
-	if len(plannable) != 0 {
-		combined, err := planner.Build(planner.Request{
-			Home:     context.home,
-			Controls: context.controls(machine.Repository),
-			Modules:  resolvedModules,
-			Scope:    plannable,
-			State:    snapshot,
-		})
-		if err != nil {
-			return planner.Plan{}, nil, nil, err
-		}
-		plan.Steps = combined.Steps
-		plan.Issues = append(plan.Issues, combined.Issues...)
-		markIssueModulesUnplanned(planned, combined.Issues)
-		for _, issue := range combined.Issues {
-			if issue.Code == planner.IssueCodeControlBoundary &&
-				!slices.Contains(warnings, issue.Reason) {
-				warnings = append(warnings, issue.Reason)
-			}
+	for _, issue := range plan.Issues {
+		if issue.Code == planner.IssueCodeControlBoundary &&
+			!slices.Contains(warnings, issue.Reason) {
+			warnings = append(warnings, issue.Reason)
 		}
 	}
-	return plan, warnings, planned, nil
-}
-
-func markIssueModulesUnplanned(planned map[string]bool, issues []planner.Issue) {
-	if len(issues) == 0 {
-		return
-	}
-	for moduleID := range planned {
-		planned[moduleID] = false
-	}
+	return plan, warnings, nil
 }
 
 func newOperationAnalysis(
@@ -397,7 +250,6 @@ func newOperationAnalysis(
 	plan planner.Plan,
 	warnings []string,
 	moduleIDs []string,
-	planned map[string]bool,
 ) OperationAnalysis {
 	return OperationAnalysis{
 		Machine: cloneMachine(machine),
@@ -407,11 +259,11 @@ func newOperationAnalysis(
 			observations,
 			snapshot,
 			plan,
-			planned,
 		),
 		Plan: planner.Plan{
-			Steps:  append([]planner.Step(nil), plan.Steps...),
-			Issues: append([]planner.Issue(nil), plan.Issues...),
+			Complete: plan.Complete,
+			Steps:    append([]planner.Step(nil), plan.Steps...),
+			Issues:   append([]planner.Issue(nil), plan.Issues...),
 		},
 		Warnings: append([]string(nil), warnings...),
 	}
@@ -423,14 +275,13 @@ func buildModuleAnalyses(
 	observations map[string]moduleObservation,
 	snapshot state.Snapshot,
 	plan planner.Plan,
-	planned map[string]bool,
 ) []ModuleAnalysis {
 	result := make([]ModuleAnalysis, 0, len(moduleIDs))
 	for _, moduleID := range moduleIDs {
 		source := sources[moduleID]
 		observation := observations[moduleID]
 		_, statePresent := snapshot.Modules[moduleID]
-		issueReason, blocked := analysisIssueForModule(
+		issueReason, directIssue := analysisIssueForModule(
 			moduleID,
 			source != (selectionSource{}) || statePresent,
 			plan.Issues,
@@ -461,30 +312,35 @@ func buildModuleAnalyses(
 			source != (selectionSource{}):
 			analysis.Summary = "not-applicable"
 		case source != (selectionSource{}):
-			if planned[moduleID] {
+			if plan.Complete {
 				analysis.Summary = "converged"
 				analysis.Convergence = "converged"
-			} else if blocked {
-				analysis.Summary = "conflict"
 			} else {
 				analysis.Summary = "pending"
+				analysis.Convergence = "unknown"
 			}
 		case statePresent:
-			if planned[moduleID] {
+			if plan.Complete {
 				analysis.Summary = "stale"
 				analysis.Convergence = "pending"
-			} else if blocked {
-				analysis.Summary = "conflict"
 			} else {
 				analysis.Summary = "stale"
+				analysis.Convergence = "unknown"
 			}
+		}
+		if !plan.Complete && directIssue {
+			analysis.Summary = "conflict"
+			analysis.Convergence = "conflict"
+		} else if !plan.Complete &&
+			(source != (selectionSource{}) || statePresent) {
+			analysis.Convergence = "unknown"
 		}
 
 		for _, issue := range plan.Issues {
 			if issue.ModuleID != moduleID {
 				continue
 			}
-			if issue.Kind == planner.IssueConflict {
+			if issue.Kind == planner.IssueConflict || !plan.Complete {
 				analysis.Summary = "conflict"
 				analysis.Convergence = "conflict"
 				if !isConcretePlacementIssue(issue) {
@@ -521,7 +377,7 @@ func buildModuleAnalyses(
 				analysis.Reason = string(action.Decision)
 			}
 		}
-		if analysis.Reason == "" && blocked {
+		if analysis.Reason == "" && directIssue {
 			analysis.Reason = issueReason
 		}
 		if analysis.Reason == "" &&
@@ -553,7 +409,7 @@ func analysisIssueForModule(
 	if includeGlobal {
 		for _, issue := range issues {
 			if issue.ModuleID == "" {
-				return issue.Reason, true
+				return issue.Reason, false
 			}
 		}
 	}
@@ -564,19 +420,12 @@ func analysisModuleIDs(
 	sources map[string]selectionSource,
 	snapshot state.Snapshot,
 	issues []planner.Issue,
-	scope []string,
 ) []string {
 	set := make(map[string]bool)
 	for _, issue := range issues {
 		if issue.ModuleID != "" {
 			set[issue.ModuleID] = true
 		}
-	}
-	if len(scope) != 0 {
-		for _, moduleID := range scope {
-			set[moduleID] = true
-		}
-		return sortedAnalysisSet(set)
 	}
 	for moduleID := range sources {
 		set[moduleID] = true

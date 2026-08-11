@@ -415,19 +415,6 @@ func TestValidateControlTopologyRejectsRootRelationshipsReadOnly(t *testing.T) {
 						validateErr,
 					)
 				}
-				resolved, validateErr = corepaths.ValidateScoped(
-					filepath.Join(root, "home"),
-					controls,
-					nil,
-					nil,
-				)
-				if !errors.Is(validateErr, corepaths.ErrControlTopology) || resolved != nil {
-					t.Fatalf(
-						"ValidateScoped(empty) = (%#v, %v), want empty topology conflict",
-						resolved,
-						validateErr,
-					)
-				}
 				if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 					t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
 				}

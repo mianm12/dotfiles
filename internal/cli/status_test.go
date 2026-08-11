@@ -205,18 +205,6 @@ func TestStatusDelaysInactiveMalformedManifest(t *testing.T) {
 	}
 	assertSnapshotUnchanged(t, before)
 
-	code, stdout, stderr = fixture.run("status", "broken")
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, `module "broken"`) {
-		t.Fatalf(
-			"status broken = (%d, %q, %q), want strict manifest failure",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertSnapshotUnchanged(t, before)
 }
 
 func TestStatusReportsEveryPlacementConflict(t *testing.T) {
@@ -242,7 +230,7 @@ target = "~/.second"
 	writeCLIFile(t, second, "personal")
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.run("status", "app")
+	code, stdout, stderr := fixture.run("status")
 
 	if code != exitOK ||
 		!strings.Contains(stdout, "app  conflict selection=profile\n") ||
@@ -276,7 +264,7 @@ target = "~/.app"
 	fixture.writeMachine(t, []string{"base"}, nil)
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.runInjected("status", "app")
+	code, stdout, stderr := fixture.runInjected("status")
 
 	if code != exitOK ||
 		!strings.Contains(stdout, "app  pending selection=profile variant=portable\n") ||

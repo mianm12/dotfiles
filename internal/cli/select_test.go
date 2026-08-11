@@ -34,7 +34,7 @@ target = "~/.extra"
 	if code != exitOK || stderr != "" || !strings.Contains(stdout, "selection_changed=false") {
 		t.Fatalf("repeated select add = (%d, %q, %q)", code, stdout, stderr)
 	}
-	code, _, stderr = fixture.run("apply", "extra")
+	code, _, stderr = fixture.run("apply")
 	if code != exitOK {
 		t.Fatalf("apply selected extra = (%d, %q)", code, stderr)
 	}

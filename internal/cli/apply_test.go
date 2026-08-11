@@ -9,7 +9,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/config"
 )
 
-func TestApplyDistinguishesProfileAndExplicitNotApplicableModules(t *testing.T) {
+func TestApplyDistinguishesProfileAndExtraNotApplicableModules(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["portable", "gated"]`)
 	fixture.writeModule(t, "portable", `
 [[links]]
@@ -58,18 +58,17 @@ id = "config"
 source = "config"
 target = "~/.gated"
 `, map[string]string{"config": "gated"})
-	explicit.writeMachine(t, []string{"base"}, nil)
+	explicit.writeMachine(t, []string{"base"}, []string{"gated"})
 	before := snapshotTree(t, explicit.root)
 
-	code, stdout, stderr = explicit.runInjected("apply", "gated")
+	code, stdout, stderr = explicit.runInjected("apply")
 	if code != exitError || stdout != "" ||
-		!strings.Contains(stderr, "not selected") ||
-		!strings.Contains(stderr, "dot select add gated") {
-		t.Fatalf("explicit apply = (%d, %q, %q), want inactive-selection failure", code, stdout, stderr)
+		!strings.Contains(stderr, "not applicable") {
+		t.Fatalf("extra apply = (%d, %q, %q), want not-applicable failure", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
-	if extras := explicit.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
+	if extras := explicit.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "gated" {
+		t.Fatalf("extra_modules = %v, want unchanged gated selection", extras)
 	}
 }
 
@@ -116,7 +115,7 @@ target = "~/.extra"
 	fixture.writeMachine(t, []string{"base"}, []string{"extra"})
 	machineBefore := snapshotPaths(t, fixture.config)
 
-	code, _, stderr := fixture.run("apply", "extra")
+	code, _, stderr := fixture.run("apply")
 	if code != exitOK || stderr == "" {
 		t.Fatalf("apply extra = (%d, %q), want success with missing-state warning", code, stderr)
 	}
@@ -126,7 +125,7 @@ target = "~/.extra"
 		filepath.Join(fixture.home, ".extra"),
 		filepath.Join(fixture.repository, "modules", "extra", "config"),
 	)
-	assertApplyNoMutation(t, fixture, fixture.run, "extra")
+	assertApplyNoMutation(t, fixture, fixture.run)
 }
 
 func TestApplyHandlesKnownPlatformMismatchAndRejectsInvalidOS(t *testing.T) {
@@ -180,7 +179,7 @@ os = ["freebsd"]
 
 	fixture.writeMachine(t, []string{"base"}, []string{"invalid-os"})
 	before := snapshotTree(t, fixture.root)
-	code, stdout, stderr = fixture.runInjected("apply", "invalid-os")
+	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitError ||
 		stdout != "" ||
 		!strings.Contains(stderr, "unsupported os token") {

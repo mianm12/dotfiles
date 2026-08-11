@@ -6,7 +6,7 @@
 ## 所有权
 
 - `internal/cli` 的跨层测试按 init、select、apply、status、analysis、placement、safety、
-  recovery 和 scope 等用户行为域组织。
+  recovery 和 full convergence 等用户行为域组织。
 - CLI 的命令语法、错误映射和输出格式由 `commands_test.go` 覆盖。
 - Config、paths、state、planner 和 executor 在各自 package 覆盖局部模型与失败边界，并以
   具体行为命名。

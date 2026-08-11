@@ -33,7 +33,7 @@ os = ["macos"]
 		Version:    1,
 		Repository: root,
 		Profiles:   []string{"base"},
-	}, platform, nil)
+	}, platform)
 	if err != nil || len(profile.Issues) != 0 || len(profile.Modules) != 0 {
 		t.Fatalf("Resolve(profile not-applicable) = (%#v, %v)", profile, err)
 	}
@@ -46,19 +46,11 @@ os = ["macos"]
 		Version:      1,
 		Repository:   root,
 		ExtraModules: []string{"gated"},
-	}, platform, nil)
+	}, platform)
 	if err != nil || len(direct.Issues) != 1 || direct.Issues[0].ModuleID != "gated" {
 		t.Fatalf("Resolve(direct not-applicable) = (%#v, %v)", direct, err)
 	}
 
-	required, err := Resolve(repository, config.Machine{
-		Version:    1,
-		Repository: root,
-		Profiles:   []string{"base"},
-	}, platform, map[string]bool{"gated": true})
-	if err != nil || len(required.Issues) != 1 || required.Issues[0].ModuleID != "gated" {
-		t.Fatalf("Resolve(required profile module) = (%#v, %v)", required, err)
-	}
 }
 
 func TestResolveReportsMissingDirectModule(t *testing.T) {
@@ -72,7 +64,7 @@ func TestResolveReportsMissingDirectModule(t *testing.T) {
 		Version:      1,
 		Repository:   root,
 		ExtraModules: []string{"gone"},
-	}, config.Platform{}, nil)
+	}, config.Platform{})
 	if err != nil || len(result.Issues) != 1 || result.Issues[0].ModuleID != "gone" {
 		t.Fatalf("Resolve(missing extra) = (%#v, %v)", result, err)
 	}

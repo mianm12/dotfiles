@@ -10,7 +10,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestScopedApplyAndSelectionIgnoreBrokenInactiveModule(t *testing.T) {
+func TestFullApplyAndSelectionIgnoreBrokenInactiveModule(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "apply-good", `
 [[links]]
@@ -31,22 +31,21 @@ target = "~/.remove-good"
 	)
 	fixture.writeMachine(t, []string{"base"}, []string{"apply-good", "remove-good"})
 
-	code, _, stderr := fixture.run("apply", "apply-good")
+	code, _, stderr := fixture.run("apply")
 	if code != exitOK {
-		t.Fatalf("scoped apply with broken inactive module = (%d, %q)", code, stderr)
+		t.Fatalf("full apply with broken inactive module = (%d, %q)", code, stderr)
 	}
 	assertCLILink(
 		t,
 		filepath.Join(fixture.home, ".apply-good"),
 		filepath.Join(fixture.repository, "modules", "apply-good", "config"),
 	)
-	assertApplyNoMutation(t, fixture, fixture.run, "apply-good")
-
-	code, _, stderr = fixture.run("apply", "remove-good")
-	if code != exitOK {
-		t.Fatalf("scoped apply remove-good = (%d, %q)", code, stderr)
-	}
-	assertApplyNoMutation(t, fixture, fixture.run, "remove-good")
+	assertCLILink(
+		t,
+		filepath.Join(fixture.home, ".remove-good"),
+		filepath.Join(fixture.repository, "modules", "remove-good", "config"),
+	)
+	assertApplyNoMutation(t, fixture, fixture.run)
 
 	code, _, stderr = fixture.run("select", "remove", "remove-good")
 	if code != exitOK {
@@ -67,17 +66,9 @@ target = "~/.remove-good"
 	assertCLIMissing(t, filepath.Join(fixture.home, ".remove-good"))
 	assertApplyNoMutation(t, fixture, fixture.run)
 
-	before := snapshotTree(t, fixture.root)
-	code, stdout, stderr := fixture.run("apply", "broken")
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, `module "broken"`) {
-		t.Fatalf("explicit broken apply = (%d, %q, %q), want strict failure", code, stdout, stderr)
-	}
-	assertSnapshotUnchanged(t, before)
 }
 
-func TestScopedAnalysisFailsClosedOnMalformedOtherEffectiveManifest(t *testing.T) {
+func TestFullAnalysisFailsClosedOnMalformedEffectiveManifest(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "good", `
 [[links]]
@@ -93,9 +84,9 @@ target = "~/.good"
 	fixture.writeMachine(t, []string{"base"}, []string{"broken", "good"})
 
 	for _, args := range [][]string{
-		{"apply", "good"},
-		{"apply", "good", "--dry-run"},
-		{"status", "good"},
+		{"apply"},
+		{"apply", "--dry-run"},
+		{"status"},
 	} {
 		t.Run(strings.Join(args, "-"), func(t *testing.T) {
 			before := snapshotTree(t, fixture.root)
@@ -114,7 +105,7 @@ target = "~/.good"
 	}
 }
 
-func TestScopedApplyIgnoresNestedTargetsBetweenOtherEffectiveModules(t *testing.T) {
+func TestFullApplyRejectsNestedTargetsAcrossEffectiveModules(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["first", "second"]`)
 	fixture.writeModule(t, "first", `
 [[links]]
@@ -136,34 +127,21 @@ target = "~/.selected"
 `, map[string]string{"config": "selected"})
 	fixture.writeMachine(t, []string{"base"}, []string{"selected"})
 
-	code, stdout, stderr := fixture.run("apply", "selected")
-
-	if code != exitOK || !strings.Contains(stderr, "state is missing") {
-		t.Fatalf("scoped apply = (%d, %q, %q), want success", code, stdout, stderr)
-	}
-	assertCLILink(
-		t,
-		filepath.Join(fixture.home, ".selected"),
-		filepath.Join(fixture.repository, "modules", "selected", "config"),
-	)
-	assertCLIMissing(t, filepath.Join(fixture.home, ".shared"))
-	extras := fixture.loadMachine(t).ExtraModules
-	if len(extras) != 1 || extras[0] != "selected" {
-		t.Fatalf("extra_modules = %v, want unchanged [selected]", extras)
-	}
-	assertApplyNoMutation(t, fixture, fixture.run, "selected")
-
-	beforeFull := snapshotTree(t, fixture.root)
-	code, stdout, stderr = fixture.run("apply")
+	before := snapshotTree(t, fixture.root)
+	code, stdout, stderr := fixture.run("apply")
 	if code != exitError ||
 		stdout != "" ||
 		!strings.Contains(stderr, "target paths conflict") {
-		t.Fatalf("full apply = (%d, %q, %q), want unrelated target conflict", code, stdout, stderr)
+		t.Fatalf("full apply = (%d, %q, %q), want target conflict", code, stdout, stderr)
 	}
-	assertSnapshotUnchanged(t, beforeFull)
+	assertSnapshotUnchanged(t, before)
+	assertCLIMissing(t, filepath.Join(fixture.home, ".selected"))
+	assertCLIMissing(t, filepath.Join(fixture.home, ".shared"))
+	assertCLIMissing(t, fixture.state)
+	assertCLIMissing(t, fixture.lock)
 }
 
-func TestScopedApplyRejectsTargetRelationshipBeforeSelectionMutation(t *testing.T) {
+func TestFullApplyRejectsTargetRelationshipBeforeMutation(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["effective"]`)
 	fixture.writeModule(t, "effective", `
 [[links]]
@@ -180,12 +158,12 @@ target = "~/.tree/child"
 	fixture.writeMachine(t, []string{"base"}, []string{"selected"})
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.run("apply", "selected")
+	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitError ||
 		stdout != "" ||
 		!strings.Contains(stderr, "target paths conflict") {
-		t.Fatalf("scoped apply = (%d, %q, %q), want target conflict", code, stdout, stderr)
+		t.Fatalf("full apply = (%d, %q, %q), want target conflict", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "selected" {
@@ -196,7 +174,7 @@ target = "~/.tree/child"
 	assertCLIMissing(t, filepath.Join(fixture.home, ".tree"))
 }
 
-func TestScopedApplyRejectsStateOwnedParentLinkBeforeMutation(t *testing.T) {
+func TestFullApplyRejectsStateOwnedParentLinkBeforeMutation(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "active", `
 [[links]]
@@ -233,13 +211,13 @@ target = "~/.shared/child"
 	})
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.run("apply", "active")
+	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitError ||
 		stdout != "" ||
 		!strings.Contains(stderr, "traverses state-owned link") {
 		t.Fatalf(
-			"scoped apply = (%d, %q, %q), want parent ownership conflict",
+			"full apply = (%d, %q, %q), want parent ownership conflict",
 			code,
 			stdout,
 			stderr,
@@ -253,7 +231,7 @@ target = "~/.shared/child"
 	assertCLIMissing(t, fixture.lock)
 }
 
-func TestScopedApplyRejectsParentUpdateTraversedByEffectiveChild(t *testing.T) {
+func TestFullApplyRejectsParentUpdateTraversedByEffectiveChild(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["parent", "child"]`)
 	fixture.writeModule(t, "parent", `
 [[links]]
@@ -335,17 +313,14 @@ target = "~/access/child"
 	})
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.run("apply", "parent")
+	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitError ||
 		stdout != "" ||
-		!strings.Contains(
-			stderr,
-			"active link cannot be owned or changed while traversed",
-		) ||
-		!strings.Contains(stderr, `effective module "child" placement "config"`) {
+		(!strings.Contains(stderr, "active link cannot be owned or changed while traversed") &&
+			!strings.Contains(stderr, "target traverses state-owned link")) {
 		t.Fatalf(
-			"scoped parent update = (%d, %q, %q), want traversal conflict",
+			"full parent update = (%d, %q, %q), want traversal conflict",
 			code,
 			stdout,
 			stderr,
@@ -358,7 +333,7 @@ target = "~/access/child"
 	assertCLIMissing(t, fixture.lock)
 }
 
-func TestScopedApplyThroughDriftedParentConvergesWithoutCleaningOtherState(
+func TestFullApplyThroughDriftedParentConvergesAndForgetsStaleState(
 	t *testing.T,
 ) {
 	fixture := newCLITestEnv(t, `base = ["active"]`)
@@ -399,13 +374,13 @@ target = "~/.shared/child"
 		},
 	})
 
-	code, stdout, stderr := fixture.run("apply", "active")
+	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitOK ||
-		stderr != "" ||
+		!strings.Contains(stderr, "forgot ownership") ||
 		!strings.Contains(stdout, "targets_changed=true state_changed=true") {
 		t.Fatalf(
-			"scoped apply through drifted parent = (%d, %q, %q)",
+			"full apply through drifted parent = (%d, %q, %q)",
 			code,
 			stdout,
 			stderr,
@@ -414,14 +389,14 @@ target = "~/.shared/child"
 	destination := filepath.Join(fixture.repository, "modules", "active", "config")
 	assertCLILink(t, filepath.Join(userTree, "child"), destination)
 	loaded := loadTestState(t, fixture)
-	if _, exists := loaded.Modules["stale"]; !exists {
-		t.Fatal("scoped apply removed scope-out stale state")
+	if _, exists := loaded.Modules["stale"]; exists {
+		t.Fatal("full apply retained stale state")
 	}
 	if _, exists := loaded.Modules["active"].Placements["child"]; !exists {
-		t.Fatal("scoped apply did not record active child")
+		t.Fatal("full apply did not record active child")
 	}
 
-	assertApplyNoMutation(t, fixture, fixture.run, "active")
+	assertApplyNoMutation(t, fixture, fixture.run)
 }
 
 func TestFullApplyRejectsStaleOwnedParentUsedByActiveDesired(t *testing.T) {

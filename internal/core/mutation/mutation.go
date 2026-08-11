@@ -36,7 +36,6 @@ type ApplyRequest struct {
 	Controls  corepaths.Controls
 	Machine   config.Machine
 	Platform  config.Platform
-	ModuleID  *string
 	RerunHint string
 }
 
@@ -73,15 +72,10 @@ func Apply(request ApplyRequest) (result Result, err error) {
 }
 
 func executionRequest(request ApplyRequest, modules []config.Module) executor.Request {
-	var scope []string
-	if request.ModuleID != nil {
-		scope = []string{*request.ModuleID}
-	}
 	return executor.Request{
 		Home:     request.Home,
 		Controls: cleanControls(request.Controls),
 		Modules:  modules,
-		Scope:    scope,
 	}
 }
 
@@ -102,28 +96,7 @@ func resolveApply(request ApplyRequest) ([]config.Module, error) {
 		return nil, err
 	}
 
-	var required map[string]bool
-	if request.ModuleID != nil {
-		moduleID := *request.ModuleID
-		if err := validateModuleID(current.Repository, moduleID); err != nil {
-			return nil, err
-		}
-		profileModules, err := repository.ProfileModules(current.Profiles)
-		if err != nil {
-			return nil, err
-		}
-		if !slices.Contains(profileModules, moduleID) &&
-			!slices.Contains(current.ExtraModules, moduleID) {
-			return nil, fmt.Errorf(
-				"operation blocked for module %q: module %q is not selected; run dot select add %s",
-				moduleID,
-				moduleID,
-				moduleID,
-			)
-		}
-		required = map[string]bool{moduleID: true}
-	}
-	resolved, err := selection.Resolve(repository, current, request.Platform, required)
+	resolved, err := selection.Resolve(repository, current, request.Platform)
 	if err != nil {
 		return nil, err
 	}

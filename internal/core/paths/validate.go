@@ -78,7 +78,7 @@ type controlTopology struct {
 // Validate resolves and validates a complete placement set. It is read-only and
 // returns no partial result when any path is invalid or conflicting.
 func Validate(home string, controls Controls, placements []Placement) ([]ResolvedPlacement, error) {
-	return validate(home, controls, placements, nil)
+	return validate(home, controls, placements)
 }
 
 // ValidateControlTopology validates the control families without resolving any
@@ -105,28 +105,10 @@ func TargetOverlapsControls(controls Controls, target Target) (bool, error) {
 	return false, nil
 }
 
-// ValidateScoped applies target-set and control-boundary checks only when at
-// least one participating placement label is selected. All placements are
-// still resolved so selected targets can be compared with the complete
-// effective desired set.
-func ValidateScoped(
-	home string,
-	controls Controls,
-	placements []Placement,
-	selectedLabels []string,
-) ([]ResolvedPlacement, error) {
-	selected := make(map[string]bool, len(selectedLabels))
-	for _, label := range selectedLabels {
-		selected[label] = true
-	}
-	return validate(home, controls, placements, selected)
-}
-
 func validate(
 	home string,
 	controls Controls,
 	placements []Placement,
-	selected map[string]bool,
 ) ([]ResolvedPlacement, error) {
 	topology, err := resolveControlTopology(controls)
 	if err != nil {
@@ -148,10 +130,10 @@ func validate(
 		}
 	}
 
-	if err := validateTargetSet(resolved, selected); err != nil {
+	if err := validateTargetSet(resolved); err != nil {
 		return nil, err
 	}
-	if err := validateControlBoundaries(topology, resolved, selected); err != nil {
+	if err := validateControlBoundaries(topology, resolved); err != nil {
 		return nil, err
 	}
 	return resolved, nil
@@ -342,17 +324,11 @@ func validateControlFamilies(families []controlFamily) error {
 	return nil
 }
 
-func validateTargetSet(
-	placements []ResolvedPlacement,
-	selected map[string]bool,
-) error {
+func validateTargetSet(placements []ResolvedPlacement) error {
 	for leftIndex := range placements {
 		left := placements[leftIndex]
 		for rightIndex := leftIndex + 1; rightIndex < len(placements); rightIndex++ {
 			right := placements[rightIndex]
-			if !participates(selected, left.Label, right.Label) {
-				continue
-			}
 			if TargetsEqual(left.Target, right.Target) {
 				return withPlacementLabels(fmt.Errorf(
 					"%w: placements %q target %q and %q target %q resolve to the same target",
@@ -404,12 +380,8 @@ func TargetStrictlyContains(parent, child Target) bool {
 func validateControlBoundaries(
 	topology controlTopology,
 	placements []ResolvedPlacement,
-	selected map[string]bool,
 ) error {
 	for _, placement := range placements {
-		if selected != nil && !selected[placement.Label] {
-			continue
-		}
 		for _, family := range topology.families {
 			for _, control := range family.paths {
 				if identityOverlapsTarget(control, placement.Target) {
@@ -427,18 +399,6 @@ func validateControlBoundaries(
 		}
 	}
 	return nil
-}
-
-func participates(selected map[string]bool, labels ...string) bool {
-	if selected == nil {
-		return true
-	}
-	for _, label := range labels {
-		if selected[label] {
-			return true
-		}
-	}
-	return false
 }
 
 func identityOverlapsTarget(control pathIdentity, target Target) bool {

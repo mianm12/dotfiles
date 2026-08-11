@@ -21,7 +21,6 @@ type Request struct {
 	Home     string
 	Controls corepaths.Controls
 	Modules  []config.Module
-	Scope    []string
 }
 
 // Result reports the plan that was applied and whether it changed artifacts or
@@ -42,7 +41,7 @@ type Analysis struct {
 
 // BlockingError reports the first issue that makes this analysis unsafe to execute.
 func (analysis Analysis) BlockingError() error {
-	if !analysis.Plan.HasIssues() {
+	if analysis.Plan.Executable() {
 		return nil
 	}
 	return conflictError(analysis.Plan)
@@ -128,7 +127,6 @@ func analyze(request Request) (preparedAnalysis, error) {
 		Home:     request.Home,
 		Controls: request.Controls,
 		Modules:  request.Modules,
-		Scope:    request.Scope,
 		State:    loaded.Snapshot,
 	})
 	if err != nil {
@@ -180,7 +178,7 @@ func conflictError(plan planner.Plan) error {
 			issue.Reason,
 		)
 	}
-	return fmt.Errorf("plan contains an issue")
+	return fmt.Errorf("convergence plan is incomplete")
 }
 
 func cloneSnapshot(snapshot state.Snapshot) state.Snapshot {

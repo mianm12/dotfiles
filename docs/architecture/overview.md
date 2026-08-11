@@ -7,7 +7,7 @@
 
 ```text
 repository desired + machine selection + state + actual filesystem
-  -> status / dry-run: CLI OperationAnalysis (module projection + Plan{Steps, Issues})
+  -> status / dry-run: CLI OperationAnalysis (module projection + Plan{Complete, Steps, Issues})
   -> apply: mutation.Apply
        -> resolve selection + executor.Analyze (full read-only preflight)
        -> acquire lock
@@ -22,18 +22,17 @@ init/select -> mutation.UpdateSelection
 
 核心业务逻辑与 CLI、文件发布和进程退出分离。`cmd/dot` 只把进程 IO/环境交给 `cli.Run` 并以
 其结果退出。CLI OperationAnalysis 只服务 status 与 dry-run：它是只读观察结果，只保存 module
-投影、`Plan{Steps, Issues}` 与输入 warning，不夹带 resolved modules、scope 或 loaded state
+投影、`Plan{Complete, Steps, Issues}` 与输入 warning，不夹带 resolved modules 或 loaded state
 供执行使用，也不是 executor 输入。
 Status 对一次请求只调用 planner 一次；path validation error 自带受影响 placement labels，不靠
 逐 module probe 定位。`mutation.Apply` 直接拥有一次 artifact mutation：锁前解析 selection 并
 调用 `executor.Analyze` 完成 state、actual 与 planner 的完整零写入检查；成功后获取单次 lock，
 锁内重新加载 machine/repository、重新解析 selection，再由 `executor.Execute` 调用同一私有分析
 实现重新加载最新 state、重新规划、执行并提交 state。锁前 analysis 不传入 executor 执行。
-`UpdateSelection` 独立
-拥有 config-only mutation；两条路径不通过 Session 或 callback 组合。Scoped mutation 的 module
-投影只包含请求 scope 和具有 module-specific blocker 的 module；完整 current selection 仍保存
-在 machine 中，其他
-effective modules 继续通过已解析 module 集合参与 target topology 校验。
+`UpdateSelection` 独立拥有 config-only mutation；两条路径不通过 Session 或 callback 组合。
+Status 与 dry-run 始终投影完整 inventory，并对全部 effective modules 与全部 state-only stale
+records 运行同一次 planner。Selection、control topology 或 target-set blocker 使
+`Plan.Complete=false` 且 Steps 为空；不会过滤 blocked module 后再次局部规划。
 
 公开给 CLI 的 mutation 写入口只有：
 
@@ -55,11 +54,11 @@ CLI 不直接获取、复用或释放 lock，也不直接发布 machine selectio
 | `internal/core/state` | ownership state 模型与编解码 |
 | `internal/core/config` | repository、machine 和 module 配置解析 |
 | `internal/core/selection` | machine selection 的纯 resolution 与 typed issue |
-| `internal/core/planner` | desired、state 与 actual 的纯计划决策；输出 `Plan{Steps, Issues}` |
+| `internal/core/planner` | desired、state 与 actual 的纯全量计划决策；输出 `Plan{Complete, Steps, Issues}` |
 | `internal/core/executor` | artifact 的只读分析、锁内重新规划、执行、changed-target 复核与 state 提交 |
 | `internal/core/mutation` | UpdateSelection/Apply、完整锁前 preflight、control 校验与 lock ownership |
 | `internal/core/mutation/internal/lock` | mutation 私有的 advisory lock 实现 |
-| `internal/cli` | 命令、只读 operation analysis、scope、输出和退出码 |
+| `internal/cli` | 命令、只读 operation analysis、完整 inventory、输出和退出码 |
 | `cmd/dot` | 进程入口 |
 
 允许的依赖总体从左向右推进：
