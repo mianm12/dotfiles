@@ -4,10 +4,13 @@
 
 仓库中的 `dot.toml`、`modules/<id>/module.toml` 和配置内容描述共享期望。
 
-`dot.toml` 与当前命令 scope 内加载的 `module.toml` 必须是 regular file，或最终解析为 regular
-file 的 symlink。Directory、FIFO、socket、device、dangling symlink 和 symlink loop 必须在
-读取内容前失败；manifest symlink 的目标不要求位于 repository 内。Scope 外 module manifest
-继续按 [`cli.md`](cli.md#命令-scope-与加载) 延迟类型检查、读取和解析。
+执行 apply/status/dry-run convergence analysis 时，`dot.toml` 与全部 current effective
+`module.toml` 必须是 regular file，或最终解析为 regular file 的 symlink。Directory、FIFO、
+socket、device、dangling symlink 和 symlink loop 必须在读取内容前失败；manifest symlink 的
+目标不要求位于 repository 内。Inactive module manifest 继续按
+[`cli.md`](cli.md#命令-scope-与加载) 延迟类型检查、读取和解析；显式 status 可加载请求的
+inactive module。Init 与 select 只按 [`cli.md`](cli.md#init) 和 [`cli.md`](cli.md#select) 的
+selection-only 规则加载必要 manifest。
 
 ## Machine config
 

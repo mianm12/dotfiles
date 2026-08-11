@@ -3,8 +3,8 @@
 ## 执行顺序
 
 ```text
-read-only preflight
-  -> strict load config/state 与 scope 内 manifests
+artifact read-only preflight
+  -> strict load config/state 与全部 effective manifests
   -> resolve desired and observe actual
   -> validate control topology and supported path conflicts
   -> build candidate plan

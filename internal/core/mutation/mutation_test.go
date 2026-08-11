@@ -216,6 +216,47 @@ target = "~/.app"
 	assertApplyBookkeepingMissing(t, fixture)
 }
 
+func TestApplyRejectsMalformedOtherEffectiveManifestBeforeLockBookkeeping(t *testing.T) {
+	fixture := newMutationFixture(t, `base = ["broken", "good"]`)
+	machine := fixture.machine([]string{"base"}, nil)
+	publishMutationMachine(t, fixture.controls.Config, machine)
+	writeMutationFile(t, filepath.Join(fixture.repository, "modules", "good", "module.toml"), `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.good"
+`)
+	writeMutationFile(
+		t,
+		filepath.Join(fixture.repository, "modules", "good", "config"),
+		"good",
+	)
+	writeMutationFile(
+		t,
+		filepath.Join(fixture.repository, "modules", "broken", "module.toml"),
+		"unknown = true\n",
+	)
+	moduleID := "good"
+
+	result, err := Apply(ApplyRequest{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Machine:  machine,
+		Platform: testPlatform(),
+		ModuleID: &moduleID,
+	})
+	if err == nil || result.TargetsChanged || result.StateChanged {
+		t.Fatalf("Apply(malformed effective manifest) = (%#v, %v), want read-only failure", result, err)
+	}
+	if !strings.Contains(err.Error(), "broken") {
+		t.Fatalf("Apply(malformed effective manifest) error = %v, want broken module context", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(fixture.home, ".good")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("good target error = %v, want missing", statErr)
+	}
+	assertApplyBookkeepingMissing(t, fixture)
+}
+
 func TestApplyRejectsTargetTopologyBeforeLockBookkeeping(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	machine := fixture.machine([]string{"base"}, nil)

@@ -69,13 +69,15 @@ dot help [COMMAND]
 - Scoped apply 的 participating set 包含目标 module 与其他 effective modules；
   placement topology 只检查目标 module 与所有 effective modules 的关系，两个都完全不属于
   scope 的 module 之间的冲突不阻断。
-- 严格加载 `dot.toml`，但只对命令 scope 内的 `module.toml` 做最终类型检查、读取和解析；
-  scope 外 module manifest 的异常类型、不可读、dangling symlink 或 malformed TOML 不影响
-  本命令。
-- Mutation dry-run 与 `status [MODULE]` 始终观察当前 machine selection；指定 `MODULE` 只缩小
-  inventory 并允许检查该 module manifest，不模拟 selection 修改。
-- 无参数 status 继续延迟加载 inactive repository module manifest；未加载的 applicability 与
-  variant 显示为 `-`。
+- Apply、mutation dry-run 与 status 的 convergence analysis 严格加载 `dot.toml` 和全部 current
+  effective `module.toml`。Scoped apply 仍需解析其他 effective placements 才能完成 participating
+  target topology 校验，因此 scope 外但 effective 的 manifest 若类型异常、不可读、dangling
+  symlink 或 malformed，整次分析 fail closed。Init/select 的 manifest 加载例外由各自章节定义。
+- Mutation dry-run 与 `status [MODULE]` 始终观察并解析完整 current effective selection；指定
+  `MODULE` 只缩小 inventory，并在该 module inactive 时额外允许检查其 manifest，不模拟
+  selection 修改。
+- Inactive repository module manifest 继续延迟加载；无参数 status 可将其列入 inventory，但
+  未加载的 applicability 与 variant 显示为 `-`。
 
 ## Status 与 dry-run
 

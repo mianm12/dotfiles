@@ -10,7 +10,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestScopedApplyAndSelectionIgnoreBrokenOutOfScopeModule(t *testing.T) {
+func TestScopedApplyAndSelectionIgnoreBrokenInactiveModule(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "apply-good", `
 [[links]]
@@ -33,7 +33,7 @@ target = "~/.remove-good"
 
 	code, _, stderr := fixture.run("apply", "apply-good")
 	if code != exitOK {
-		t.Fatalf("scoped apply with broken out-of-scope module = (%d, %q)", code, stderr)
+		t.Fatalf("scoped apply with broken inactive module = (%d, %q)", code, stderr)
 	}
 	assertCLILink(
 		t,
@@ -50,7 +50,7 @@ target = "~/.remove-good"
 
 	code, _, stderr = fixture.run("select", "remove", "remove-good")
 	if code != exitOK {
-		t.Fatalf("remove with broken out-of-scope module = (%d, %q)", code, stderr)
+		t.Fatalf("remove with broken inactive module = (%d, %q)", code, stderr)
 	}
 	assertCLILink(
 		t,
@@ -75,6 +75,43 @@ target = "~/.remove-good"
 		t.Fatalf("explicit broken apply = (%d, %q, %q), want strict failure", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
+}
+
+func TestScopedAnalysisFailsClosedOnMalformedOtherEffectiveManifest(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	fixture.writeModule(t, "good", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.good"
+`, map[string]string{"config": "good"})
+	writeCLIFile(
+		t,
+		filepath.Join(fixture.repository, "modules", "broken", "module.toml"),
+		"unknown = true\n",
+	)
+	fixture.writeMachine(t, []string{"base"}, []string{"broken", "good"})
+
+	for _, args := range [][]string{
+		{"apply", "good"},
+		{"apply", "good", "--dry-run"},
+		{"status", "good"},
+	} {
+		t.Run(strings.Join(args, "-"), func(t *testing.T) {
+			before := snapshotTree(t, fixture.root)
+			code, stdout, stderr := fixture.run(args...)
+			if code != exitError || stdout != "" || !strings.Contains(stderr, "broken") {
+				t.Fatalf(
+					"%v with malformed effective module = (%d, %q, %q), want fail-closed input error",
+					args,
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertSnapshotUnchanged(t, before)
+		})
+	}
 }
 
 func TestScopedApplyIgnoresNestedTargetsBetweenOtherEffectiveModules(t *testing.T) {
