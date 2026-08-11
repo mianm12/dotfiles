@@ -236,14 +236,11 @@ target = "~/.good"
 		filepath.Join(fixture.repository, "modules", "broken", "module.toml"),
 		"unknown = true\n",
 	)
-	moduleID := "good"
-
 	result, err := Apply(ApplyRequest{
 		Home:     fixture.home,
 		Controls: fixture.controls,
 		Machine:  machine,
 		Platform: testPlatform(),
-		ModuleID: &moduleID,
 	})
 	if err == nil || result.TargetsChanged || result.StateChanged {
 		t.Fatalf("Apply(malformed effective manifest) = (%#v, %v), want read-only failure", result, err)

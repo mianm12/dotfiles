@@ -19,24 +19,23 @@ target = "~/.extra"
 	fixture.writeMachine(t, []string{"base"}, nil)
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.runInjected("status", "extra")
+	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
 		stdout != "extra  inactive\n" ||
 		strings.Contains(stdout, "add-extra") ||
 		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("status extra = (%d, %q, %q), want current inventory", code, stdout, stderr)
+		t.Fatalf("status = (%d, %q, %q), want current inventory", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
 
-	code, stdout, stderr = fixture.runInjected("apply", "extra", "--dry-run")
-	if code != exitError ||
-		!strings.Contains(stdout, "not selected") ||
-		!strings.Contains(stdout, "dot select add extra") ||
+	code, stdout, stderr = fixture.runInjected("apply", "--dry-run")
+	if code != exitOK ||
+		stdout != "converged\n" ||
 		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
-			"apply extra --dry-run = (%d, %q, %q), want current-selection blocker",
+			"apply --dry-run = (%d, %q, %q), want empty current selection",
 			code,
 			stdout,
 			stderr,
@@ -66,7 +65,7 @@ target = "~/.app"
 		t.Fatalf("resolveContext() error = %v", err)
 	}
 
-	analysis, err := analyzeStatus(context, fixture.loadMachine(t), nil)
+	analysis, err := analyzeStatus(context, fixture.loadMachine(t))
 	if err != nil {
 		t.Fatalf("analyzeStatus() error = %v", err)
 	}
@@ -84,8 +83,8 @@ target = "~/.app"
 	}
 }
 
-func TestScopedMutationAnalysisProjectsOnlyScopeAndModuleBlockers(t *testing.T) {
-	t.Run("successful scope", func(t *testing.T) {
+func TestFullMutationAnalysisCompleteness(t *testing.T) {
+	t.Run("complete selection", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = ["base"]`)
 		fixture.writeModule(t, "base", "", nil)
 		fixture.writeModule(t, "extra", "", nil)
@@ -94,21 +93,17 @@ func TestScopedMutationAnalysisProjectsOnlyScopeAndModuleBlockers(t *testing.T) 
 		if err != nil {
 			t.Fatalf("resolveContext() error = %v", err)
 		}
-		moduleID := "extra"
-
-		analysis, err := analyzeApply(
-			context,
-			fixture.loadMachine(t),
-			&moduleID,
-		)
+		analysis, err := analyzeApply(context, fixture.loadMachine(t))
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}
-		if len(analysis.Modules) != 1 ||
-			analysis.Modules[0].ID != "extra" ||
-			analysis.Modules[0].Convergence != "converged" {
+		if !analysis.Plan.Complete || len(analysis.Modules) != 2 ||
+			analysis.Modules[0].ID != "base" ||
+			analysis.Modules[0].Convergence != "converged" ||
+			analysis.Modules[1].ID != "extra" ||
+			analysis.Modules[1].Convergence != "converged" {
 			t.Fatalf(
-				"scoped modules = %#v, want only converged extra",
+				"full modules = %#v, want converged base and extra",
 				analysis.Modules,
 			)
 		}
@@ -122,25 +117,20 @@ func TestScopedMutationAnalysisProjectsOnlyScopeAndModuleBlockers(t *testing.T) 
 		if err != nil {
 			t.Fatalf("resolveContext() error = %v", err)
 		}
-		moduleID := "extra"
-
-		analysis, err := analyzeApply(
-			context,
-			fixture.loadMachine(t),
-			&moduleID,
-		)
+		analysis, err := analyzeApply(context, fixture.loadMachine(t))
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}
-		if len(analysis.Modules) != 2 ||
+		if analysis.Plan.Complete || len(analysis.Plan.Steps) != 0 ||
+			len(analysis.Modules) != 2 ||
 			analysis.Modules[0].ID != "extra" ||
 			analysis.Modules[0].Summary != "pending" ||
-			analysis.Modules[0].Convergence != "-" ||
+			analysis.Modules[0].Convergence != "unknown" ||
 			analysis.Modules[1].ID != "gone" ||
 			analysis.Modules[1].Summary != "conflict" ||
-			analysis.Modules[1].Convergence != "-" {
+			analysis.Modules[1].Convergence != "conflict" {
 			t.Fatalf(
-				"blocked scoped modules = %#v, want unknown scope plus blocker",
+				"incomplete full modules = %#v, want unknown peer plus blocker",
 				analysis.Modules,
 			)
 		}
@@ -178,7 +168,7 @@ func TestStatusRendersSelectionSources(t *testing.T) {
 			fixture.writeModule(t, "app", "", nil)
 			fixture.writeMachine(t, []string{"base"}, test.extras)
 
-			code, stdout, _ := fixture.runInjected("status", "app")
+			code, stdout, _ := fixture.runInjected("status")
 
 			if code != exitOK ||
 				stdout != "app  converged "+test.want+"\n" {
@@ -222,11 +212,7 @@ os = ["macos"]
 		fixture.writeMachine(t, []string{"base"}, []string{"gated"})
 		before := snapshotTree(t, fixture.root)
 
-		code, stdout, stderr := fixture.runInjected(
-			"apply",
-			"gated",
-			"--dry-run",
-		)
+		code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 
 		if code != exitError ||
 			!strings.Contains(stdout, "blocked module=gated") ||
@@ -234,40 +220,6 @@ os = ["macos"]
 			!strings.Contains(stderr, "state is missing") ||
 			strings.Contains(stderr, "error:") {
 			t.Fatalf("not-applicable dry-run = (%d, %q, %q)", code, stdout, stderr)
-		}
-		assertSnapshotUnchanged(t, before)
-	})
-
-	t.Run("unknown explicit module", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = []`)
-		fixture.writeMachine(t, []string{"base"}, nil)
-		before := snapshotTree(t, fixture.root)
-
-		code, stdout, stderr := fixture.runInjected(
-			"apply",
-			"missing",
-			"--dry-run",
-		)
-
-		if code != exitError ||
-			!strings.Contains(stdout, "blocked module=missing") ||
-			!strings.Contains(stdout, "not selected") ||
-			!strings.Contains(stderr, "state is missing") ||
-			strings.Contains(stderr, "error:") {
-			t.Fatalf("unknown dry-run = (%d, %q, %q)", code, stdout, stderr)
-		}
-		assertSnapshotUnchanged(t, before)
-
-		code, stdout, stderr = fixture.runInjected("status", "missing")
-		if code != exitOK ||
-			!strings.Contains(
-				stdout,
-				`missing  inactive reason="unknown module \"missing\""`,
-			) ||
-			!strings.Contains(stdout, "blocked module=missing") ||
-			!strings.Contains(stdout, "unknown module") ||
-			!strings.Contains(stderr, "state is missing") {
-			t.Fatalf("unknown status = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
 	})
@@ -302,7 +254,7 @@ target = "~/.app"
 	)
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.runInjected("status", "app")
+	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
 		stderr != "" ||
 		!strings.Contains(
@@ -358,7 +310,7 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 			}
 			before := snapshotTree(t, fixture.root)
 
-			code, stdout, _ := fixture.runInjected("status", "gone")
+			code, stdout, _ := fixture.runInjected("status")
 
 			if code != exitOK ||
 				!strings.Contains(
@@ -367,7 +319,7 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 				) ||
 				!strings.Contains(
 					stdout,
-					`reason="required module \"gone\" does not exist"`,
+					`reason="selected module \"gone\" does not exist"`,
 				) ||
 				!strings.Contains(stdout, "blocked module=gone") ||
 				strings.Contains(stdout, "gone  converged") {
@@ -401,12 +353,12 @@ target = "~/.app"
 		fixture.writeMachine(t, []string{"base"}, []string{"extra"})
 		before := snapshotTree(t, fixture.root)
 
-		code, stdout, _ := fixture.runInjected("status", "app")
+		code, stdout, _ := fixture.runInjected("status")
 
 		if code != exitOK ||
 			!strings.Contains(
 				stdout,
-				"app  conflict selection=profile reason=",
+				"app  pending selection=profile convergence=unknown",
 			) ||
 			!strings.Contains(stdout, `reason="control paths conflict:`) ||
 			!strings.Contains(stdout, "blocked") ||

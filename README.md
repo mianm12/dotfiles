@@ -34,8 +34,8 @@ bin/dot paths
 
 ```sh
 bin/dot select add starship
-bin/dot apply starship --dry-run
-bin/dot apply starship
+bin/dot apply --dry-run
+bin/dot apply
 ```
 
 `select` 只改本机 selection，`apply` 才收敛 target。`apply` 不会覆盖已有普通文件、目录或未知

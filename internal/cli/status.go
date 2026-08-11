@@ -10,20 +10,16 @@ import (
 
 func newStatusCommand(env environment) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status [MODULE]",
+		Use:   "status",
 		Short: "Inspect module convergence without mutation",
-		Args:  maximumArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			var moduleID *string
-			if len(args) == 1 {
-				moduleID = &args[0]
-			}
-			return runStatus(command, moduleID, env)
+		Args:  noArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return runStatus(command, env)
 		},
 	}
 }
 
-func runStatus(command *cobra.Command, moduleID *string, env environment) error {
+func runStatus(command *cobra.Command, env environment) error {
 	context, err := resolveContext(env)
 	if err != nil {
 		return err
@@ -32,7 +28,7 @@ func runStatus(command *cobra.Command, moduleID *string, env environment) error 
 	if err != nil {
 		return err
 	}
-	analysis, err := analyzeStatus(context, machine, moduleID)
+	analysis, err := analyzeStatus(context, machine)
 	if err != nil {
 		return err
 	}
@@ -40,14 +36,10 @@ func runStatus(command *cobra.Command, moduleID *string, env environment) error 
 }
 
 func statusModuleIDs(
-	moduleID *string,
 	repository config.Repository,
 	machine config.Machine,
 	snapshot state.Snapshot,
 ) []string {
-	if moduleID != nil {
-		return []string{*moduleID}
-	}
 	set := make(map[string]bool)
 	for _, id := range repository.ModuleIDs() {
 		set[id] = true

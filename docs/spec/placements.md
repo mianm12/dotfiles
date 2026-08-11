@@ -71,10 +71,10 @@ target = "~/.config/example/config.local"
   不支持只能用原始字节表示的文件系统路径，并在 mutation preflight 拒绝。
 - Target 先展开 HOME 并做词法规范化。
 - 对现存 ancestor symlink，解析到其实际父路径；missing suffix 按原名称追加。
-- CLI 按命令 scope 提供 participating placements；该集合中的任意两个 active desired
-  placements 必须构成 target antichain：规范化 target 或解析后 target 相等、互为祖先或
-  后代时拒绝。参与集合由 [`cli.md`](cli.md#命令-scope-与加载) 定义。State-only stale
-  records 不进入该集合，其清理关系由 [`planning.md`](planning.md#通用决策规则) 定义。
+- 每次 convergence analysis 都对全部 effective placements 运行同一次完整 target validation；
+  任意两个 active desired placements 必须构成 target antichain：规范化 target 或解析后 target
+  相等、互为祖先或后代时拒绝。State-only stale records 不进入该集合，其清理关系由
+  [`planning.md`](planning.md#通用决策规则) 定义。
 - 该不变量不区分 link/local、source 是文件还是目录，也不依赖 actual target 当前类型。
 - Parent symlink 合法；路径关系同时比较 lexical 和 resolved identity。Link state 保存的
   resolved target 及其变化对应的 step eligibility 分别由

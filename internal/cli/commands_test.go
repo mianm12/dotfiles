@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mianm12/dotfiles/internal/core/config"
 )
 
 func TestExitCodesAndStatusConflict(t *testing.T) {
@@ -19,6 +21,8 @@ target = "~/.app"
 
 	for _, args := range [][]string{
 		{"apply", "one", "two"},
+		{"apply", "missing"},
+		{"status", "app"},
 		{"select"},
 		{"select", "add"},
 		{"select", "remove"},
@@ -35,21 +39,14 @@ target = "~/.app"
 			t.Fatalf("run(%v) = (%d, %q, %q), want stderr-only usage error", args, code, stdout, stderr)
 		}
 	}
-	code, stdout, stderr := fixture.run("apply", "missing")
-	if code != exitError || stdout != "" || stderr == "" {
-		t.Fatalf("apply missing = (%d, %q, %q), want stderr-only runtime error", code, stdout, stderr)
-	}
-	code, stdout, stderr = fixture.run("status")
+	code, stdout, stderr := fixture.run("status")
 	if code != exitOK || !strings.Contains(stdout, "conflict") || stderr == "" {
 		t.Fatalf("status conflict = (%d, %q, %q), want successful status", code, stdout, stderr)
 	}
 }
 
-func TestEmptyOptionalModuleIsRejectedWithoutMutation(t *testing.T) {
+func TestEmptySelectionModuleIsRejectedWithoutMutation(t *testing.T) {
 	for _, args := range [][]string{
-		{"apply", ""},
-		{"apply", "", "--dry-run"},
-		{"status", ""},
 		{"select", "add", ""},
 		{"select", "remove", ""},
 	} {
@@ -71,6 +68,51 @@ target = "~/.app"
 				!strings.Contains(stderr, "module ID") {
 				t.Fatalf(
 					"run(%q) = (%d, %q, %q), want stderr-only invalid module failure",
+					args,
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertSnapshotUnchanged(t, before)
+			assertCLIMissing(t, fixture.state)
+			assertCLIMissing(t, fixture.lock)
+			assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
+		})
+	}
+}
+
+func TestApplyAndStatusRejectRemovedModuleArgumentsWithoutReadingOrMutation(t *testing.T) {
+	for _, args := range [][]string{
+		{"apply", "app"},
+		{"apply", "app", "--dry-run"},
+		{"status", "app"},
+		{"apply", ""},
+		{"status", ""},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			fixture := newCLITestEnv(t, `base = ["app"]`)
+			fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "portable"})
+			fixture.writeMachine(t, []string{"base"}, nil)
+			before := snapshotTree(t, fixture.root)
+			fixture.env.userHomeDir = func() (string, error) {
+				t.Fatal("removed module argument consulted HOME")
+				return "", nil
+			}
+			fixture.env.platform = func() config.Platform {
+				t.Fatal("removed module argument detected the platform")
+				return config.Platform{}
+			}
+
+			code, stdout, stderr := fixture.runInjected(args...)
+			if code != exitUsage || stdout != "" || stderr == "" {
+				t.Fatalf(
+					"run(%q) = (%d, %q, %q), want stderr-only usage error",
 					args,
 					code,
 					stdout,

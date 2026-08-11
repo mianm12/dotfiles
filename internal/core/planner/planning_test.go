@@ -159,14 +159,13 @@ func TestPlanRejectsActiveTargetTraversingStateOwnedParentLink(t *testing.T) {
 				Home:     fixture.home,
 				Controls: fixture.controls,
 				Modules:  []config.Module{module},
-				Scope:    []string{"active"},
 				State:    snapshot,
 			})
 			if err != nil {
-				t.Fatalf("Build(scoped) error = %v", err)
+				t.Fatalf("Build() error = %v", err)
 			}
 
-			assertDecisions(t, plan, conflictDecision)
+			assertDecisions(t, plan, conflictDecision, conflictDecision)
 			if got := plan.Issues[0].Reason; !strings.Contains(
 				got,
 				`state-owned link from module "stale" placement "tree"`,
@@ -305,7 +304,7 @@ func TestPlanRejectsRepairStateTraversedByEffectiveDesiredTarget(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestScopedPlanRejectsLinkUpdateTraversedByOutOfScopeDesired(t *testing.T) {
+func TestFullPlanRejectsLinkUpdateTraversedByDesiredTarget(t *testing.T) {
 	tests := []struct {
 		name  string
 		local bool
@@ -355,58 +354,25 @@ func TestScopedPlanRejectsLinkUpdateTraversedByOutOfScopeDesired(t *testing.T) {
 				Home:     fixture.home,
 				Controls: fixture.controls,
 				Modules:  []config.Module{parent, child},
-				Scope:    []string{"parent"},
 				State:    snapshot,
 			})
 			if err != nil {
-				t.Fatalf("Build(scoped parent) error = %v", err)
+				t.Fatalf("Build() error = %v", err)
 			}
 
-			assertDecisions(t, plan, conflictDecision)
+			assertDecisions(t, plan, conflictDecision, conflictDecision)
 			if got := plan.Issues[0].Reason; !strings.Contains(
 				got,
 				`effective module "child" placement "config"`,
 			) {
-				t.Fatalf("scoped update conflict reason = %q", got)
+				t.Fatalf("update conflict reason = %q", got)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
 }
 
-func TestScopedPlanDoesNotOwnOutOfScopeDesiredParentLink(t *testing.T) {
-	fixture := newFixture(t)
-	parentSource := fixture.dir(t, "repo/modules/parent/tree")
-	outside := fixture.dir(t, "outside")
-	fixture.symlink(t, outside, filepath.Join(parentSource, "out"))
-	parentTarget := fixture.target("owned")
-	fixture.symlink(t, parentSource, parentTarget)
-	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
-	childSource := fixture.file(t, "repo/modules/child/config", "child")
-	before := snapshotTree(t, fixture.root)
-
-	plan, err := planner.Build(planner.Request{
-		Home:     fixture.home,
-		Controls: fixture.controls,
-		Modules: []config.Module{
-			linkModule("parent", "tree", parentSource, "~/owned"),
-			linkModule("child", "config", childSource, "~/access/child"),
-		},
-		Scope: []string{"child"},
-		State: state.Snapshot{
-			Home:    fixture.home,
-			Modules: map[string]state.Module{},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Build(scoped child) error = %v", err)
-	}
-
-	assertDecisions(t, plan, planner.DecisionCreateLink)
-	assertTreeUnchanged(t, fixture.root, before)
-}
-
-func TestScopedPlanAllowsFullyOwnedKeepTraversedByOutOfScopeDesired(
+func TestFullPlanAllowsFullyOwnedKeepTraversedByDesired(
 	t *testing.T,
 ) {
 	fixture := newFixture(t)
@@ -438,18 +404,17 @@ func TestScopedPlanAllowsFullyOwnedKeepTraversedByOutOfScopeDesired(
 			linkModule("parent", "tree", parentSource, "~/owned"),
 			linkModule("child", "config", childSource, "~/access/child"),
 		},
-		Scope: []string{"parent"},
 		State: snapshot,
 	})
 	if err != nil {
-		t.Fatalf("Build(scoped parent) error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
 
-	assertDecisions(t, plan, planner.DecisionKeep)
+	assertDecisions(t, plan, planner.DecisionKeep, conflictDecision)
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestScopedPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
+func TestFullPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 	t *testing.T,
 ) {
 	tests := []struct {
@@ -520,14 +485,17 @@ func TestScopedPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 					),
 					linkModule("child", "config", childSource, "~/access/child"),
 				},
-				Scope: []string{"parent"},
 				State: snapshot,
 			})
 			if err != nil {
-				t.Fatalf("Build(scoped parent) error = %v", err)
+				t.Fatalf("Build() error = %v", err)
 			}
 
-			assertDecisions(t, plan, test.want)
+			if test.want == planner.DecisionKeep {
+				assertDecisions(t, plan, planner.DecisionKeep, conflictDecision)
+			} else {
+				assertDecisions(t, plan, conflictDecision, planner.DecisionCreateLink)
+			}
 			if test.want == conflictDecision &&
 				!strings.Contains(
 					plan.Issues[0].Reason,
@@ -540,7 +508,7 @@ func TestScopedPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 	}
 }
 
-func TestScopedStaleCleanupRejectsParentTraversedByOutOfScopeDesired(
+func TestFullPlanRejectsStaleCleanupTraversedByDesired(
 	t *testing.T,
 ) {
 	tests := []struct {
@@ -596,19 +564,21 @@ func TestScopedStaleCleanupRejectsParentTraversedByOutOfScopeDesired(
 				Home:     fixture.home,
 				Controls: fixture.controls,
 				Modules:  []config.Module{module},
-				Scope:    []string{"stale"},
 				State:    snapshot,
 			})
 			if err != nil {
-				t.Fatalf("Build(scoped stale cleanup) error = %v", err)
+				t.Fatalf("Build() error = %v", err)
 			}
 
-			assertDecisions(t, plan, conflictDecision)
-			if got := plan.Issues[0].Reason; !strings.Contains(
-				got,
-				`active module "active" placement "child"`,
-			) {
-				t.Fatalf("stale cleanup conflict reason = %q, want dependent child", got)
+			assertDecisions(t, plan, conflictDecision, conflictDecision)
+			found := false
+			for _, issue := range plan.Issues {
+				if strings.Contains(issue.Reason, `active module "active" placement "child"`) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("issues = %#v, want stale cleanup dependent child", plan.Issues)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -956,7 +926,7 @@ func TestPlanKeepsIndependentStalePrunesWithSameDestination(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestScopedPlanAllowsUpdateWithOutOfScopeStaleDependency(t *testing.T) {
+func TestFullPlanRejectsUpdateWithStaleDependency(t *testing.T) {
 	fixture := newFixture(t)
 	oldSource := fixture.dir(t, "repo/modules/parent/old")
 	newSource := fixture.dir(t, "repo/modules/parent/new")
@@ -995,14 +965,13 @@ func TestScopedPlanAllowsUpdateWithOutOfScopeStaleDependency(t *testing.T) {
 		Modules: []config.Module{
 			linkModule("parent", "tree", newSource, "~/owned"),
 		},
-		Scope: []string{"parent"},
 		State: snapshot,
 	})
 	if err != nil {
-		t.Fatalf("Build(scoped parent) error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
 
-	assertDecisions(t, plan, planner.DecisionUpdate)
+	assertDecisions(t, plan, planner.DecisionUpdate, conflictDecision)
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
@@ -1028,14 +997,13 @@ func TestPlanDoesNotTreatDriftedParentLinkAsStateOwned(t *testing.T) {
 		Home:     fixture.home,
 		Controls: fixture.controls,
 		Modules:  []config.Module{module},
-		Scope:    []string{"active"},
 		State:    snapshot,
 	})
 	if err != nil {
-		t.Fatalf("Build(scoped) error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
 
-	assertDecisions(t, plan, planner.DecisionCreateLink)
+	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionForget)
 	if plan.HasIssues() {
 		t.Fatalf("Build() = %#v, want drifted state link to remain unowned", plan)
 	}
@@ -1074,14 +1042,13 @@ func TestPlanDoesNotTreatResolvedParentDriftAsStateOwned(t *testing.T) {
 		Home:     fixture.home,
 		Controls: fixture.controls,
 		Modules:  []config.Module{module},
-		Scope:    []string{"active"},
 		State:    snapshot,
 	})
 	if err != nil {
-		t.Fatalf("Build(scoped) error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
 
-	assertDecisions(t, plan, planner.DecisionCreateLink)
+	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionForget)
 	if plan.HasIssues() {
 		t.Fatalf("Build() = %#v, want resolved state drift to remain unowned", plan)
 	}
@@ -1700,6 +1667,9 @@ func (fixture *fixture) build(
 	})
 	if err != nil {
 		t.Fatalf("planner.Build() error = %v", err)
+	}
+	if !plan.Complete {
+		t.Fatalf("planner.Build() returned incomplete plan: %#v", plan)
 	}
 	return plan
 }

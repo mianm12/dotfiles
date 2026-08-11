@@ -642,7 +642,7 @@ func TestLocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
 	assertFilesUnchanged(t, before)
 }
 
-func TestScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
+func TestFullExecutorRepeatApplyDoesNotMutateSettledTargets(t *testing.T) {
 	fixture := newFixture(t)
 	baseSource := fixture.writeRepositoryFile(t, "modules/base/file", "base")
 	extraSource := fixture.writeRepositoryFile(t, "modules/extra/file", "extra")
@@ -687,8 +687,6 @@ func TestScopedExecutorRepeatApplyDoesNotMutate(t *testing.T) {
 			}},
 		},
 	})
-	request.Scope = []string{"extra"}
-
 	first, err := runSession(request)
 	if err != nil {
 		t.Fatalf("runSession(first) error = %v", err)

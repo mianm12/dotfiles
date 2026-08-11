@@ -35,13 +35,13 @@ type Result struct {
 	Issues       []Issue
 }
 
-// Resolve loads the effective selection. Required marks an explicitly requested
-// active module, so profile not-applicability becomes an issue for scoped apply.
+// Resolve loads the complete effective selection. Profile not-applicability
+// leaves the module out of desired so stale ownership can be cleaned; extra
+// not-applicability and any indeterminate result block convergence.
 func Resolve(
 	repository config.Repository,
 	machine config.Machine,
 	platform config.Platform,
-	required map[string]bool,
 ) (Result, error) {
 	profileModules, err := repository.ProfileModules(machine.Profiles)
 	if err != nil {
@@ -58,12 +58,6 @@ func Resolve(
 		source.Extra = true
 		sources[moduleID] = source
 	}
-	for moduleID := range required {
-		if _, exists := sources[moduleID]; !exists {
-			sources[moduleID] = Source{}
-		}
-	}
-
 	ids := make([]string, 0, len(sources))
 	for moduleID := range sources {
 		ids = append(ids, moduleID)
@@ -85,7 +79,7 @@ func Resolve(
 		if !exists {
 			result.Issues = append(result.Issues, Issue{
 				ModuleID: moduleID,
-				Reason:   fmt.Sprintf("required module %q does not exist", moduleID),
+				Reason:   fmt.Sprintf("selected module %q does not exist", moduleID),
 			})
 			continue
 		}
@@ -103,7 +97,7 @@ func Resolve(
 		case config.ApplicabilityApplicable:
 			result.Modules = append(result.Modules, module)
 		case config.ApplicabilityNotApplicable:
-			if source.Extra || required[moduleID] {
+			if source.Extra {
 				result.Issues = append(result.Issues, Issue{
 					ModuleID: moduleID,
 					Reason:   fmt.Sprintf("module %q is not applicable", moduleID),

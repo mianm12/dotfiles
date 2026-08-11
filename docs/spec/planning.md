@@ -7,7 +7,7 @@ Target 使用 `lstat` 区分 absent、symlink、regular file、directory 和 spe
 
 ## 通用决策规则
 
-选定 scope 内任一 placement 在规划阶段落到 conflict 时，plan 不可执行。Status 的公开投影
+全量 plan 内任一 placement 在规划阶段落到 conflict 时，plan 不可执行。Status 的公开投影
 与退出码只由 [`cli.md`](cli.md#status-与-dry-run) 定义。执行前后的写入边界见
 [`mutation-and-recovery.md`](mutation-and-recovery.md)。
 
@@ -16,21 +16,21 @@ State 中 placement 的 kind 与当前 desired 的 kind 不一致（同一 ID �
 不是通用的类型转换方式；显式转换使用下文的[两阶段 placement 迁移](#两阶段-placement-迁移)。
 
 Active target 的父路径解析链经过一条仍有完整 state ownership 证据的 link 时为 conflict。
-该守卫包括 scope 外和仅存在于 state 的 link，避免 active step 先写入其当前 destination，
+该守卫包括仅存在于 state 的 link，避免 active step 先写入其当前 destination，
 而该 link 随后更新或清理后让成功结果失去可达性。只有解析链实际经过该 link 目录项才命中；
 独立 alias 即使最终解析到同一 destination 也不冲突。State target 的 resolved identity 或
 actual raw destination 已漂移时 ownership 不成立，不使用该守卫。
 
-Scope 内非 conflict active link step 若会改变 link 目录项，或当前 state 尚不能完整 owns
+非 conflict active link step 若会改变 link 目录项，或当前 state 尚不能完整 owns
 该 actual link，则成功后会建立或刷新 ownership。若任一 effective desired target 的当前父
-路径解析链经过该 active link 目录项，该 placement 产生 conflict issue；比较必须包含 scope 外 desired。
+路径解析链经过该 active link 目录项，该 placement 产生 conflict issue；比较包含全部 effective desired。
 该规则既避免 Adopt、RepairState 或 resolved-drift Keep 首次成功后让相同输入在下一次 apply
-才冲突，也避免 scoped Update 切断 scope 外 desired target 的当前可达性。当前 state 已完整
+才冲突，也避免 Update 切断其他 desired target 的当前可达性。当前 state 已完整
 owns 同一 resolved link entry 与 raw destination 的 Keep 不改变 namespace 或建立新 ownership
 边界，不使用该 prospective guard；这包括 recorded lexical target 与 desired 不同、但旧
 target 仍能证明同一 ownership 的 rebind。CreateLink 的 actual 尚不存在，因此当前解析链不会
-经过该目录项。该 guard 只把本轮 scope 内 active link step 视为 parent；scope 外且没有完整
-state ownership 的 desired link 不因本规则获得 ownership。
+经过该目录项。该 guard 只把本轮实际生成的 active link step 视为 parent；没有完整 state
+ownership 且本轮不建立 ownership 的 desired link 不因本规则获得 ownership。
 
 Control topology 自身无效时整条规划失败，不能使用 stale 宽容规则绕过。Active target 与
 control family 重叠仍是 path conflict。仅当 state placement 已退出 desired，且其历史 target
@@ -38,7 +38,7 @@ control family 重叠仍是 path conflict。仅当 state placement 已退出 des
 ownership/provenance，禁止 prune，不删除、替换或以其他 placement step 修改对应 target。
 该 step 是 ownership 放弃原因的唯一真相源，具体的只读预告与成功结果文案由
 [`cli.md`](cli.md#status-与-dry-run) 投影。该规则同时适用于 stale link 与 stale local，只处理
-当前命令 scope 内的记录；损坏 state、HOME 不匹配和未知 kind 等输入错误不得降级为 forget。
+全部 state-only stale records；损坏 state、HOME 不匹配和未知 kind 等输入错误不得降级为 forget。
 
 Profile 选中的 module 已确定 not-applicable 时，其旧 state placements 视为退出 desired，
 继续按本文件的 stale prune/forget 规则规划 cleanup。Effective indeterminate module 不生成
@@ -53,8 +53,7 @@ leaf placements，都不能在一次 desired 变更中自动迁移。每个受�
 
 1. 阶段一的 desired 只删除旧 placement，不加入 replacement。Directory-link 迁移还要求所有
    effective modules 都不声明父路径解析链经过旧 link 的 descendants。
-2. 运行覆盖旧 state record scope 的 `dot apply`；module 仍 active 且 applicable 时可以使用
-   `dot apply MODULE`。若 mutation 失败或提示可能部分完成，保持阶段一的 desired，并按
+2. 运行全量 `dot apply`。若 mutation 失败或提示可能部分完成，保持阶段一的 desired，并按
    [`mutation-and-recovery.md`](mutation-and-recovery.md#中断恢复) 重跑到成功；不能仅凭 actual
    target 已消失推断 state 已提交。
 3. 检查旧 target。Prune 只删除仍匹配 ownership 的 link；forget 和 local cleanup 都保留 actual。
@@ -66,7 +65,7 @@ leaf placements，都不能在一次 desired 变更中自动迁移。每个受�
 
 若 module 已因 selection 移除或已确定 not-applicable 而退出 desired，按
 [`cli.md`](cli.md#apply) 与 [`cli.md`](cli.md#select) 的规则先调整 selection，再执行全量
-`dot apply` cleanup；不得用 scoped apply 把 inactive module 重新加入 selection。Indeterminate
+`dot apply` cleanup；apply 不会把 inactive module 重新加入 selection。Indeterminate
 applicability 不表示退出 desired，仍按安全规则阻断；应先恢复平台判定或用 `select remove`
 移除 direct selection 来源。多机仓库中每个仍有旧 record 的 HOME 都不得跳过阶段一。
 
@@ -94,21 +93,19 @@ state 记录时才允许 prune。Dangling symlink 仍按 raw destination 应用�
 Stale link target 与 active desired target 相等时，stale cleanup step 为 forget 旧
 ownership；该 step 不覆盖 active placement 按上文规则独立产生的 ownership conflict。
 Active target 的父路径解析链经过 stale link 时，由通用 state-owned link 守卫把 active
-placement 标记为 conflict；stale cleanup 也必须比较全部 effective desired targets，即使命令
-scope 不包含对应 child。只要 child 的父路径解析链仍经过该 link，prune step 不再生成并改为
-conflict issue，避免 scoped cleanup 切断 scope 外的 desired target。两种 conflict issue 复用同一个
+placement 标记为 conflict；stale cleanup 也必须比较全部 effective desired targets。只要 child
+的父路径解析链仍经过该 link，prune step 不再生成并改为 conflict issue，避免 cleanup 切断
+desired target。两种 conflict issue 复用同一个
 traversal 与 ownership 不变量。
 
 同一 plan 内本可 prune 的 state-owned stale link，如果其当前父路径解析链经过一条将在此前
 执行 Update 的 active link，则 stale cleanup 为 conflict。否则 Update 会先改变 namespace，
 让后续 prune 的 resolved ownership 复核被本轮自身必然破坏，并留下部分完成。该规则只比较
-当前 scope 实际生成的 Update/Prune step pair；独立 alias 即使到达相同 destination 也不
-命中，scope 外未生成 cleanup step 的 stale record 不阻断 scoped Update，之后若发生 resolved
-drift 仍按下文 forget。恢复时先保持 parent 的旧 destination 并完成 stale cleanup，再更新
-parent；跨 module 可以在命令 scope 允许时先做 scoped cleanup/remove，同一 module 则分两次
-desired 变更。
+当前 plan 实际生成的 Update/Prune step pair；独立 alias 即使到达相同 destination 也不命中。
+恢复时先保持 parent 的旧 destination 并通过一次 desired 变更完成 stale cleanup，再更新
+parent；不能依赖局部命令绕过该依赖。
 
-当前 scope 内其余 Prune step 按实际 traversal 依赖排序：child target 的父路径解析链经过
+其余 Prune step 按实际 traversal 依赖排序：child target 的父路径解析链经过
 另一条 stale parent link 时，child 先于 parent；无依赖的 step 保持稳定 state key 顺序，
 独立 alias 不建立依赖。多个完整 ownership record 若指向同一个当前 target，只由稳定顺序中的
 第一条 step 代表物理 Prune，其余生成说明代表 step 的 forget；不同 target 即使 raw

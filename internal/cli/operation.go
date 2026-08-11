@@ -51,6 +51,9 @@ func finishMutation(
 }
 
 func rejectAnalysis(analysis OperationAnalysis) error {
+	if analysis.Plan.Executable() {
+		return nil
+	}
 	if len(analysis.Plan.Issues) != 0 {
 		issue := analysis.Plan.Issues[0]
 		if issue.Kind == planner.IssueConflict && issue.PlacementID != "" {
@@ -70,7 +73,7 @@ func rejectAnalysis(analysis OperationAnalysis) error {
 		}
 		return fmt.Errorf("operation blocked: %s", issue.Reason)
 	}
-	return nil
+	return fmt.Errorf("operation blocked: convergence planning is incomplete")
 }
 
 func loadRequiredMachine(context commandContext) (config.Machine, error) {
@@ -85,15 +88,6 @@ func loadRequiredMachine(context commandContext) (config.Machine, error) {
 		)
 	}
 	return machine, nil
-}
-
-func validateModuleID(repository, moduleID string) error {
-	_, err := config.MarshalMachine(config.Machine{
-		Version:      1,
-		Repository:   repository,
-		ExtraModules: []string{moduleID},
-	})
-	return err
 }
 
 func appendWarning(warning string, warnings []string) []string {

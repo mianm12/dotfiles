@@ -457,7 +457,7 @@ target = "~/.app"
 	})
 }
 
-func TestScopedApplyFailureAdvisesScopedRerun(t *testing.T) {
+func TestApplyFailureAdvisesFullRerun(t *testing.T) {
 	newFixture := func(t *testing.T) *cliTestEnv {
 		t.Helper()
 		fixture := newCLITestEnv(t, `base = []`)
@@ -474,9 +474,9 @@ target = "~/.extra"
 	t.Run("result output failure", func(t *testing.T) {
 		fixture := newFixture(t)
 
-		stderr := runWithFailedStdout(t, []string{"apply", "extra"})
+		stderr := runWithFailedStdout(t, []string{"apply"})
 
-		assertOutputFailure(t, stderr, "dot apply extra")
+		assertOutputFailure(t, stderr, "dot apply")
 		assertCLILink(
 			t,
 			filepath.Join(fixture.home, ".extra"),

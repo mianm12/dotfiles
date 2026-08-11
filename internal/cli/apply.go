@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/mianm12/dotfiles/internal/core/mutation"
 	"github.com/spf13/cobra"
 )
@@ -10,15 +8,11 @@ import (
 func newApplyCommand(env environment) *cobra.Command {
 	var dryRun bool
 	command := &cobra.Command{
-		Use:   "apply [MODULE]",
+		Use:   "apply",
 		Short: "Converge the current effective selection",
-		Args:  maximumArgs(1),
-		RunE: func(command *cobra.Command, args []string) error {
-			var moduleID *string
-			if len(args) == 1 {
-				moduleID = &args[0]
-			}
-			return runApply(command, moduleID, dryRun, env)
+		Args:  noArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return runApply(command, dryRun, env)
 		},
 	}
 	command.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "print the plan without mutation")
@@ -27,7 +21,6 @@ func newApplyCommand(env environment) *cobra.Command {
 
 func runApply(
 	command *cobra.Command,
-	moduleID *string,
 	dryRun bool,
 	env environment,
 ) error {
@@ -36,15 +29,12 @@ func runApply(
 		return err
 	}
 	rerun := "dot apply"
-	if moduleID != nil {
-		rerun = fmt.Sprintf("dot apply %s", *moduleID)
-	}
 	if dryRun {
 		machine, err := loadRequiredMachine(context)
 		if err != nil {
 			return err
 		}
-		analysis, err := analyzeApply(context, machine, moduleID)
+		analysis, err := analyzeApply(context, machine)
 		if err != nil {
 			return err
 		}
@@ -60,7 +50,6 @@ func runApply(
 		Controls:  context.controls(machine.Repository),
 		Machine:   machine,
 		Platform:  context.platform,
-		ModuleID:  moduleID,
 		RerunHint: rerun,
 	})
 	return finishMutation(command, result, runErr, rerun)

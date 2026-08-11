@@ -164,7 +164,7 @@ func TestOpenRepositoryRejectsUnsafeRootManifestEntries(t *testing.T) {
 	}
 }
 
-func TestInspectModuleDefersUnsafeOutOfScopeManifestEntries(t *testing.T) {
+func TestInspectModuleDefersUnsafeInactiveManifestEntries(t *testing.T) {
 	for _, test := range unsafeManifestEntries() {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -187,10 +187,10 @@ base = ["good"]
 
 			profileModules, err := loaded.ProfileModules([]string{"base"})
 			if err != nil {
-				t.Fatalf("ProfileModules(good scope) error = %v", err)
+				t.Fatalf("ProfileModules(active profile) error = %v", err)
 			}
 			if !reflect.DeepEqual(profileModules, []string{"good"}) {
-				t.Fatalf("ProfileModules(good scope) = %v, want [good]", profileModules)
+				t.Fatalf("ProfileModules(active profile) = %v, want [good]", profileModules)
 			}
 			module, exists, applicability, err := loaded.InspectModule(
 				"good",
@@ -223,7 +223,7 @@ base = ["good"]
 	}
 }
 
-func TestProfileModulesDefersOutOfScopeDiscoveryError(t *testing.T) {
+func TestProfileModulesDefersInactiveDiscoveryError(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -250,10 +250,10 @@ base = ["good"]
 	}
 	profileModules, err := loaded.ProfileModules([]string{"base"})
 	if err != nil {
-		t.Fatalf("ProfileModules(good scope) error = %v", err)
+		t.Fatalf("ProfileModules(active profile) error = %v", err)
 	}
 	if !reflect.DeepEqual(profileModules, []string{"good"}) {
-		t.Fatalf("ProfileModules(good scope) = %v, want [good]", profileModules)
+		t.Fatalf("ProfileModules(active profile) = %v, want [good]", profileModules)
 	}
 	if _, exists, _, err := loaded.InspectModule(
 		"bad",

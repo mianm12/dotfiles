@@ -43,11 +43,10 @@ func Build(request Request) (Plan, error) {
 		return Plan{}, err
 	}
 
-	scope := newScope(request.Scope)
-	desired, err := resolveDesired(home, request.Controls, request.Modules, scope)
+	desired, err := resolveDesired(home, request.Controls, request.Modules)
 	if err != nil {
 		if isPlanningIssue(err) {
-			return Plan{Issues: pathIssues(err)}, nil
+			return Plan{Complete: false, Issues: pathIssues(err)}, nil
 		}
 		return Plan{}, err
 	}
@@ -55,9 +54,6 @@ func Build(request Request) (Plan, error) {
 	usedState := make(map[placementKey]bool)
 	candidates := make([]candidate, 0, len(desired))
 	for _, placement := range desired {
-		if !scope.includes(placement.key.moduleID) {
-			continue
-		}
 		planned, used, planErr := planActive(placement, request.State)
 		if planErr != nil {
 			return Plan{}, planErr
@@ -130,7 +126,6 @@ func Build(request Request) (Plan, error) {
 		active,
 		request.State,
 		usedState,
-		scope,
 	)
 	if err != nil {
 		return Plan{}, err
@@ -188,8 +183,9 @@ func executableSteps(candidates []candidate) []Step {
 
 func finalize(candidates []candidate) Plan {
 	plan := Plan{
-		Steps:  make([]Step, 0, len(candidates)),
-		Issues: make([]Issue, 0),
+		Complete: true,
+		Steps:    make([]Step, 0, len(candidates)),
+		Issues:   make([]Issue, 0),
 	}
 	for _, planned := range candidates {
 		if planned.conflict {
@@ -226,10 +222,8 @@ func resolveDesired(
 	home string,
 	controls corepaths.Controls,
 	modules []config.Module,
-	scope moduleScope,
 ) ([]desiredPlacement, error) {
 	pathInputs := make([]corepaths.Placement, 0)
-	selectedLabels := make([]string, 0)
 	for _, module := range modules {
 		for _, link := range module.Links {
 			label := placementLabel(module.ID, link.ID)
@@ -237,9 +231,6 @@ func resolveDesired(
 				Label:  label,
 				Target: link.Target,
 			})
-			if scope.includes(module.ID) {
-				selectedLabels = append(selectedLabels, label)
-			}
 		}
 		for _, local := range module.Locals {
 			label := placementLabel(module.ID, local.ID)
@@ -247,26 +238,10 @@ func resolveDesired(
 				Label:  label,
 				Target: local.Target,
 			})
-			if scope.includes(module.ID) {
-				selectedLabels = append(selectedLabels, label)
-			}
 		}
 	}
 
-	var (
-		resolved []corepaths.ResolvedPlacement
-		err      error
-	)
-	if scope.all {
-		resolved, err = corepaths.Validate(home, controls, pathInputs)
-	} else {
-		resolved, err = corepaths.ValidateScoped(
-			home,
-			controls,
-			pathInputs,
-			selectedLabels,
-		)
-	}
+	resolved, err := corepaths.Validate(home, controls, pathInputs)
 	if err != nil {
 		return nil, err
 	}
@@ -401,12 +376,11 @@ func planStale(
 	active []Step,
 	snapshot state.Snapshot,
 	used map[placementKey]bool,
-	scope moduleScope,
 ) ([]candidate, error) {
 	keys := stateKeys(snapshot)
 	results := make([]candidate, 0)
 	for _, key := range keys {
-		if used[key] || !scope.includes(key.moduleID) {
+		if used[key] {
 			continue
 		}
 		record, _ := statePlacement(snapshot, key)
@@ -960,24 +934,4 @@ func stateKeys(snapshot state.Snapshot) []placementKey {
 
 func placementLabel(moduleID, placementID string) string {
 	return moduleID + "/" + placementID
-}
-
-type moduleScope struct {
-	all     bool
-	modules map[string]bool
-}
-
-func newScope(modules []string) moduleScope {
-	if modules == nil {
-		return moduleScope{all: true}
-	}
-	selected := make(map[string]bool, len(modules))
-	for _, module := range modules {
-		selected[module] = true
-	}
-	return moduleScope{modules: selected}
-}
-
-func (scope moduleScope) includes(moduleID string) bool {
-	return scope.all || scope.modules[moduleID]
 }

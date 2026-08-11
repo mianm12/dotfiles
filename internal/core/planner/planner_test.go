@@ -14,6 +14,31 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
+func TestPlanExecutableRequiresCompletePlanWithoutIssues(t *testing.T) {
+	tests := []struct {
+		name string
+		plan planner.Plan
+		want bool
+	}{
+		{name: "incomplete", plan: planner.Plan{}},
+		{
+			name: "complete with issue",
+			plan: planner.Plan{
+				Complete: true,
+				Issues:   []planner.Issue{{Kind: planner.IssueConflict}},
+			},
+		},
+		{name: "complete", plan: planner.Plan{Complete: true}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.plan.Executable(); got != test.want {
+				t.Fatalf("Plan.Executable() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestOrderedLinkDecisionRules(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -353,65 +378,6 @@ func TestStaleTargetReuseDoesNotOverrideActiveOwnershipConflict(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestScopedPlanChecksOnlyRelationshipsInvolvingScope(t *testing.T) {
-	fixture := newFixture(t)
-	appSource := fixture.file(t, "repo/modules/app/config", "app")
-	firstSource := fixture.file(t, "repo/modules/first/config", "first")
-	secondSource := fixture.file(t, "repo/modules/second/config", "second")
-	modules := []config.Module{
-		linkModule("app", "config", appSource, "~/.config/app"),
-		linkModule("first", "config", firstSource, "~/.config/shared"),
-		linkModule("second", "config", secondSource, "~/.config/shared/child"),
-	}
-
-	plan, err := planner.Build(planner.Request{
-		Home:     fixture.home,
-		Controls: fixture.controls,
-		Modules:  modules,
-		Scope:    []string{"app"},
-		State:    fixture.snapshot(nil),
-	})
-	if err != nil {
-		t.Fatalf("Build(scoped) error = %v", err)
-	}
-	assertDecisions(t, plan, planner.DecisionCreateLink)
-
-	plan, err = planner.Build(planner.Request{
-		Home:     fixture.home,
-		Controls: fixture.controls,
-		Modules:  modules,
-		State:    fixture.snapshot(nil),
-	})
-	if err != nil || !plan.HasIssues() {
-		t.Fatalf("Build(full unrelated nested targets) = (%#v, %v), want issue", plan, err)
-	}
-
-	modules[1].Links[0].Target = "~/.config/app/child"
-	modules[2].Links[0].Target = "~/.config/second"
-	plan, err = planner.Build(planner.Request{
-		Home:     fixture.home,
-		Controls: fixture.controls,
-		Modules:  modules,
-		Scope:    []string{"app"},
-		State:    fixture.snapshot(nil),
-	})
-	if err != nil || !plan.HasIssues() {
-		t.Fatalf("Build(scoped selected-parent conflict) = (%#v, %v), want issue", plan, err)
-	}
-
-	modules[1].Links[0].Target = "~/.config"
-	plan, err = planner.Build(planner.Request{
-		Home:     fixture.home,
-		Controls: fixture.controls,
-		Modules:  modules,
-		Scope:    []string{"app"},
-		State:    fixture.snapshot(nil),
-	})
-	if err != nil || !plan.HasIssues() {
-		t.Fatalf("Build(scoped selected-child conflict) = (%#v, %v), want issue", plan, err)
-	}
-}
-
 func TestBuildRejectsNestedTargetsForEveryPlacementKindCombination(t *testing.T) {
 	combinations := []struct {
 		name           string
@@ -456,38 +422,26 @@ func TestBuildRejectsNestedTargetsForEveryPlacementKindCombination(t *testing.T)
 				descendantSource,
 				"~/.config/app/child",
 			)
-			for _, operation := range []struct {
-				name  string
-				scope []string
-			}{
-				{name: "full"},
-				{name: "scoped", scope: []string{"app"}},
-			} {
-				t.Run(operation.name, func(t *testing.T) {
-					before := snapshotTree(t, fixture.root)
-
-					plan, err := planner.Build(planner.Request{
-						Home:     fixture.home,
-						Controls: fixture.controls,
-						Modules:  []config.Module{module},
-						Scope:    operation.scope,
-						State:    fixture.snapshot(nil),
-					})
-
-					if err != nil || !plan.HasIssues() {
-						t.Fatalf("Build() = (%#v, %v), want target issue", plan, err)
-					}
-					if len(plan.Steps) != 0 {
-						t.Fatalf("Build() returned executable steps %#v", plan)
-					}
-					assertTreeUnchanged(t, fixture.root, before)
-				})
+			fixture.fileAbsolute(t, fixture.target(".config/app"), "user")
+			before := snapshotTree(t, fixture.root)
+			plan, err := planner.Build(planner.Request{
+				Home:     fixture.home,
+				Controls: fixture.controls,
+				Modules:  []config.Module{module},
+				State:    fixture.snapshot(nil),
+			})
+			if err != nil || !plan.HasIssues() || plan.Complete {
+				t.Fatalf("Build() = (%#v, %v), want incomplete target issue", plan, err)
 			}
+			if len(plan.Steps) != 0 {
+				t.Fatalf("Build() returned executable steps %#v", plan)
+			}
+			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
 }
 
-func TestScopedPlanLeavesOtherModuleStateUntouched(t *testing.T) {
+func TestFullPlanIncludesStateOnlyStaleRecords(t *testing.T) {
 	fixture := newFixture(t)
 	appSource := fixture.file(t, "repo/modules/app/config", "app")
 	otherSource := fixture.file(t, "repo/modules/other/config", "other")
@@ -514,13 +468,12 @@ func TestScopedPlanLeavesOtherModuleStateUntouched(t *testing.T) {
 		Modules: []config.Module{
 			linkModule("app", "config", appSource, "~/.config/app"),
 		},
-		Scope: []string{"app"},
 		State: snapshot,
 	})
 	if err != nil {
-		t.Fatalf("Build(scoped) error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
-	assertDecisions(t, plan, planner.DecisionCreateLink)
+	assertDecisions(t, plan, planner.DecisionCreateLink, planner.DecisionPrune)
 }
 
 func TestBuildPropagatesStaleFilesystemErrorWithoutPartialPlan(t *testing.T) {

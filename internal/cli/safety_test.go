@@ -1110,7 +1110,7 @@ target = "~/.extra"
 	if code != exitOK || stderr == "" {
 		t.Fatalf("status = (%d, %q)", code, stderr)
 	}
-	code, stdout, stderr := fixture.run("apply", "extra", "--dry-run")
+	code, stdout, stderr := fixture.run("apply", "--dry-run")
 	if code != exitOK ||
 		!strings.Contains(stdout, "create-link") ||
 		stderr == "" {

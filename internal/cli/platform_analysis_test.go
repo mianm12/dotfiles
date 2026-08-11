@@ -46,7 +46,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 	}
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.runInjected("status", "gated")
+	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
 		stderr != "" ||
 		!strings.Contains(
@@ -102,7 +102,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 	)
 }
 
-func TestExplicitIndeterminateModuleShowsAnalysisButDoesNotChangeSelection(t *testing.T) {
+func TestInactiveIndeterminateModuleIsNotResolvedByStatus(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(
 		t,
@@ -116,35 +116,13 @@ func TestExplicitIndeterminateModuleShowsAnalysisButDoesNotChangeSelection(t *te
 	}
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.runInjected("status", "gated")
+	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
-		!strings.Contains(
-			stdout,
-			"gated  inactive applicability=indeterminate ",
-		) ||
-		!strings.Contains(stdout, `reason="platform distro is unknown:`) ||
+		stdout != "gated  inactive\n" ||
 		strings.Contains(stdout, "blocked") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"inactive indeterminate status = (%d, %q, %q)",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertSnapshotUnchanged(t, before)
-
-	code, stdout, stderr = fixture.runInjected(
-		"apply",
-		"gated",
-		"--dry-run",
-	)
-	if code != exitError ||
-		!strings.Contains(stdout, "blocked module=gated") ||
-		!strings.Contains(stdout, "not selected") ||
-		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf(
-			"explicit indeterminate dry-run = (%d, %q, %q)",
 			code,
 			stdout,
 			stderr,
@@ -210,7 +188,7 @@ func TestInitDoesNotResolveIndeterminateProfile(t *testing.T) {
 	assertCLIMissing(t, filepath.Join(fixture.home, ".gated"))
 }
 
-func TestAnyEffectiveIndeterminateModuleBlocksScopedMutation(t *testing.T) {
+func TestAnyEffectiveIndeterminateModuleBlocksFullMutation(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["uncertain"]`)
 	fixture.writeModule(t, "uncertain", `
 [match]
@@ -229,17 +207,13 @@ target = "~/.extra"
 	}
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.runInjected(
-		"apply",
-		"extra",
-		"--dry-run",
-	)
+	code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 	if code != exitError ||
 		!strings.Contains(stdout, "blocked module=uncertain") ||
 		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
-			"scoped dry-run = (%d, %q, %q), want whole-operation blocker",
+			"full dry-run = (%d, %q, %q), want whole-operation blocker",
 			code,
 			stdout,
 			stderr,
@@ -247,12 +221,12 @@ target = "~/.extra"
 	}
 	assertSnapshotUnchanged(t, before)
 
-	code, stdout, stderr = fixture.runInjected("apply", "extra")
+	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitError ||
 		stdout != "" ||
 		!strings.Contains(stderr, `module "uncertain" applicability is indeterminate`) {
 		t.Fatalf(
-			"scoped apply = (%d, %q, %q), want whole-operation failure",
+			"full apply = (%d, %q, %q), want whole-operation failure",
 			code,
 			stdout,
 			stderr,
