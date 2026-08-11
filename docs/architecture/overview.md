@@ -31,8 +31,9 @@ init/select -> converge.Initialize / SelectAdd / SelectRemove
 和 lock 的词法路径及解析身份固定为一个不可变 `paths.ResolvedControls`。Selection 与 platform
 只解析一次；planner 的完整 target-set 校验和全部 stale control-boundary 判断只消费该快照，
 不能接收 raw controls，也不能重新解析 control topology。私有 analysis 最终只保留 Report、
-loaded state、ResolvedControls 和 machine semantic fingerprint；公开 `Report` 只包含 module 投影、
-`Plan{Complete, Steps, Issues}` 与 warnings。
+loaded state、ResolvedControls 和 machine semantic fingerprint；公开 `Report` 只包含客观
+ModuleFacts、`Plan{Transitions, Problems}` 与 warnings。Planner 对每个 state key 最多构造一个
+Transition，并一次性计算私有不可变 FinalState；executor 只执行 Action 和提交该 FinalState。
 
 `converge.Apply` 在锁前调用同一分析实现完成完整零写入检查，并使用该次快照固定的 lock 路径
 获取单次 lock。锁内再次调用同一实现，生成一份 fresh ResolvedControls 和 fresh Plan；只执行这份
@@ -41,8 +42,8 @@ machine selection 漂移。这里的“一次解析”以单次 analysis 为边�
 错误复用到锁内重分析。
 
 Status 与 dry-run 对全部 effective modules 与全部 state-only stale records 运行同一次全量规划。
-Selection、control topology 或 target-set blocker 使
-`Plan.Complete=false` 且 Steps 为空；不会过滤 blocked module 后再次局部规划。
+Selection、control topology 或 target-set blocker 使 Transitions 为空并生成 Problems；不会过滤
+blocked module 后再次局部规划。
 
 公开给 CLI 的 core 接口是：
 
@@ -56,7 +57,7 @@ type Environment struct {
 }
 
 type Report struct {
-    Modules  []ModuleReport
+    Facts    []ModuleFact
     Plan     Plan
     Warnings []string
 }

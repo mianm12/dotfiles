@@ -160,8 +160,10 @@ target = "~/.tree/child"
 
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
-		!strings.Contains(stdout, "effective  conflict") ||
-		!strings.Contains(stdout, "selected  conflict") ||
+		!strings.Contains(stdout, "fact module=effective selection=profile") ||
+		!strings.Contains(stdout, "fact module=selected selection=extra") ||
+		!strings.Contains(stdout, "problem kind=blocked module=effective") ||
+		!strings.Contains(stdout, "problem kind=blocked module=selected") ||
 		!strings.Contains(stdout, "target paths conflict") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf("full status = (%d, %q, %q), want target conflict report", code, stdout, stderr)

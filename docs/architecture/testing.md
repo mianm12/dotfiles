@@ -23,7 +23,10 @@
 - `cmd/dot` 只保留最小进程级 smoke；完整公开行为通过 `cli.Run` 测试。
 - CLI 合成环境集中在 `internal/cli/testenv_test.go`，不创建跨 package 通用测试框架。
 - CLI 分别验证 status/dry-run 的当前 selection forget、成功 state commit 后的过去式 forget
-  结果，以及 mutation/state commit/lock release 失败时不输出未完成 step。
+  结果，以及 mutation/state commit/lock release 失败时不输出未完成 Action。
+- Converge planning 直接断言每个 state key 最多一个 Transition、target move 合并为同一
+  Transition 的多个 Action，以及 FinalState 不依赖 executor 的 Action 遍历顺序；execution
+  测试断言 executor 不增量编辑 state。
 
 ## 合成环境
 

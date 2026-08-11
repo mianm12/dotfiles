@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
-	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
 type mutationRun struct {
@@ -18,9 +17,9 @@ type mutationRun struct {
 	changed bool
 }
 
-func (run *mutationRun) apply(plan Plan, snapshot *state.Snapshot) error {
-	active := make(map[actionKey]bool)
-	for _, action := range plan.Steps {
+func (run *mutationRun) apply(plan Plan) error {
+	actions := plan.Actions()
+	for _, action := range actions {
 		if action.Decision != DecisionCreateLocal &&
 			action.Decision != DecisionCreateLink {
 			continue
@@ -29,35 +28,35 @@ func (run *mutationRun) apply(plan Plan, snapshot *state.Snapshot) error {
 			return actionError(action, err)
 		}
 	}
-	for _, action := range plan.Steps {
+	for _, action := range actions {
 		if action.Decision != DecisionCreateLocal &&
 			action.Decision != DecisionCreateLink {
 			continue
 		}
-		if err := run.applyAndRecord(action, snapshot, active); err != nil {
-			return err
+		if err := run.applyActive(action); err != nil {
+			return actionError(action, err)
 		}
 	}
-	for _, action := range plan.Steps {
+	for _, action := range actions {
 		if action.Decision != DecisionUpdate {
 			continue
 		}
-		if err := run.applyAndRecord(action, snapshot, active); err != nil {
-			return err
+		if err := run.applyActive(action); err != nil {
+			return actionError(action, err)
 		}
 	}
-	for _, action := range plan.Steps {
+	for _, action := range actions {
 		if action.Decision != DecisionAdopt &&
 			action.Decision != DecisionKeep &&
 			action.Decision != DecisionRepairState {
 			continue
 		}
-		if err := run.applyAndRecord(action, snapshot, active); err != nil {
-			return err
+		if err := run.applyActive(action); err != nil {
+			return actionError(action, err)
 		}
 	}
 
-	for _, action := range plan.Steps {
+	for _, action := range actions {
 		if action.Decision != DecisionPrune &&
 			action.Decision != DecisionForget {
 			continue
@@ -67,32 +66,11 @@ func (run *mutationRun) apply(plan Plan, snapshot *state.Snapshot) error {
 				return actionError(action, err)
 			}
 		}
-		if !active[actionKey{moduleID: action.ModuleID, placementID: action.PlacementID}] {
-			applyState(snapshot, action)
-		}
 	}
 	return nil
 }
 
-func (run *mutationRun) applyAndRecord(
-	action Step,
-	snapshot *state.Snapshot,
-	active map[actionKey]bool,
-) error {
-	if err := run.applyActive(action); err != nil {
-		return actionError(action, err)
-	}
-	applyState(snapshot, action)
-	active[actionKey{moduleID: action.ModuleID, placementID: action.PlacementID}] = true
-	return nil
-}
-
-type actionKey struct {
-	moduleID    string
-	placementID string
-}
-
-func (run *mutationRun) applyActive(action Step) error {
+func (run *mutationRun) applyActive(action Action) error {
 	switch action.Decision {
 	case DecisionCreateLocal:
 		if err := run.createLocal(action.Source, action.Target); err != nil {
@@ -187,7 +165,7 @@ func (run *mutationRun) createLocal(source, target string) (err error) {
 	return nil
 }
 
-func (run *mutationRun) removeOwnedLink(action Step) error {
+func (run *mutationRun) removeOwnedLink(action Action) error {
 	resolved, err := run.resolveTarget(action.Target)
 	if err != nil {
 		return err
@@ -238,7 +216,7 @@ func verifyAbsent(target string) error {
 	}
 }
 
-func (run *mutationRun) verifyLink(action Step) error {
+func (run *mutationRun) verifyLink(action Action) error {
 	resolved, err := run.resolveTarget(action.Target)
 	if err != nil {
 		return err
@@ -297,7 +275,7 @@ func verifyLocal(target string) error {
 	return nil
 }
 
-func actionError(action Step, err error) error {
+func actionError(action Action, err error) error {
 	return fmt.Errorf(
 		"%s %s/%s target %q: %w",
 		action.Decision,
@@ -306,31 +284,4 @@ func actionError(action Step, err error) error {
 		action.Target,
 		err,
 	)
-}
-
-func applyState(snapshot *state.Snapshot, action Step) {
-	switch action.Decision {
-	case DecisionPrune, DecisionForget:
-		removePlacement(snapshot, action.ModuleID, action.PlacementID)
-	default:
-		record := state.Record{
-			Kind:   action.Kind,
-			Target: action.Target,
-		}
-		if action.Kind == state.KindLink {
-			record.ResolvedTarget = action.ResolvedTarget
-			record.LinkDestination = action.LinkDestination
-		}
-		snapshot.Records[state.Key{
-			ModuleID:    action.ModuleID,
-			PlacementID: action.PlacementID,
-		}] = record
-	}
-}
-
-func removePlacement(snapshot *state.Snapshot, moduleID, placementID string) {
-	delete(snapshot.Records, state.Key{
-		ModuleID:    moduleID,
-		PlacementID: placementID,
-	})
 }

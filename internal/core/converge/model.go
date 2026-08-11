@@ -4,6 +4,7 @@ package converge
 
 import (
 	"errors"
+	"sort"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
@@ -32,21 +33,21 @@ type Environment struct {
 	Platform   config.Platform
 }
 
-// ModuleReport is the orthogonal status projection for one inventory module.
-type ModuleReport struct {
-	ID            string
-	Summary       string
-	Selection     string
-	Applicability string
-	Convergence   string
-	Variant       string
-	NamedVariant  bool
-	Reason        string
+// ModuleFact contains only observed or resolved facts for one inventory module.
+// CLI projections derive presentation from these facts and the plan.
+type ModuleFact struct {
+	ID             string
+	Selection      string
+	ManifestLoaded bool
+	Applicability  string
+	Variant        string
+	StatePresent   bool
+	Diagnostic     string
 }
 
 // Report is one complete read-only convergence result.
 type Report struct {
-	Modules  []ModuleReport
+	Facts    []ModuleFact
 	Plan     Plan
 	Warnings []string
 }
@@ -79,7 +80,7 @@ const (
 // or stale placement.
 type Decision string
 
-// Planner decisions cover executable convergence and stale cleanup steps.
+// Planner decisions cover executable convergence and stale cleanup actions.
 const (
 	DecisionCreateLink  Decision = "create-link"
 	DecisionCreateLocal Decision = "create-local"
@@ -91,25 +92,25 @@ const (
 	DecisionForget      Decision = "forget"
 )
 
-// IssueKind identifies why a plan cannot be executed.
-type IssueKind string
+// ProblemKind identifies why a plan cannot be executed.
+type ProblemKind string
 
-// IssueCode identifies a machine-readable issue cause when projections need
+// ProblemCode identifies a machine-readable cause when projections need
 // more detail than blocked versus conflict.
-type IssueCode string
+type ProblemCode string
 
 const (
-	// IssueConflict identifies a concrete planner conflict.
-	IssueConflict IssueKind = "conflict"
-	// IssueBlocked identifies an input or path condition that blocks planning.
-	IssueBlocked IssueKind = "blocked"
+	// ProblemConflict identifies a concrete planner conflict.
+	ProblemConflict ProblemKind = "conflict"
+	// ProblemBlocked identifies an input or path condition that blocks planning.
+	ProblemBlocked ProblemKind = "blocked"
 )
 
 const (
-	// IssueCodeControlTopology identifies overlapping control families.
-	IssueCodeControlTopology IssueCode = "control-topology"
-	// IssueCodeControlBoundary identifies a placement/control path overlap.
-	IssueCodeControlBoundary IssueCode = "control-boundary"
+	// ProblemCodeControlTopology identifies overlapping control families.
+	ProblemCodeControlTopology ProblemCode = "control-topology"
+	// ProblemCodeControlBoundary identifies a placement/control path overlap.
+	ProblemCodeControlBoundary ProblemCode = "control-boundary"
 )
 
 // planRequest contains the complete desired set and ownership snapshot for one
@@ -121,11 +122,12 @@ type planRequest struct {
 	State    state.Snapshot
 }
 
-// Step describes one ordered executable planner decision. LinkDestination is the
+// Action describes one ordered executable planner decision. LinkDestination is the
 // desired raw destination. ExpectedResolvedTarget and
 // ExpectedLinkDestination preserve the state facts that the executor must
 // recheck before update or prune.
-type Step struct {
+type Action struct {
+	Order                   int
 	ModuleID                string
 	PlacementID             string
 	Kind                    state.Kind
@@ -139,28 +141,54 @@ type Step struct {
 	Reason                  string
 }
 
-// Issue describes one reason a plan cannot be executed. PlacementID and Target
-// are present when the issue belongs to a concrete placement.
-type Issue struct {
-	Kind        IssueKind
-	Code        IssueCode
+// Problem describes one reason a plan cannot be executed. PlacementID and
+// Target are present when the problem belongs to a concrete placement.
+type Problem struct {
+	Kind        ProblemKind
+	Code        ProblemCode
 	ModuleID    string
 	PlacementID string
 	Target      string
 	Reason      string
 }
 
-// Plan is the single planning report: executable Steps and blocking Issues.
-// Complete reports whether every desired placement and stale state record
-// received a decision. Steps preserve active-before-stale ordering. Step.Reason
-// is the single source of truth for why an executable step was selected.
-type Plan struct {
-	Complete bool
-	Steps    []Step
-	Issues   []Issue
+// Transition is the sole final-state decision for one logical placement key.
+// Desired transitions publish FinalRecord after every Action succeeds. Stale
+// transitions remove the key from FinalState.
+type Transition struct {
+	ModuleID    string
+	PlacementID string
+	Desired     bool
+	FinalRecord state.Record
+	Actions     []Action
 }
 
-// Executable reports whether the complete plan is safe to execute.
+// Plan contains one Transition per logical key and all blocking Problems.
+// finalState is computed by the planner from transition facts, never by the
+// executor from action order.
+type Plan struct {
+	Transitions []Transition
+	Problems    []Problem
+	finalState  state.Snapshot
+}
+
+// Executable reports whether the plan is safe to execute.
 func (plan Plan) Executable() bool {
-	return plan.Complete && len(plan.Issues) == 0
+	return len(plan.Problems) == 0
+}
+
+// Actions returns the explicit executor actions in their global plan order.
+func (plan Plan) Actions() []Action {
+	actions := make([]Action, 0)
+	for _, transition := range plan.Transitions {
+		actions = append(actions, transition.Actions...)
+	}
+	sort.SliceStable(actions, func(left, right int) bool {
+		return actions[left].Order < actions[right].Order
+	})
+	return actions
+}
+
+func (plan Plan) finalSnapshot() state.Snapshot {
+	return cloneSnapshot(plan.finalState)
 }

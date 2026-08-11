@@ -77,51 +77,36 @@ dot help [COMMAND]
 
 ## Status 与 dry-run
 
-- CLI 对 status 和 dry-run 建立同一种只读 operation analysis。它包含
-  当前 machine selection、module selection source、applicability、variant、convergence、
-  输入 warning，以及同一份 `Plan{Complete, Steps, Issues}`。`Steps` 只包含可执行 placement
-  step；plan conflict 和 blocker 都是带 kind、module/placement 定位与 reason 的 `Issues`。
-  `Complete=true` 表示全部 effective placements 与全部 stale records 已完成决策，即使其中有
-  concrete conflict；selection blocker、control topology 或 target-set blocker 在完整决策前
-  阻断时为 `Complete=false`。Plan 仅在 `Complete && len(Issues) == 0` 时可执行。
+- CLI 对 status 和 dry-run 建立同一种只读 operation analysis。它包含当前 machine selection、
+  客观 ModuleFacts、输入 warning，以及同一份 `Plan{Transitions, Problems}`。每个 logical key
+  恰好一个 Transition；Transition 直接声明 desired/final record，并包含零个或多个有序 Action。
+  Conflict 和 blocker 都是带 kind、module/placement 定位与 reason 的 Problem。Plan 仅在
+  `len(Problems) == 0` 时可执行；不存在独立的 Complete 位或第二套完成状态。
 - 真实 apply 的完整零写入 preflight 由 converge owner 调用同一 Analyze 实现完成，不接收或
   复用 CLI 保存的 Report；锁内再次 Analyze，并且只执行锁内新 Plan。
-- Status 保留第二列的 `converged`、`pending`、`conflict`、`not-applicable`、`inactive` 或
-  `stale` 摘要。每行固定从 `MODULE  SUMMARY` 开始，只追加有区分度的维度：
+- Status 逐行投影事实，不由 core 维护字符串 summary/convergence 状态机：
 
-  - selection 不是 `none` 时追加 `selection=<profile|extra|profile+extra>`；
-  - applicability 仅在不是 `applicable`/`-` 且未与 `not-applicable` 摘要重复时追加；
-  - convergence 不是 `-` 且未与摘要重复时追加；
-  - 只有具名 variant 才追加 `variant=VARIANT`；portable layout 与 `-` 省略，但名字恰好为
-    `portable` 的具名 variant 仍显示 `variant=portable`；
-  - 只有非空 reason 才追加带双引号和转义的 `reason=QUOTED_REASON`。
+  - `fact module=MODULE selection=<none|profile|extra|profile+extra> state=<absent|present>`；
+  - 已加载 manifest 时追加 `applicability=<applicable|not-applicable|indeterminate>`；
+  - applicable 时追加 `variant=portable` 或具名 variant；
+  - indeterminate 时追加诊断 reason。
 
-  Analysis 内部的 `-` 仍表示未加载或不存在该维度，不是平台状态。Effective indeterminate
-  module 的第二列摘要为 `conflict`，显示 applicability 与平台字段或 variant 歧义 reason，
-  不生成 placement step。Concrete placement conflict 逐条显示结构化 issue；module/path
-  级合成 conflict 不伪造 placement step，而在 module 行保留完整 reason。Profile module
-  已确定 not-applicable 但仍有旧 ownership step 时显示
-  `convergence=pending-cleanup`，reason 至少标出对应 cleanup decision。
-- `Plan.Complete=false` 时不绕开 blocker 做局部规划：`Steps` 必须为空；有直接 issue 的 module
-  显示 `conflict`，其余 effective 或 stale module 的 convergence 显示 `unknown`。Inactive
-  inventory 仍显示 `inactive`。
-- 完整分析中的 blocked issue 写 stdout 并包含 reason。Dry-run 和 status 都显示计划执行的 forget
-  step 及其结构化
-  reason；status 还显示每条 concrete placement conflict；输入 warning 仍写 stderr。
+  Dry-run 与 status 均直接显示 `action kind=... module=... placement=... target=...` 和
+  `problem kind=...`；forget Action 与 Problem 必须包含结构化 reason。Inactive inventory 仍以
+  fact 表达，但不伪造 Transition。全局 blocker 不绕开后做局部规划：Transitions 为空，Problem
+  完整写 stdout。输入 warning 仍写 stderr。
 - Status 只要形成完整 analysis 就返回成功，即使其中有 pending、conflict 或 blocker。
   Mutation dry-run 能形成 Report 后，若 `Plan` 不可执行则完整输出后返回 `1`；否则返回成功。
-  Pending、create、update、
-  prune 或 forget step 本身不改变 dry-run 退出码。没有 `--check`。配置、manifest 或 state
+  Create、update、prune 或 forget Action 本身不改变 dry-run 退出码。没有 `--check`。配置、manifest 或 state
   无法解析、必要输入无法读取，或未分类的文件系统观察失败时 analysis 不完整并返回失败。
 - Dry-run 使用与真实命令相同的解析、resolution 和 planner，但不写 config、state、target、
   parent directory、lock 或 temporary file。
-- Status 和 dry-run 可以在内存中删除兼容的空 state module，但不得因此重写 state。
 - Status 和 dry-run 不取锁；并发 mutation 时结果是 best-effort snapshot。
 - 本节只定义 operation analysis 的公开投影；真实 mutation 的重新分析与执行只由
   [`mutation-and-recovery.md`](mutation-and-recovery.md#执行顺序) 定义。
-- CLI 只投影 converge owner 判定的最终 outcome。成功 outcome 中每个 forget step 的过去式
-  ownership/provenance 提示都从结构化 step 派生，不保存第二份字符串结果；失败 outcome
-  返回 `1`，不得先输出成功摘要或把未完成 step 显示为成功。若 outcome 表明可能已经部分
+- CLI 只投影 converge owner 判定的最终 outcome。成功 outcome 中每个 forget Action 的过去式
+  ownership/provenance 提示都从结构化 Action 派生，不保存第二份字符串结果；失败 outcome
+  返回 `1`，不得先输出成功摘要或把未完成 Action 显示为成功。若 outcome 表明可能已经部分
   应用，错误提示重跑确认收敛。
 
 ## 输出与退出码
@@ -144,5 +129,5 @@ variants 等无法可靠形成 Report 的配置失败返回 `1`。`2` 仅用于 
 `apply/status` 的多余位置参数或 `select add` 缺少 `MODULE` 参数。
 
 运行时失败不要求维护完整的 completed/failed/not-attempted 结果协议。错误信息必须指出失败
-动作；已经发生 mutation 时提示本轮可能部分完成并建议重跑，不得输出计划 step 或把未完成
+动作；已经发生 mutation 时提示本轮可能部分完成并建议重跑，不得输出计划 Action 或把未完成
 动作显示为成功，尤其不得声称已经 forget ownership。
