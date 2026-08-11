@@ -223,7 +223,6 @@ os = ["macos"]
 		}
 		assertSnapshotUnchanged(t, before)
 	})
-
 }
 
 func TestStatusShowsPendingCleanupForNotApplicableProfileModule(t *testing.T) {

@@ -204,7 +204,6 @@ func TestStatusDelaysInactiveMalformedManifest(t *testing.T) {
 		)
 	}
 	assertSnapshotUnchanged(t, before)
-
 }
 
 func TestStatusReportsEveryPlacementConflict(t *testing.T) {

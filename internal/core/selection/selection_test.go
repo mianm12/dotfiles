@@ -50,7 +50,6 @@ os = ["macos"]
 	if err != nil || len(direct.Issues) != 1 || direct.Issues[0].ModuleID != "gated" {
 		t.Fatalf("Resolve(direct not-applicable) = (%#v, %v)", direct, err)
 	}
-
 }
 
 func TestResolveReportsMissingDirectModule(t *testing.T) {

@@ -65,7 +65,6 @@ target = "~/.remove-good"
 	}
 	assertCLIMissing(t, filepath.Join(fixture.home, ".remove-good"))
 	assertApplyNoMutation(t, fixture, fixture.run)
-
 }
 
 func TestFullAnalysisFailsClosedOnMalformedEffectiveManifest(t *testing.T) {
