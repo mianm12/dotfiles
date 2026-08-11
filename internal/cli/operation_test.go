@@ -92,7 +92,7 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 	})
 }
 
-func TestOperationAnalysisRendersEveryActionWithQuotedReason(t *testing.T) {
+func TestOperationReportRendersEveryActionWithQuotedReason(t *testing.T) {
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
@@ -114,8 +114,8 @@ func TestOperationAnalysisRendersEveryActionWithQuotedReason(t *testing.T) {
 		}},
 	}
 
-	if err := printOperationAnalysis(command, analysis); err != nil {
-		t.Fatalf("printOperationAnalysis() error = %v", err)
+	if err := printOperationReport(command, analysis); err != nil {
+		t.Fatalf("printOperationReport() error = %v", err)
 	}
 
 	output := stdout.String()
@@ -126,7 +126,7 @@ func TestOperationAnalysisRendersEveryActionWithQuotedReason(t *testing.T) {
 			`reason="actual target is \"user-owned\""`,
 		) {
 		t.Fatalf(
-			"printOperationAnalysis() stdout = %q, want every structured action",
+			"printOperationReport() stdout = %q, want every structured action",
 			output,
 		)
 	}

@@ -48,7 +48,7 @@ target = "~/.extra"
 	}
 }
 
-func TestOperationAnalysisTreatsMachineSelectionsAsSets(t *testing.T) {
+func TestAnalyzeTreatsMachineSelectionsAsSets(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `
 [[links]]

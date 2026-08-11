@@ -214,12 +214,15 @@ func checkCurrentSelection(
 	environment Environment,
 	moduleID string,
 ) (checkedSelection, config.Repository, error) {
+	if err := validateEnvironmentControls(environment); err != nil {
+		return checkedSelection{}, config.Repository{}, err
+	}
 	machine, err := requireMachine(environment.ConfigPath)
 	if err != nil {
 		return checkedSelection{}, config.Repository{}, err
 	}
 	controls := environmentControls(environment, machine.Repository)
-	if err := validateControls(controls); err != nil {
+	if err := validateControlTopology(controls); err != nil {
 		return checkedSelection{}, config.Repository{}, err
 	}
 	repository, err := config.OpenRepository(machine.Repository)

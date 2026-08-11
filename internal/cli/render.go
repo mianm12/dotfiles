@@ -61,7 +61,7 @@ func printWarnings(command *cobra.Command, warnings []string) error {
 	return nil
 }
 
-func printOperationAnalysis(
+func printOperationReport(
 	command *cobra.Command,
 	report converge.Report,
 ) error {

@@ -1,6 +1,7 @@
 package converge
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -76,7 +77,7 @@ func publishMutationMachine(t *testing.T, path string, machine config.Machine) {
 	}
 }
 
-func TestUpdateSelectionOwnsConfigOnlyMutation(t *testing.T) {
+func TestSelectionMutationsOwnConfigOnlyChanges(t *testing.T) {
 	fixture := newMutationFixture(t, "base = []")
 	environment := fixture.environment()
 	result, err := Initialize(environment, fixture.repository, []string{"base"})
@@ -101,7 +102,7 @@ func TestUpdateSelectionOwnsConfigOnlyMutation(t *testing.T) {
 	}
 }
 
-func TestUpdateSelectionRejectsInvalidInitBeforeLockBookkeeping(t *testing.T) {
+func TestInitializeRejectsInvalidProfileBeforeLockBookkeeping(t *testing.T) {
 	fixture := newMutationFixture(t, "base = []")
 	result, err := Initialize(
 		fixture.environment(),
@@ -118,7 +119,7 @@ func TestUpdateSelectionRejectsInvalidInitBeforeLockBookkeeping(t *testing.T) {
 	}
 }
 
-func TestUpdateSelectionRemoveDoesNotDecodeTargetManifest(t *testing.T) {
+func TestSelectRemoveDoesNotDecodeTargetManifest(t *testing.T) {
 	fixture := newMutationFixture(t, "base = []")
 	machine := fixture.machine([]string{"base"}, []string{"broken"})
 	publishMutationMachine(t, fixture.controls.Config, machine)
@@ -315,6 +316,48 @@ func TestApplyRejectsBusyLock(t *testing.T) {
 	}
 }
 
+func TestAnalysisAndSelectionRejectSymlinkedConfigRootBeforeReadingMachine(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(Environment) error
+	}{
+		{
+			name: "analyze",
+			run: func(environment Environment) error {
+				_, err := Analyze(environment)
+				return err
+			},
+		},
+		{
+			name: "select add",
+			run: func(environment Environment) error {
+				_, err := SelectAdd(environment, "app")
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newMutationFixture(t, "base = []")
+			externalRoot := filepath.Join(fixture.root, "external-config")
+			writeMutationFile(
+				t,
+				filepath.Join(externalRoot, "machine.toml"),
+				"version = [malformed",
+			)
+			if err := os.Symlink(externalRoot, filepath.Dir(fixture.controls.Config)); err != nil {
+				t.Fatalf("os.Symlink(config root) error = %v", err)
+			}
+
+			err := test.run(fixture.environment())
+			if !errors.Is(err, ErrControl) || !strings.Contains(err.Error(), "symbolic link") {
+				t.Fatalf("operation error = %v, want control-root symlink rejection", err)
+			}
+			assertApplyBookkeepingMissing(t, fixture)
+		})
+	}
+}
+
 func TestApplyLockedRejectsMachineDriftWithoutExecutingPreflightPlan(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	initial := fixture.machine([]string{"base"}, nil)
@@ -361,6 +404,38 @@ target = "~/.app"
 	}
 	if _, statErr := os.Lstat(fixture.controls.State); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("state error = %v, want missing", statErr)
+	}
+}
+
+func TestMachineFingerprintUsesSelectionSetSemantics(t *testing.T) {
+	fixture := newMutationFixture(t, "base = []")
+	left, err := machineFingerprint(fixture.machine(
+		[]string{"work", "base", "work"},
+		[]string{"shell", "editor", "shell"},
+	))
+	if err != nil {
+		t.Fatalf("machineFingerprint(left) error = %v", err)
+	}
+	right, err := machineFingerprint(fixture.machine(
+		[]string{"base", "work"},
+		[]string{"editor", "shell"},
+	))
+	if err != nil {
+		t.Fatalf("machineFingerprint(right) error = %v", err)
+	}
+	if !bytes.Equal(left, right) {
+		t.Fatalf("semantic fingerprints differ:\nleft=%q\nright=%q", left, right)
+	}
+
+	changed, err := machineFingerprint(fixture.machine(
+		[]string{"base"},
+		[]string{"editor", "shell"},
+	))
+	if err != nil {
+		t.Fatalf("machineFingerprint(changed) error = %v", err)
+	}
+	if bytes.Equal(left, changed) {
+		t.Fatal("semantic fingerprint ignored a changed profile set")
 	}
 }
 

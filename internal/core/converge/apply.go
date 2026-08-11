@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -66,7 +67,6 @@ func applyLocked(environment Environment, expectedFingerprint []byte) (ApplyResu
 		locked.loaded.Snapshot.Home,
 		locked.controls.State,
 		locked.report.Plan,
-		locked.report.Warnings,
 		locked.loaded,
 		commitState,
 	)
@@ -130,22 +130,41 @@ func environmentControls(environment Environment, repository string) corepaths.C
 
 func validateControls(controls corepaths.Controls) error {
 	controls = cleanControls(controls)
+	if err := validateControlTopology(controls); err != nil {
+		return err
+	}
+	return validateControlEntries(controls.Config, controls.State, controls.Lock)
+}
+
+func validateEnvironmentControls(environment Environment) error {
+	return validateControlEntries(
+		environment.ConfigPath,
+		environment.StatePath,
+		environment.LockPath,
+	)
+}
+
+func validateControlTopology(controls corepaths.Controls) error {
 	if err := corepaths.ValidateControlTopology(controls); err != nil {
 		return controlError{cause: err}
 	}
-	configRoot := filepath.Dir(controls.Config)
+	return nil
+}
+
+func validateControlEntries(configPath, statePath, lockPath string) error {
+	configRoot := filepath.Dir(configPath)
 	if err := storage.ValidateRoot(configRoot); err != nil {
 		return controlError{cause: fmt.Errorf("validate machine config root %q: %w", configRoot, err)}
 	}
-	if err := storage.ValidatePrivateFile(controls.Config); err != nil {
-		return controlError{cause: fmt.Errorf("validate machine config %q: %w", controls.Config, err)}
+	if err := storage.ValidatePrivateFile(configPath); err != nil {
+		return controlError{cause: fmt.Errorf("validate machine config %q: %w", configPath, err)}
 	}
-	stateRoot := filepath.Dir(controls.State)
-	if err := validateLock(stateRoot, controls.Lock); err != nil {
-		return controlError{cause: fmt.Errorf("validate state root and lock %q: %w", controls.Lock, err)}
+	stateRoot := filepath.Dir(statePath)
+	if err := validateLock(stateRoot, lockPath); err != nil {
+		return controlError{cause: fmt.Errorf("validate state root and lock %q: %w", lockPath, err)}
 	}
-	if err := storage.ValidatePrivateFile(controls.State); err != nil {
-		return controlError{cause: fmt.Errorf("validate state %q: %w", controls.State, err)}
+	if err := storage.ValidatePrivateFile(statePath); err != nil {
+		return controlError{cause: fmt.Errorf("validate state %q: %w", statePath, err)}
 	}
 	return nil
 }
@@ -186,7 +205,16 @@ func requireMachine(path string) (config.Machine, error) {
 }
 
 func machineFingerprint(machine config.Machine) ([]byte, error) {
-	return config.MarshalMachine(machine)
+	semantic := cloneMachine(machine)
+	semantic.Profiles = sortedUnique(semantic.Profiles)
+	semantic.ExtraModules = sortedUnique(semantic.ExtraModules)
+	return config.MarshalMachine(semantic)
+}
+
+func sortedUnique(values []string) []string {
+	result := append([]string(nil), values...)
+	slices.Sort(result)
+	return slices.Compact(result)
 }
 
 func cloneMachine(machine config.Machine) config.Machine {

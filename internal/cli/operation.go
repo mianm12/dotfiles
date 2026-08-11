@@ -14,7 +14,7 @@ func printDryRunAnalysis(
 	command *cobra.Command,
 	report converge.Report,
 ) error {
-	if err := printOperationAnalysis(command, report); err != nil {
+	if err := printOperationReport(command, report); err != nil {
 		return err
 	}
 	if rejectAnalysis(report) != nil {

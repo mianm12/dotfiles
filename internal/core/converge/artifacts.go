@@ -9,10 +9,8 @@ import (
 )
 
 type executionResult struct {
-	Plan           Plan
 	TargetsChanged bool
 	StateChanged   bool
-	Warnings       []string
 }
 
 type stateCommitter func(string, state.Snapshot) error
@@ -21,24 +19,18 @@ func executePlan(
 	home string,
 	statePath string,
 	plan Plan,
-	warnings []string,
 	loaded state.Loaded,
 	commit stateCommitter,
 ) (executionResult, error) {
 	if !plan.Executable() {
-		return executionResult{
-			Plan:     plan,
-			Warnings: warnings,
-		}, conflictError(plan)
+		return executionResult{}, conflictError(plan)
 	}
 
 	next := cloneSnapshot(loaded.Snapshot)
 	mutation := mutationRun{home: filepath.Clean(home)}
 	if err := mutation.apply(plan, &next); err != nil {
 		return executionResult{
-			Plan:           plan,
 			TargetsChanged: mutation.changed,
-			Warnings:       warnings,
 		}, mutation.wrapError(err)
 	}
 
@@ -52,17 +44,13 @@ func executePlan(
 				err,
 			)
 			return executionResult{
-				Plan:           plan,
 				TargetsChanged: mutation.changed,
-				Warnings:       warnings,
 			}, fmt.Errorf("%w: %w", ErrPartial, commitErr)
 		}
 	}
 	return executionResult{
-		Plan:           plan,
 		TargetsChanged: mutation.changed,
 		StateChanged:   stateChanged,
-		Warnings:       warnings,
 	}, nil
 }
 

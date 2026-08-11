@@ -47,13 +47,16 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
+	if err := validateEnvironmentControls(environment); err != nil {
+		return analysis{}, err
+	}
 	machine, err := requireMachine(environment.ConfigPath)
 	if err != nil {
 		return analysis{}, err
 	}
 	controls := environmentControls(environment, machine.Repository)
 	issues := make([]Issue, 0, 1)
-	if err := validateControls(controls); err != nil {
+	if err := validateControlTopology(controls); err != nil {
 		if !errors.Is(err, corepaths.ErrControlTopology) {
 			return analysis{}, err
 		}
