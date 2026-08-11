@@ -1250,7 +1250,7 @@ func TestResolveControlsRejectsInvalidTopologyBeforePlanning(t *testing.T) {
 
 	_, err := resolveControls(controls)
 	if !errors.Is(err, corepaths.ErrControlTopology) {
-		t.Fatalf("resolveControls() error = %v, want control topology issue", err)
+		t.Fatalf("resolveControls() error = %v, want control topology problem", err)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1498,7 +1498,7 @@ func TestPlanStateOwnedSymlinkDriftIsConflict(t *testing.T) {
 
 	assertDecisions(t, plan, conflictDecision)
 	if len(plan.Problems) == 0 {
-		t.Fatal("Build() HasIssues() = false, want true")
+		t.Fatal("Build() Problems is empty, want conflict")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }

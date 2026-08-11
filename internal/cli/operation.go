@@ -41,7 +41,7 @@ func finishMutation(
 		if errors.Is(runErr, converge.ErrPartial) {
 			return fmt.Errorf("%w; rerun %s", runErr, rerun)
 		}
-		if hasControlIssue(result.Report.Plan) {
+		if hasControlProblem(result.Report.Plan) {
 			return fmt.Errorf("%w; run `dot paths`", runErr)
 		}
 		return withCoreRecovery(runErr)
@@ -76,7 +76,7 @@ func withCoreRecovery(err error) error {
 	}
 }
 
-func hasControlIssue(plan converge.Plan) bool {
+func hasControlProblem(plan converge.Plan) bool {
 	for _, problem := range plan.Problems {
 		if problem.Code == converge.ProblemCodeControlTopology ||
 			problem.Code == converge.ProblemCodeControlBoundary {

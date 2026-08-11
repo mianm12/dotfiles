@@ -45,7 +45,7 @@ func buildPlan(request planRequest) (Plan, error) {
 
 	desired, err := resolveDesired(home, request.Controls, request.Modules)
 	if err != nil {
-		if isPlanningIssue(err) {
+		if isPlanningProblem(err) {
 			return Plan{
 				Problems:   pathProblems(err),
 				finalState: cloneSnapshot(request.State),
@@ -137,7 +137,7 @@ func buildPlan(request planRequest) (Plan, error) {
 	return finalize(request.State, desired, candidates), nil
 }
 
-func isPlanningIssue(err error) bool {
+func isPlanningProblem(err error) bool {
 	return errors.Is(err, corepaths.ErrTargetConflict) ||
 		errors.Is(err, corepaths.ErrControlBoundary) ||
 		errors.Is(err, corepaths.ErrControlTopology)

@@ -1,6 +1,6 @@
 # 0001: Convergence V3 使用单一状态转换模型
 
-状态：Proposed
+状态：Accepted
 日期：2026-08-12
 
 ## 背景

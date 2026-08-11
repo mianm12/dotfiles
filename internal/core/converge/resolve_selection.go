@@ -19,8 +19,8 @@ type moduleObservation struct {
 	variant       string
 }
 
-// selectionIssue is a module-specific reason the effective selection cannot be applied.
-type selectionIssue struct {
+// selectionProblem is a module-specific reason the effective selection cannot be applied.
+type selectionProblem struct {
 	moduleID string
 	reason   string
 }
@@ -30,7 +30,7 @@ type selectionResolution struct {
 	modules      []config.Module
 	sources      map[string]selectionSource
 	observations map[string]moduleObservation
-	issues       []selectionIssue
+	problems     []selectionProblem
 }
 
 // resolveSelection loads the complete effective selection. Profile not-applicability
@@ -75,7 +75,7 @@ func resolveSelection(
 			return selectionResolution{}, inspectErr
 		}
 		if !exists {
-			result.issues = append(result.issues, selectionIssue{
+			result.problems = append(result.problems, selectionProblem{
 				moduleID: moduleID,
 				reason:   fmt.Sprintf("selected module %q does not exist", moduleID),
 			})
@@ -96,13 +96,13 @@ func resolveSelection(
 			result.modules = append(result.modules, module)
 		case config.ApplicabilityNotApplicable:
 			if source.extra {
-				result.issues = append(result.issues, selectionIssue{
+				result.problems = append(result.problems, selectionProblem{
 					moduleID: moduleID,
 					reason:   fmt.Sprintf("module %q is not applicable", moduleID),
 				})
 			}
 		case config.ApplicabilityIndeterminate:
-			result.issues = append(result.issues, selectionIssue{
+			result.problems = append(result.problems, selectionProblem{
 				moduleID: moduleID,
 				reason: fmt.Sprintf(
 					"module %q applicability is indeterminate: %s",

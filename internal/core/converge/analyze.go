@@ -72,11 +72,11 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
-	for _, issue := range selection.issues {
+	for _, problem := range selection.problems {
 		problems = append(problems, Problem{
 			Kind:     ProblemBlocked,
-			ModuleID: issue.moduleID,
-			Reason:   issue.reason,
+			ModuleID: problem.moduleID,
+			Reason:   problem.reason,
 		})
 	}
 	loaded, err := loadState(environment.StatePath, environment.Home)
