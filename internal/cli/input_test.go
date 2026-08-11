@@ -108,6 +108,31 @@ target = "~/.good"
 		}
 		assertSnapshotUnchanged(t, before)
 	}
+
+	code, stdout, stderr := fixture.runProcess("apply")
+	if code != exitOK ||
+		!strings.Contains(stdout, "targets_changed=true state_changed=true") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf(
+			"apply = (%d, %q, %q), want inactive manifest deferral",
+			code,
+			stdout,
+			stderr,
+		)
+	}
+	assertCLILink(
+		t,
+		filepath.Join(fixture.home, ".good"),
+		filepath.Join(fixture.repository, "modules", "good", "config"),
+	)
+
+	beforeRepeat := snapshotTree(t, fixture.root)
+	code, stdout, stderr = fixture.runProcess("apply")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("repeated apply = (%d, %q, %q)", code, stdout, stderr)
+	}
+	assertCLINoMutationResult(t, stdout)
+	assertSnapshotUnchanged(t, beforeRepeat)
 }
 
 func TestReadOnlyCommandsDoNotRewriteEmptyStateModules(t *testing.T) {

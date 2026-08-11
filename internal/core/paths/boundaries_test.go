@@ -113,6 +113,19 @@ func TestValidateRejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
 			wantErr: corepaths.ErrTargetConflict,
 		},
 		{
+			name: "lexical target relationship precedes blocked child resolution",
+			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
+				if err := os.WriteFile(filepath.Join(home, "tree"), []byte("user"), 0o600); err != nil {
+					t.Fatalf("os.WriteFile(tree) error = %v", err)
+				}
+				return controlsOutsideHome(root), []corepaths.Placement{
+					{Label: "parent", Target: "~/tree"},
+					{Label: "child", Target: "~/tree/child"},
+				}
+			},
+			wantErr: corepaths.ErrTargetConflict,
+		},
+		{
 			name: "lexical child target is contained by parent target",
 			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
 				return controlsOutsideHome(root), []corepaths.Placement{
@@ -201,6 +214,23 @@ func TestValidateRejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
 				controls.Config = filepath.Join(home, ".config", "dot")
 				return controls, []corepaths.Placement{
 					{Label: "inside-config", Target: "~/.config/dot/config.toml"},
+				}
+			},
+			wantErr: corepaths.ErrControlBoundary,
+		},
+		{
+			name: "lexical control boundary precedes blocked target resolution",
+			setup: func(t *testing.T, root, home string) (corepaths.Controls, []corepaths.Placement) {
+				controls := controlsOutsideHome(root)
+				controls.Config = filepath.Join(home, ".config", "dot", "config.toml")
+				if err := os.MkdirAll(filepath.Dir(controls.Config), 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(config root) error = %v", err)
+				}
+				if err := os.WriteFile(controls.Config, []byte("machine"), 0o600); err != nil {
+					t.Fatalf("os.WriteFile(config) error = %v", err)
+				}
+				return controls, []corepaths.Placement{
+					{Label: "inside-config", Target: "~/.config/dot/config.toml/child"},
 				}
 			},
 			wantErr: corepaths.ErrControlBoundary,

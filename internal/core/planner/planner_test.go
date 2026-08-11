@@ -422,6 +422,7 @@ func TestBuildRejectsNestedTargetsForEveryPlacementKindCombination(t *testing.T)
 				descendantSource,
 				"~/.config/app/child",
 			)
+			fixture.fileAbsolute(t, fixture.target(".config/app"), "user")
 			before := snapshotTree(t, fixture.root)
 			plan, err := planner.Build(planner.Request{
 				Home:     fixture.home,

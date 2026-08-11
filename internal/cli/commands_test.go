@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mianm12/dotfiles/internal/core/config"
 )
 
 func TestExitCodesAndStatusConflict(t *testing.T) {
@@ -98,8 +100,16 @@ target = "~/.app"
 `, map[string]string{"config": "portable"})
 			fixture.writeMachine(t, []string{"base"}, nil)
 			before := snapshotTree(t, fixture.root)
+			fixture.env.userHomeDir = func() (string, error) {
+				t.Fatal("removed module argument consulted HOME")
+				return "", nil
+			}
+			fixture.env.platform = func() config.Platform {
+				t.Fatal("removed module argument detected the platform")
+				return config.Platform{}
+			}
 
-			code, stdout, stderr := fixture.run(args...)
+			code, stdout, stderr := fixture.runInjected(args...)
 			if code != exitUsage || stdout != "" || stderr == "" {
 				t.Fatalf(
 					"run(%q) = (%d, %q, %q), want stderr-only usage error",

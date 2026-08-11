@@ -156,9 +156,28 @@ example = "config.local.example"
 target = "~/.tree/child"
 `, map[string]string{"config.local.example": "selected"})
 	fixture.writeMachine(t, []string{"base"}, []string{"selected"})
+	writeCLIFile(t, filepath.Join(fixture.home, ".tree"), "user")
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.run("apply")
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK ||
+		!strings.Contains(stdout, "effective  conflict") ||
+		!strings.Contains(stdout, "selected  conflict") ||
+		!strings.Contains(stdout, "target paths conflict") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf("full status = (%d, %q, %q), want target conflict report", code, stdout, stderr)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.run("apply", "--dry-run")
+	if code != exitError ||
+		!strings.Contains(stdout, "target paths conflict") ||
+		!strings.Contains(stderr, "state is missing") {
+		t.Fatalf("full dry-run = (%d, %q, %q), want target conflict report", code, stdout, stderr)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.run("apply")
 
 	if code != exitError ||
 		stdout != "" ||
@@ -171,7 +190,9 @@ target = "~/.tree/child"
 	}
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
-	assertCLIMissing(t, filepath.Join(fixture.home, ".tree"))
+	if content, err := os.ReadFile(filepath.Join(fixture.home, ".tree")); err != nil || string(content) != "user" {
+		t.Fatalf("ordinary parent changed: content=%q error=%v", content, err)
+	}
 }
 
 func TestFullApplyRejectsStateOwnedParentLinkBeforeMutation(t *testing.T) {

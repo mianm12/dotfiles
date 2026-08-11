@@ -114,13 +114,40 @@ func validate(
 	if err != nil {
 		return nil, err
 	}
+	cleanHome, err := cleanAbsolute("HOME", home)
+	if err != nil {
+		return nil, err
+	}
 
-	resolved := make([]ResolvedPlacement, len(placements))
+	// Diagnose relationships that depend only on declared paths before an
+	// obstructed target ancestor can hide the complete target-set decision.
+	lexical := make([]ResolvedPlacement, len(placements))
 	for index, placement := range placements {
 		if placement.Label == "" {
 			return nil, fmt.Errorf("%w: placement %d has an empty label", ErrInvalidPath, index)
 		}
-		target, resolveErr := ResolveTarget(home, placement.Target)
+		path, expandErr := expandTarget(cleanHome, placement.Target)
+		if expandErr != nil {
+			return nil, fmt.Errorf("resolve placement %q: %w", placement.Label, expandErr)
+		}
+		lexical[index] = ResolvedPlacement{
+			Label: placement.Label,
+			Target: Target{
+				lexical:  path,
+				resolved: path,
+			},
+		}
+	}
+	if err := validateTargetSet(lexical); err != nil {
+		return nil, err
+	}
+	if err := validateControlBoundaries(topology, lexical); err != nil {
+		return nil, err
+	}
+
+	resolved := make([]ResolvedPlacement, len(placements))
+	for index, placement := range placements {
+		target, resolveErr := ResolveTarget(cleanHome, placement.Target)
 		if resolveErr != nil {
 			return nil, fmt.Errorf("resolve placement %q: %w", placement.Label, resolveErr)
 		}
