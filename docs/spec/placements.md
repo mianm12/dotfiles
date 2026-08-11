@@ -77,7 +77,7 @@ target = "~/.config/example/config.local"
   records 不进入该集合，其清理关系由 [`planning.md`](planning.md#通用决策规则) 定义。
 - 该不变量不区分 link/local、source 是文件还是目录，也不依赖 actual target 当前类型。
 - Parent symlink 合法；路径关系同时比较 lexical 和 resolved identity。Link state 保存的
-  resolved target 及其变化对应的 action eligibility 分别由
+  resolved target 及其变化对应的 step eligibility 分别由
   [`state-and-ownership.md`](state-and-ownership.md#ownership-规则) 和
   [`planning.md`](planning.md#link) 定义。
 - State-owned parent link 与本轮 active link ownership 的实际 traversal 约束由

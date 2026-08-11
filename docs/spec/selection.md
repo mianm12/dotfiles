@@ -26,8 +26,9 @@ extra_modules = ["tmux"]
 modules(active profiles) union extra_modules
 ```
 
-Profile 内容只在仓库中人工维护。`init` 写入 profiles；`apply <module>` 和
-`remove <module>` 可以确定性重写 `extra_modules`。CLI 重写机器配置时不承诺保留注释和空行。
+Profile 内容只在仓库中人工维护。`init` 写入 profiles；`select add <module>` 和
+`select remove <module>` 可以确定性重写 `extra_modules`。`apply` 不修改 machine selection。
+CLI 重写机器配置时不承诺保留注释和空行。
 
 Machine config 不存在表示机器未初始化；一旦存在，其最终目录项本身必须是 regular file。
 类型检查不跟随最终 symlink，因此 symlink-to-regular、dangling symlink、directory、FIFO、
@@ -105,8 +106,8 @@ arch = ["x86_64", "aarch64"]
   - 所有受约束字段都 known 且匹配时，结果为 applicable。
 - 不支持否定、正则、优先级、fallback 或 capability 表达式。
 - Profile 选中的 module 无匹配 variant 时，resolution 结果是 not-applicable；这是合法的
-  非配置错误结果。Extra module 或显式 `apply <module>` 无匹配 variant 时得到相同
-  applicability 结果。
+  非配置错误结果。Extra module 或 `select add <module>` 检查的 module 无匹配 variant 时得到
+  相同 applicability 结果。
 - Profile not-applicable 的旧 ownership cleanup 只由
   [`planning.md`](planning.md#通用决策规则) 定义；indeterminate 和 extra/explicit
   not-applicable 的 mutation 边界只由

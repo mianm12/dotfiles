@@ -8,14 +8,16 @@
 当前 Go 实现支持 macOS/Linux、profiles、portable 或 platform variants modules、link/local
 placements、dry-run、ownership state 和单进程 mutation lock。
 
-公开命令为 `init`、`status`、`apply`、`remove`、`paths`、`version` 和 `help`。完整行为和
-安全边界以[产品规范集合](docs/spec/README.md)为准，当前实现证据以代码、测试和 CI 为准。
+公开命令为 `init`、`select add`、`select remove`、`status`、`apply`、`paths`、`version` 和
+`help`。完整行为和安全边界以[产品规范集合](docs/spec/README.md)为准，当前实现证据以代码、
+测试和 CI 为准。
 
 ## 快速开始
 
 ```sh
 make build
 bin/dot init /absolute/path/to/dotfiles
+bin/dot apply
 bin/dot status
 ```
 
@@ -31,12 +33,14 @@ bin/dot paths
 当前仓库提供跨 macOS/Linux 的 `starship` module。初始 selection 为空，可按机器单独启用：
 
 ```sh
+bin/dot select add starship
 bin/dot apply starship --dry-run
 bin/dot apply starship
 ```
 
-`apply` 不会覆盖已有普通文件、目录或未知 symlink；启用 module 前应先人工检查并迁移冲突
-target。`dot` 不负责安装软件，也不提供自动导入、backup 或 rollback。
+`select` 只改本机 selection，`apply` 才收敛 target。`apply` 不会覆盖已有普通文件、目录或未知
+symlink；启用 module 前应先人工检查并迁移冲突 target。`dot` 不负责安装软件，也不提供自动
+导入、backup 或 rollback。
 
 ## 开发验证
 

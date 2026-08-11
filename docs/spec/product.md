@@ -28,7 +28,7 @@ Desired repository + Machine selection + State + Actual filesystem -> Plan
 - profiles、modules、platform variants 和多个 placements。
 - 文件或目录 symlink。
 - 目标缺失时从 `*.local.example` 初始化本机 local 文件；已存在时不读取或覆盖。
-- `init`、`status`、`apply`、`remove`、`paths`、`version` 和 `help`。
+- `init`、`select add`、`select remove`、`status`、`apply`、`paths`、`version` 和 `help`。
 - mutation dry-run、最小 ownership state 和单进程锁。
 
 ## 非目标
