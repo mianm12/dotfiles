@@ -187,7 +187,7 @@ func buildModuleReports(
 	for _, moduleID := range moduleIDs {
 		source := sources[moduleID]
 		observation := observations[moduleID]
-		_, statePresent := snapshot.Modules[moduleID]
+		statePresent := stateHasModule(snapshot, moduleID)
 		issueReason, directIssue := analysisIssueForModule(
 			moduleID,
 			source != (selectionSource{}) || statePresent,
@@ -297,17 +297,16 @@ func buildModuleReports(
 }
 
 func keepStateRecorded(snapshot state.Snapshot, action Step) bool {
-	module, exists := snapshot.Modules[action.ModuleID]
-	if !exists {
-		return false
-	}
-	placement, exists := module.Placements[action.PlacementID]
-	if !exists || placement.Kind != action.Kind || placement.Target != action.Target {
+	record, exists := snapshot.Records[state.Key{
+		ModuleID:    action.ModuleID,
+		PlacementID: action.PlacementID,
+	}]
+	if !exists || record.Kind != action.Kind || record.Target != action.Target {
 		return false
 	}
 	if action.Kind == state.KindLink {
-		return placement.ResolvedTarget == action.ResolvedTarget &&
-			placement.LinkDestination == action.LinkDestination
+		return record.ResolvedTarget == action.ResolvedTarget &&
+			record.LinkDestination == action.LinkDestination
 	}
 	return true
 }
@@ -351,10 +350,19 @@ func statusModuleIDs(
 	for _, id := range machine.ExtraModules {
 		set[id] = true
 	}
-	for id := range snapshot.Modules {
-		set[id] = true
+	for key := range snapshot.Records {
+		set[key.ModuleID] = true
 	}
 	return sortedAnalysisSet(set)
+}
+
+func stateHasModule(snapshot state.Snapshot, moduleID string) bool {
+	for key := range snapshot.Records {
+		if key.ModuleID == moduleID {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedAnalysisSet(values map[string]bool) []string {

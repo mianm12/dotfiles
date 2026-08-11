@@ -221,13 +221,11 @@ func TestForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.T) {
 	writeExecutorFile(t, target, "personal")
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Modules: map[string]state.Module{
-			"app": {Placements: map[string]state.Placement{
-				"local": {
-					Kind:   state.KindLocal,
-					Target: target,
-				},
-			}},
+		Records: map[state.Key]state.Record{
+			{ModuleID: "app", PlacementID: "local"}: {
+				Kind:   state.KindLocal,
+				Target: target,
+			},
 		},
 	})
 	beforeTarget := snapshotExecutorPath(t, target)

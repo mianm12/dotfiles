@@ -34,9 +34,7 @@ func executePlan(
 		}, mutation.wrapError(err)
 	}
 
-	stateChanged := loaded.Missing ||
-		loaded.NeedsRewrite ||
-		!reflect.DeepEqual(loaded.Snapshot, next)
+	stateChanged := loaded.Missing || !reflect.DeepEqual(loaded.Snapshot, next)
 	if stateChanged {
 		if err := commit(statePath, next); err != nil {
 			commitErr := fmt.Errorf(
@@ -79,14 +77,10 @@ func conflictError(plan Plan) error {
 func cloneSnapshot(snapshot state.Snapshot) state.Snapshot {
 	cloned := state.Snapshot{
 		Home:    snapshot.Home,
-		Modules: make(map[string]state.Module, len(snapshot.Modules)),
+		Records: make(map[state.Key]state.Record, len(snapshot.Records)),
 	}
-	for moduleID, module := range snapshot.Modules {
-		placements := make(map[string]state.Placement, len(module.Placements))
-		for placementID, placement := range module.Placements {
-			placements[placementID] = placement
-		}
-		cloned.Modules[moduleID] = state.Module{Placements: placements}
+	for key, record := range snapshot.Records {
+		cloned.Records[key] = record
 	}
 	return cloned
 }

@@ -19,16 +19,14 @@ var (
 )
 
 type stateDocument struct {
-	Version *int                      `json:"version"`
-	Home    *string                   `json:"home"`
-	Modules map[string]moduleDocument `json:"modules"`
+	Version *int              `json:"version"`
+	Home    *string           `json:"home"`
+	Records *[]recordDocument `json:"records"`
 }
 
-type moduleDocument struct {
-	Placements map[string]placementDocument `json:"placements"`
-}
-
-type placementDocument struct {
+type recordDocument struct {
+	ModuleID        *string `json:"module_id"`
+	PlacementID     *string `json:"placement_id"`
 	Kind            *string `json:"kind"`
 	Target          *string `json:"target"`
 	ResolvedTarget  *string `json:"resolved_target"`
@@ -36,192 +34,194 @@ type placementDocument struct {
 }
 
 type encodedDocument struct {
-	Version int                      `json:"version"`
-	Home    string                   `json:"home"`
-	Modules map[string]encodedModule `json:"modules"`
+	Version int             `json:"version"`
+	Home    string          `json:"home"`
+	Records []encodedRecord `json:"records"`
 }
 
-type encodedModule struct {
-	Placements map[string]encodedPlacement `json:"placements"`
-}
-
-type encodedPlacement struct {
+type encodedRecord struct {
+	ModuleID        string `json:"module_id"`
+	PlacementID     string `json:"placement_id"`
 	Kind            Kind   `json:"kind"`
 	Target          string `json:"target"`
 	ResolvedTarget  string `json:"resolved_target,omitempty"`
 	LinkDestination string `json:"link_destination,omitempty"`
 }
 
-// Decode strictly decodes state v2 and binds it to expectedHome.
+// Decode strictly decodes state v3 and binds it to expectedHome.
 func Decode(data []byte, expectedHome string) (Snapshot, error) {
-	snapshot, _, err := decode(data, expectedHome)
-	return snapshot, err
+	return decode(data, expectedHome)
 }
 
-func decode(data []byte, expectedHome string) (Snapshot, bool, error) {
+func decode(data []byte, expectedHome string) (Snapshot, error) {
 	home, err := cleanExpectedHome(expectedHome)
 	if err != nil {
-		return Snapshot{}, false, err
+		return Snapshot{}, err
 	}
 	if err := validateJSONText(data); err != nil {
-		return Snapshot{}, false, invalidf("%v", err)
+		return Snapshot{}, invalidf("%v", err)
 	}
 	if err := rejectDuplicateMembers(data); err != nil {
-		return Snapshot{}, false, invalidf("%v", err)
+		return Snapshot{}, invalidf("%v", err)
 	}
 	version, err := probeVersion(data)
 	if err != nil {
-		return Snapshot{}, false, err
+		return Snapshot{}, err
 	}
 	switch {
 	case version.Cmp(big.NewInt(Version)) > 0:
-		return Snapshot{}, false, fmt.Errorf(
+		return Snapshot{}, fmt.Errorf(
 			"%w: found version %s, maximum supported is %d",
 			ErrTooNew,
 			version,
 			Version,
 		)
-	case version.Cmp(big.NewInt(1)) == 0:
-		return Snapshot{}, false, fmt.Errorf(
-			"%w: version 1 is unsupported",
+	case version.Cmp(big.NewInt(Version)) < 0:
+		return Snapshot{}, fmt.Errorf(
+			"%w: version %s is unsupported; remove or archive it before using version %d",
 			ErrLegacyVersion,
+			version,
+			Version,
 		)
-	case version.Cmp(big.NewInt(Version)) != 0:
-		return Snapshot{}, false, invalidf("unsupported state version %s", version)
 	}
 	if err := validateObjectShapes(data); err != nil {
-		return Snapshot{}, false, invalidf("%v", err)
+		return Snapshot{}, invalidf("%v", err)
 	}
 
 	var document stateDocument
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&document); err != nil {
-		return Snapshot{}, false, invalidf("decode state v2: %v", err)
+		return Snapshot{}, invalidf("decode state v3: %v", err)
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return Snapshot{}, false, invalidf("%v", err)
+		return Snapshot{}, invalidf("%v", err)
 	}
-	snapshot, needsRewrite, err := snapshotFromDocument(document)
+	snapshot, err := snapshotFromDocument(document)
 	if err != nil {
-		return Snapshot{}, false, err
+		return Snapshot{}, err
 	}
 	if snapshot.Home != home {
-		return Snapshot{}, false, fmt.Errorf(
+		return Snapshot{}, fmt.Errorf(
 			"%w: state is bound to %q, current home is %q",
 			ErrHomeMismatch,
 			snapshot.Home,
 			home,
 		)
 	}
-	return snapshot, needsRewrite, nil
+	return snapshot, nil
 }
 
-// Marshal validates and encodes one state v2 document.
+// Marshal validates and encodes one state v3 document.
 func Marshal(snapshot Snapshot) ([]byte, error) {
-	if err := validateCanonicalSnapshot(snapshot); err != nil {
+	if err := validateSnapshot(snapshot); err != nil {
 		return nil, err
 	}
 	document := encodedDocument{
 		Version: Version,
 		Home:    snapshot.Home,
-		Modules: make(map[string]encodedModule, len(snapshot.Modules)),
+		Records: make([]encodedRecord, 0, len(snapshot.Records)),
 	}
-	for moduleID, module := range snapshot.Modules {
-		placements := make(map[string]encodedPlacement, len(module.Placements))
-		for placementID, placement := range module.Placements {
-			placements[placementID] = encodedPlacement(placement)
-		}
-		document.Modules[moduleID] = encodedModule{Placements: placements}
+	for _, key := range sortedStateKeys(snapshot.Records) {
+		record := snapshot.Records[key]
+		document.Records = append(document.Records, encodedRecord{
+			ModuleID:        key.ModuleID,
+			PlacementID:     key.PlacementID,
+			Kind:            record.Kind,
+			Target:          record.Target,
+			ResolvedTarget:  record.ResolvedTarget,
+			LinkDestination: record.LinkDestination,
+		})
 	}
 	data, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("encode state v2: %w", err)
+		return nil, fmt.Errorf("encode state v3: %w", err)
 	}
 	return append(data, '\n'), nil
 }
 
-func snapshotFromDocument(document stateDocument) (Snapshot, bool, error) {
+func snapshotFromDocument(document stateDocument) (Snapshot, error) {
 	if document.Version == nil || *document.Version != Version {
-		return Snapshot{}, false, invalidf("required top-level version must equal %d", Version)
+		return Snapshot{}, invalidf("required top-level version must equal %d", Version)
 	}
 	if document.Home == nil {
-		return Snapshot{}, false, invalidf("required top-level home is missing")
+		return Snapshot{}, invalidf("required top-level home is missing")
+	}
+	if document.Records == nil {
+		return Snapshot{}, invalidf("required top-level records are missing")
 	}
 	snapshot := Snapshot{
 		Home:    *document.Home,
-		Modules: make(map[string]Module, len(document.Modules)),
+		Records: make(map[Key]Record, len(*document.Records)),
 	}
-	for _, moduleID := range sortedKeys(document.Modules) {
-		rawModule := document.Modules[moduleID]
-		module := Module{Placements: make(map[string]Placement, len(rawModule.Placements))}
-		for _, placementID := range sortedKeys(rawModule.Placements) {
-			rawPlacement := rawModule.Placements[placementID]
-			placement, err := placementFromDocument(moduleID, placementID, rawPlacement)
-			if err != nil {
-				return Snapshot{}, false, err
-			}
-			module.Placements[placementID] = placement
+	for index, document := range *document.Records {
+		key, record, err := recordFromDocument(index, document)
+		if err != nil {
+			return Snapshot{}, err
 		}
-		snapshot.Modules[moduleID] = module
+		if _, exists := snapshot.Records[key]; exists {
+			return Snapshot{}, invalidf(
+				"record %d duplicates identity %q/%q",
+				index,
+				key.ModuleID,
+				key.PlacementID,
+			)
+		}
+		snapshot.Records[key] = record
 	}
 	if err := validateSnapshot(snapshot); err != nil {
-		return Snapshot{}, false, err
+		return Snapshot{}, err
 	}
-	needsRewrite := false
-	for moduleID, module := range snapshot.Modules {
-		if len(module.Placements) != 0 {
-			continue
-		}
-		delete(snapshot.Modules, moduleID)
-		needsRewrite = true
-	}
-	return snapshot, needsRewrite, nil
+	return snapshot, nil
 }
 
-func placementFromDocument(
-	moduleID, placementID string,
-	document placementDocument,
-) (Placement, error) {
-	if document.Kind == nil || document.Target == nil {
-		return Placement{}, invalidf(
-			"module %q placement %q requires kind and target",
-			moduleID,
-			placementID,
+func recordFromDocument(index int, document recordDocument) (Key, Record, error) {
+	if document.ModuleID == nil || document.PlacementID == nil ||
+		document.Kind == nil || document.Target == nil {
+		return Key{}, Record{}, invalidf(
+			"record %d requires module_id, placement_id, kind, and target",
+			index,
 		)
 	}
-	placement := Placement{
+	key := Key{
+		ModuleID:    *document.ModuleID,
+		PlacementID: *document.PlacementID,
+	}
+	record := Record{
 		Kind:   Kind(*document.Kind),
 		Target: *document.Target,
 	}
-	switch placement.Kind {
+	switch record.Kind {
 	case KindLink:
 		if document.ResolvedTarget == nil || document.LinkDestination == nil {
-			return Placement{}, invalidf(
-				"module %q link %q requires resolved_target and link_destination",
-				moduleID,
-				placementID,
+			return Key{}, Record{}, invalidf(
+				"record %d link %q/%q requires resolved_target and link_destination",
+				index,
+				key.ModuleID,
+				key.PlacementID,
 			)
 		}
-		placement.ResolvedTarget = *document.ResolvedTarget
-		placement.LinkDestination = *document.LinkDestination
+		record.ResolvedTarget = *document.ResolvedTarget
+		record.LinkDestination = *document.LinkDestination
 	case KindLocal:
 		if document.ResolvedTarget != nil || document.LinkDestination != nil {
-			return Placement{}, invalidf(
-				"module %q local %q must not contain link ownership fields",
-				moduleID,
-				placementID,
+			return Key{}, Record{}, invalidf(
+				"record %d local %q/%q must not contain link ownership fields",
+				index,
+				key.ModuleID,
+				key.PlacementID,
 			)
 		}
 	default:
-		return Placement{}, invalidf(
-			"module %q placement %q has unsupported kind %q",
-			moduleID,
-			placementID,
-			placement.Kind,
+		return Key{}, Record{}, invalidf(
+			"record %d %q/%q has unsupported kind %q",
+			index,
+			key.ModuleID,
+			key.PlacementID,
+			record.Kind,
 		)
 	}
-	return placement, nil
+	return key, record, nil
 }
 
 func validateSnapshot(snapshot Snapshot) error {
@@ -229,81 +229,68 @@ func validateSnapshot(snapshot Snapshot) error {
 	if err != nil {
 		return err
 	}
-	for _, moduleID := range sortedKeys(snapshot.Modules) {
-		if !idPattern.MatchString(moduleID) {
-			return invalidf("invalid module ID %q", moduleID)
-		}
-		module := snapshot.Modules[moduleID]
-		for _, placementID := range sortedKeys(module.Placements) {
-			if !idPattern.MatchString(placementID) {
-				return invalidf(
-					"module %q has invalid placement ID %q",
-					moduleID,
-					placementID,
-				)
-			}
-			placement := module.Placements[placementID]
-			if err := validatePlacement(home, moduleID, placementID, placement); err != nil {
-				return err
-			}
-		}
+	if snapshot.Records == nil {
+		return invalidf("records map must not be nil")
 	}
-	return nil
-}
-
-func validateCanonicalSnapshot(snapshot Snapshot) error {
-	if err := validateSnapshot(snapshot); err != nil {
-		return err
-	}
-	for _, moduleID := range sortedKeys(snapshot.Modules) {
-		if len(snapshot.Modules[moduleID].Placements) == 0 {
-			return invalidf("module %q must contain at least one placement", moduleID)
+	for _, key := range sortedStateKeys(snapshot.Records) {
+		if !idPattern.MatchString(key.ModuleID) {
+			return invalidf("invalid module ID %q", key.ModuleID)
+		}
+		if !idPattern.MatchString(key.PlacementID) {
+			return invalidf(
+				"module %q has invalid placement ID %q",
+				key.ModuleID,
+				key.PlacementID,
+			)
+		}
+		if err := validateRecord(home, key, snapshot.Records[key]); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func validatePlacement(home, moduleID, placementID string, placement Placement) error {
-	if err := validateTarget(home, placement.Target); err != nil {
+func validateRecord(home string, key Key, record Record) error {
+	if err := validateTarget(home, record.Target); err != nil {
 		return invalidf(
 			"module %q placement %q target: %v",
-			moduleID,
-			placementID,
+			key.ModuleID,
+			key.PlacementID,
 			err,
 		)
 	}
-	switch placement.Kind {
+	switch record.Kind {
 	case KindLink:
-		if _, err := cleanStoredAbsolute("resolved_target", placement.ResolvedTarget); err != nil {
+		if _, err := cleanStoredAbsolute("resolved_target", record.ResolvedTarget); err != nil {
 			return invalidf(
 				"module %q link %q: %v",
-				moduleID,
-				placementID,
+				key.ModuleID,
+				key.PlacementID,
 				err,
 			)
 		}
-		if _, err := cleanStoredAbsolute("link_destination", placement.LinkDestination); err != nil {
+		if _, err := cleanStoredAbsolute("link_destination", record.LinkDestination); err != nil {
 			return invalidf(
 				"module %q link %q: %v",
-				moduleID,
-				placementID,
+				key.ModuleID,
+				key.PlacementID,
 				err,
 			)
 		}
 	case KindLocal:
-		if placement.ResolvedTarget != "" || placement.LinkDestination != "" {
+		if record.ResolvedTarget != "" || record.LinkDestination != "" {
 			return invalidf(
 				"module %q local %q must not contain link ownership fields",
-				moduleID,
-				placementID,
+				key.ModuleID,
+				key.PlacementID,
 			)
 		}
 	default:
 		return invalidf(
 			"module %q placement %q has unsupported kind %q",
-			moduleID,
-			placementID,
-			placement.Kind,
+			key.ModuleID,
+			key.PlacementID,
+			record.Kind,
 		)
 	}
 	return nil
@@ -390,65 +377,44 @@ func validateObjectShapes(data []byte) error {
 	if err := rejectUnknownMembers(root, "top-level state", []string{
 		"version",
 		"home",
-		"modules",
+		"records",
 	}); err != nil {
 		return err
 	}
-	modulesRaw, exists := root["modules"]
+	recordsRaw, exists := root["records"]
 	if !exists {
 		return nil
 	}
-	modules, err := decodeObject(modulesRaw, "modules")
-	if err != nil {
-		return err
+	if bytes.Equal(bytes.TrimSpace(recordsRaw), []byte("null")) {
+		return fmt.Errorf("records must be a JSON array")
 	}
-	for moduleID, moduleRaw := range modules {
-		module, err := decodeObject(moduleRaw, fmt.Sprintf("module %q", moduleID))
+	var records []json.RawMessage
+	if err := json.Unmarshal(recordsRaw, &records); err != nil || records == nil {
+		return fmt.Errorf("records must be a JSON array")
+	}
+	for index, recordRaw := range records {
+		name := fmt.Sprintf("record %d", index)
+		record, err := decodeObject(recordRaw, name)
 		if err != nil {
 			return err
 		}
 		if err := rejectUnknownMembers(
-			module,
-			fmt.Sprintf("module %q", moduleID),
-			[]string{"placements"},
+			record,
+			name,
+			[]string{
+				"module_id",
+				"placement_id",
+				"kind",
+				"target",
+				"resolved_target",
+				"link_destination",
+			},
 		); err != nil {
 			return err
 		}
-		placementsRaw, exists := module["placements"]
-		if !exists {
-			continue
-		}
-		placements, err := decodeObject(
-			placementsRaw,
-			fmt.Sprintf("module %q placements", moduleID),
-		)
-		if err != nil {
-			return err
-		}
-		for placementID, placementRaw := range placements {
-			placement, err := decodeObject(
-				placementRaw,
-				fmt.Sprintf("module %q placement %q", moduleID, placementID),
-			)
-			if err != nil {
-				return err
-			}
-			if err := rejectUnknownMembers(
-				placement,
-				fmt.Sprintf("module %q placement %q", moduleID, placementID),
-				[]string{"kind", "target", "resolved_target", "link_destination"},
-			); err != nil {
-				return err
-			}
-			for _, field := range sortedKeys(placement) {
-				if bytes.Equal(bytes.TrimSpace(placement[field]), []byte("null")) {
-					return fmt.Errorf(
-						"module %q placement %q field %q must not be null",
-						moduleID,
-						placementID,
-						field,
-					)
-				}
+		for _, field := range sortedKeys(record) {
+			if bytes.Equal(bytes.TrimSpace(record[field]), []byte("null")) {
+				return fmt.Errorf("%s field %q must not be null", name, field)
 			}
 		}
 	}
@@ -636,6 +602,20 @@ func sortedKeys[Value any](values map[string]Value) []string {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
+	return keys
+}
+
+func sortedStateKeys(records map[Key]Record) []Key {
+	keys := make([]Key, 0, len(records))
+	for key := range records {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, func(left, right Key) int {
+		if byModule := strings.Compare(left.ModuleID, right.ModuleID); byModule != 0 {
+			return byModule
+		}
+		return strings.Compare(left.PlacementID, right.PlacementID)
+	})
 	return keys
 }
 

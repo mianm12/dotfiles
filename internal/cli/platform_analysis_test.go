@@ -325,8 +325,8 @@ func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 			if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 				t.Fatalf("extra_modules = %v, want empty", extras)
 			}
-			if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-				t.Fatalf("state modules = %#v, want empty", modules)
+			if records := loadTestState(t, fixture).Records; len(records) != 0 {
+				t.Fatalf("state records = %#v, want empty", records)
 			}
 			if test.drift {
 				assertCLILink(t, target, userDestination)
@@ -394,8 +394,8 @@ target = "~/.gated.local"
 	if err != nil || string(data) != "user-owned" {
 		t.Fatalf("local after remove = (%q, %v), want preserved user data", data, err)
 	}
-	if modules := loadTestState(t, fixture).Modules; len(modules) != 0 {
-		t.Fatalf("state modules = %#v, want empty", modules)
+	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		t.Fatalf("state records = %#v, want empty", records)
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)
 }

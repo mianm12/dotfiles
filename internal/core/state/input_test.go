@@ -22,7 +22,7 @@ func TestLoadRequiresDirectRegularFile(t *testing.T) {
 			path: func(t *testing.T, root, home string) string {
 				target := filepath.Join(root, "actual.json")
 				writeStateDocument(t, target, fmt.Sprintf(
-					`{"version":2,"home":%q,"modules":{}}`,
+					`{"version":3,"home":%q,"records":[]}`,
 					home,
 				))
 				path := filepath.Join(root, "state.json")
@@ -82,10 +82,9 @@ func TestLoadRequiresDirectRegularFile(t *testing.T) {
 				t.Fatalf("Load() = (%#v, %v), want invalid direct file", loaded, err)
 			}
 			if loaded.Missing ||
-				loaded.NeedsRewrite ||
 				loaded.Warning != "" ||
 				loaded.Snapshot.Home != "" ||
-				loaded.Snapshot.Modules != nil {
+				loaded.Snapshot.Records != nil {
 				t.Fatalf("Load(error) returned partial result %#v", loaded)
 			}
 			assertTreeUnchanged(t, root, before)
@@ -93,7 +92,7 @@ func TestLoadRequiresDirectRegularFile(t *testing.T) {
 	}
 }
 
-func TestLoadCanonicalizesEmptyModulesInMemory(t *testing.T) {
+func TestLoadReadsFlatRecordsWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	if err := os.Mkdir(home, 0o700); err != nil {
@@ -102,7 +101,7 @@ func TestLoadCanonicalizesEmptyModulesInMemory(t *testing.T) {
 	statePath := filepath.Join(root, "state.json")
 	target := filepath.Join(home, ".config", "kept")
 	document := fmt.Sprintf(
-		`{"version":2,"home":%q,"modules":{"empty_explicit":{"placements":{}},"empty_missing":{},"kept":{"placements":{"local":{"kind":"local","target":%q}}}}}`,
+		`{"version":3,"home":%q,"records":[{"module_id":"kept","placement_id":"local","kind":"local","target":%q}]}`,
 		home,
 		target,
 	)
@@ -110,11 +109,10 @@ func TestLoadCanonicalizesEmptyModulesInMemory(t *testing.T) {
 	before := snapshotTree(t, root)
 	want := corestate.Snapshot{
 		Home: home,
-		Modules: map[string]corestate.Module{
-			"kept": {
-				Placements: map[string]corestate.Placement{
-					"local": {Kind: corestate.KindLocal, Target: target},
-				},
+		Records: map[corestate.Key]corestate.Record{
+			{ModuleID: "kept", PlacementID: "local"}: {
+				Kind:   corestate.KindLocal,
+				Target: target,
 			},
 		},
 	}
@@ -123,8 +121,8 @@ func TestLoadCanonicalizesEmptyModulesInMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if loaded.Missing || !loaded.NeedsRewrite || loaded.Warning != "" {
-		t.Fatalf("Load() = %#v, want rewrite-only loaded state", loaded)
+	if loaded.Missing || loaded.Warning != "" {
+		t.Fatalf("Load() = %#v, want present state without warning", loaded)
 	}
 	if !reflect.DeepEqual(loaded.Snapshot, want) {
 		t.Fatalf("Load() snapshot = %#v, want %#v", loaded.Snapshot, want)
@@ -139,55 +137,22 @@ func TestLoadCanonicalizesEmptyModulesInMemory(t *testing.T) {
 	assertTreeUnchanged(t, root, before)
 }
 
-func TestLoadCanonicalEmptyStateDoesNotNeedRewrite(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		modules string
-	}{
-		{name: "modules missing"},
-		{name: "modules empty", modules: `,"modules":{}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			home := filepath.Join(root, "home")
-			if err := os.Mkdir(home, 0o700); err != nil {
-				t.Fatalf("os.Mkdir(home) error = %v", err)
-			}
-			statePath := filepath.Join(root, "state.json")
-			writeStateDocument(t, statePath, fmt.Sprintf(
-				`{"version":2,"home":%q%s}`,
-				home,
-				test.modules,
-			))
-
-			loaded, err := corestate.Load(statePath, home)
-
-			if err != nil ||
-				loaded.Missing ||
-				loaded.NeedsRewrite ||
-				loaded.Warning != "" ||
-				len(loaded.Snapshot.Modules) != 0 {
-				t.Fatalf("Load(canonical empty) = (%#v, %v)", loaded, err)
-			}
-		})
-	}
-}
-
-func TestMarshalRejectsEmptyModules(t *testing.T) {
+func TestMarshalEmptyStateWritesExplicitRecordsArray(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
-	for _, placements := range []map[string]corestate.Placement{nil, {}} {
-		snapshot := corestate.Snapshot{
-			Home: home,
-			Modules: map[string]corestate.Module{
-				"empty": {Placements: placements},
-			},
-		}
-
-		data, err := corestate.Marshal(snapshot)
-
-		if !errors.Is(err, corestate.ErrInvalid) {
-			t.Fatalf("Marshal(empty module) = (%q, %v), want ErrInvalid", data, err)
-		}
+	snapshot, err := corestate.New(home)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	data, err := corestate.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	want := fmt.Sprintf(
+		"{\n  \"version\": 3,\n  \"home\": %q,\n  \"records\": []\n}\n",
+		home,
+	)
+	if string(data) != want {
+		t.Fatalf("Marshal(empty) = %s, want %s", data, want)
 	}
 }
 

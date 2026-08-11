@@ -218,15 +218,13 @@ target = "~/.shared/child"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Modules: map[string]state.Module{
-			"stale": {Placements: map[string]state.Placement{
-				"tree": {
-					Kind:            state.KindLink,
-					Target:          parentTarget,
-					ResolvedTarget:  resolvedParent.Resolved(),
-					LinkDestination: oldTree,
-				},
-			}},
+		Records: map[state.Key]state.Record{
+			{ModuleID: "stale", PlacementID: "tree"}: {
+				Kind:            state.KindLink,
+				Target:          parentTarget,
+				ResolvedTarget:  resolvedParent.Resolved(),
+				LinkDestination: oldTree,
+			},
 		},
 	})
 	before := snapshotTree(t, fixture.root)
@@ -312,23 +310,19 @@ target = "~/access/child"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Modules: map[string]state.Module{
-			"parent": {Placements: map[string]state.Placement{
-				"tree": {
-					Kind:            state.KindLink,
-					Target:          parentTarget,
-					ResolvedTarget:  resolvedParent.Resolved(),
-					LinkDestination: oldSource,
-				},
-			}},
-			"child": {Placements: map[string]state.Placement{
-				"config": {
-					Kind:            state.KindLink,
-					Target:          lexicalChild,
-					ResolvedTarget:  resolvedChild.Resolved(),
-					LinkDestination: childSource,
-				},
-			}},
+		Records: map[state.Key]state.Record{
+			{ModuleID: "parent", PlacementID: "tree"}: {
+				Kind:            state.KindLink,
+				Target:          parentTarget,
+				ResolvedTarget:  resolvedParent.Resolved(),
+				LinkDestination: oldSource,
+			},
+			{ModuleID: "child", PlacementID: "config"}: {
+				Kind:            state.KindLink,
+				Target:          lexicalChild,
+				ResolvedTarget:  resolvedChild.Resolved(),
+				LinkDestination: childSource,
+			},
 		},
 	})
 	before := snapshotTree(t, fixture.root)
@@ -382,15 +376,13 @@ target = "~/.shared/child"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Modules: map[string]state.Module{
-			"stale": {Placements: map[string]state.Placement{
-				"tree": {
-					Kind:            state.KindLink,
-					Target:          parentTarget,
-					ResolvedTarget:  resolvedParent.Resolved(),
-					LinkDestination: recordedTree,
-				},
-			}},
+		Records: map[state.Key]state.Record{
+			{ModuleID: "stale", PlacementID: "tree"}: {
+				Kind:            state.KindLink,
+				Target:          parentTarget,
+				ResolvedTarget:  resolvedParent.Resolved(),
+				LinkDestination: recordedTree,
+			},
 		},
 	})
 
@@ -409,10 +401,10 @@ target = "~/.shared/child"
 	destination := filepath.Join(fixture.repository, "modules", "active", "config")
 	assertCLILink(t, filepath.Join(userTree, "child"), destination)
 	loaded := loadTestState(t, fixture)
-	if _, exists := loaded.Modules["stale"]; exists {
+	if _, exists := loaded.Records[state.Key{ModuleID: "stale", PlacementID: "tree"}]; exists {
 		t.Fatal("full apply retained stale state")
 	}
-	if _, exists := loaded.Modules["active"].Placements["child"]; !exists {
+	if _, exists := loaded.Records[state.Key{ModuleID: "active", PlacementID: "child"}]; !exists {
 		t.Fatal("full apply did not record active child")
 	}
 
@@ -443,15 +435,13 @@ target = "~/.shared/child"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Modules: map[string]state.Module{
-			"stale": {Placements: map[string]state.Placement{
-				"tree": {
-					Kind:            state.KindLink,
-					Target:          parentTarget,
-					ResolvedTarget:  resolvedParent.Resolved(),
-					LinkDestination: oldTree,
-				},
-			}},
+		Records: map[state.Key]state.Record{
+			{ModuleID: "stale", PlacementID: "tree"}: {
+				Kind:            state.KindLink,
+				Target:          parentTarget,
+				ResolvedTarget:  resolvedParent.Resolved(),
+				LinkDestination: oldTree,
+			},
 		},
 	})
 	before := snapshotTree(t, fixture.root)
