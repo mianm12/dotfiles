@@ -10,7 +10,7 @@ import (
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-func TestScopedApplyAndRemoveIgnoreBrokenOutOfScopeModule(t *testing.T) {
+func TestScopedApplyAndSelectionIgnoreBrokenOutOfScopeModule(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "apply-good", `
 [[links]]
@@ -29,7 +29,7 @@ target = "~/.remove-good"
 		filepath.Join(fixture.repository, "modules", "broken", "module.toml"),
 		"unknown = true\n",
 	)
-	fixture.writeMachine(t, []string{"base"}, []string{"remove-good"})
+	fixture.writeMachine(t, []string{"base"}, []string{"apply-good", "remove-good"})
 
 	code, _, stderr := fixture.run("apply", "apply-good")
 	if code != exitOK {
@@ -48,15 +48,23 @@ target = "~/.remove-good"
 	}
 	assertApplyNoMutation(t, fixture, fixture.run, "remove-good")
 
-	code, _, stderr = fixture.run("remove", "remove-good")
+	code, _, stderr = fixture.run("select", "remove", "remove-good")
 	if code != exitOK {
 		t.Fatalf("remove with broken out-of-scope module = (%d, %q)", code, stderr)
 	}
-	assertCLIMissing(t, filepath.Join(fixture.home, ".remove-good"))
+	assertCLILink(
+		t,
+		filepath.Join(fixture.home, ".remove-good"),
+		filepath.Join(fixture.repository, "modules", "remove-good", "config"),
+	)
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 ||
 		extras[0] != "apply-good" {
 		t.Fatalf("extra_modules = %v, want [apply-good]", extras)
 	}
+	if code, _, stderr := fixture.run("apply"); code != exitOK {
+		t.Fatalf("apply after selection change = (%d, %q)", code, stderr)
+	}
+	assertCLIMissing(t, filepath.Join(fixture.home, ".remove-good"))
 	assertApplyNoMutation(t, fixture, fixture.run)
 
 	before := snapshotTree(t, fixture.root)
@@ -89,7 +97,7 @@ id = "config"
 source = "config"
 target = "~/.selected"
 `, map[string]string{"config": "selected"})
-	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeMachine(t, []string{"base"}, []string{"selected"})
 
 	code, stdout, stderr := fixture.run("apply", "selected")
 
@@ -104,7 +112,7 @@ target = "~/.selected"
 	assertCLIMissing(t, filepath.Join(fixture.home, ".shared"))
 	extras := fixture.loadMachine(t).ExtraModules
 	if len(extras) != 1 || extras[0] != "selected" {
-		t.Fatalf("extra_modules = %v, want [selected]", extras)
+		t.Fatalf("extra_modules = %v, want unchanged [selected]", extras)
 	}
 	assertApplyNoMutation(t, fixture, fixture.run, "selected")
 
@@ -132,7 +140,7 @@ id = "child"
 example = "config.local.example"
 target = "~/.tree/child"
 `, map[string]string{"config.local.example": "selected"})
-	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeMachine(t, []string{"base"}, []string{"selected"})
 	before := snapshotTree(t, fixture.root)
 
 	code, stdout, stderr := fixture.run("apply", "selected")
@@ -143,8 +151,8 @@ target = "~/.tree/child"
 		t.Fatalf("scoped apply = (%d, %q, %q), want target conflict", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "selected" {
+		t.Fatalf("extra_modules = %v, want unchanged [selected]", extras)
 	}
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
@@ -159,7 +167,7 @@ id = "child"
 source = "config"
 target = "~/.shared/child"
 `, map[string]string{"config": "active"})
-	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeMachine(t, []string{"base"}, []string{"active"})
 
 	oldTree := filepath.Join(fixture.root, "old-repository", "modules", "stale", "tree")
 	if err := os.MkdirAll(oldTree, 0o700); err != nil {
@@ -201,8 +209,8 @@ target = "~/.shared/child"
 		)
 	}
 	assertSnapshotUnchanged(t, before)
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "active" {
+		t.Fatalf("extra_modules = %v, want unchanged [active]", extras)
 	}
 	assertCLIMissing(t, filepath.Join(oldTree, "child"))
 	assertCLIMissing(t, fixture.lock)
@@ -379,7 +387,7 @@ target = "~/.shared/child"
 	assertApplyNoMutation(t, fixture, fixture.run, "active")
 }
 
-func TestScopedRemoveRejectsOwnedParentUsedByOutOfScopeDesired(t *testing.T) {
+func TestFullApplyRejectsStaleOwnedParentUsedByActiveDesired(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["active"]`)
 	fixture.writeModule(t, "active", `
 [[links]]
@@ -416,13 +424,13 @@ target = "~/.shared/child"
 	})
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.run("remove", "stale")
+	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitError ||
 		stdout != "" ||
-		!strings.Contains(stderr, "state-owned link is traversed by active module") {
+		!strings.Contains(stderr, "traverses state-owned link") {
 		t.Fatalf(
-			"scoped remove = (%d, %q, %q), want out-of-scope dependency conflict",
+			"full apply = (%d, %q, %q), want dependency conflict",
 			code,
 			stdout,
 			stderr,

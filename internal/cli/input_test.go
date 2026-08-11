@@ -101,10 +101,11 @@ target = "~/.good"
 
 	code, stdout, stderr := fixture.runProcess("apply", "bad", "--dry-run")
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "regular file") {
+		!strings.Contains(stdout, "not selected") ||
+		strings.Contains(stdout, "regular file") ||
+		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
-			"scoped bad dry-run = (%d, %q, %q), want fast manifest error",
+			"scoped bad dry-run = (%d, %q, %q), want inactive-selection blocker without manifest load",
 			code,
 			stdout,
 			stderr,
@@ -146,7 +147,7 @@ func TestReadOnlyCommandsDoNotRewriteEmptyStateModules(t *testing.T) {
 		stderr != "" ||
 		!strings.Contains(
 			stdout,
-			"selection_changed=false targets_changed=false state_changed=true",
+			"targets_changed=false state_changed=true",
 		) {
 		t.Fatalf("apply canonical rewrite = (%d, %q, %q)", code, stdout, stderr)
 	}

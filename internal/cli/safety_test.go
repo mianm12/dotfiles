@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
-	"github.com/mianm12/dotfiles/internal/core/executor"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
@@ -229,14 +228,12 @@ target = "~/alias/child"
 		filepath.Join(newRepository, "modules", "app", "child-source"),
 		"child",
 	)
-	if _, err := config.PublishMachine(fixture.config, config.Machine{
+	publishTestMachine(t, fixture.config, config.Machine{
 		Version:      1,
 		Repository:   newRepository,
 		Profiles:     []string{"base"},
 		ExtraModules: []string{},
-	}); err != nil {
-		t.Fatalf("PublishMachine(rebind) error = %v", err)
-	}
+	})
 	before := snapshotTree(t, fixture.root)
 
 	code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
@@ -493,40 +490,17 @@ target = "~/owned"
 	}
 }
 
-func TestInitRejectsControlPathAncestorsBeforeMutation(t *testing.T) {
+func TestInitRejectsExistingControlRootSymlinkBeforeMutation(t *testing.T) {
 	tests := []struct {
 		name         string
 		target       string
 		existingLink bool
 		repository   func(*testing.T, *cliTestEnv) string
 	}{
-		{name: "missing machine-config ancestor", target: "~/.config"},
-		{name: "missing state-and-lock ancestor", target: "~/.local"},
 		{
 			name:         "existing managed machine-config ancestor",
 			target:       "~/.config",
 			existingLink: true,
-		},
-		{
-			name:   "repository inside target",
-			target: "~/managed",
-			repository: func(_ *testing.T, fixture *cliTestEnv) string {
-				return filepath.Join(fixture.home, "managed", "repository")
-			},
-		},
-		{
-			name:   "repository inside resolved target",
-			target: "~/alias/managed",
-			repository: func(t *testing.T, fixture *cliTestEnv) string {
-				actual := filepath.Join(fixture.root, "actual")
-				if err := os.Mkdir(actual, 0o700); err != nil {
-					t.Fatalf("os.Mkdir(actual) error = %v", err)
-				}
-				if err := os.Symlink(actual, filepath.Join(fixture.home, "alias")); err != nil {
-					t.Fatalf("os.Symlink(alias) error = %v", err)
-				}
-				return filepath.Join(actual, "managed", "repository")
-			},
 		},
 	}
 
@@ -629,7 +603,7 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 			readOnlyAnalysis: true,
 			wantCode:         exitError,
 		},
-		{name: "remove before selection publish", args: []string{"remove", "app"}, extras: []string{"app"}},
+		{name: "select remove before publication", args: []string{"select", "remove", "app"}, extras: []string{"app"}},
 		{
 			name:             "status empty repository",
 			args:             []string{"status"},
@@ -677,7 +651,7 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 			assertSnapshotUnchanged(t, before)
 			assertCLIMissing(t, fixture.state)
 			assertCLIMissing(t, fixture.lock)
-			if test.name == "remove before selection publish" {
+			if test.name == "select remove before publication" {
 				extras := fixture.loadMachine(t).ExtraModules
 				if len(extras) != 1 || extras[0] != "app" {
 					t.Fatalf("extra_modules = %v, want unchanged [app]", extras)
@@ -1121,32 +1095,6 @@ func TestCommandsRejectAbnormalLockBeforeChangingStateRoot(t *testing.T) {
 	}
 }
 
-func TestMutationLockRejectsSecondProcess(t *testing.T) {
-	fixture := newCLITestEnv(t, `base = []`)
-	fixture.writeMachine(t, []string{"base"}, nil)
-	session, err := executor.OpenSession(fixture.home, corepaths.Controls{
-		Repository: fixture.repository,
-		Config:     fixture.config,
-		State:      fixture.state,
-		Lock:       fixture.lock,
-	})
-	if err != nil {
-		t.Fatalf("executor.OpenSession() error = %v", err)
-	}
-	defer func() {
-		if err := session.Close(); err != nil {
-			t.Fatalf("session.Close() error = %v", err)
-		}
-	}()
-
-	code, stdout, stderr := fixture.runProcess("apply")
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "another dot process") {
-		t.Fatalf("locked apply = (%d, %q, %q), want lock failure", code, stdout, stderr)
-	}
-}
-
 func TestStatusAndDryRunAreStrictlyReadOnly(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "extra", `
@@ -1155,7 +1103,7 @@ id = "config"
 source = "config"
 target = "~/.extra"
 `, map[string]string{"config": "extra"})
-	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeMachine(t, []string{"base"}, []string{"extra"})
 	before := snapshotTree(t, fixture.root)
 
 	code, _, stderr := fixture.run("status")
@@ -1172,7 +1120,7 @@ target = "~/.extra"
 	assertCLIMissing(t, fixture.lock)
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules = %v, want unchanged", extras)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "extra" {
+		t.Fatalf("extra_modules = %v, want unchanged [extra]", extras)
 	}
 }

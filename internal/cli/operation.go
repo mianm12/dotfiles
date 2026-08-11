@@ -5,15 +5,10 @@ import (
 	"fmt"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
-	"github.com/mianm12/dotfiles/internal/core/executor"
+	"github.com/mianm12/dotfiles/internal/core/mutation"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/spf13/cobra"
 )
-
-type mutationOutcome struct {
-	result           executor.Result
-	selectionChanged bool
-}
 
 var errDryRunBlocked = errors.New("dry-run blocked")
 
@@ -31,83 +26,49 @@ func printDryRunAnalysis(
 }
 
 func validateOperationControls(context commandContext, machine config.Machine) error {
-	return executor.ValidateMutationControls(context.controls(machine.Repository))
-}
-
-func runMutationSession(
-	context commandContext,
-	repository string,
-	rerun string,
-	run func(*executor.Session, *mutationOutcome) error,
-) (outcome mutationOutcome, err error) {
-	session, err := executor.OpenSession(
-		context.home,
-		context.controls(repository),
-	)
-	if err != nil {
-		return mutationOutcome{}, err
-	}
-	defer func() {
-		err = joinMutationSessionErrors(err, session.Close(), rerun)
-	}()
-	err = run(session, &outcome)
-	return outcome, err
-}
-
-func joinMutationSessionErrors(runErr, closeErr error, rerun string) error {
-	if closeErr != nil {
-		closeErr = fmt.Errorf(
-			"release mutation lock: %w; mutation may already be applied; rerun %s",
-			closeErr,
-			rerun,
-		)
-	}
-	return errors.Join(runErr, closeErr)
+	return mutation.ValidateControls(context.controls(machine.Repository))
 }
 
 func finishMutation(
 	command *cobra.Command,
-	outcome mutationOutcome,
+	result mutation.Result,
 	runErr error,
 	rerun string,
 ) error {
 	if runErr != nil {
 		// Executor warnings are input diagnostics. Never project the plan or
 		// completed forget results from a failed mutation.
-		if warningErr := printWarnings(command, outcome.result.Warnings); warningErr != nil {
+		if warningErr := printWarnings(command, result.Warnings); warningErr != nil {
 			return errors.Join(runErr, warningErr)
 		}
 		return runErr
 	}
 	return printMutationResult(
 		command,
-		outcome.result,
-		outcome.selectionChanged,
+		result,
 		rerun,
 	)
 }
 
 func rejectAnalysis(analysis OperationAnalysis) error {
-	if len(analysis.Blockers) != 0 {
-		blocker := analysis.Blockers[0]
-		if blocker.ModuleID != "" {
-			return fmt.Errorf(
-				"operation blocked for module %q: %s",
-				blocker.ModuleID,
-				blocker.Reason,
-			)
-		}
-		return fmt.Errorf("operation blocked: %s", blocker.Reason)
-	}
-	for _, action := range analysis.Actions {
-		if action.Decision == planner.DecisionConflict {
+	if len(analysis.Plan.Issues) != 0 {
+		issue := analysis.Plan.Issues[0]
+		if issue.Kind == planner.IssueConflict && issue.PlacementID != "" {
 			return fmt.Errorf(
 				"plan conflict for %s/%s: %s",
-				action.ModuleID,
-				action.PlacementID,
-				action.Reason,
+				issue.ModuleID,
+				issue.PlacementID,
+				issue.Reason,
 			)
 		}
+		if issue.ModuleID != "" {
+			return fmt.Errorf(
+				"operation blocked for module %q: %s",
+				issue.ModuleID,
+				issue.Reason,
+			)
+		}
+		return fmt.Errorf("operation blocked: %s", issue.Reason)
 	}
 	return nil
 }
@@ -126,11 +87,13 @@ func loadRequiredMachine(context commandContext) (config.Machine, error) {
 	return machine, nil
 }
 
-func afterSelectionPublished(env environment, changed bool) error {
-	if !changed || env.afterSelectionPublish == nil {
-		return nil
-	}
-	return env.afterSelectionPublish()
+func validateModuleID(repository, moduleID string) error {
+	_, err := config.MarshalMachine(config.Machine{
+		Version:      1,
+		Repository:   repository,
+		ExtraModules: []string{moduleID},
+	})
+	return err
 }
 
 func appendWarning(warning string, warnings []string) []string {

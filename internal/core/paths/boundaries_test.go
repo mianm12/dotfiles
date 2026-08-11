@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -245,6 +246,17 @@ func TestValidateRejectsTargetAndControlConflictsBeforeMutation(t *testing.T) {
 			}
 			if resolved != nil {
 				t.Fatalf("Validate() returned partial result: %#v", resolved)
+			}
+			labels := corepaths.PlacementLabels(err)
+			if len(labels) == 0 {
+				t.Fatalf("PlacementLabels() = nil, want affected placement labels")
+			}
+			for _, label := range labels {
+				if !slices.ContainsFunc(placements, func(placement corepaths.Placement) bool {
+					return placement.Label == label
+				}) {
+					t.Fatalf("PlacementLabels() = %v, unknown label %q", labels, label)
+				}
 			}
 			if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 				t.Fatalf("Validate() mutated fixture\nbefore=%v\nafter=%v", before, after)

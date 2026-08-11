@@ -201,59 +201,6 @@ target = "~/.app-new"
 		filepath.Join(fixture.repository, "modules", "app", "config"),
 	)
 	assertApplyNoMutation(t, fixture, fixture.run)
-
-	failure := newCLITestEnv(t, `base = ["app"]`)
-	failure.writeModule(t, "app", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.old"
-`, map[string]string{"config": "config"})
-	failure.writeMachine(t, []string{"base"}, nil)
-	code, _, stderr = failure.run("apply")
-	if code != exitOK {
-		t.Fatalf("initial ordering apply = (%d, %q)", code, stderr)
-	}
-	assertApplyNoMutation(t, failure, failure.run)
-	writeModuleManifest(t, failure, "app", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.blocked/new"
-`)
-	oldTarget := filepath.Join(failure.home, ".old")
-	blockedParent := filepath.Join(failure.home, ".blocked")
-	if err := os.Mkdir(blockedParent, 0o700); err != nil {
-		t.Fatalf("os.Mkdir(blocked parent) error = %v", err)
-	}
-	newTarget := filepath.Join(blockedParent, "new")
-	beforeControl := snapshotPaths(
-		t,
-		failure.config,
-		failure.state,
-		failure.lock,
-		oldTarget,
-	)
-	failure.env.beforeExecution = func() {
-		if err := os.Chmod(blockedParent, 0o500); err != nil {
-			t.Fatalf("os.Chmod(blocked parent) error = %v", err)
-		}
-	}
-
-	code, stdout, stderr := failure.runInjected("apply")
-	if err := os.Chmod(blockedParent, 0o700); err != nil {
-		t.Fatalf("os.Chmod(restore parent) error = %v", err)
-	}
-	if code != exitError || stdout != "" || !strings.Contains(stderr, "create symlink") {
-		t.Fatalf("ordered failure apply = (%d, %q, %q), want execution-time create failure", code, stdout, stderr)
-	}
-	assertSnapshotUnchanged(t, beforeControl)
-	assertCLILink(
-		t,
-		oldTarget,
-		filepath.Join(failure.repository, "modules", "app", "config"),
-	)
-	assertCLIMissing(t, newTarget)
 }
 
 func TestApplyCreatesLocalOnlyWhenAbsent(t *testing.T) {

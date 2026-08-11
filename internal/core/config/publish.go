@@ -6,7 +6,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/mianm12/dotfiles/internal/storage"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -32,27 +31,6 @@ func MarshalMachine(machine Machine) ([]byte, error) {
 		return nil, fmt.Errorf("encode machine config: %w", err)
 	}
 	return data, nil
-}
-
-// PublishMachine atomically writes a changed machine selection with private
-// permissions. Identical content is a no-op.
-func PublishMachine(path string, machine Machine) (changed bool, err error) {
-	if path == "" || !filepath.IsAbs(path) {
-		return false, fmt.Errorf(
-			"%w: machine config path must be a non-empty absolute path",
-			ErrInvalidConfiguration,
-		)
-	}
-	path = filepath.Clean(path)
-	data, err := MarshalMachine(machine)
-	if err != nil {
-		return false, err
-	}
-	changed, err = storage.PublishPrivateFile(path, data)
-	if err != nil {
-		return changed, fmt.Errorf("publish machine config %q: %w", path, err)
-	}
-	return changed, nil
 }
 
 func validateMachine(machine Machine) error {

@@ -1,12 +1,10 @@
 package architecture_test
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -17,41 +15,25 @@ import (
 )
 
 var allowedInternalImports = map[string]map[string]bool{
-	"internal/buildinfo":     {},
-	"internal/storage":       {},
-	"internal/core/paths":    {},
-	"internal/core/state":    {},
-	"internal/core/config":   allow("internal/core/paths", "internal/storage"),
-	"internal/lock":          allow("internal/storage"),
-	"internal/core/planner":  allow("internal/core/config", "internal/core/paths", "internal/core/state"),
-	"internal/core/executor": allow("internal/core/config", "internal/core/paths", "internal/core/planner", "internal/core/state", "internal/lock", "internal/storage"),
-	"internal/cli":           allow("internal/buildinfo", "internal/core/config", "internal/core/executor", "internal/core/paths", "internal/core/planner", "internal/core/state"),
-	"cmd/dot":                allow("internal/cli"),
+	"internal/buildinfo":                   {},
+	"internal/storage":                     {},
+	"internal/core/paths":                  {},
+	"internal/core/state":                  {},
+	"internal/core/config":                 allow("internal/core/paths"),
+	"internal/core/selection":              allow("internal/core/config"),
+	"internal/core/planner":                allow("internal/core/config", "internal/core/paths", "internal/core/state"),
+	"internal/core/executor":               allow("internal/core/config", "internal/core/paths", "internal/core/planner", "internal/core/state", "internal/storage"),
+	"internal/core/mutation/internal/lock": allow("internal/storage"),
+	"internal/core/mutation":               allow("internal/core/config", "internal/core/executor", "internal/core/mutation/internal/lock", "internal/core/paths", "internal/core/selection", "internal/storage"),
+	"internal/cli":                         allow("internal/buildinfo", "internal/core/config", "internal/core/mutation", "internal/core/paths", "internal/core/planner", "internal/core/selection", "internal/core/state"),
+	"cmd/dot":                              allow("internal/cli"),
 }
 
 var allowedThirdPartyImports = map[string]map[string]bool{
-	"github.com/gofrs/flock":          allow("internal/lock"),
+	"github.com/gofrs/flock":          allow("internal/core/mutation/internal/lock"),
 	"github.com/google/renameio/v2":   allow("internal/storage"),
 	"github.com/pelletier/go-toml/v2": allow("internal/core/config"),
 	"github.com/spf13/cobra":          allow("internal/cli"),
-}
-
-type mutationReferenceOwner struct {
-	source   string
-	function string
-	receiver string
-}
-
-var sensitiveMutationOwners = map[string]mutationReferenceOwner{
-	"internal/lock.Acquire": {
-		source:   "internal/core/executor",
-		function: "OpenSession",
-	},
-	"internal/core/config.PublishMachine": {
-		source:   "internal/core/executor",
-		function: "PublishSelection",
-		receiver: "Session",
-	},
 }
 
 func TestProductionPackageDependenciesMatchArchitecture(t *testing.T) {
@@ -73,6 +55,14 @@ func TestProductionPackageDependenciesMatchArchitecture(t *testing.T) {
 		for target := range imports {
 			if !allowed[target] {
 				failures = append(failures, source+" imports forbidden internal package "+target)
+			}
+		}
+		for target := range allowed {
+			if !imports[target] {
+				failures = append(
+					failures,
+					"architecture table contains unused edge "+source+" -> "+target,
+				)
 			}
 		}
 	}
@@ -131,177 +121,6 @@ func TestProductionThirdPartyDependenciesMatchArchitecture(t *testing.T) {
 			"production third-party dependency boundary changed:\n%s",
 			strings.Join(failures, "\n"),
 		)
-	}
-}
-
-func TestProductionSensitiveMutationReferencesHaveSingleOwner(t *testing.T) {
-	root := repositoryRoot(t)
-	modulePath := repositoryModulePath(t, root)
-	var failures []string
-	observed := make(map[string]bool, len(sensitiveMutationOwners))
-
-	walkProductionGoFiles(t, root, func(filename, source string) {
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, filename, nil, 0)
-		if err != nil {
-			t.Fatalf("parse production file %q: %v", filename, err)
-		}
-		failures = append(
-			failures,
-			sensitiveMutationFailures(
-				t,
-				fileSet,
-				file,
-				source,
-				modulePath,
-				observed,
-			)...,
-		)
-	})
-	for target := range sensitiveMutationOwners {
-		if !observed[target] {
-			failures = append(
-				failures,
-				"sensitive mutation owner table contains unused target "+target,
-			)
-		}
-	}
-
-	sort.Strings(failures)
-	if len(failures) != 0 {
-		t.Fatalf(
-			"production sensitive mutation reference has wrong owner:\n%s",
-			strings.Join(failures, "\n"),
-		)
-	}
-}
-
-func TestSensitiveMutationBoundaryRejectsIndirectReferences(t *testing.T) {
-	const modulePath = "example.com/dot"
-	tests := map[string]struct {
-		sourcePackage string
-		code          string
-	}{
-		"function value": {
-			sourcePackage: "internal/cli",
-			code: `package sample
-import config "example.com/dot/internal/core/config"
-func bypass() {
-	publish := config.PublishMachine
-	_ = publish
-}
-`,
-		},
-		"package function value": {
-			sourcePackage: "internal/cli",
-			code: `package sample
-import config "example.com/dot/internal/core/config"
-var publish = config.PublishMachine
-`,
-		},
-		"nested function value": {
-			sourcePackage: "internal/cli",
-			code: `package sample
-import config "example.com/dot/internal/core/config"
-var publish = (&struct{ Value any }{Value: config.PublishMachine}).Value
-`,
-		},
-		"dot import": {
-			sourcePackage: "internal/cli",
-			code: `package sample
-import . "example.com/dot/internal/core/config"
-func bypass() {
-	_ = PublishMachine
-}
-`,
-		},
-		"config package wrapper": {
-			sourcePackage: "internal/core/config",
-			code: `package config
-func bypass() {
-	_ = PublishMachine
-}
-`,
-		},
-		"lock package wrapper": {
-			sourcePackage: "internal/lock",
-			code: `package lock
-func bypass() {
-	_ = Acquire
-}
-`,
-		},
-	}
-
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			fileSet := token.NewFileSet()
-			file, err := parser.ParseFile(fileSet, name+".go", test.code, 0)
-			if err != nil {
-				t.Fatalf("parse synthetic source: %v", err)
-			}
-			failures := sensitiveMutationFailures(
-				t,
-				fileSet,
-				file,
-				test.sourcePackage,
-				modulePath,
-				make(map[string]bool),
-			)
-			if len(failures) == 0 {
-				t.Fatal("indirect sensitive mutation reference was not rejected")
-			}
-		})
-	}
-}
-
-func TestSensitiveMutationBoundaryIgnoresLocalShadows(t *testing.T) {
-	const modulePath = "example.com/dot"
-	tests := map[string]struct {
-		sourcePackage string
-		code          string
-	}{
-		"import alias": {
-			sourcePackage: "internal/cli",
-			code: `package sample
-import config "example.com/dot/internal/core/config"
-var _ config.Machine
-func allowed() {
-	config := struct{ PublishMachine func() }{}
-	_ = config.PublishMachine
-}
-`,
-		},
-		"sensitive name": {
-			sourcePackage: "internal/core/config",
-			code: `package config
-func allowed() {
-	PublishMachine := func() {}
-	PublishMachine()
-}
-`,
-		},
-	}
-
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			fileSet := token.NewFileSet()
-			file, err := parser.ParseFile(fileSet, "shadow.go", test.code, 0)
-			if err != nil {
-				t.Fatalf("parse synthetic source: %v", err)
-			}
-			failures := sensitiveMutationFailures(
-				t,
-				fileSet,
-				file,
-				test.sourcePackage,
-				modulePath,
-				make(map[string]bool),
-			)
-			if len(failures) != 0 {
-				t.Fatalf("local shadow produced failures: %v", failures)
-			}
-		})
 	}
 }
 
@@ -566,183 +385,4 @@ func collectThirdPartyImports(
 			imports[importPath] = true
 		}
 	}
-}
-
-func importedPackageNames(
-	t *testing.T,
-	file *ast.File,
-	modulePath string,
-) map[string]string {
-	t.Helper()
-	result := make(map[string]string)
-	for _, importSpec := range file.Imports {
-		importPath, err := strconv.Unquote(importSpec.Path.Value)
-		if err != nil {
-			t.Fatalf("unquote import %s: %v", importSpec.Path.Value, err)
-		}
-		if !strings.HasPrefix(importPath, modulePath+"/") {
-			continue
-		}
-		name := path.Base(importPath)
-		if importSpec.Name != nil {
-			name = importSpec.Name.Name
-		}
-		result[name] = strings.TrimPrefix(importPath, modulePath+"/")
-	}
-	return result
-}
-
-func sensitiveMutationFailures(
-	t *testing.T,
-	fileSet *token.FileSet,
-	file *ast.File,
-	source string,
-	modulePath string,
-	observed map[string]bool,
-) []string {
-	t.Helper()
-	imports := importedPackageNames(t, file, modulePath)
-	var failures []string
-	for _, importSpec := range file.Imports {
-		if importSpec.Name == nil || importSpec.Name.Name != "." {
-			continue
-		}
-		importPath, err := strconv.Unquote(importSpec.Path.Value)
-		if err != nil {
-			t.Fatalf("unquote import %s: %v", importSpec.Path.Value, err)
-		}
-		internalPath := strings.TrimPrefix(importPath, modulePath+"/")
-		if !sensitiveMutationPackage(internalPath) {
-			continue
-		}
-		failures = append(
-			failures,
-			fmtPosition(fileSet, importSpec.Pos())+
-				": dot import of sensitive mutation package "+internalPath,
-		)
-	}
-
-	recordReference := func(position token.Pos, function, receiver, target string) {
-		owner, sensitive := sensitiveMutationOwners[target]
-		if !sensitive {
-			return
-		}
-		if owner.source == source &&
-			owner.function == function &&
-			owner.receiver == receiver {
-			observed[target] = true
-			return
-		}
-		failures = append(
-			failures,
-			fmtPosition(fileSet, position)+
-				": forbidden reference to "+target,
-		)
-	}
-	var inspectReferences func(ast.Node, string, string)
-	inspectReferences = func(node ast.Node, function, receiver string) {
-		ast.Inspect(node, func(node ast.Node) bool {
-			switch expression := node.(type) {
-			case *ast.SelectorExpr:
-				if target, ok := importedSelectorTarget(expression, imports); ok {
-					recordReference(expression.Pos(), function, receiver, target)
-				} else {
-					inspectReferences(expression.X, function, receiver)
-				}
-				return false
-			case *ast.Ident:
-				target, ok := localSensitiveMutationTarget(file, source, expression)
-				if ok {
-					recordReference(expression.Pos(), function, receiver, target)
-				}
-			default:
-				return true
-			}
-			return true
-		})
-	}
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if ok {
-			inspectReferences(
-				function.Body,
-				function.Name.Name,
-				receiverTypeName(function),
-			)
-			continue
-		}
-		general, ok := declaration.(*ast.GenDecl)
-		if !ok {
-			continue
-		}
-		for _, specification := range general.Specs {
-			values, ok := specification.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for _, value := range values.Values {
-				inspectReferences(value, "", "")
-			}
-		}
-	}
-	return failures
-}
-
-func sensitiveMutationPackage(packagePath string) bool {
-	prefix := packagePath + "."
-	for target := range sensitiveMutationOwners {
-		if strings.HasPrefix(target, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func localSensitiveMutationTarget(
-	file *ast.File,
-	source string,
-	identifier *ast.Ident,
-) (string, bool) {
-	if identifier.Obj != nil &&
-		file.Scope.Lookup(identifier.Name) != identifier.Obj {
-		return "", false
-	}
-	target := source + "." + identifier.Name
-	_, exists := sensitiveMutationOwners[target]
-	return target, exists
-}
-
-func importedSelectorTarget(
-	selector *ast.SelectorExpr,
-	imports map[string]string,
-) (string, bool) {
-	qualifier, ok := selector.X.(*ast.Ident)
-	if !ok || qualifier.Obj != nil {
-		return "", false
-	}
-	importPath, ok := imports[qualifier.Name]
-	if !ok {
-		return "", false
-	}
-	return importPath + "." + selector.Sel.Name, true
-}
-
-func receiverTypeName(declaration *ast.FuncDecl) string {
-	if declaration.Recv == nil || len(declaration.Recv.List) == 0 {
-		return ""
-	}
-	expression := declaration.Recv.List[0].Type
-	if pointer, ok := expression.(*ast.StarExpr); ok {
-		expression = pointer.X
-	}
-	identifier, _ := expression.(*ast.Ident)
-	if identifier == nil {
-		return ""
-	}
-	return identifier.Name
-}
-
-func fmtPosition(fileSet *token.FileSet, position token.Pos) string {
-	location := fileSet.Position(position)
-	return fmt.Sprintf("%s:%d", location.Filename, location.Line)
 }

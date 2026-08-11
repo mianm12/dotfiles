@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mianm12/dotfiles/internal/core/executor"
+	"github.com/mianm12/dotfiles/internal/core/mutation"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/spf13/cobra"
@@ -16,13 +16,13 @@ func printPlan(command *cobra.Command, plan planner.Plan, warnings []string) err
 	if err := printWarnings(command, warnings); err != nil {
 		return err
 	}
-	if len(plan.Actions) == 0 {
+	if len(plan.Steps) == 0 && len(plan.Issues) == 0 {
 		if _, err := fmt.Fprintln(command.OutOrStdout(), "converged"); err != nil {
 			return fmt.Errorf("write plan: %w", err)
 		}
 		return nil
 	}
-	for _, action := range plan.Actions {
+	for _, action := range plan.Steps {
 		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write plan: %w", err)
 		}
@@ -30,7 +30,7 @@ func printPlan(command *cobra.Command, plan planner.Plan, warnings []string) err
 	return nil
 }
 
-func printAction(command *cobra.Command, action planner.Action) error {
+func printAction(command *cobra.Command, action planner.Step) error {
 	if _, err := fmt.Fprintf(
 		command.OutOrStdout(),
 		"%-12s %s/%s %s",
@@ -71,53 +71,15 @@ func printOperationAnalysis(
 		return err
 	}
 	printed := false
-	if analysis.SelectionDelta.Changes() {
-		if _, err := fmt.Fprintf(
-			command.OutOrStdout(),
-			"selection-delta %s",
-			analysis.SelectionDelta.Kind,
-		); err != nil {
-			return fmt.Errorf("write selection delta: %w", err)
-		}
-		if analysis.SelectionDelta.ModuleID != "" {
-			if _, err := fmt.Fprintf(
-				command.OutOrStdout(),
-				" module=%s",
-				analysis.SelectionDelta.ModuleID,
-			); err != nil {
-				return fmt.Errorf("write selection delta: %w", err)
-			}
-		}
-		if _, err := fmt.Fprintln(command.OutOrStdout()); err != nil {
-			return fmt.Errorf("write selection delta: %w", err)
-		}
-		printed = true
-	}
-	for _, action := range analysis.Actions {
+	for _, action := range analysis.Plan.Steps {
 		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write operation action: %w", err)
 		}
 		printed = true
 	}
-	for _, blocker := range analysis.Blockers {
-		if _, err := fmt.Fprint(command.OutOrStdout(), "blocked"); err != nil {
-			return fmt.Errorf("write operation blocker: %w", err)
-		}
-		if blocker.ModuleID != "" {
-			if _, err := fmt.Fprintf(
-				command.OutOrStdout(),
-				" module=%s",
-				blocker.ModuleID,
-			); err != nil {
-				return fmt.Errorf("write operation blocker: %w", err)
-			}
-		}
-		if _, err := fmt.Fprintf(
-			command.OutOrStdout(),
-			" reason=%s\n",
-			strconv.Quote(blocker.Reason),
-		); err != nil {
-			return fmt.Errorf("write operation blocker: %w", err)
+	for _, issue := range analysis.Plan.Issues {
+		if err := printIssue(command, issue); err != nil {
+			return fmt.Errorf("write operation issue: %w", err)
 		}
 		printed = true
 	}
@@ -129,23 +91,62 @@ func printOperationAnalysis(
 	return nil
 }
 
+func printIssue(command *cobra.Command, issue planner.Issue) error {
+	if isConcretePlacementIssue(issue) {
+		if _, err := fmt.Fprintf(
+			command.OutOrStdout(),
+			"%-12s %s/%s %s",
+			issue.Kind,
+			issue.ModuleID,
+			issue.PlacementID,
+			issue.Target,
+		); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(
+			command.OutOrStdout(),
+			" reason=%s\n",
+			strconv.Quote(issue.Reason),
+		)
+		return err
+	}
+	if _, err := fmt.Fprint(command.OutOrStdout(), issue.Kind); err != nil {
+		return err
+	}
+	if issue.ModuleID != "" {
+		if _, err := fmt.Fprintf(command.OutOrStdout(), " module=%s", issue.ModuleID); err != nil {
+			return err
+		}
+	}
+	if issue.PlacementID != "" {
+		if _, err := fmt.Fprintf(command.OutOrStdout(), " placement=%s", issue.PlacementID); err != nil {
+			return err
+		}
+	}
+	if issue.Target != "" {
+		if _, err := fmt.Fprintf(command.OutOrStdout(), " target=%s", issue.Target); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(command.OutOrStdout(), " reason=%s\n", strconv.Quote(issue.Reason))
+	return err
+}
+
 func printResult(
 	command *cobra.Command,
-	result executor.Result,
-	selectionChanged bool,
+	result mutation.Result,
 ) error {
 	if err := printPlan(command, result.Plan, result.Warnings); err != nil {
 		return err
 	}
 	if result.StateChanged {
-		if err := printForgotOwnership(command, result.Plan.Actions); err != nil {
+		if err := printForgotOwnership(command, result.Plan.Steps); err != nil {
 			return err
 		}
 	}
 	_, err := fmt.Fprintf(
 		command.OutOrStdout(),
-		"selection_changed=%t targets_changed=%t state_changed=%t\n",
-		selectionChanged,
+		"targets_changed=%t state_changed=%t\n",
 		result.TargetsChanged,
 		result.StateChanged,
 	)
@@ -157,7 +158,7 @@ func printResult(
 
 func printForgotOwnership(
 	command *cobra.Command,
-	actions []planner.Action,
+	actions []planner.Step,
 ) error {
 	for _, action := range actions {
 		if action.Decision != planner.DecisionForget {
@@ -195,13 +196,12 @@ func printForgotOwnership(
 
 func printMutationResult(
 	command *cobra.Command,
-	result executor.Result,
-	selectionChanged bool,
+	result mutation.Result,
 	rerun string,
 ) error {
-	err := printResult(command, result, selectionChanged)
+	err := printResult(command, result)
 	if err == nil ||
-		(!selectionChanged && !result.TargetsChanged && !result.StateChanged) {
+		(!result.TargetsChanged && !result.StateChanged) {
 		return err
 	}
 	return fmt.Errorf(
@@ -211,7 +211,7 @@ func printMutationResult(
 	)
 }
 
-func keepStateRecorded(snapshot state.Snapshot, action planner.Action) bool {
+func keepStateRecorded(snapshot state.Snapshot, action planner.Step) bool {
 	module, exists := snapshot.Modules[action.ModuleID]
 	if !exists {
 		return false
@@ -269,34 +269,17 @@ func printStatusAnalysis(
 			return fmt.Errorf("write status: %w", err)
 		}
 	}
-	for _, action := range analysis.Actions {
-		if action.Decision != planner.DecisionForget &&
-			!isConcretePlacementConflict(action) {
+	for _, action := range analysis.Plan.Steps {
+		if action.Decision != planner.DecisionForget {
 			continue
 		}
 		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write status action: %w", err)
 		}
 	}
-	for _, blocker := range analysis.Blockers {
-		if _, err := fmt.Fprint(command.OutOrStdout(), "blocked"); err != nil {
-			return fmt.Errorf("write status blocker: %w", err)
-		}
-		if blocker.ModuleID != "" {
-			if _, err := fmt.Fprintf(
-				command.OutOrStdout(),
-				" module=%s",
-				blocker.ModuleID,
-			); err != nil {
-				return fmt.Errorf("write status blocker: %w", err)
-			}
-		}
-		if _, err := fmt.Fprintf(
-			command.OutOrStdout(),
-			" reason=%s\n",
-			strconv.Quote(blocker.Reason),
-		); err != nil {
-			return fmt.Errorf("write status blocker: %w", err)
+	for _, issue := range analysis.Plan.Issues {
+		if err := printIssue(command, issue); err != nil {
+			return fmt.Errorf("write status issue: %w", err)
 		}
 	}
 	return nil

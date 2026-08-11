@@ -6,74 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mianm12/dotfiles/internal/core/executor"
+	"github.com/mianm12/dotfiles/internal/core/mutation"
 	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/spf13/cobra"
 )
 
-func TestFinishMutationSuppressesSuccessWhenSessionCloseFails(t *testing.T) {
-	convergeErr := errors.New("synthetic convergence failure")
-	closeErr := errors.New("synthetic close failure")
-	runErr := joinMutationSessionErrors(convergeErr, closeErr, "dot apply")
-	var stdout bytes.Buffer
-	command := &cobra.Command{}
-	command.SetOut(&stdout)
-
-	err := finishMutation(
-		command,
-		mutationOutcome{selectionChanged: true},
-		runErr,
-		"dot apply",
-	)
-
-	if !errors.Is(err, convergeErr) || !errors.Is(err, closeErr) {
-		t.Fatalf("finishMutation() error = %v, want both convergence and close failures", err)
-	}
-	if !strings.Contains(err.Error(), "release mutation lock") ||
-		!strings.Contains(err.Error(), "rerun dot apply") {
-		t.Fatalf("finishMutation() error = %q, want close recovery guidance", err)
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("finishMutation() stdout = %q, want no success result", stdout.String())
-	}
-}
-
-func TestRunMutationSessionClosesDuringPanic(t *testing.T) {
-	fixture := newCLITestEnv(t, `base = []`)
-	context, err := resolveContext(fixture.env)
-	if err != nil {
-		t.Fatalf("resolveContext() error = %v", err)
-	}
-	func() {
-		defer func() {
-			if recovered := recover(); recovered != "synthetic panic" {
-				t.Fatalf("recovered panic = %#v, want synthetic panic", recovered)
-			}
-		}()
-		_, _ = runMutationSession(
-			context,
-			fixture.repository,
-			"dot apply",
-			func(*executor.Session, *mutationOutcome) error {
-				panic("synthetic panic")
-			},
-		)
-	}()
-
-	_, err = runMutationSession(
-		context,
-		fixture.repository,
-		"dot apply",
-		func(*executor.Session, *mutationOutcome) error { return nil },
-	)
-	if err != nil {
-		t.Fatalf("runMutationSession(after panic) error = %v", err)
-	}
-}
-
 func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
-	forget := planner.Action{
+	forget := planner.Step{
 		ModuleID:    "old",
 		PlacementID: "config",
 		Kind:        state.KindLink,
@@ -81,41 +21,46 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 		Target:      "/tmp/home/.config",
 		Reason:      `stale destination "changed"`,
 	}
-	outcome := mutationOutcome{
-		result: executor.Result{
-			Plan:         planner.Plan{Actions: []planner.Action{forget}},
-			StateChanged: true,
-			Warnings:     []string{"synthetic input warning"},
-		},
+	result := mutation.Result{
+		Plan:         planner.Plan{Steps: []planner.Step{forget}},
+		StateChanged: true,
+		Warnings:     []string{"synthetic input warning"},
 	}
 
-	t.Run("failure", func(t *testing.T) {
-		runErr := errors.New("synthetic state commit failure")
-		var stdout, stderr bytes.Buffer
-		command := &cobra.Command{}
-		command.SetOut(&stdout)
-		command.SetErr(&stderr)
+	for _, test := range []struct {
+		name   string
+		runErr error
+	}{
+		{name: "state commit failure", runErr: errors.New("synthetic state commit failure")},
+		{name: "lock release failure", runErr: mutation.ErrLockIO},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			command := &cobra.Command{}
+			command.SetOut(&stdout)
+			command.SetErr(&stderr)
 
-		err := finishMutation(command, outcome, runErr, "dot apply")
+			err := finishMutation(command, result, test.runErr, "dot apply")
 
-		if !errors.Is(err, runErr) {
-			t.Fatalf("finishMutation() error = %v, want run error", err)
-		}
-		if stdout.Len() != 0 {
-			t.Fatalf(
-				"finishMutation() stdout = %q, want no action result",
-				stdout.String(),
-			)
-		}
-		if !strings.Contains(stderr.String(), "synthetic input warning") ||
-			strings.Contains(stderr.String(), "forgot ownership") ||
-			strings.Contains(stderr.String(), forget.Reason) {
-			t.Fatalf(
-				"finishMutation() stderr = %q, want only input warning",
-				stderr.String(),
-			)
-		}
-	})
+			if !errors.Is(err, test.runErr) {
+				t.Fatalf("finishMutation() error = %v, want run error", err)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf(
+					"finishMutation() stdout = %q, want no action result",
+					stdout.String(),
+				)
+			}
+			if !strings.Contains(stderr.String(), "synthetic input warning") ||
+				strings.Contains(stderr.String(), "forgot ownership") ||
+				strings.Contains(stderr.String(), forget.Reason) {
+				t.Fatalf(
+					"finishMutation() stderr = %q, want only input warning",
+					stderr.String(),
+				)
+			}
+		})
+	}
 
 	t.Run("success", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
@@ -123,7 +68,7 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 		command.SetOut(&stdout)
 		command.SetErr(&stderr)
 
-		err := finishMutation(command, outcome, nil, "dot apply")
+		err := finishMutation(command, result, nil, "dot apply")
 		if err != nil {
 			t.Fatalf("finishMutation() error = %v", err)
 		}
@@ -152,7 +97,7 @@ func TestOperationAnalysisRendersEveryActionWithQuotedReason(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
 	analysis := OperationAnalysis{
-		Actions: []planner.Action{
+		Plan: planner.Plan{Steps: []planner.Step{
 			{
 				ModuleID:    "app",
 				PlacementID: "new",
@@ -166,7 +111,7 @@ func TestOperationAnalysisRendersEveryActionWithQuotedReason(t *testing.T) {
 				Target:      "/tmp/home/.old",
 				Reason:      `actual target is "user-owned"`,
 			},
-		},
+		}},
 	}
 
 	if err := printOperationAnalysis(command, analysis); err != nil {
@@ -200,7 +145,7 @@ func TestStatusAnalysisCompactsDefaultsAndAppendsDiagnosticActions(t *testing.T)
 			Convergence:   "pending",
 			Variant:       "-",
 		}},
-		Actions: []planner.Action{
+		Plan: planner.Plan{Steps: []planner.Step{
 			{
 				ModuleID:    "app",
 				PlacementID: "new",
@@ -214,19 +159,20 @@ func TestStatusAnalysisCompactsDefaultsAndAppendsDiagnosticActions(t *testing.T)
 				Target:      "/tmp/home/.old",
 				Reason:      "stale target is absent",
 			},
+		}, Issues: []planner.Issue{
 			{
+				Kind:        planner.IssueConflict,
 				ModuleID:    "app",
 				PlacementID: "config",
-				Decision:    planner.DecisionConflict,
 				Target:      "/tmp/home/.app",
 				Reason:      "actual target is regular file",
 			},
 			{
+				Kind:     planner.IssueBlocked,
 				ModuleID: "global",
-				Decision: planner.DecisionConflict,
 				Reason:   "synthetic path conflict",
 			},
-		},
+		}},
 	}
 
 	if err := printStatusAnalysis(command, analysis); err != nil {
@@ -244,8 +190,7 @@ func TestStatusAnalysisCompactsDefaultsAndAppendsDiagnosticActions(t *testing.T)
 		!strings.Contains(output, `reason="stale target is absent"`) ||
 		!strings.Contains(output, "conflict     app/config /tmp/home/.app") ||
 		!strings.Contains(output, `reason="actual target is regular file"`) ||
-		strings.Contains(output, "global/") ||
-		strings.Contains(output, "synthetic path conflict") {
+		!strings.Contains(output, `blocked module=global reason="synthetic path conflict"`) {
 		t.Fatalf(
 			"printStatusAnalysis() stdout = %q, want compact module and diagnostic actions",
 			output,

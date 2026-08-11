@@ -62,8 +62,10 @@ target = "~/.gated"
 	before := snapshotTree(t, explicit.root)
 
 	code, stdout, stderr = explicit.runInjected("apply", "gated")
-	if code != exitError || stdout != "" || !strings.Contains(stderr, "not applicable") {
-		t.Fatalf("explicit apply = (%d, %q, %q), want not-applicable failure", code, stdout, stderr)
+	if code != exitError || stdout != "" ||
+		!strings.Contains(stderr, "not selected") ||
+		!strings.Contains(stderr, "dot select add gated") {
+		t.Fatalf("explicit apply = (%d, %q, %q), want inactive-selection failure", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
 	if extras := explicit.loadMachine(t).ExtraModules; len(extras) != 0 {
@@ -103,7 +105,7 @@ target = "~/.app"
 	assertCLILink(t, target, source)
 }
 
-func TestApplyActivatesExtraModuleAndConverges(t *testing.T) {
+func TestApplyConvergesSelectedExtraModuleWithoutChangingSelection(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "extra", `
 [[links]]
@@ -111,15 +113,14 @@ id = "config"
 source = "config"
 target = "~/.extra"
 `, map[string]string{"config": "extra"})
-	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeMachine(t, []string{"base"}, []string{"extra"})
+	machineBefore := snapshotPaths(t, fixture.config)
 
 	code, _, stderr := fixture.run("apply", "extra")
 	if code != exitOK || stderr == "" {
 		t.Fatalf("apply extra = (%d, %q), want success with missing-state warning", code, stderr)
 	}
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "extra" {
-		t.Fatalf("extra_modules = %v, want [extra]", extras)
-	}
+	assertSnapshotUnchanged(t, machineBefore)
 	assertCLILink(
 		t,
 		filepath.Join(fixture.home, ".extra"),
@@ -177,6 +178,7 @@ os = ["freebsd"]
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)
 
+	fixture.writeMachine(t, []string{"base"}, []string{"invalid-os"})
 	before := snapshotTree(t, fixture.root)
 	code, stdout, stderr = fixture.runInjected("apply", "invalid-os")
 	if code != exitError ||
@@ -185,7 +187,7 @@ os = ["freebsd"]
 		t.Fatalf("invalid-os apply = (%d, %q, %q), want strict config failure", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
-		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
+	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "invalid-os" {
+		t.Fatalf("extra_modules = %v, want unchanged [invalid-os] selection", extras)
 	}
 }

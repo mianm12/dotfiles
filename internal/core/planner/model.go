@@ -2,8 +2,6 @@
 package planner
 
 import (
-	"slices"
-
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
@@ -13,7 +11,7 @@ import (
 // or stale placement.
 type Decision string
 
-// Planner decisions cover active convergence, stale cleanup, and conflicts.
+// Planner decisions cover executable convergence and stale cleanup steps.
 const (
 	DecisionCreateLink  Decision = "create-link"
 	DecisionCreateLocal Decision = "create-local"
@@ -23,7 +21,25 @@ const (
 	DecisionUpdate      Decision = "update"
 	DecisionPrune       Decision = "prune"
 	DecisionForget      Decision = "forget"
-	DecisionConflict    Decision = "conflict"
+)
+
+// IssueKind identifies why a plan cannot be executed.
+type IssueKind string
+
+// IssueCode identifies a machine-readable issue cause when projections need
+// more detail than blocked versus conflict.
+type IssueCode string
+
+const (
+	// IssueConflict identifies a concrete planner conflict.
+	IssueConflict IssueKind = "conflict"
+	// IssueBlocked identifies an input or path condition that blocks planning.
+	IssueBlocked IssueKind = "blocked"
+)
+
+const (
+	// IssueCodeControlBoundary identifies a placement/control path overlap.
+	IssueCodeControlBoundary IssueCode = "control-boundary"
 )
 
 // Request contains the complete desired set and ownership snapshot for one
@@ -39,11 +55,11 @@ type Request struct {
 	State state.Snapshot
 }
 
-// Action describes one ordered planner decision. LinkDestination is the
+// Step describes one ordered executable planner decision. LinkDestination is the
 // desired raw destination. ExpectedResolvedTarget and
 // ExpectedLinkDestination preserve the state facts that the executor must
 // recheck before update or prune.
-type Action struct {
+type Step struct {
 	ModuleID                string
 	PlacementID             string
 	Kind                    state.Kind
@@ -57,16 +73,26 @@ type Action struct {
 	Reason                  string
 }
 
-// Plan contains active-placement decisions followed by stale cleanup
-// decisions. Action.Reason is the single source of truth for why an action,
-// including ownership abandonment, was selected.
-type Plan struct {
-	Actions []Action
+// Issue describes one reason a plan cannot be executed. PlacementID and Target
+// are present when the issue belongs to a concrete placement.
+type Issue struct {
+	Kind        IssueKind
+	Code        IssueCode
+	ModuleID    string
+	PlacementID string
+	Target      string
+	Reason      string
 }
 
-// HasConflicts reports whether the plan is unsafe to execute.
-func (plan Plan) HasConflicts() bool {
-	return slices.ContainsFunc(plan.Actions, func(action Action) bool {
-		return action.Decision == DecisionConflict
-	})
+// Plan is the single planning report: executable Steps and blocking Issues.
+// Steps preserve active-before-stale ordering. Step.Reason is the single source
+// of truth for why an executable step was selected.
+type Plan struct {
+	Steps  []Step
+	Issues []Issue
+}
+
+// HasIssues reports whether the plan is unsafe to execute.
+func (plan Plan) HasIssues() bool {
+	return len(plan.Issues) != 0
 }
