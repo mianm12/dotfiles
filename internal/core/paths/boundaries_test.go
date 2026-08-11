@@ -429,8 +429,8 @@ func TestValidateControlTopologyRejectsRootRelationshipsReadOnly(t *testing.T) {
 				if !errors.Is(err, corepaths.ErrControlTopology) {
 					t.Fatalf("ValidateControlTopology() error = %v, want topology conflict", err)
 				}
-				if !containsAll(err.Error(), "run `dot paths`", roots[pair.left], roots[pair.right]) {
-					t.Fatalf("topology error = %q, want both paths and recovery hint", err)
+				if !containsAll(err.Error(), roots[pair.left], roots[pair.right]) {
+					t.Fatalf("topology error = %q, want both paths", err)
 				}
 
 				resolved, validateErr := corepaths.Validate(
@@ -533,8 +533,8 @@ func TestValidateControlTopologyRejectsResolvedControlAliases(t *testing.T) {
 			if !errors.Is(err, corepaths.ErrControlTopology) {
 				t.Fatalf("ValidateControlTopology() error = %v, want resolved conflict", err)
 			}
-			if err == nil || !containsAll(err.Error(), "resolved", "run `dot paths`") {
-				t.Fatalf("topology error = %q, want resolved paths and recovery hint", err)
+			if err == nil || !containsAll(err.Error(), "resolved") {
+				t.Fatalf("topology error = %q, want resolved paths", err)
 			}
 			if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 				t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
@@ -565,8 +565,8 @@ func TestValidateControlTopologyReportsLexicalOverlapBeforeBlockedResolution(t *
 	if errors.Is(err, corepaths.ErrPathBlocked) {
 		t.Fatalf("ValidateControlTopology() error = %v, want topology diagnosed before resolution", err)
 	}
-	if !containsAll(err.Error(), repository, "machine config root", "run `dot paths`") {
-		t.Fatalf("topology error = %q, want root identities and recovery hint", err)
+	if !containsAll(err.Error(), repository, "machine config root") {
+		t.Fatalf("topology error = %q, want root identities", err)
 	}
 	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)
@@ -622,8 +622,8 @@ func TestValidateControlTopologyRequiresDistinctStateSiblings(t *testing.T) {
 			if !errors.Is(err, corepaths.ErrControlTopology) {
 				t.Fatalf("ValidateControlTopology() error = %v, want sibling conflict", err)
 			}
-			if err == nil || !containsAll(err.Error(), controls.State, controls.Lock, "dot paths") {
-				t.Fatalf("topology error = %q, want state, lock, and recovery hint", err)
+			if err == nil || !containsAll(err.Error(), controls.State, controls.Lock) {
+				t.Fatalf("topology error = %q, want state and lock", err)
 			}
 			if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 				t.Fatalf("control validation mutated fixture\nbefore=%v\nafter=%v", before, after)

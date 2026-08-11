@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -65,7 +66,7 @@ target = "~/.app"
 		t.Fatalf("resolveContext() error = %v", err)
 	}
 
-	analysis, err := analyzeStatus(context, fixture.loadMachine(t))
+	analysis, err := converge.Analyze(context.environment())
 	if err != nil {
 		t.Fatalf("analyzeStatus() error = %v", err)
 	}
@@ -93,7 +94,7 @@ func TestFullMutationAnalysisCompleteness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveContext() error = %v", err)
 		}
-		analysis, err := analyzeApply(context, fixture.loadMachine(t))
+		analysis, err := converge.Analyze(context.environment())
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}
@@ -117,7 +118,7 @@ func TestFullMutationAnalysisCompleteness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveContext() error = %v", err)
 		}
-		analysis, err := analyzeApply(context, fixture.loadMachine(t))
+		analysis, err := converge.Analyze(context.environment())
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}

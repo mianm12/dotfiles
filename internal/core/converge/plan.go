@@ -1,4 +1,4 @@
-package planner
+package converge
 
 import (
 	"errors"
@@ -35,10 +35,10 @@ type candidate struct {
 	conflict bool
 }
 
-// Build observes the filesystem without mutating it and returns a deterministic
+// buildPlan observes the filesystem without mutating it and returns a deterministic
 // plan. Active decisions always precede stale cleanup decisions.
-func Build(request Request) (Plan, error) {
-	home, err := validateRequest(request)
+func buildPlan(request planRequest) (Plan, error) {
+	home, err := validatePlanRequest(request)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -203,7 +203,7 @@ func finalize(candidates []candidate) Plan {
 	return plan
 }
 
-func validateRequest(request Request) (string, error) {
+func validatePlanRequest(request planRequest) (string, error) {
 	if request.Home == "" || !filepath.IsAbs(request.Home) {
 		return "", fmt.Errorf("planner HOME must be a non-empty absolute path")
 	}

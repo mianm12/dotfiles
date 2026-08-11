@@ -6,25 +6,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mianm12/dotfiles/internal/core/mutation"
-	"github.com/mianm12/dotfiles/internal/core/planner"
-	"github.com/mianm12/dotfiles/internal/core/state"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
 func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
-	forget := planner.Step{
+	forget := converge.Step{
 		ModuleID:    "old",
 		PlacementID: "config",
-		Kind:        state.KindLink,
-		Decision:    planner.DecisionForget,
+		Kind:        converge.KindLink,
+		Decision:    converge.DecisionForget,
 		Target:      "/tmp/home/.config",
 		Reason:      `stale destination "changed"`,
 	}
-	result := mutation.Result{
-		Plan:         planner.Plan{Steps: []planner.Step{forget}},
+	result := converge.ApplyResult{
+		Report: converge.Report{
+			Plan:     converge.Plan{Steps: []converge.Step{forget}},
+			Warnings: []string{"synthetic input warning"},
+		},
 		StateChanged: true,
-		Warnings:     []string{"synthetic input warning"},
 	}
 
 	for _, test := range []struct {
@@ -32,7 +32,7 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 		runErr error
 	}{
 		{name: "state commit failure", runErr: errors.New("synthetic state commit failure")},
-		{name: "lock release failure", runErr: mutation.ErrLockIO},
+		{name: "lock release failure", runErr: converge.ErrPartial},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -96,18 +96,18 @@ func TestOperationAnalysisRendersEveryActionWithQuotedReason(t *testing.T) {
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
-	analysis := OperationAnalysis{
-		Plan: planner.Plan{Steps: []planner.Step{
+	analysis := converge.Report{
+		Plan: converge.Plan{Steps: []converge.Step{
 			{
 				ModuleID:    "app",
 				PlacementID: "new",
-				Decision:    planner.DecisionCreateLink,
+				Decision:    converge.DecisionCreateLink,
 				Target:      "/tmp/home/.new",
 			},
 			{
 				ModuleID:    "old",
 				PlacementID: "stale",
-				Decision:    planner.DecisionForget,
+				Decision:    converge.DecisionForget,
 				Target:      "/tmp/home/.old",
 				Reason:      `actual target is "user-owned"`,
 			},
@@ -136,8 +136,8 @@ func TestStatusAnalysisCompactsDefaultsAndAppendsDiagnosticActions(t *testing.T)
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
-	analysis := OperationAnalysis{
-		Modules: []ModuleAnalysis{{
+	analysis := converge.Report{
+		Modules: []converge.ModuleReport{{
 			ID:            "old",
 			Summary:       "stale",
 			Selection:     "none",
@@ -145,30 +145,30 @@ func TestStatusAnalysisCompactsDefaultsAndAppendsDiagnosticActions(t *testing.T)
 			Convergence:   "pending",
 			Variant:       "-",
 		}},
-		Plan: planner.Plan{Steps: []planner.Step{
+		Plan: converge.Plan{Steps: []converge.Step{
 			{
 				ModuleID:    "app",
 				PlacementID: "new",
-				Decision:    planner.DecisionCreateLink,
+				Decision:    converge.DecisionCreateLink,
 				Target:      "/tmp/home/.new",
 			},
 			{
 				ModuleID:    "old",
 				PlacementID: "stale",
-				Decision:    planner.DecisionForget,
+				Decision:    converge.DecisionForget,
 				Target:      "/tmp/home/.old",
 				Reason:      "stale target is absent",
 			},
-		}, Issues: []planner.Issue{
+		}, Issues: []converge.Issue{
 			{
-				Kind:        planner.IssueConflict,
+				Kind:        converge.IssueConflict,
 				ModuleID:    "app",
 				PlacementID: "config",
 				Target:      "/tmp/home/.app",
 				Reason:      "actual target is regular file",
 			},
 			{
-				Kind:     planner.IssueBlocked,
+				Kind:     converge.IssueBlocked,
 				ModuleID: "global",
 				Reason:   "synthetic path conflict",
 			},
@@ -202,7 +202,7 @@ func TestStatusAnalysisRendersOnlyDistinctDimensions(t *testing.T) {
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
-	analysis := OperationAnalysis{Modules: []ModuleAnalysis{
+	analysis := converge.Report{Modules: []converge.ModuleReport{
 		{
 			ID:            "named",
 			Summary:       "converged",

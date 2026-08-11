@@ -1,4 +1,4 @@
-package lock
+package converge
 
 import (
 	"github.com/gofrs/flock"

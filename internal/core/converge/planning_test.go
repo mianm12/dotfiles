@@ -1,4 +1,4 @@
-package planner_test
+package converge_test
 
 import (
 	"errors"
@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
+	planner "github.com/mianm12/dotfiles/internal/core/converge"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
-	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -1510,7 +1510,7 @@ func TestPlanStateOwnedSymlinkDriftIsConflict(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision)
-	if !plan.HasIssues() {
+	if len(plan.Issues) == 0 {
 		t.Fatal("Build() HasIssues() = false, want true")
 	}
 	assertTreeUnchanged(t, fixture.root, before)

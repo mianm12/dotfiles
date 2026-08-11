@@ -1,10 +1,7 @@
 package cli
 
 import (
-	"slices"
-
-	"github.com/mianm12/dotfiles/internal/core/config"
-	"github.com/mianm12/dotfiles/internal/core/state"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
@@ -24,36 +21,9 @@ func runStatus(command *cobra.Command, env environment) error {
 	if err != nil {
 		return err
 	}
-	machine, err := loadRequiredMachine(context)
+	report, err := converge.Analyze(context.environment())
 	if err != nil {
-		return err
+		return withCoreRecovery(err)
 	}
-	analysis, err := analyzeStatus(context, machine)
-	if err != nil {
-		return err
-	}
-	return printStatusAnalysis(command, analysis)
-}
-
-func statusModuleIDs(
-	repository config.Repository,
-	machine config.Machine,
-	snapshot state.Snapshot,
-) []string {
-	set := make(map[string]bool)
-	for _, id := range repository.ModuleIDs() {
-		set[id] = true
-	}
-	for _, id := range machine.ExtraModules {
-		set[id] = true
-	}
-	for id := range snapshot.Modules {
-		set[id] = true
-	}
-	ids := make([]string, 0, len(set))
-	for id := range set {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
+	return printStatusAnalysis(command, report)
 }

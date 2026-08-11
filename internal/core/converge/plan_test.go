@@ -1,4 +1,4 @@
-package planner_test
+package converge_test
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
-	"github.com/mianm12/dotfiles/internal/core/planner"
+	planner "github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -369,7 +369,7 @@ func TestStaleTargetReuseDoesNotOverrideActiveOwnershipConflict(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, planner.DecisionForget)
-	if !plan.HasIssues() {
+	if len(plan.Issues) == 0 {
 		t.Fatal("Build() HasIssues() = false, want active ownership conflict")
 	}
 	if got := plan.Steps[0].Reason; got != "stale target is reused by desired configuration" {
@@ -578,7 +578,7 @@ func TestActiveTargetAndStaleParentBothProjectTraversalConflict(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, conflictDecision)
-	if !plan.HasIssues() {
+	if len(plan.Issues) == 0 {
 		t.Fatal("Build() HasIssues() = false, want traversal conflicts")
 	}
 	if got := plan.Issues[0].Reason; !strings.Contains(got, "traverses state-owned link") {

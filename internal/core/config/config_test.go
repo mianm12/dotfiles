@@ -10,6 +10,19 @@ import (
 	coreconfig "github.com/mianm12/dotfiles/internal/core/config"
 )
 
+func TestValidateModuleID(t *testing.T) {
+	for _, valid := range []string{"app", "shell-tools", "nvim_2"} {
+		if err := coreconfig.ValidateModuleID(valid); err != nil {
+			t.Fatalf("ValidateModuleID(%q) error = %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{"", "App", "../app", "app.local"} {
+		if err := coreconfig.ValidateModuleID(invalid); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
+			t.Fatalf("ValidateModuleID(%q) error = %v, want invalid configuration", invalid, err)
+		}
+	}
+}
+
 func TestLoadMachine_StrictValidation(t *testing.T) {
 	root := t.TempDir()
 	validPath := filepath.Join(root, "valid.toml")

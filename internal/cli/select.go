@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/mianm12/dotfiles/internal/core/mutation"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
@@ -50,22 +50,9 @@ func runSelectAdd(command *cobra.Command, moduleID string, env environment) erro
 	if err != nil {
 		return err
 	}
-	machine, err := loadRequiredMachine(context)
-	if err != nil {
-		return err
-	}
-	request := mutation.SelectionRequest{
-		Home:      context.home,
-		Controls:  context.controls(machine.Repository),
-		Operation: mutation.SelectionAdd,
-		Machine:   machine,
-		ModuleID:  moduleID,
-		Platform:  context.platform,
-		RerunHint: "dot select add " + moduleID,
-	}
-	result, runErr := mutation.UpdateSelection(request)
+	result, runErr := converge.SelectAdd(context.environment(), moduleID)
 	if runErr != nil {
-		return runErr
+		return finishSelectionMutation(runErr, "dot select add "+moduleID)
 	}
 	return printSelectionResult(
 		command,
@@ -80,22 +67,9 @@ func runSelectRemove(command *cobra.Command, moduleID string, env environment) e
 	if err != nil {
 		return err
 	}
-	context := commandContext{controlContext: control}
-	machine, err := loadRequiredMachine(context)
-	if err != nil {
-		return err
-	}
-	request := mutation.SelectionRequest{
-		Home:      context.home,
-		Controls:  context.controls(machine.Repository),
-		Operation: mutation.SelectionRemove,
-		Machine:   machine,
-		ModuleID:  moduleID,
-		RerunHint: "dot select remove " + moduleID,
-	}
-	result, runErr := mutation.UpdateSelection(request)
+	result, runErr := converge.SelectRemove(control.environment(), moduleID)
 	if runErr != nil {
-		return runErr
+		return finishSelectionMutation(runErr, "dot select remove "+moduleID)
 	}
 	message := fmt.Sprintf("direct selection for module %s is absent; run dot apply", moduleID)
 	if result.ProfileSelected {

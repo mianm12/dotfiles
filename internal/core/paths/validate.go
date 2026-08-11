@@ -189,11 +189,10 @@ func resolveControlTopology(controls Controls) (controlTopology, error) {
 	stateRootPath := filepath.Dir(cleaned["state"])
 	if !directChild(configRootPath, cleaned["machine config"]) {
 		return controlTopology{}, fmt.Errorf(
-			"%w: machine config %q must be a direct child of config root %q; %s",
+			"%w: machine config %q must be a direct child of config root %q",
 			ErrControlTopology,
 			cleaned["machine config"],
 			configRootPath,
-			controlPathHint,
 		)
 	}
 	if stateRootPath != filepath.Dir(cleaned["lock"]) ||
@@ -201,11 +200,10 @@ func resolveControlTopology(controls Controls) (controlTopology, error) {
 		!directChild(stateRootPath, cleaned["lock"]) ||
 		cleaned["state"] == cleaned["lock"] {
 		return controlTopology{}, fmt.Errorf(
-			"%w: state %q and lock %q must be distinct siblings under one state root; %s",
+			"%w: state %q and lock %q must be distinct siblings under one state root",
 			ErrControlTopology,
 			cleaned["state"],
 			cleaned["lock"],
-			controlPathHint,
 		)
 	}
 	if err := validateControlFamilies(controlFamilies(
@@ -270,11 +268,10 @@ func resolveControlTopology(controls Controls) (controlTopology, error) {
 	}
 	if identitiesOverlap(topology.state, topology.lock) {
 		return controlTopology{}, fmt.Errorf(
-			"%w: state %q and lock %q do not identify distinct siblings; %s",
+			"%w: state %q and lock %q do not identify distinct siblings",
 			ErrControlTopology,
 			topology.state.lexical,
 			topology.lock.lexical,
-			controlPathHint,
 		)
 	}
 	if err := validateControlFamilies(topology.families); err != nil {
@@ -282,8 +279,6 @@ func resolveControlTopology(controls Controls) (controlTopology, error) {
 	}
 	return topology, nil
 }
-
-const controlPathHint = "run `dot paths` to inspect the active control paths"
 
 func resolveIdentity(label, path string) (pathIdentity, error) {
 	lexical, err := cleanAbsolute(label, path)
@@ -334,7 +329,7 @@ func validateControlFamilies(families []controlFamily) error {
 						continue
 					}
 					return fmt.Errorf(
-						"%w: %s %q (resolved %q) overlaps %s %q (resolved %q); %s",
+						"%w: %s %q (resolved %q) overlaps %s %q (resolved %q)",
 						ErrControlTopology,
 						left.label,
 						left.lexical,
@@ -342,7 +337,6 @@ func validateControlFamilies(families []controlFamily) error {
 						right.label,
 						right.lexical,
 						right.resolved,
-						controlPathHint,
 					)
 				}
 			}
@@ -413,13 +407,12 @@ func validateControlBoundaries(
 			for _, control := range family.paths {
 				if identityOverlapsTarget(control, placement.Target) {
 					return withPlacementLabels(fmt.Errorf(
-						"%w: placement %q target %q overlaps %s %q; %s",
+						"%w: placement %q target %q overlaps %s %q",
 						ErrControlBoundary,
 						placement.Label,
 						placement.Target.lexical,
 						control.label,
 						filepath.Clean(control.lexical),
-						controlPathHint,
 					), placement.Label)
 				}
 			}

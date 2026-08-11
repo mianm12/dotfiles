@@ -1,5 +1,4 @@
-// Package lock owns the process lock used by core mutation entrypoints.
-package lock
+package converge
 
 import (
 	"errors"
@@ -10,15 +9,14 @@ import (
 )
 
 var (
-	// ErrBusy reports that another mutation currently owns the advisory lock.
-	ErrBusy = errors.New("another dot process is running")
-	// ErrIO reports a failure while accessing the advisory lock.
-	ErrIO = errors.New("process lock I/O failure")
+	// ErrBusy reports that another dot mutation currently owns the advisory lock.
+	ErrBusy   = errors.New("another dot process is running")
+	errLockIO = errors.New("process lock I/O failure")
 )
 
-// Acquire prepares and acquires the non-blocking exclusive lock. The returned
+// acquireLock prepares and acquires the non-blocking exclusive lock. The returned
 // release function is owned by the caller and must be invoked exactly once.
-func Acquire(root, path string) (func() error, error) {
+func acquireLock(root, path string) (func() error, error) {
 	cleanRoot, cleanPath, err := cleanPair(root, path)
 	if err != nil {
 		return nil, err
@@ -27,16 +25,16 @@ func Acquire(root, path string) (func() error, error) {
 		return nil, err
 	}
 	if err := storage.EnsureRoot(cleanRoot); err != nil {
-		return nil, fmt.Errorf("%w: prepare process lock root: %w", ErrIO, err)
+		return nil, fmt.Errorf("%w: prepare process lock root: %w", errLockIO, err)
 	}
 	if err := storage.EnsurePrivateFile(cleanPath); err != nil {
-		return nil, fmt.Errorf("%w: prepare process lock file: %w", ErrIO, err)
+		return nil, fmt.Errorf("%w: prepare process lock file: %w", errLockIO, err)
 	}
 
 	fileLock := newBackend(cleanPath)
 	locked, err := fileLock.TryLock()
 	if err != nil {
-		return nil, fmt.Errorf("%w: acquire process lock %q: %w", ErrIO, cleanPath, err)
+		return nil, fmt.Errorf("%w: acquire process lock %q: %w", errLockIO, cleanPath, err)
 	}
 	if !locked {
 		return nil, fmt.Errorf("%w: %q", ErrBusy, cleanPath)
@@ -47,14 +45,14 @@ func Acquire(root, path string) (func() error, error) {
 func releaseBackend(fileLock backend, path string) func() error {
 	return func() error {
 		if err := fileLock.Unlock(); err != nil {
-			return fmt.Errorf("%w: release process lock %q: %w", ErrIO, path, err)
+			return fmt.Errorf("%w: release process lock %q: %w", errLockIO, path, err)
 		}
 		return nil
 	}
 }
 
-// Validate performs the read-only validation used before lock acquisition.
-func Validate(root, path string) error {
+// validateLock performs the read-only validation used before lock acquisition.
+func validateLock(root, path string) error {
 	cleanRoot, cleanPath, err := cleanPair(root, path)
 	if err != nil {
 		return err
@@ -64,10 +62,10 @@ func Validate(root, path string) error {
 
 func validateEntries(root, path string) error {
 	if err := storage.ValidateRoot(root); err != nil {
-		return fmt.Errorf("%w: validate process lock root: %w", ErrIO, err)
+		return fmt.Errorf("%w: validate process lock root: %w", errLockIO, err)
 	}
 	if err := storage.ValidatePrivateFile(path); err != nil {
-		return fmt.Errorf("%w: validate process lock file: %w", ErrIO, err)
+		return fmt.Errorf("%w: validate process lock file: %w", errLockIO, err)
 	}
 	return nil
 }

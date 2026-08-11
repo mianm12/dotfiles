@@ -1,4 +1,4 @@
-package lock
+package converge
 
 import (
 	"errors"
@@ -10,17 +10,17 @@ import (
 func TestAcquireIsExclusiveAndReleaseAllowsReacquire(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	path := filepath.Join(root, "lock")
-	firstRelease, err := Acquire(root, path)
+	firstRelease, err := acquireLock(root, path)
 	if err != nil {
 		t.Fatalf("Acquire(first) error = %v", err)
 	}
-	if secondRelease, err := Acquire(root, path); secondRelease != nil || !errors.Is(err, ErrBusy) {
+	if secondRelease, err := acquireLock(root, path); secondRelease != nil || !errors.Is(err, ErrBusy) {
 		t.Fatalf("Acquire(second) = (release_present=%t, %v), want ErrBusy", secondRelease != nil, err)
 	}
 	if err := firstRelease(); err != nil {
 		t.Fatalf("release(first) error = %v", err)
 	}
-	release, err := Acquire(root, path)
+	release, err := acquireLock(root, path)
 	if err != nil {
 		t.Fatalf("Acquire(after release) error = %v", err)
 	}
@@ -38,7 +38,7 @@ func TestValidateRejectsAbnormalExistingLock(t *testing.T) {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(lock directory) error = %v", err)
 	}
-	if err := Validate(root, path); err == nil {
+	if err := validateLock(root, path); err == nil {
 		t.Fatal("Validate(lock directory) error = nil")
 	}
 }
@@ -48,8 +48,8 @@ func TestReleaseClassifiesBackendFailure(t *testing.T) {
 	release := releaseBackend(&stubBackend{unlockErr: unlockErr}, "/state/lock")
 
 	err := release()
-	if !errors.Is(err, ErrIO) || !errors.Is(err, unlockErr) {
-		t.Fatalf("release() error = %v, want ErrIO wrapping backend failure", err)
+	if !errors.Is(err, errLockIO) || !errors.Is(err, unlockErr) {
+		t.Fatalf("release() error = %v, want lock I/O classification wrapping backend failure", err)
 	}
 }
 

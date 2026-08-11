@@ -84,8 +84,8 @@ dot help [COMMAND]
   `Complete=true` 表示全部 effective placements 与全部 stale records 已完成决策，即使其中有
   concrete conflict；selection blocker、control topology 或 target-set blocker 在完整决策前
   阻断时为 `Complete=false`。Plan 仅在 `Complete && len(Issues) == 0` 时可执行。
-- 真实 apply 的完整零写入 preflight 由 mutation owner 执行，复用同一 selection、state、actual
-  与 planner 规则，但不接收或复用 CLI operation analysis。
+- 真实 apply 的完整零写入 preflight 由 converge owner 调用同一 Analyze 实现完成，不接收或
+  复用 CLI 保存的 Report；锁内再次 Analyze，并且只执行锁内新 Plan。
 - Status 保留第二列的 `converged`、`pending`、`conflict`、`not-applicable`、`inactive` 或
   `stale` 摘要。每行固定从 `MODULE  SUMMARY` 开始，只追加有区分度的维度：
 
@@ -119,7 +119,7 @@ dot help [COMMAND]
 - Status 和 dry-run 不取锁；并发 mutation 时结果是 best-effort snapshot。
 - 本节只定义 operation analysis 的公开投影；真实 mutation 的重新分析与执行只由
   [`mutation-and-recovery.md`](mutation-and-recovery.md#执行顺序) 定义。
-- CLI 只投影 mutation owner 判定的最终 outcome。成功 outcome 中每个 forget step 的过去式
+- CLI 只投影 converge owner 判定的最终 outcome。成功 outcome 中每个 forget step 的过去式
   ownership/provenance 提示都从结构化 step 派生，不保存第二份字符串结果；失败 outcome
   返回 `1`，不得先输出成功摘要或把未完成 step 显示为成功。若 outcome 表明可能已经部分
   应用，错误提示重跑确认收敛。

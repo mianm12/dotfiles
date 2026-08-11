@@ -1,4 +1,4 @@
-package executor
+package converge
 
 import (
 	"errors"
@@ -11,7 +11,6 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
-	"github.com/mianm12/dotfiles/internal/core/planner"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -64,11 +63,11 @@ func TestAnalyzeIsReadOnlyAndMatchesFreshExecutionPlan(t *testing.T) {
 	target := filepath.Join(fixture.home, ".config", "base")
 	request := fixture.linkRequest(source, "~/.config/base")
 
-	analysis, err := Analyze(request)
+	analysis, err := analyzeArtifactTest(request)
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
-	if analysis.BlockingError() != nil || len(analysis.Plan.Steps) != 1 {
+	if analysis.blockingError() != nil || len(analysis.Plan.Steps) != 1 {
 		t.Fatalf("Analyze() = %#v, want one executable step", analysis)
 	}
 	for _, path := range []string{target, fixture.state, filepath.Dir(fixture.state)} {
@@ -92,8 +91,8 @@ func TestExecuteReanalyzesAfterPreflightFilesystemChange(t *testing.T) {
 	target := filepath.Join(fixture.home, ".config", "base")
 	request := fixture.linkRequest(source, "~/.config/base")
 
-	analysis, err := Analyze(request)
-	if err != nil || analysis.BlockingError() != nil || len(analysis.Plan.Steps) != 1 {
+	analysis, err := analyzeArtifactTest(request)
+	if err != nil || analysis.blockingError() != nil || len(analysis.Plan.Steps) != 1 {
 		t.Fatalf("Analyze() = (%#v, %v), want executable create", analysis, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
@@ -436,7 +435,7 @@ func TestExecutorRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
 			t.Fatalf("ResolveTarget() error = %v", err)
 		}
 		run := mutationRun{home: fixture.home}
-		err = run.removeOwnedLink(planner.Step{
+		err = run.removeOwnedLink(Step{
 			Target:                  target,
 			ExpectedResolvedTarget:  resolved.Resolved(),
 			ExpectedLinkDestination: oldDestination,
@@ -466,7 +465,7 @@ func TestExecutorRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
 			t.Fatalf("os.Symlink(target) error = %v", err)
 		}
 		run := mutationRun{home: fixture.home}
-		err := run.removeOwnedLink(planner.Step{
+		err := run.removeOwnedLink(Step{
 			Target:                  target,
 			ExpectedResolvedTarget:  filepath.Join(realOne, "owned"),
 			ExpectedLinkDestination: destination,
@@ -481,11 +480,11 @@ func TestExecutorRechecksRawAndResolvedFactsBeforeDelete(t *testing.T) {
 func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 	tests := []struct {
 		name    string
-		prepare func(*testing.T, fixture) Request
+		prepare func(*testing.T, fixture) artifactRequest
 	}{
 		{
 			name: "link created before state",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) artifactRequest {
 				source := fixture.writeRepositoryFile(t, "modules/base/file", "file")
 				if err := os.Symlink(source, filepath.Join(fixture.home, ".file")); err != nil {
 					t.Fatalf("os.Symlink() error = %v", err)
@@ -495,7 +494,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		},
 		{
 			name: "local published before state",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) artifactRequest {
 				source := fixture.writeRepositoryFile(t, "modules/base/local.example", "example")
 				if err := os.WriteFile(filepath.Join(fixture.home, ".local"), []byte("personal"), 0o600); err != nil {
 					t.Fatalf("os.WriteFile() error = %v", err)
@@ -505,7 +504,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		},
 		{
 			name: "updated link before state",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) artifactRequest {
 				oldSource := fixture.writeRepositoryFile(t, "modules/base/old", "old")
 				newSource := fixture.writeRepositoryFile(t, "modules/base/new", "new")
 				target := filepath.Join(fixture.home, ".file")
@@ -518,7 +517,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		},
 		{
 			name: "old link deleted during update",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) artifactRequest {
 				oldSource := fixture.writeRepositoryFile(t, "modules/base/old", "old")
 				newSource := fixture.writeRepositoryFile(t, "modules/base/new", "new")
 				target := filepath.Join(fixture.home, ".file")
@@ -528,7 +527,7 @@ func TestInterruptedFactsConvergeAndThenRemainUnchanged(t *testing.T) {
 		},
 		{
 			name: "stale link pruned before state",
-			prepare: func(t *testing.T, fixture fixture) Request {
+			prepare: func(t *testing.T, fixture fixture) artifactRequest {
 				source := fixture.writeRepositoryFile(t, "modules/base/file", "file")
 				target := filepath.Join(fixture.home, ".file")
 				fixture.writeLinkState(t, target, source)
@@ -814,12 +813,12 @@ func newFixture(t *testing.T) fixture {
 	return fixture
 }
 
-func runSession(request Request) (result Result, err error) {
+func runSession(request artifactRequest) (result executionResult, err error) {
 	return runLocked(request, commitState)
 }
 
-func (fixture fixture) request(modules []config.Module) Request {
-	return Request{
+func (fixture fixture) request(modules []config.Module) artifactRequest {
+	return artifactRequest{
 		Home: fixture.home,
 		Controls: corepaths.Controls{
 			Repository: fixture.repository,
@@ -831,7 +830,7 @@ func (fixture fixture) request(modules []config.Module) Request {
 	}
 }
 
-func (fixture fixture) linkRequest(source, target string) Request {
+func (fixture fixture) linkRequest(source, target string) artifactRequest {
 	return fixture.request([]config.Module{{
 		ID: "base",
 		Links: []config.Link{{
@@ -842,7 +841,7 @@ func (fixture fixture) linkRequest(source, target string) Request {
 	}})
 }
 
-func (fixture fixture) localRequest(source, target string) Request {
+func (fixture fixture) localRequest(source, target string) artifactRequest {
 	return fixture.request([]config.Module{{
 		ID: "base",
 		Locals: []config.Local{{

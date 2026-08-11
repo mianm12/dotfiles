@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mianm12/dotfiles/internal/core/config"
-	"github.com/mianm12/dotfiles/internal/core/mutation"
-	"github.com/mianm12/dotfiles/internal/core/planner"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
@@ -14,34 +12,39 @@ var errDryRunBlocked = errors.New("dry-run blocked")
 
 func printDryRunAnalysis(
 	command *cobra.Command,
-	analysis OperationAnalysis,
+	report converge.Report,
 ) error {
-	if err := printOperationAnalysis(command, analysis); err != nil {
+	if err := printOperationAnalysis(command, report); err != nil {
 		return err
 	}
-	if rejectAnalysis(analysis) != nil {
+	if rejectAnalysis(report) != nil {
 		return errDryRunBlocked
 	}
 	return nil
 }
 
-func validateOperationControls(context commandContext, machine config.Machine) error {
-	return mutation.ValidateControls(context.controls(machine.Repository))
-}
-
 func finishMutation(
 	command *cobra.Command,
-	result mutation.Result,
+	result converge.ApplyResult,
 	runErr error,
 	rerun string,
 ) error {
 	if runErr != nil {
-		// Executor warnings are input diagnostics. Never project the plan or
+		// Core warnings are input diagnostics. Never project the plan or
 		// completed forget results from a failed mutation.
-		if warningErr := printWarnings(command, result.Warnings); warningErr != nil {
+		if warningErr := printWarnings(
+			command,
+			projectWarnings(result.Report.Plan, result.Report.Warnings),
+		); warningErr != nil {
 			return errors.Join(runErr, warningErr)
 		}
-		return runErr
+		if errors.Is(runErr, converge.ErrPartial) {
+			return fmt.Errorf("%w; rerun %s", runErr, rerun)
+		}
+		if hasControlIssue(result.Report.Plan) {
+			return fmt.Errorf("%w; run `dot paths`", runErr)
+		}
+		return withCoreRecovery(runErr)
 	}
 	return printMutationResult(
 		command,
@@ -50,13 +53,46 @@ func finishMutation(
 	)
 }
 
-func rejectAnalysis(analysis OperationAnalysis) error {
-	if analysis.Plan.Executable() {
+func finishSelectionMutation(runErr error, rerun string) error {
+	if runErr == nil {
 		return nil
 	}
-	if len(analysis.Plan.Issues) != 0 {
-		issue := analysis.Plan.Issues[0]
-		if issue.Kind == planner.IssueConflict && issue.PlacementID != "" {
+	if errors.Is(runErr, converge.ErrPartial) {
+		return fmt.Errorf("%w; rerun %s", runErr, rerun)
+	}
+	return withCoreRecovery(runErr)
+}
+
+func withCoreRecovery(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, converge.ErrUninitialized):
+		return fmt.Errorf("%w; run `dot init`", err)
+	case errors.Is(err, converge.ErrControl), errors.Is(err, converge.ErrState):
+		return fmt.Errorf("%w; run `dot paths`", err)
+	default:
+		return err
+	}
+}
+
+func hasControlIssue(plan converge.Plan) bool {
+	for _, issue := range plan.Issues {
+		if issue.Code == converge.IssueCodeControlTopology ||
+			issue.Code == converge.IssueCodeControlBoundary {
+			return true
+		}
+	}
+	return false
+}
+
+func rejectAnalysis(report converge.Report) error {
+	if report.Plan.Executable() {
+		return nil
+	}
+	if len(report.Plan.Issues) != 0 {
+		issue := report.Plan.Issues[0]
+		if issue.Kind == converge.IssueConflict && issue.PlacementID != "" {
 			return fmt.Errorf(
 				"plan conflict for %s/%s: %s",
 				issue.ModuleID,
@@ -74,26 +110,4 @@ func rejectAnalysis(analysis OperationAnalysis) error {
 		return fmt.Errorf("operation blocked: %s", issue.Reason)
 	}
 	return fmt.Errorf("operation blocked: convergence planning is incomplete")
-}
-
-func loadRequiredMachine(context commandContext) (config.Machine, error) {
-	machine, exists, err := config.LoadMachine(context.configPath)
-	if err != nil {
-		return config.Machine{}, err
-	}
-	if !exists {
-		return config.Machine{}, fmt.Errorf(
-			"machine config %q is missing; run dot init",
-			context.configPath,
-		)
-	}
-	return machine, nil
-}
-
-func appendWarning(warning string, warnings []string) []string {
-	result := make([]string, 0, len(warnings)+1)
-	if warning != "" {
-		result = append(result, warning)
-	}
-	return append(result, warnings...)
 }
