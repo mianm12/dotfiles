@@ -28,7 +28,8 @@ converge.Analyze read-only preflight
   config/state/lock 目录项类型、不受支持的路径编码、path 或 ownership conflict 必须在获取
   lock 前失败，零文件系统写入：不得创建或 chmod config/state/lock root、lock、temporary
   file、selection、state、parent 或 target。
-- [`selection.md`](selection.md#platform-与-module) 定义的任意 effective indeterminate，以及
+- [`modules-and-platforms.md`](modules-and-platforms.md#applicability) 定义的任意 effective
+  indeterminate，以及
   任意 extra not-applicable，都属于同一 preflight 失败边界：整次真实 mutation 在获取 lock 前
   失败，零写入。Profile not-applicable cleanup 是否存在只由
   [`planning.md`](planning.md#通用决策规则) 决定。

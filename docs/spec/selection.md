@@ -1,65 +1,13 @@
-# 仓库、机器选择与解析
+# Repository 与机器选择
 
-## Repository desired
+本文件拥有 repository binding、顶层 profile 定义、machine config 与 effective selection。Module
+发现、manifest 加载和平台解析由
+[`modules-and-platforms.md`](modules-and-platforms.md)拥有。
 
-仓库中的 `dot.toml`、`modules/<id>/module.toml` 和配置内容描述共享期望。
+## Repository desired 与 `dot.toml`
 
-执行 apply/status/dry-run convergence analysis 时，`dot.toml` 与全部 current effective
-`module.toml` 必须是 regular file，或最终解析为 regular file 的 symlink。Directory、FIFO、
-socket、device、dangling symlink 和 symlink loop 必须在读取内容前失败；manifest symlink 的
-目标不要求位于 repository 内。Inactive module manifest 继续按
-[`cli.md`](cli.md#全量收敛与加载) 延迟类型检查、读取和解析；status 可在不读取 manifest 的情况下
-将其列入 inventory。Init 与 select 只按 [`cli.md`](cli.md#init) 和 [`cli.md`](cli.md#select) 的
-selection-only 规则加载必要 manifest。
-
-## Machine config
-
-机器配置保存仓库路径、active profiles 和本机额外 modules：
-
-```toml
-version = 1
-repository = "/Users/user/dotfiles"
-profiles = ["base", "work"]
-extra_modules = ["tmux"]
-```
-
-有效 module 集合是：
-
-```text
-modules(active profiles) union extra_modules
-```
-
-Profile 内容只在仓库中人工维护。`init` 写入 profiles；`select add <module>` 和
-`select remove <module>` 可以确定性重写 `extra_modules`。`apply` 不修改 machine selection。
-CLI 重写机器配置时不承诺保留注释和空行。
-
-Machine config 不存在表示机器未初始化；一旦存在，其最终目录项本身必须是 regular file。
-类型检查不跟随最终 symlink，因此 symlink-to-regular、dangling symlink、directory、FIFO、
-socket 和 device 都必须在读取内容前失败。更高层 ancestor symlink 仍按 control root 规则
-处理。
-
-Init 之后调整 active profiles 的受支持方式是先通过
-[`dot paths`](cli.md#paths) 定位机器配置，手工编辑其中的 profiles，再执行 `dot apply`；
-产品不提供修改 profiles 的命令。命令细节见 [`cli.md`](cli.md)。
-
-## 仓库布局与 Profile
-
-```text
-.
-├── dot.toml
-└── modules/
-    ├── git/
-    │   ├── module.toml
-    │   ├── gitconfig
-    │   └── config.local.example
-    └── ghostty/
-        ├── module.toml
-        ├── config
-        ├── macos/
-        └── linux/
-```
-
-顶层 `dot.toml`：
+Repository 中的 `dot.toml` 选择 modules，`modules/` 下的 manifest 与 source 描述它们的内容。
+顶层 `dot.toml` 示例：
 
 ```toml
 version = 1
@@ -70,111 +18,64 @@ personal = ["ghostty"]
 work = ["work-git"]
 ```
 
-规则：
-
 - `version` 必填，只支持 `1`。
-- Module ID 来自 `modules/<id>/`；module manifest 固定为 `module.toml`。
-- Module、profile、variant 和 placement ID 使用 `[a-z0-9][a-z0-9_-]*`。
-- 只有名字符合该规则且含 `module.toml` 的 `modules/<id>/` 目录才是 module；`modules/` 下其他
-  文件、非目录项或不合规目录一律忽略，不报错。
-- Profile 值是 module ID 数组，不得重复。
-- 多个 active profiles 只做集合并集，顺序不改变语义。
-- 空 profile 合法；active profile 列表可为空，`init` 省略 `--profile` 时写入空列表。
-- Active profile 引用不存在的 module 时配置无效；该失效只针对仓库 profile。extra_modules
-  和 state 中引用已删除 module 视为可清理，因为 profile 由仓库权威维护，extra/state 由本机
-  维护。
-- CLI 不修改仓库 profile。
+- `[profiles]` 必须显式存在；空表合法。
+- Profile ID 使用 `[a-z0-9][a-z0-9_-]*`。
+- Profile 值是 [module ID](modules-and-platforms.md#module-发现与加载) 数组，不得重复。
+- 空 profile 合法。
+- Active profile 引用不存在的 module 时配置无效。该规则只针对 repository profile；
+  `extra_modules` 和 state 中引用已删除 module 仍可作为本机 stale 输入清理。
+- CLI 不修改 repository profiles；多个 active profiles 只做集合并集，声明与选择顺序不改变
+  语义。
 
-## Platform 与 Module
+执行 init、select、apply、status 或 dry-run 需要读取 `dot.toml` 时，其最终对象必须是 regular
+file，或最终解析为 regular file 的 symlink。Directory、FIFO、socket、device、dangling symlink
+和 symlink loop 必须在读取内容前失败；manifest symlink 的目标不要求位于 repository 内。
 
-Platform 是 resolver 的显式输入，测试必须能够注入合成值。每个字段同时保存 value、是否
-known 和 unknown 时的诊断原因；value 只有在 known 时参与匹配：
+各命令加载 selection 的范围由 [CLI 规范](cli.md)定义；module manifest 的 eager/deferred
+边界由 [`modules-and-platforms.md`](modules-and-platforms.md#module-发现与加载)定义。
 
-```toml
-os = ["macos", "linux"]
-distro = ["ubuntu", "arch"]
-arch = ["x86_64", "aarch64"]
-```
+## Machine config
 
-- 不同字段之间是 AND，同一字段数组内是 OR。
-- 字段缺失表示不限制。
-- `os` 是封闭枚举 `{macos, linux}`，出现枚举外值为配置错误；`distro`、`arch` 是自由小写
-  字符串，逐字比较，不维护发行版/架构注册表。
-- `distro` 只允许与 `os = ["linux"]` 一起声明。
-- 运行时检测不到 os/distro/arch 本身不是配置错误，但字段必须保留 unknown 诊断，不能用空
-  value 冒充已确定不匹配。
-- Match 结果为 `applicable`、`not-applicable` 或 `indeterminate`：
-  - 任一受约束字段 known 且不匹配时，结果确定为 not-applicable，即使其他字段 unknown。
-  - 没有 known mismatch，但至少一个受约束字段 unknown 时，结果为 indeterminate。
-  - 所有受约束字段都 known 且匹配时，结果为 applicable。
-- 不支持否定、正则、优先级、fallback 或 capability 表达式。
-- Profile 选中的 module 无匹配 variant 时，resolution 结果是 not-applicable；这是合法的
-  非配置错误结果。Extra module 或 `select add <module>` 检查的 module 无匹配 variant 时得到
-  相同 applicability 结果。
-- Profile not-applicable 的旧 ownership cleanup 只由
-  [`planning.md`](planning.md#通用决策规则) 定义；indeterminate 和 extra/explicit
-  not-applicable 的 mutation 边界只由
-  [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义；公开显示与退出码只由
-  [`cli.md`](cli.md#status-与-dry-run) 定义。
-
-Module 只能使用 portable 或 variants 其中一种模式，不得混用。
-
-### Portable
+Machine config 保存 repository 绝对路径、active profiles 和本机直接选择的 modules：
 
 ```toml
-[match]
-os = ["macos", "linux"]
-
-[[links]]
-id = "config"
-source = "gitconfig"
-target = "~/.gitconfig"
-
-[[locals]]
-id = "local"
-example = "config.local.example"
-target = "~/.config/git/config.local"
+version = 1
+repository = "/Users/user/dotfiles"
+profiles = ["base", "work"]
+extra_modules = ["tmux"]
 ```
 
-`[match]` 可以省略，表示适用于所有受支持平台。
+- Machine config 不存在表示机器未初始化。
+- `version` 必填，只支持 `1`；`repository` 必须是非空绝对路径。
+- 一旦存在，其最终目录项本身必须是 regular file。类型检查不跟随最终 symlink，因此
+  symlink-to-regular、dangling symlink、directory、FIFO、socket 和 device 都必须在读取内容前
+  失败；更高层 ancestor symlink 仍按 control root 规则处理。
+- Active profile 列表可为空；`init` 省略 `--profile` 时写入空列表。
+- `init` 写入 profiles；`select add MODULE` 和 `select remove MODULE` 确定性重写
+  `extra_modules`；`apply` 不修改 machine config。
+- CLI 重写 machine config 时不承诺保留注释和空行。
 
-### Variants
+Init 后修改 active profiles 的受支持方式是先通过 [`dot paths`](cli.md#paths) 定位 machine
+config，手工编辑 `profiles`，再执行全量 `dot apply`。产品不提供 profile 修改或 repository
+rebind 子命令；命令边界见 [CLI 规范](cli.md)。
 
-共享内容但 target 不同时，variant 的 `root` 可以是 `.`：
+## Effective selection
 
-```toml
-[variants.macos]
-root = "."
+当前 effective module IDs 是：
 
-[variants.macos.match]
-os = ["macos"]
-
-[[variants.macos.links]]
-id = "config"
-source = "config"
-target = "~/Library/Application Support/example/config"
-
-[variants.linux]
-root = "."
-
-[variants.linux.match]
-os = ["linux"]
-
-[[variants.linux.links]]
-id = "config"
-source = "config"
-target = "~/.config/example/config"
+```text
+modules(active profiles) union extra_modules
 ```
 
-内容也不同时使用不同 root，例如 `root = "macos"` 或 `root = "linux"`。
+每个 module 的 selection 来源可以是 profile、extra 或两者。集合语义意味着重复来源不会让同一
+module 执行两次；移除 extra 来源也不会停用仍由 active profile 选择的 module。
 
-Variant 规则：
+Effective IDs 还要经过 module 存在性与 platform applicability 解析，才能得到当前 desired
+placements。Module 不存在、not-applicable、indeterminate 和 variant 选择的规则见
+[`modules-and-platforms.md`](modules-and-platforms.md)；stale ownership 的计划规则见
+[`planning.md`](planning.md#通用决策规则)。
 
-- `root` 必填；`.` 表示 module 根目录。
-- 其他 root 必须是 module 内相对目录，不得是绝对路径或包含 `..` 逃逸。
-- 零个 applicable 且没有 indeterminate variant 表示 not-applicable；多个已确定 applicable
-  variant 是配置错误。
-- 一个已确定 applicable variant 与任意可能匹配的 indeterminate variant 同时存在时，不选择
-  variant，整个 module 为 indeterminate。没有已确定 applicable、但至少一个 variant
-  indeterminate 时同样为 indeterminate。
-- Variant 完整声明自己的 placements，不继承其他 variant 或顶层 placements。
+Selection mutation 只改变 machine config，不同步修改 target 或 state。`dot apply` 始终收敛当前
+完整 effective selection，而不是隐式记住某次 select 命令的单个 module。公开命令行为见
+[`cli.md`](cli.md#select)与[`cli.md`](cli.md#apply)。

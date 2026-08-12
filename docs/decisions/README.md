@@ -37,4 +37,6 @@ ADR 解释选择理由，不复制产品规范。若决策改变用户行为，�
 
 ## 记录
 
-- [0001: Convergence V3 使用单一状态转换模型](0001-convergence-v3.md)（Accepted）
+状态只在每篇 ADR 正文中记录，索引不复制，避免决策变化后出现两个状态来源。
+
+- [0001: Convergence V3 使用单一状态转换模型](0001-convergence-v3.md)

@@ -5,15 +5,15 @@
 
 | 术语 | 在本项目中的含义 | 规则 owner |
 | --- | --- | --- |
-| repository | 包含 `dot.toml`、`modules/`、manifest 与 source 的期望配置仓库 | [selection](spec/selection.md) |
-| desired | Repository 与当前 machine selection 共同表达的目标状态 | [product](spec/product.md)、[selection](spec/selection.md) |
+| repository | 包含 `dot.toml`、`modules/`、manifest 与 source 的期望配置仓库 | [selection](spec/selection.md)、[modules](spec/modules-and-platforms.md) |
+| desired | Repository 与当前 machine selection 共同表达的目标状态 | [product](spec/product.md)、[selection](spec/selection.md)、[modules](spec/modules-and-platforms.md) |
 | machine config | 当前机器绑定的 repository、profiles 与直接 module selection | [selection](spec/selection.md) |
 | profile | Repository 中命名的一组 module 选择；不是继承或覆盖系统 | [selection](spec/selection.md) |
-| module | 一个可选择、可按平台匹配并包含 placements 的配置单元 | [selection](spec/selection.md) |
-| effective module | 由 active profile 或直接 selection 选中、进入当前分析集合的 module | [selection](spec/selection.md) |
-| applicability | 根据 OS、distro、arch 证据得到的 applicable、not-applicable 或 indeterminate 判断 | [selection](spec/selection.md) |
-| portable module | 所有适用平台共用一个 manifest 和 source 目录的 module | [selection](spec/selection.md) |
-| variant | 同一 module 针对特定平台解析出的 manifest/source 版本 | [selection](spec/selection.md) |
+| module | 一个可选择、可按平台匹配并包含 placements 的配置单元 | [modules](spec/modules-and-platforms.md) |
+| effective module | 由 active profile 或直接 selection 选中并进入当前平台解析的 module | [selection](spec/selection.md)、[modules](spec/modules-and-platforms.md) |
+| applicability | 根据 OS、distro、arch 证据得到的 applicable、not-applicable 或 indeterminate 判断 | [modules](spec/modules-and-platforms.md) |
+| portable module | 所有适用平台共用一个 manifest 和 source 目录的 module | [modules](spec/modules-and-platforms.md) |
+| variant | 同一 module 针对特定平台解析出的 manifest/source 版本 | [modules](spec/modules-and-platforms.md) |
 | placement | Module 中一个有稳定 ID 的目标放置声明，种类为 link 或 local | [placements](spec/placements.md) |
 | link | 将 HOME 内 target 指向 repository source 的 symlink placement | [placements](spec/placements.md) |
 | local | 只在 target 缺失时从 example 初始化、之后由用户维护的私人文件 placement | [placements](spec/placements.md) |

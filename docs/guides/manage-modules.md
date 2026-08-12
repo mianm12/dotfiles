@@ -5,7 +5,8 @@ module。开始前先理解 [selection 与 convergence 分离](../concepts/menta
 选择变化不会立即修改 target，只有全量 `dot apply` 才收敛文件系统。
 
 字段、路径与冲突的精确定义分别由
-[selection 规范](../spec/selection.md)、[placements 规范](../spec/placements.md)和
+[selection 规范](../spec/selection.md)、[modules 规范](../spec/modules-and-platforms.md)、
+[placements 规范](../spec/placements.md)和
 [planning 规范](../spec/planning.md)拥有。
 
 ## 在一台机器上启用已有 module
@@ -94,7 +95,8 @@ target = "~/.config/example/config.local"
 5. 平台差异确实需要 variants 时再引入，不为未来可能性复制 manifest。
 
 完整 schema 和校验条件见
-[selection](../spec/selection.md)与[placements](../spec/placements.md)。代码、测试与 CI 才能证明
+[modules and platforms](../spec/modules-and-platforms.md)与
+[placements](../spec/placements.md)。代码、测试与 CI 才能证明
 当前实现接受该 manifest，文档示例不能替代 dry-run。
 
 ## 文件 link、目录 link 还是 leaf placements
