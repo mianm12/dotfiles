@@ -17,7 +17,7 @@ func printDryRunAnalysis(
 	if err := printOperationReport(command, report); err != nil {
 		return err
 	}
-	if rejectAnalysis(report) != nil {
+	if !report.Plan.Executable() {
 		return errDryRunBlocked
 	}
 	return nil
@@ -32,10 +32,7 @@ func finishMutation(
 	if runErr != nil {
 		// Core warnings are input diagnostics. Never project the plan or
 		// completed forget results from a failed mutation.
-		if warningErr := printWarnings(
-			command,
-			projectWarnings(result.Report.Plan, result.Report.Warnings),
-		); warningErr != nil {
+		if warningErr := printWarnings(command, result.Report.Warnings); warningErr != nil {
 			return errors.Join(runErr, warningErr)
 		}
 		if errors.Is(runErr, converge.ErrPartial) {
@@ -84,30 +81,4 @@ func hasControlProblem(plan converge.Plan) bool {
 		}
 	}
 	return false
-}
-
-func rejectAnalysis(report converge.Report) error {
-	if report.Plan.Executable() {
-		return nil
-	}
-	if len(report.Plan.Problems) != 0 {
-		problem := report.Plan.Problems[0]
-		if problem.Kind == converge.ProblemConflict && problem.PlacementID != "" {
-			return fmt.Errorf(
-				"plan conflict for %s/%s: %s",
-				problem.ModuleID,
-				problem.PlacementID,
-				problem.Reason,
-			)
-		}
-		if problem.ModuleID != "" {
-			return fmt.Errorf(
-				"operation blocked for module %q: %s",
-				problem.ModuleID,
-				problem.Reason,
-			)
-		}
-		return fmt.Errorf("operation blocked: %s", problem.Reason)
-	}
-	return fmt.Errorf("operation blocked: convergence plan is not executable")
 }

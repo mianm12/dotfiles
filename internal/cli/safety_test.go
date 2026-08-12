@@ -727,10 +727,12 @@ target = "~/.config/dot/managed"
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=app selection=profile") ||
 		!strings.Contains(stdout, "problem kind=blocked code=control-boundary module=app placement=config") ||
+		!strings.Contains(stdout, target) ||
+		!strings.Contains(stdout, filepath.Dir(fixture.config)) ||
+		!strings.Contains(stdout, "run `dot paths`") ||
 		!strings.Contains(stderr, "state is missing") ||
-		!strings.Contains(stderr, target) ||
-		!strings.Contains(stderr, filepath.Dir(fixture.config)) ||
-		!strings.Contains(stderr, "run `dot paths`") {
+		strings.Contains(stderr, target) ||
+		strings.Contains(stderr, "run `dot paths`") {
 		t.Fatalf("status = (%d, %q, %q), want read-only conflict", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
@@ -741,7 +743,9 @@ target = "~/.config/dot/managed"
 		!strings.Contains(stdout, target) ||
 		!strings.Contains(stdout, filepath.Dir(fixture.config)) ||
 		!strings.Contains(stdout, "run `dot paths`") ||
-		!strings.Contains(stderr, "state is missing") {
+		!strings.Contains(stderr, "state is missing") ||
+		strings.Contains(stderr, target) ||
+		strings.Contains(stderr, "run `dot paths`") {
 		t.Fatalf(
 			"apply --dry-run = (%d, %q, %q), want complete blocker analysis",
 			code,

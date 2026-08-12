@@ -11,7 +11,7 @@ import (
 )
 
 func printPlan(command *cobra.Command, plan converge.Plan, warnings []string) error {
-	if err := printWarnings(command, projectWarnings(plan, warnings)); err != nil {
+	if err := printWarnings(command, warnings); err != nil {
 		return err
 	}
 	actions := plan.Actions()
@@ -66,7 +66,7 @@ func printOperationReport(
 	command *cobra.Command,
 	report converge.Report,
 ) error {
-	if err := printWarnings(command, projectWarnings(report.Plan, report.Warnings)); err != nil {
+	if err := printWarnings(command, report.Warnings); err != nil {
 		return err
 	}
 	printed := false
@@ -210,7 +210,7 @@ func printStatusAnalysis(
 	command *cobra.Command,
 	report converge.Report,
 ) error {
-	if err := printWarnings(command, projectWarnings(report.Plan, report.Warnings)); err != nil {
+	if err := printWarnings(command, report.Warnings); err != nil {
 		return fmt.Errorf("write status warning: %w", err)
 	}
 	facts := append([]converge.ModuleFact(nil), report.Facts...)
@@ -254,18 +254,4 @@ func printStatusAnalysis(
 		}
 	}
 	return nil
-}
-
-func projectWarnings(plan converge.Plan, warnings []string) []string {
-	projected := append([]string(nil), warnings...)
-	for index, warning := range projected {
-		for _, problem := range plan.Problems {
-			if problem.Code == converge.ProblemCodeControlBoundary &&
-				problem.Reason == warning {
-				projected[index] += "; run `dot paths`"
-				break
-			}
-		}
-	}
-	return projected
 }
