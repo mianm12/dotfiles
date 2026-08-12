@@ -19,18 +19,12 @@ type moduleObservation struct {
 	variant       string
 }
 
-// selectionProblem is a module-specific reason the effective selection cannot be applied.
-type selectionProblem struct {
-	moduleID string
-	reason   string
-}
-
 // selectionResolution is the complete resolution of one machine selection.
 type selectionResolution struct {
 	modules      []config.Module
 	sources      map[string]selectionSource
 	observations map[string]moduleObservation
-	problems     []selectionProblem
+	issues       []Issue
 }
 
 // resolveSelection loads the complete effective selection. Profile not-applicability
@@ -75,9 +69,12 @@ func resolveSelection(
 			return selectionResolution{}, inspectErr
 		}
 		if !exists {
-			result.problems = append(result.problems, selectionProblem{
-				moduleID: moduleID,
-				reason:   fmt.Sprintf("selected module %q does not exist", moduleID),
+			result.issues = append(result.issues, Issue{
+				Severity: IssueBlocker,
+				Code:     IssueCodeSelectionNotApplicable,
+				ModuleID: moduleID,
+				Reason:   fmt.Sprintf("selected module %q does not exist", moduleID),
+				Recovery: RecoveryNone,
 			})
 			continue
 		}
@@ -96,19 +93,25 @@ func resolveSelection(
 			result.modules = append(result.modules, module)
 		case config.ApplicabilityNotApplicable:
 			if source.extra {
-				result.problems = append(result.problems, selectionProblem{
-					moduleID: moduleID,
-					reason:   fmt.Sprintf("module %q is not applicable", moduleID),
+				result.issues = append(result.issues, Issue{
+					Severity: IssueBlocker,
+					Code:     IssueCodeSelectionNotApplicable,
+					ModuleID: moduleID,
+					Reason:   fmt.Sprintf("module %q is not applicable", moduleID),
+					Recovery: RecoveryNone,
 				})
 			}
 		case config.ApplicabilityIndeterminate:
-			result.problems = append(result.problems, selectionProblem{
-				moduleID: moduleID,
-				reason: fmt.Sprintf(
+			result.issues = append(result.issues, Issue{
+				Severity: IssueBlocker,
+				Code:     IssueCodeSelectionIndeterminate,
+				ModuleID: moduleID,
+				Reason: fmt.Sprintf(
 					"module %q applicability is indeterminate: %s",
 					moduleID,
 					applicability.Diagnostic,
 				),
+				Recovery: RecoveryNone,
 			})
 		default:
 			return selectionResolution{}, fmt.Errorf(

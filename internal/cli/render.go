@@ -10,18 +10,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func printPlan(command *cobra.Command, plan converge.Plan, warnings []string) error {
-	if err := printWarnings(command, warnings); err != nil {
+func printPlan(command *cobra.Command, plan converge.Plan) error {
+	if err := printWarningIssues(command, plan.Issues); err != nil {
 		return err
 	}
-	actions := plan.Actions()
-	if len(actions) == 0 && len(plan.Problems()) == 0 {
+	if len(plan.Actions) == 0 && !hasBlockerIssue(plan.Issues) {
 		if _, err := fmt.Fprintln(command.OutOrStdout(), "converged"); err != nil {
 			return fmt.Errorf("write plan: %w", err)
 		}
 		return nil
 	}
-	for _, action := range actions {
+	for _, action := range plan.Actions {
 		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write plan: %w", err)
 		}
@@ -53,9 +52,12 @@ func printAction(command *cobra.Command, action converge.Action) error {
 	return err
 }
 
-func printWarnings(command *cobra.Command, warnings []string) error {
-	for _, warning := range warnings {
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "warning: %s\n", warning); err != nil {
+func printWarningIssues(command *cobra.Command, issues []converge.Issue) error {
+	for _, issue := range issues {
+		if issue.Severity != converge.IssueWarning {
+			continue
+		}
+		if _, err := fmt.Fprintf(command.ErrOrStderr(), "warning: %s\n", issue.Reason); err != nil {
 			return fmt.Errorf("write warning: %w", err)
 		}
 	}
@@ -66,18 +68,21 @@ func printOperationReport(
 	command *cobra.Command,
 	report converge.Report,
 ) error {
-	if err := printWarnings(command, report.Warnings); err != nil {
+	if err := printWarningIssues(command, report.Plan.Issues); err != nil {
 		return err
 	}
 	printed := false
-	for _, action := range report.Plan.Actions() {
+	for _, action := range report.Plan.Actions {
 		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write operation action: %w", err)
 		}
 		printed = true
 	}
-	for _, problem := range report.Plan.Problems() {
-		if err := printProblem(command, problem); err != nil {
+	for _, issue := range report.Plan.Issues {
+		if issue.Severity != converge.IssueBlocker {
+			continue
+		}
+		if err := printIssue(command, issue); err != nil {
 			return fmt.Errorf("write operation problem: %w", err)
 		}
 		printed = true
@@ -90,36 +95,35 @@ func printOperationReport(
 	return nil
 }
 
-func printProblem(command *cobra.Command, problem converge.Problem) error {
-	reason := problem.Reason
-	if problem.Code == converge.ProblemCodeControlTopology ||
-		problem.Code == converge.ProblemCodeControlBoundary {
+func printIssue(command *cobra.Command, issue converge.Issue) error {
+	reason := issue.Reason
+	if issue.Recovery == converge.RecoveryPaths {
 		reason += "; run `dot paths`"
 	}
 	if _, err := fmt.Fprintf(
 		command.OutOrStdout(),
 		"problem kind=%s",
-		problem.Kind,
+		legacyProblemKind(issue),
 	); err != nil {
 		return err
 	}
-	if problem.Code != "" {
-		if _, err := fmt.Fprintf(command.OutOrStdout(), " code=%s", problem.Code); err != nil {
+	if issue.ModuleID != "" {
+		if _, err := fmt.Fprintf(command.OutOrStdout(), " module=%s", issue.ModuleID); err != nil {
 			return err
 		}
 	}
-	if problem.ModuleID != "" {
-		if _, err := fmt.Fprintf(command.OutOrStdout(), " module=%s", problem.ModuleID); err != nil {
+	if issue.PlacementID != "" {
+		if _, err := fmt.Fprintf(command.OutOrStdout(), " placement=%s", issue.PlacementID); err != nil {
 			return err
 		}
 	}
-	if problem.PlacementID != "" {
-		if _, err := fmt.Fprintf(command.OutOrStdout(), " placement=%s", problem.PlacementID); err != nil {
+	if issue.Target != "" {
+		if _, err := fmt.Fprintf(command.OutOrStdout(), " target=%s", strconv.Quote(issue.Target)); err != nil {
 			return err
 		}
 	}
-	if problem.Target != "" {
-		if _, err := fmt.Fprintf(command.OutOrStdout(), " target=%s", strconv.Quote(problem.Target)); err != nil {
+	if issue.Code != "" {
+		if _, err := fmt.Fprintf(command.OutOrStdout(), " code=%s", issue.Code); err != nil {
 			return err
 		}
 	}
@@ -127,15 +131,37 @@ func printProblem(command *cobra.Command, problem converge.Problem) error {
 	return err
 }
 
+func legacyProblemKind(issue converge.Issue) string {
+	switch issue.Code {
+	case converge.IssueCodeTargetConflict:
+		if issue.Target == "" {
+			return "blocked"
+		}
+		return "conflict"
+	case converge.IssueCodeOwnershipConflict,
+		converge.IssueCodeTopologyConflict,
+		converge.IssueCodePlacementTypeChange:
+		return "conflict"
+	default:
+		return "blocked"
+	}
+}
+
+func hasBlockerIssue(issues []converge.Issue) bool {
+	return slices.ContainsFunc(issues, func(issue converge.Issue) bool {
+		return issue.Severity == converge.IssueBlocker
+	})
+}
+
 func printResult(
 	command *cobra.Command,
 	result converge.ApplyResult,
 ) error {
-	if err := printPlan(command, result.Report.Plan, result.Report.Warnings); err != nil {
+	if err := printPlan(command, result.Report.Plan); err != nil {
 		return err
 	}
 	if result.StateChanged {
-		if err := printForgotOwnership(command, result.Report.Plan.Actions()); err != nil {
+		if err := printForgotOwnership(command, result.Report.Plan.Actions); err != nil {
 			return err
 		}
 	}
@@ -205,7 +231,7 @@ func printStatusAnalysis(
 	command *cobra.Command,
 	report converge.Report,
 ) error {
-	if err := printWarnings(command, report.Warnings); err != nil {
+	if err := printWarningIssues(command, report.Plan.Issues); err != nil {
 		return fmt.Errorf("write status warning: %w", err)
 	}
 	facts := append([]converge.ModuleFact(nil), report.Facts...)
@@ -238,13 +264,16 @@ func printStatusAnalysis(
 			return fmt.Errorf("write status: %w", err)
 		}
 	}
-	for _, action := range report.Plan.Actions() {
+	for _, action := range report.Plan.Actions {
 		if err := printAction(command, action); err != nil {
 			return fmt.Errorf("write status action: %w", err)
 		}
 	}
-	for _, problem := range report.Plan.Problems() {
-		if err := printProblem(command, problem); err != nil {
+	for _, issue := range report.Plan.Issues {
+		if issue.Severity != converge.IssueBlocker {
+			continue
+		}
+		if err := printIssue(command, issue); err != nil {
 			return fmt.Errorf("write status problem: %w", err)
 		}
 	}

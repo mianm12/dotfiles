@@ -40,7 +40,7 @@ func prepareApply(environment Environment) (applyPreflight, ApplyResult, error) 
 		return applyPreflight{}, ApplyResult{}, err
 	}
 	if !preflight.report.Plan.Executable() {
-		result := ApplyResult{Report: cloneReport(preflight.report)}
+		result := ApplyResult{Report: preflight.report}
 		return applyPreflight{}, result, blockedError(preflight.report.Plan)
 	}
 	return applyPreflight{
@@ -55,13 +55,13 @@ func applyLocked(environment Environment, expectedFingerprint []byte) (ApplyResu
 		return ApplyResult{}, err
 	}
 	if !bytes.Equal(expectedFingerprint, locked.fingerprint) {
-		return ApplyResult{Report: cloneReport(locked.report)}, fmt.Errorf(
+		return ApplyResult{Report: locked.report}, fmt.Errorf(
 			"%w: machine config changed while waiting for the mutation lock",
 			ErrBlocked,
 		)
 	}
 	if !locked.report.Plan.Executable() {
-		return ApplyResult{Report: cloneReport(locked.report)}, blockedError(locked.report.Plan)
+		return ApplyResult{Report: locked.report}, blockedError(locked.report.Plan)
 	}
 	controlPaths, err := locked.controls.Paths()
 	if err != nil {
@@ -75,7 +75,7 @@ func applyLocked(environment Environment, expectedFingerprint []byte) (ApplyResu
 		commitState,
 	)
 	result := ApplyResult{
-		Report:         cloneReport(locked.report),
+		Report:         locked.report,
 		TargetsChanged: execution.TargetsChanged,
 		StateChanged:   execution.StateChanged,
 	}

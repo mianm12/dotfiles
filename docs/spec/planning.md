@@ -96,6 +96,10 @@ actual：
 - target 与 active、control 或其他 stale target 存在上述复杂关系；
 - 多条 stale records 指向同一 lexical/resolved target。
 
+Target absent 或路径被现存对象阻断时先按普通 forget 处理；此时没有可安全定位并声明“保留”的
+actual entry，不因词法关系额外生成 `stale-preserved`。其余 actual 可观察的复杂关系才进入下述
+warning 规则。
+
 复杂关系产生的 forget 必须同时产生 `stale-preserved` warning Issue，明确 actual 被保留并需要
 人工迁移；所有参与关系的 stale records 都 forget，不选取某一条代表物理删除。普通 drift/absent
 forget 由 Action reason 说明，不阻断其他独立收敛。

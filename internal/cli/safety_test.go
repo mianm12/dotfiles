@@ -246,7 +246,7 @@ target = "~/alias/child"
 		) ||
 		!strings.Contains(
 			stdout,
-			`effective module \"app\" placement \"child\"`,
+			`desired app/child`,
 		) ||
 		stderr != "" {
 		t.Fatalf(
@@ -264,7 +264,7 @@ target = "~/alias/child"
 		stdout != "" ||
 		!strings.Contains(
 			stderr,
-			"active link cannot be owned or changed while traversed",
+			"target traverses state-owned link",
 		) {
 		t.Fatalf(
 			"apply after rebind = (%d, %q, %q), want active-link traversal conflict",
@@ -327,7 +327,7 @@ target = "~/access/child"
 			stderr,
 			"active link cannot be owned or changed while traversed",
 		) ||
-		!strings.Contains(stderr, `effective module "child" placement "config"`) {
+		!strings.Contains(stderr, `desired child/config`) {
 		t.Fatalf(
 			"apply = (%d, %q, %q), want prospective ownership conflict",
 			code,
@@ -350,12 +350,12 @@ func TestApplyRejectsUpdateThatWouldInvalidateStalePruneBeforeMutation(
 
 	code, stdout, stderr := fixture.run("apply", "--dry-run")
 	if code != exitError ||
-		stderr != "" ||
-		!strings.Contains(stdout, "update") ||
+		!strings.Contains(stderr, "actual preserved") ||
+		!strings.Contains(stdout, "action kind=forget") ||
 		!strings.Contains(stdout, "conflict") ||
 		!strings.Contains(
 			stdout,
-			"cleanup would be invalidated by active link update",
+			"active link cannot be owned or changed while traversed by state stale/child",
 		) {
 		t.Fatalf(
 			"apply dry-run = (%d, %q, %q), want update/prune conflict",
@@ -372,11 +372,11 @@ func TestApplyRejectsUpdateThatWouldInvalidateStalePruneBeforeMutation(
 		stdout != "" ||
 		!strings.Contains(
 			stderr,
-			"cleanup would be invalidated by active link update",
+			"active link cannot be owned or changed while traversed by state stale/child",
 		) ||
 		!strings.Contains(
 			stderr,
-			`module "parent" placement "tree"`,
+			`parent/tree`,
 		) {
 		t.Fatalf(
 			"apply = (%d, %q, %q), want preflight update/prune conflict",
@@ -724,7 +724,8 @@ target = "~/.config/dot/managed"
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=app selection=profile") ||
-		!strings.Contains(stdout, "problem kind=blocked code=control-boundary module=app placement=config") ||
+		!strings.Contains(stdout, "problem kind=blocked module=app placement=config") ||
+		!strings.Contains(stdout, "code=control-boundary") ||
 		!strings.Contains(stdout, target) ||
 		!strings.Contains(stdout, filepath.Dir(fixture.config)) ||
 		!strings.Contains(stdout, "run `dot paths`") ||
@@ -883,7 +884,7 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 		if code != exitOK ||
 			!strings.Contains(stdout, "fact module=old selection=none state=present") ||
 			!strings.Contains(stdout, "forget") ||
-			!strings.Contains(stdout, "overlaps a protected control path") ||
+			!strings.Contains(stdout, "stale target is absent") ||
 			stderr != "" {
 			t.Fatalf(
 				"status = (%d, %q, %q), want structured stale forget",
@@ -898,7 +899,7 @@ func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
 		code, stdout, stderr = fixture.run("apply", "--dry-run")
 		if code != exitOK ||
 			!strings.Contains(stdout, "forget") ||
-			!strings.Contains(stdout, "overlaps a protected control path") ||
+			!strings.Contains(stdout, "stale target is absent") ||
 			stderr != "" {
 			t.Fatalf(
 				"apply --dry-run = (%d, %q, %q), want prospective forget",

@@ -73,7 +73,7 @@ target = "~/.app"
 	if err != nil {
 		t.Fatalf("analyzeStatus() error = %v", err)
 	}
-	actions := analysis.Plan.Actions()
+	actions := analysis.Plan.Actions
 	if len(analysis.Facts) != 1 ||
 		analysis.Facts[0].ID != "app" ||
 		analysis.Facts[0].Selection != "profile+extra" ||
@@ -126,14 +126,13 @@ func TestFullMutationAnalysisCompleteness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}
-		if analysis.Plan.Executable() || len(analysis.Plan.Actions()) != 0 ||
+		if analysis.Plan.Executable() || len(analysis.Plan.Actions) != 0 ||
 			len(analysis.Facts) != 2 ||
 			analysis.Facts[0].ID != "extra" ||
 			analysis.Facts[0].Selection != "extra" ||
 			analysis.Facts[1].ID != "gone" ||
 			analysis.Facts[1].Selection != "extra" ||
-			len(analysis.Plan.Problems()) != 1 ||
-			analysis.Plan.Problems()[0].ModuleID != "gone" {
+			!hasIssue(analysis.Plan, converge.IssueBlocker, "gone") {
 			t.Fatalf(
 				"incomplete full modules = %#v, want unknown peer plus blocker",
 				analysis.Facts,
@@ -365,4 +364,17 @@ target = "~/.app"
 		assertSnapshotUnchanged(t, before)
 		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
 	})
+}
+
+func hasIssue(
+	plan converge.Plan,
+	severity converge.IssueSeverity,
+	moduleID string,
+) bool {
+	for _, issue := range plan.Issues {
+		if issue.Severity == severity && issue.ModuleID == moduleID {
+			return true
+		}
+	}
+	return false
 }

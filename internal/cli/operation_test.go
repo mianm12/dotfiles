@@ -27,8 +27,13 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 		},
 	})
 	report := analyzeOperationReport(t, fixture)
-	report.Warnings = []string{"synthetic input warning"}
-	actions := report.Plan.Actions()
+	report.Plan.Issues = append(report.Plan.Issues, converge.Issue{
+		Severity: converge.IssueWarning,
+		Code:     converge.IssueCodeStateMissing,
+		Reason:   "synthetic input warning",
+		Recovery: converge.RecoveryNone,
+	})
+	actions := report.Plan.Actions
 	if len(actions) != 1 || actions[0].Decision != converge.DecisionForget {
 		t.Fatalf("Analyze() actions = %#v, want one forget", actions)
 	}
@@ -123,7 +128,7 @@ target = "~/.new"
 		},
 	})
 	analysis := analyzeOperationReport(t, fixture)
-	actions := analysis.Plan.Actions()
+	actions := analysis.Plan.Actions
 	if len(actions) != 2 ||
 		actions[0].Decision != converge.DecisionCreateLink ||
 		actions[1].Decision != converge.DecisionForget {
@@ -181,7 +186,7 @@ target = "~/.new"
 	if analysis.Plan.Executable() {
 		t.Fatal("Analyze() plan is executable, want app target conflict")
 	}
-	actions := analysis.Plan.Actions()
+	actions := analysis.Plan.Actions
 	if len(actions) != 2 || actions[1].Decision != converge.DecisionForget {
 		t.Fatalf("Analyze() actions = %#v, want create then forget", actions)
 	}

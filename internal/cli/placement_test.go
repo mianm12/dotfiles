@@ -377,7 +377,8 @@ target = "~/.app"
 		}
 		before := snapshotTree(t, fixture.root)
 		code, stdout, stderr = fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		if code != exitError || stdout != "" ||
+			!strings.Contains(stderr, "actual symlink is not explained by desired or state") {
 			t.Fatalf("apply after drift = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
@@ -409,7 +410,8 @@ target = "~/.shared"
 `)
 		before := snapshotTree(t, fixture.root)
 		code, stdout, stderr := fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		if code != exitError || stdout != "" ||
+			!strings.Contains(stderr, "actual target is regular file") {
 			t.Fatalf("apply after kind change = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)
@@ -437,7 +439,8 @@ target = "~/.shared"
 `)
 		before = snapshotTree(t, fixture.root)
 		code, stdout, stderr = fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		if code != exitError || stdout != "" ||
+			!strings.Contains(stderr, "actual target is regular file") {
 			t.Fatalf(
 				"phase-two apply with retained local = (%d, %q, %q), want conflict",
 				code,
@@ -550,7 +553,8 @@ target = "~/alias/config"
 		before := snapshotTree(t, fixture.root)
 
 		code, stdout, stderr := fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		if code != exitError || stdout != "" ||
+			!strings.Contains(stderr, "resolved target changed since state was recorded") {
 			t.Fatalf("apply after parent drift = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, before)

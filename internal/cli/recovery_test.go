@@ -172,15 +172,20 @@ func TestApplyUsesTwoStagesForParentUpdateAndTraversedStaleCleanup(
 	fixture := topology.fixture
 
 	code, _, stderr := fixture.run("apply")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("stage-one apply = (%d, %q), want stale cleanup", code, stderr)
+	if code != exitOK ||
+		!strings.Contains(stderr, "actual preserved") ||
+		!strings.Contains(stderr, "forgot ownership") {
+		t.Fatalf("stage-one apply = (%d, %q), want conservative stale forget", code, stderr)
 	}
 	assertCLILink(t, topology.parentTarget, topology.oldSource)
-	assertCLIMissing(t, topology.staleActual)
+	assertCLILink(t, topology.staleActual, topology.staleSource)
 	if _, exists := loadTestState(t, fixture).Links[state.Key{ModuleID: "stale", PlacementID: "child"}]; exists {
 		t.Fatal("stage-one apply retained stale ownership")
 	}
 	assertApplyNoMutation(t, fixture, fixture.run)
+	if err := os.Remove(topology.staleActual); err != nil {
+		t.Fatalf("remove preserved stale target: %v", err)
+	}
 
 	writeModuleManifest(t, fixture, "parent", `
 [[links]]
@@ -196,7 +201,7 @@ target = "~/owned"
 	assertApplyNoMutation(t, fixture, fixture.run)
 }
 
-func TestApplyPrunesTraversedStaleLinksChildFirst(t *testing.T) {
+func TestApplyForgetsTraversedStaleLinksWithoutDeletingThem(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeMachine(t, []string{"base"}, nil)
 	parentSource := filepath.Join(fixture.root, "old-repository", "tree")
@@ -272,11 +277,11 @@ func TestApplyPrunesTraversedStaleLinksChildFirst(t *testing.T) {
 	}
 
 	code, _, stderr := fixture.run("apply")
-	if code != exitOK || stderr != "" {
-		t.Fatalf("apply = (%d, %q), want ordered stale cleanup", code, stderr)
+	if code != exitOK || strings.Count(stderr, "actual preserved") != 2 {
+		t.Fatalf("apply = (%d, %q), want one warning per preserved stale link", code, stderr)
 	}
-	assertCLIMissing(t, childActual)
-	assertCLIMissing(t, parentTarget)
+	assertCLILink(t, childActual, childSource)
+	assertCLILink(t, parentTarget, parentSource)
 	if links := loadTestState(t, fixture).Links; len(links) != 0 {
 		t.Fatalf("state links = %#v, want both stale ownership records removed", links)
 	}
@@ -328,9 +333,9 @@ func TestDuplicateStaleOwnershipAcrossStatusDryRunAndApply(t *testing.T) {
 
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
-		stderr != "" ||
+		strings.Count(stderr, "actual preserved") != 2 ||
 		!strings.Contains(stdout, "forget") ||
-		!strings.Contains(stdout, "shares ownership") {
+		!strings.Contains(stdout, "shares lexical or resolved identity") {
 		t.Fatalf(
 			"status = (%d, %q, %q), want cross-module duplicate ownership",
 			code,
@@ -342,12 +347,12 @@ func TestDuplicateStaleOwnershipAcrossStatusDryRunAndApply(t *testing.T) {
 
 	code, stdout, stderr = fixture.run("apply", "--dry-run")
 	if code != exitOK ||
-		stderr != "" ||
-		!strings.Contains(stdout, "prune") ||
+		strings.Count(stderr, "actual preserved") != 2 ||
+		strings.Contains(stdout, "prune") ||
 		!strings.Contains(stdout, "forget") ||
-		!strings.Contains(stdout, "shares ownership") {
+		!strings.Contains(stdout, "shares lexical or resolved identity") {
 		t.Fatalf(
-			"apply dry-run = (%d, %q, %q), want one prune and one forget",
+			"apply dry-run = (%d, %q, %q), want two conservative forgets",
 			code,
 			stdout,
 			stderr,
@@ -358,10 +363,10 @@ func TestDuplicateStaleOwnershipAcrossStatusDryRunAndApply(t *testing.T) {
 	code, _, stderr = fixture.run("apply")
 	if code != exitOK ||
 		!strings.Contains(stderr, "forgot ownership") ||
-		!strings.Contains(stderr, "shares ownership") {
+		!strings.Contains(stderr, "shares lexical or resolved identity") {
 		t.Fatalf("apply = (%d, %q), want duplicate cleanup", code, stderr)
 	}
-	assertCLIMissing(t, actual)
+	assertCLILink(t, actual, source)
 	if links := loadTestState(t, fixture).Links; len(links) != 0 {
 		t.Fatalf("state links = %#v, want duplicate ownership records removed", links)
 	}

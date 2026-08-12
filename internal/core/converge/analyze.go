@@ -30,13 +30,13 @@ type analysis struct {
 }
 
 // Analyze reloads every convergence input and returns one complete read-only
-// report. Expressible selection and path blockers are reported as Problems.
+// report. Expressible selection and path blockers are reported as Issues.
 func Analyze(environment Environment) (Report, error) {
 	prepared, err := analyzeEnvironment(environment)
 	if err != nil {
 		return Report{}, err
 	}
-	return cloneReport(prepared.report), nil
+	return prepared.report, nil
 }
 
 func analyzeEnvironment(environment Environment) (analysis, error) {
@@ -52,16 +52,17 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 		return analysis{}, err
 	}
 	controlPaths := environmentControls(environment, machine.Repository)
-	problems := make([]Problem, 0, 1)
+	issues := make([]Issue, 0, 2)
 	controls, err := resolveControls(controlPaths)
 	if err != nil {
 		if !errors.Is(err, corepaths.ErrControlTopology) {
 			return analysis{}, err
 		}
-		problems = append(problems, Problem{
-			Kind:   ProblemBlocked,
-			Code:   ProblemCodeControlTopology,
-			Reason: err.Error(),
+		issues = append(issues, Issue{
+			Severity: IssueBlocker,
+			Code:     IssueCodeControlTopology,
+			Reason:   err.Error(),
+			Recovery: RecoveryPaths,
 		})
 	}
 	repository, err := config.OpenRepository(machine.Repository)
@@ -72,37 +73,34 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
-	for _, problem := range selection.problems {
-		problems = append(problems, Problem{
-			Kind:     ProblemBlocked,
-			ModuleID: problem.moduleID,
-			Reason:   problem.reason,
-		})
-	}
+	issues = append(issues, selection.issues...)
 	loaded, err := loadState(environment.StatePath, environment.Home)
 	if err != nil {
 		return analysis{}, err
+	}
+	if loaded.Warning != "" {
+		issues = append(issues, Issue{
+			Severity: IssueWarning,
+			Code:     IssueCodeStateMissing,
+			Reason:   loaded.Warning,
+			Recovery: RecoveryNone,
+		})
 	}
 	plan, err := buildAnalysisPlan(
 		environment.Home,
 		controls,
 		selection.modules,
 		loaded.Snapshot,
-		problems,
+		issues,
 	)
 	if err != nil {
 		return analysis{}, err
-	}
-	warnings := make([]string, 0, 1)
-	if loaded.Warning != "" {
-		warnings = append(warnings, loaded.Warning)
 	}
 	report := newReport(
 		loaded.Snapshot,
 		selection.sources,
 		selection.observations,
 		plan,
-		warnings,
 		statusModuleIDs(repository, machine, loaded.Snapshot),
 	)
 	fingerprint, err := machineFingerprint(machine)
@@ -122,13 +120,12 @@ func buildAnalysisPlan(
 	controls corepaths.ResolvedControls,
 	resolvedModules []config.Module,
 	snapshot state.Snapshot,
-	problems []Problem,
+	issues []Issue,
 ) (Plan, error) {
-	if len(problems) != 0 {
-		return Plan{
-			problems:   append([]Problem(nil), problems...),
-			finalState: cloneSnapshot(snapshot),
-		}, nil
+	if slices.ContainsFunc(issues, func(issue Issue) bool {
+		return issue.Severity == IssueBlocker
+	}) {
+		return planFromIssues(issues), nil
 	}
 
 	plan, err := buildPlan(planRequest{
@@ -140,6 +137,8 @@ func buildAnalysisPlan(
 	if err != nil {
 		return Plan{}, err
 	}
+	plan.Issues = append(plan.Issues, issues...)
+	sortIssues(plan.Issues)
 	return plan, nil
 }
 
@@ -148,7 +147,6 @@ func newReport(
 	sources map[string]selectionSource,
 	observations map[string]moduleObservation,
 	plan Plan,
-	warnings []string,
 	moduleIDs []string,
 ) Report {
 	return Report{
@@ -158,8 +156,7 @@ func newReport(
 			observations,
 			snapshot,
 		),
-		Plan:     clonePlan(plan),
-		Warnings: append([]string(nil), warnings...),
+		Plan: plan,
 	}
 }
 
@@ -228,30 +225,4 @@ func sortedAnalysisSet(values map[string]bool) []string {
 	}
 	slices.Sort(result)
 	return result
-}
-
-func cloneReport(report Report) Report {
-	return Report{
-		Facts:    append([]ModuleFact(nil), report.Facts...),
-		Plan:     clonePlan(report.Plan),
-		Warnings: append([]string(nil), report.Warnings...),
-	}
-}
-
-func clonePlan(plan Plan) Plan {
-	cloned := Plan{
-		transitions: make([]transition, len(plan.transitions)),
-		problems:    append([]Problem(nil), plan.problems...),
-		actions:     append([]Action(nil), plan.actions...),
-		schedule:    append([]executionStep(nil), plan.schedule...),
-		finalState:  cloneSnapshot(plan.finalState),
-	}
-	for index, planned := range plan.transitions {
-		cloned.transitions[index] = planned
-		cloned.transitions[index].actionIndexes = append(
-			[]int(nil),
-			planned.actionIndexes...,
-		)
-	}
-	return cloned
 }

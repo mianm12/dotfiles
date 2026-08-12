@@ -46,9 +46,8 @@ type ModuleFact struct {
 
 // Report is one complete read-only convergence result.
 type Report struct {
-	Facts    []ModuleFact
-	Plan     Plan
-	Warnings []string
+	Facts []ModuleFact
+	Plan  Plan
 }
 
 // ApplyResult reports a successfully committed convergence run.
@@ -74,32 +73,50 @@ const (
 	DecisionCreateLink  Decision = "create-link"
 	DecisionCreateLocal Decision = "create-local"
 	DecisionAdopt       Decision = "adopt"
-	DecisionKeep        Decision = "keep"
 	DecisionRepairState Decision = "repair-state"
 	DecisionUpdate      Decision = "update"
 	DecisionPrune       Decision = "prune"
 	DecisionForget      Decision = "forget"
 )
 
-// ProblemKind identifies why a plan cannot be executed.
-type ProblemKind string
+// IssueSeverity identifies whether an issue is informational or prevents
+// execution.
+type IssueSeverity string
 
-// ProblemCode identifies a machine-readable cause when projections need
-// more detail than blocked versus conflict.
-type ProblemCode string
-
+// Issue severity values distinguish non-blocking warnings from blockers.
 const (
-	// ProblemConflict identifies a concrete planner conflict.
-	ProblemConflict ProblemKind = "conflict"
-	// ProblemBlocked identifies an input or path condition that blocks planning.
-	ProblemBlocked ProblemKind = "blocked"
+	IssueWarning IssueSeverity = "warning"
+	IssueBlocker IssueSeverity = "blocker"
 )
 
+// IssueCode is the stable machine-readable cause of one planning issue.
+type IssueCode string
+
+// Issue codes form the stable machine-readable planning vocabulary.
 const (
-	// ProblemCodeControlTopology identifies overlapping control families.
-	ProblemCodeControlTopology ProblemCode = "control-topology"
-	// ProblemCodeControlBoundary identifies a placement/control path overlap.
-	ProblemCodeControlBoundary ProblemCode = "control-boundary"
+	IssueCodeStateMissing           IssueCode = "state-missing"
+	IssueCodeStalePreserved         IssueCode = "stale-preserved"
+	IssueCodeSelectionIndeterminate IssueCode = "selection-indeterminate"
+	IssueCodeSelectionNotApplicable IssueCode = "selection-not-applicable"
+	IssueCodeControlTopology        IssueCode = "control-topology"
+	IssueCodeControlBoundary        IssueCode = "control-boundary"
+	IssueCodeTargetConflict         IssueCode = "target-conflict"
+	IssueCodeOwnershipConflict      IssueCode = "ownership-conflict"
+	IssueCodeTopologyConflict       IssueCode = "topology-conflict"
+	IssueCodePlacementTypeChange    IssueCode = "placement-type-change"
+)
+
+// Recovery is the user action attached to an Issue or runtime failure.
+type Recovery string
+
+// Recovery values describe the bounded user response to an issue or failure.
+const (
+	RecoveryNone            Recovery = "none"
+	RecoveryInit            Recovery = "init"
+	RecoveryPaths           Recovery = "paths"
+	RecoveryArchiveState    Recovery = "archive-state"
+	RecoveryManualMigration Recovery = "manual-migration"
+	RecoveryRerunApply      Recovery = "rerun-apply"
 )
 
 // planRequest contains the complete desired set and ownership snapshot for one
@@ -111,8 +128,8 @@ type planRequest struct {
 	State    state.Snapshot
 }
 
-// Action describes one ordered executable planner decision. LinkDestination is the
-// desired raw destination. ExpectedResolvedTarget and
+// Action describes one ordered executable planner decision. LinkDestination
+// is the desired raw destination. ExpectedResolvedTarget and
 // ExpectedLinkDestination preserve the state facts that the executor must
 // recheck before update or prune.
 type Action struct {
@@ -128,90 +145,37 @@ type Action struct {
 	Reason                  string
 }
 
-// Problem describes one reason a plan cannot be executed. PlacementID and
-// Target are present when the problem belongs to a concrete placement.
-type Problem struct {
-	Kind        ProblemKind
-	Code        ProblemCode
+// Issue describes one warning or blocker. PlacementID and Target are present
+// when the issue belongs to a concrete placement.
+type Issue struct {
+	Severity    IssueSeverity
+	Code        IssueCode
 	ModuleID    string
 	PlacementID string
 	Target      string
 	Reason      string
+	Recovery    Recovery
 }
 
-// transition is the sole final-state decision for one logical placement key.
-// Desired transitions publish finalRecord after every action succeeds. Stale
-// transitions remove the key from finalState.
-type transition struct {
-	moduleID      string
-	placementID   string
-	desired       bool
-	finalRecord   state.LinkRecord
-	actionIndexes []int
-}
-
-type executionOperation uint8
-
-const (
-	executionPrepareParent executionOperation = iota
-	executionApplyAction
-)
-
-type executionStep struct {
-	operation   executionOperation
-	actionIndex int
-}
-
-type scheduledExecution struct {
-	operation executionOperation
-	action    Action
-}
-
-// Plan contains one transition per logical key, its execution schedule, and all
-// blocking problems. Its slices are private so callers cannot create or mutate
-// plans that violate planner invariants.
-// finalState is computed by the planner from transition facts, never by the
-// executor from action order.
+// Plan contains the one semantic Action sequence, all structured Issues, and
+// the ownership snapshot to commit after every Action succeeds. Blocked plans
+// do not carry a committable nextState.
 type Plan struct {
-	transitions []transition
-	problems    []Problem
-	actions     []Action
-	schedule    []executionStep
-	finalState  state.Snapshot
+	Actions   []Action
+	Issues    []Issue
+	nextState state.Snapshot
 }
 
 // Executable reports whether the plan is safe to execute.
 func (plan Plan) Executable() bool {
-	return len(plan.problems) == 0
-}
-
-// Actions returns a copy of the executable actions in their real execution order.
-func (plan Plan) Actions() []Action {
-	actions := make([]Action, 0)
-	for _, step := range plan.schedule {
-		if step.operation == executionApplyAction {
-			actions = append(actions, plan.actions[step.actionIndex])
+	for _, issue := range plan.Issues {
+		if issue.Severity == IssueBlocker {
+			return false
 		}
 	}
-	return actions
+	return true
 }
 
-// Problems returns a copy of every reason the plan cannot be executed.
-func (plan Plan) Problems() []Problem {
-	return append([]Problem(nil), plan.problems...)
-}
-
-func (plan Plan) executionSteps() []scheduledExecution {
-	steps := make([]scheduledExecution, len(plan.schedule))
-	for index, step := range plan.schedule {
-		steps[index] = scheduledExecution{
-			operation: step.operation,
-			action:    plan.actions[step.actionIndex],
-		}
-	}
-	return steps
-}
-
-func (plan Plan) finalSnapshot() state.Snapshot {
-	return cloneSnapshot(plan.finalState)
+func (plan Plan) nextSnapshot() state.Snapshot {
+	return cloneSnapshot(plan.nextState)
 }

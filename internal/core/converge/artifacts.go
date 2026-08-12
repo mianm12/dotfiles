@@ -25,7 +25,7 @@ func executePlan(
 		return executionResult{}, conflictError(plan)
 	}
 
-	next := plan.finalSnapshot()
+	next := plan.nextSnapshot()
 	mutation := mutationRun{home: filepath.Clean(home)}
 	if err := mutation.apply(plan); err != nil {
 		return executionResult{
@@ -60,14 +60,15 @@ func loadState(path, home string) (state.Loaded, error) {
 }
 
 func conflictError(plan Plan) error {
-	if len(plan.problems) != 0 {
-		problem := plan.problems[0]
+	for _, issue := range plan.Issues {
+		if issue.Severity != IssueBlocker {
+			continue
+		}
 		return fmt.Errorf(
-			"plan %s for %s/%s: %s",
-			problem.Kind,
-			problem.ModuleID,
-			problem.PlacementID,
-			problem.Reason,
+			"plan blocker for %s/%s: %s",
+			issue.ModuleID,
+			issue.PlacementID,
+			issue.Reason,
 		)
 	}
 	return fmt.Errorf("convergence plan is not executable")

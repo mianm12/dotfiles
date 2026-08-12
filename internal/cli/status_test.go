@@ -106,7 +106,7 @@ target = "~/current/config"
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK || stderr != "" ||
 		!strings.Contains(stdout, "fact module=app selection=profile state=present") ||
-		!strings.Contains(stdout, "action kind=keep module=app placement=config") {
+		!strings.Contains(stdout, "action kind=repair-state module=app placement=config") {
 		t.Fatalf("status before state refresh = (%d, %q, %q), want pending", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, beforeStatus)
@@ -171,12 +171,13 @@ func TestStatusReportsCrossModuleUpdatePruneConflict(t *testing.T) {
 	code, stdout, stderr := fixture.run("status")
 
 	if code != exitOK ||
-		stderr != "" ||
+		!strings.Contains(stderr, "actual preserved") ||
 		!strings.Contains(stdout, "fact module=stale selection=none state=present") ||
-		!strings.Contains(stdout, "problem kind=conflict module=stale placement=child") ||
+		!strings.Contains(stdout, "action kind=forget module=stale placement=child") ||
+		!strings.Contains(stdout, "problem kind=conflict module=parent placement=tree") ||
 		!strings.Contains(
 			stdout,
-			"cleanup would be invalidated by active link update",
+			"active link cannot be owned or changed while traversed by state stale/child",
 		) {
 		t.Fatalf(
 			"status = (%d, %q, %q), want cross-module update/prune conflict",

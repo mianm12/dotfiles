@@ -18,18 +18,9 @@ type mutationRun struct {
 }
 
 func (run *mutationRun) apply(plan Plan) error {
-	for _, step := range plan.executionSteps() {
-		var err error
-		switch step.operation {
-		case executionPrepareParent:
-			err = run.ensureParent(step.action.Target)
-		case executionApplyAction:
-			err = run.applyAction(step.action)
-		default:
-			err = fmt.Errorf("unsupported execution operation %d", step.operation)
-		}
-		if err != nil {
-			return actionError(step.action, err)
+	for _, action := range plan.Actions {
+		if err := run.applyAction(action); err != nil {
+			return actionError(action, err)
 		}
 	}
 	return nil
@@ -38,11 +29,17 @@ func (run *mutationRun) apply(plan Plan) error {
 func (run *mutationRun) applyAction(action Action) error {
 	switch action.Decision {
 	case DecisionCreateLocal:
+		if err := run.ensureParent(action.Target); err != nil {
+			return err
+		}
 		if err := run.createLocal(action.Source, action.Target); err != nil {
 			return err
 		}
 		return verifyLocal(action.Target)
 	case DecisionCreateLink:
+		if err := run.ensureParent(action.Target); err != nil {
+			return err
+		}
 		if err := run.createLink(action.LinkDestination, action.Target); err != nil {
 			return err
 		}
@@ -55,7 +52,7 @@ func (run *mutationRun) applyAction(action Action) error {
 			return err
 		}
 		return run.verifyLink(action)
-	case DecisionAdopt, DecisionKeep, DecisionRepairState:
+	case DecisionAdopt, DecisionRepairState:
 		return nil
 	case DecisionPrune:
 		return run.removeOwnedLink(action)

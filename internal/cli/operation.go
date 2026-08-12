@@ -32,13 +32,13 @@ func finishMutation(
 	if runErr != nil {
 		// Core warnings are input diagnostics. Never project the plan or
 		// completed forget results from a failed mutation.
-		if warningErr := printWarnings(command, result.Report.Warnings); warningErr != nil {
+		if warningErr := printWarningIssues(command, result.Report.Plan.Issues); warningErr != nil {
 			return errors.Join(runErr, warningErr)
 		}
 		if errors.Is(runErr, converge.ErrPartial) {
 			return fmt.Errorf("%w; rerun %s", runErr, rerun)
 		}
-		if hasControlProblem(result.Report.Plan) {
+		if hasControlIssue(result.Report.Plan) {
 			return fmt.Errorf("%w; run `dot paths`", runErr)
 		}
 		return withCoreRecovery(runErr)
@@ -73,10 +73,10 @@ func withCoreRecovery(err error) error {
 	}
 }
 
-func hasControlProblem(plan converge.Plan) bool {
-	for _, problem := range plan.Problems() {
-		if problem.Code == converge.ProblemCodeControlTopology ||
-			problem.Code == converge.ProblemCodeControlBoundary {
+func hasControlIssue(plan converge.Plan) bool {
+	for _, issue := range plan.Issues {
+		if issue.Code == converge.IssueCodeControlTopology ||
+			issue.Code == converge.IssueCodeControlBoundary {
 			return true
 		}
 	}

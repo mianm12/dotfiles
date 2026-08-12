@@ -58,7 +58,7 @@ func TestPlanAddAndSafeStalePruneAreOrdered(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionPrune)
-	actions := plan.Actions()
+	actions := plan.Actions
 	if actions[0].Target != newTarget || actions[1].Target != oldTarget {
 		t.Fatalf("Build() targets = %#v, want create %q then prune %q", actions, newTarget, oldTarget)
 	}
@@ -91,7 +91,7 @@ func TestPlanIndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionPrune)
-	if len(plan.Problems()) != 0 {
+	if len(plan.Issues) != 0 {
 		t.Fatal("Build() has conflict, want independent alias target followed by stale prune")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -167,8 +167,11 @@ func TestPlanRejectsActiveTargetTraversingStateOwnedParentLink(t *testing.T) {
 				t.Fatalf("Build() error = %v", err)
 			}
 
-			assertDecisions(t, plan, conflictDecision, conflictDecision)
-			if got := plan.Problems()[0].Reason; !strings.Contains(
+			assertDecisions(t, plan, conflictDecision, DecisionForget)
+			if countIssues(plan, IssueWarning) != 1 {
+				t.Fatalf("Build() Issues = %#v, want one stale-preserved warning", plan.Issues)
+			}
+			if got := firstIssue(plan, IssueBlocker).Reason; !strings.Contains(
 				got,
 				`state-owned link from module "stale" placement "tree"`,
 			) {
@@ -204,9 +207,9 @@ func TestPlanRejectsAdoptedLinkTraversedByEffectiveDesiredTarget(t *testing.T) {
 	plan := fixture.build(t, modules, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, DecisionCreateLink)
-	if got := plan.Problems()[0].Reason; !strings.Contains(
+	if got := issueForPlacement(plan, IssueBlocker, "parent", "tree").Reason; !strings.Contains(
 		got,
-		`effective module "child" placement "config"`,
+		`traversed by desired child/config`,
 	) {
 		t.Fatalf("prospective ownership conflict reason = %q", got)
 	}
@@ -251,14 +254,14 @@ func TestPlanRejectsResolvedDriftKeepTraversedByEffectiveDesiredTarget(
 	before := snapshotTree(t, fixture.root)
 
 	parentOnly := fixture.build(t, modules[:1], snapshot)
-	assertDecisions(t, parentOnly, DecisionKeep)
+	assertDecisions(t, parentOnly, DecisionRepairState)
 
 	plan := fixture.build(t, modules, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, DecisionCreateLink)
-	if got := plan.Problems()[0].Reason; !strings.Contains(
+	if got := issueForPlacement(plan, IssueBlocker, "parent", "tree").Reason; !strings.Contains(
 		got,
-		`effective module "child" placement "config"`,
+		`traversed by desired child/config`,
 	) {
 		t.Fatalf("resolved-drift ownership conflict reason = %q", got)
 	}
@@ -297,9 +300,9 @@ func TestPlanRejectsRepairStateTraversedByEffectiveDesiredTarget(t *testing.T) {
 	plan := fixture.build(t, modules, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, DecisionCreateLink)
-	if got := plan.Problems()[0].Reason; !strings.Contains(
+	if got := issueForPlacement(plan, IssueBlocker, "parent", "tree").Reason; !strings.Contains(
 		got,
-		`effective module "child" placement "config"`,
+		`traversed by desired child/config`,
 	) {
 		t.Fatalf("repair-state ownership conflict reason = %q", got)
 	}
@@ -361,9 +364,9 @@ func TestFullPlanRejectsLinkUpdateTraversedByDesiredTarget(t *testing.T) {
 			}
 
 			assertDecisions(t, plan, conflictDecision, conflictDecision)
-			if got := plan.Problems()[0].Reason; !strings.Contains(
+			if got := issueForPlacement(plan, IssueBlocker, "parent", "tree").Reason; !strings.Contains(
 				got,
-				`effective module "child" placement "config"`,
+				`traversed by desired child/config`,
 			) {
 				t.Fatalf("update conflict reason = %q", got)
 			}
@@ -422,7 +425,7 @@ func TestFullPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 	}{
 		{
 			name: "existing ownership remains valid",
-			want: DecisionKeep,
+			want: "",
 		},
 		{
 			name:           "recorded alias no longer proves ownership",
@@ -487,17 +490,20 @@ func TestFullPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 				t.Fatalf("Build() error = %v", err)
 			}
 
-			if test.want == DecisionKeep {
-				assertDecisions(t, plan, DecisionKeep, conflictDecision)
+			if test.want == "" {
+				assertDecisions(t, plan, conflictDecision, conflictDecision)
 			} else {
 				assertDecisions(t, plan, conflictDecision, DecisionCreateLink)
 			}
 			if test.want == conflictDecision &&
 				!strings.Contains(
-					plan.Problems()[0].Reason,
-					`effective module "child" placement "config"`,
+					issueForPlacement(plan, IssueBlocker, "parent", "tree").Reason,
+					`traversed by desired child/config`,
 				) {
-				t.Fatalf("rebind conflict reason = %q", plan.Problems()[0].Reason)
+				t.Fatalf(
+					"rebind conflict reason = %q",
+					issueForPlacement(plan, IssueBlocker, "parent", "tree").Reason,
+				)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -568,15 +574,16 @@ func TestFullPlanRejectsStaleCleanupTraversedByDesired(
 				t.Fatalf("Build() error = %v", err)
 			}
 
-			assertDecisions(t, plan, conflictDecision, conflictDecision)
+			assertDecisions(t, plan, conflictDecision, DecisionForget)
 			found := false
-			for _, problem := range plan.Problems() {
-				if strings.Contains(problem.Reason, `active module "active" placement "child"`) {
+			for _, issue := range plan.Issues {
+				if issue.Severity == IssueWarning &&
+					strings.Contains(issue.Reason, "actual preserved") {
 					found = true
 				}
 			}
 			if !found {
-				t.Fatalf("problems = %#v, want stale cleanup dependent child", plan.Problems())
+				t.Fatalf("issues = %#v, want stale-preserved warning", plan.Issues)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -611,7 +618,7 @@ func TestPlanDoesNotConfuseIndependentAliasWithOwnedLinkTraversal(t *testing.T) 
 	plan := fixture.build(t, modules, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionUpdate)
-	if len(plan.Problems()) != 0 {
+	if len(plan.Issues) != 0 {
 		t.Fatalf("Build() = %#v, want independent alias to remain executable", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -650,10 +657,10 @@ func TestPlanRejectsUpdateBeforeTraversedStalePrune(t *testing.T) {
 		linkModule("parent", "tree", newSource, "~/owned"),
 	}, snapshot)
 
-	assertDecisions(t, plan, DecisionUpdate, conflictDecision)
-	if got := plan.Problems()[0].Reason; !strings.Contains(
+	assertDecisions(t, plan, conflictDecision, DecisionForget)
+	if got := firstIssue(plan, IssueBlocker).Reason; !strings.Contains(
 		got,
-		`active link update from module "parent" placement "tree"`,
+		`traversed by state stale/child`,
 	) {
 		t.Fatalf("stale cleanup conflict reason = %q", got)
 	}
@@ -702,14 +709,14 @@ func TestPlanConflictedUpdateDoesNotBlockIndependentStaleCleanup(t *testing.T) {
 		plan,
 		conflictDecision,
 		conflictDecision,
-		DecisionPrune,
+		DecisionForget,
 	)
-	if plan.Actions()[0].ModuleID != "stale" {
-		t.Fatalf("executable cleanup = %#v, want stale prune", plan.Actions())
+	if plan.Actions[0].ModuleID != "stale" {
+		t.Fatalf("executable cleanup = %#v, want stale prune", plan.Actions)
 	}
-	for _, problem := range plan.Problems() {
-		if problem.ModuleID == "stale" {
-			t.Fatalf("stale cleanup was blocked by a conflicted update: %#v", plan)
+	for _, issue := range plan.Issues {
+		if issue.Severity == IssueBlocker && issue.ModuleID == "stale" {
+			t.Fatalf("stale cleanup itself was blocked by a conflicted update: %#v", plan)
 		}
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -752,7 +759,7 @@ func TestPlanAllowsUpdateBeforeIndependentStalePrune(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanAllowsUpdateWithTraversedDriftedStaleForget(t *testing.T) {
+func TestPlanRejectsUpdateWithTraversedDriftedStaleForget(t *testing.T) {
 	fixture := newPlanFixture(t)
 	oldSource := fixture.dir(t, "repo/modules/parent/old")
 	newSource := fixture.dir(t, "repo/modules/parent/new")
@@ -786,11 +793,14 @@ func TestPlanAllowsUpdateWithTraversedDriftedStaleForget(t *testing.T) {
 		linkModule("parent", "tree", newSource, "~/owned"),
 	}, snapshot)
 
-	assertDecisions(t, plan, DecisionUpdate, DecisionForget)
+	assertDecisions(t, plan, conflictDecision, DecisionForget)
+	if countIssues(plan, IssueWarning) != 1 {
+		t.Fatalf("Build() Issues = %#v, want stale-preserved warning", plan.Issues)
+	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanOrdersTraversedStalePrunesChildFirst(t *testing.T) {
+func TestPlanForgetsAllTraversedStaleLinks(t *testing.T) {
 	fixture := newPlanFixture(t)
 	parentSource := fixture.dir(t, "old-repo/tree")
 	outside := fixture.dir(t, "outside")
@@ -829,16 +839,17 @@ func TestPlanOrdersTraversedStalePrunesChildFirst(t *testing.T) {
 
 	plan := fixture.build(t, nil, snapshot)
 
-	assertDecisions(t, plan, DecisionPrune, DecisionPrune)
-	actions := plan.Actions()
-	if actions[0].PlacementID != "z-child" ||
-		actions[1].PlacementID != "a-parent" {
-		t.Fatalf("stale prune order = %#v, want child before parent", actions)
+	assertDecisions(t, plan, DecisionForget, DecisionForget)
+	actions := plan.Actions
+	if actions[0].PlacementID != "a-parent" ||
+		actions[1].PlacementID != "z-child" ||
+		countIssues(plan, IssueWarning) != 2 {
+		t.Fatalf("complex stale plan = %#v, want two ordered forgets and warnings", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanCollapsesDuplicateStaleOwnershipToOnePrune(t *testing.T) {
+func TestPlanForgetsEveryDuplicateStaleOwnership(t *testing.T) {
 	fixture := newPlanFixture(t)
 	realParent := fixture.dir(t, "targets")
 	firstAlias := fixture.target("first")
@@ -861,10 +872,13 @@ func TestPlanCollapsesDuplicateStaleOwnershipToOnePrune(t *testing.T) {
 
 	plan := fixture.build(t, nil, snapshot)
 
-	assertDecisions(t, plan, DecisionPrune, DecisionForget)
-	if got := plan.Actions()[1].Reason; !strings.Contains(
+	assertDecisions(t, plan, DecisionForget, DecisionForget)
+	if countIssues(plan, IssueWarning) != 2 {
+		t.Fatalf("Build() Issues = %#v, want one warning per stale record", plan.Issues)
+	}
+	if got := plan.Actions[1].Reason; !strings.Contains(
 		got,
-		`module "app" placement "a-first"`,
+		`state app/a-first`,
 	) {
 		t.Fatalf("duplicate ownership forget reason = %q", got)
 	}
@@ -898,7 +912,7 @@ func TestPlanKeepsIndependentStalePrunesWithSameDestination(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, DecisionPrune, DecisionPrune)
-	actions := plan.Actions()
+	actions := plan.Actions
 	if actions[0].PlacementID != "a-first" ||
 		actions[1].PlacementID != "b-second" {
 		t.Fatalf("independent prune order = %#v", actions)
@@ -947,7 +961,7 @@ func TestFullPlanRejectsUpdateWithStaleDependency(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	assertDecisions(t, plan, DecisionUpdate, conflictDecision)
+	assertDecisions(t, plan, conflictDecision, DecisionForget)
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
@@ -982,8 +996,8 @@ func TestPlanDoesNotTreatDriftedParentLinkAsStateOwned(t *testing.T) {
 	}
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Problems()) != 0 {
-		t.Fatalf("Build() = %#v, want drifted state link to remain unowned", plan)
+	if countIssues(plan, IssueBlocker) != 0 || countIssues(plan, IssueWarning) != 1 {
+		t.Fatalf("Build() = %#v, want executable create plus stale warning", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1029,8 +1043,8 @@ func TestPlanDoesNotTreatResolvedParentDriftAsStateOwned(t *testing.T) {
 	}
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Problems()) != 0 {
-		t.Fatalf("Build() = %#v, want resolved state drift to remain unowned", plan)
+	if countIssues(plan, IssueBlocker) != 0 || countIssues(plan, IssueWarning) != 1 {
+		t.Fatalf("Build() = %#v, want executable create plus stale warning", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1081,7 +1095,7 @@ func TestPlanStaleLinkInsideControlPathIsForgotten(t *testing.T) {
 				t.Fatalf("Build() error = %v", err)
 			}
 			assertDecisions(t, plan, DecisionForget)
-			if got := plan.Actions()[0].Reason; got != "stale target overlaps a protected control path" {
+			if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
 				t.Fatalf("forget reason = %q", got)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
@@ -1127,7 +1141,7 @@ func TestPlanStaleLinkContainingControlPathIsForgotten(t *testing.T) {
 				t.Fatalf("Build() error = %v", err)
 			}
 			assertDecisions(t, plan, DecisionForget)
-			if got := plan.Actions()[0].Reason; got != "stale target overlaps a protected control path" {
+			if got := plan.Actions[0].Reason; got != "stale target is absent" {
 				t.Fatalf("forget reason = %q", got)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
@@ -1158,7 +1172,7 @@ func TestPlanStaleResolvedAliasOverlappingControlPathIsForgotten(t *testing.T) {
 	plan := fixture.build(t, nil, snapshot)
 
 	assertDecisions(t, plan, DecisionForget)
-	if got := plan.Actions()[0].Reason; got != "stale target overlaps a protected control path" {
+	if got := plan.Actions[0].Reason; got != "stale target overlaps a protected control path" {
 		t.Fatalf("forget reason = %q", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1194,7 +1208,7 @@ func TestPlanDriftedStaleLinkForgetsAndDoesNotBlock(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Problems()) != 0 {
+	if len(plan.Issues) != 0 {
 		t.Fatal("Build() has conflict, want drifted stale link to remain non-blocking")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1215,34 +1229,18 @@ func TestPlanTargetChangeCreatesBeforePrune(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionPrune)
-	actions := plan.Actions()
+	actions := plan.Actions
 	if actions[0].Target != newTarget || actions[1].Target != oldTarget {
 		t.Fatalf("Build() targets = %#v, want new target before old target", actions)
 	}
-	if len(plan.transitions) != 1 {
-		t.Fatalf("Build() transitions = %#v, want one logical-key transition", plan.transitions)
-	}
-	planned := plan.transitions[0]
-	if !planned.desired ||
-		planned.moduleID != "app" ||
-		planned.placementID != "config" ||
-		len(planned.actionIndexes) != 2 ||
-		planned.finalRecord.Target != newTarget {
-		t.Fatalf("Build() transition = %#v, want desired move to new target", planned)
-	}
-	final := plan.finalSnapshot()
+	final := plan.nextSnapshot()
 	wantKey := state.Key{ModuleID: "app", PlacementID: "config"}
 	if len(final.Links) != 1 || final.Links[wantKey].Target != newTarget {
-		t.Fatalf("Build() FinalState = %#v, want only new target", final)
-	}
-	plan.transitions[0].actionIndexes[0], plan.transitions[0].actionIndexes[1] = plan.transitions[0].actionIndexes[1], plan.transitions[0].actionIndexes[0]
-	ordered := plan.Actions()
-	if ordered[0].Target != newTarget || ordered[1].Target != oldTarget {
-		t.Fatalf("Plan.Actions() = %#v, want explicit global action order", ordered)
+		t.Fatalf("Build() NextState = %#v, want only new target", final)
 	}
 	delete(final.Links, wantKey)
-	if got := plan.finalSnapshot().Links[wantKey].Target; got != newTarget {
-		t.Fatalf("Plan FinalState changed through returned snapshot: got %q", got)
+	if got := plan.nextSnapshot().Links[wantKey].Target; got != newTarget {
+		t.Fatalf("Plan NextState changed through returned snapshot: got %q", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1308,8 +1306,8 @@ func TestPlanLocalAbsentCreatesAndEveryExistingEntryIsNoOp(t *testing.T) {
 			} else {
 				assertDecisions(t, plan, test.want)
 			}
-			if len(plan.finalSnapshot().Links) != 0 {
-				t.Fatalf("local plan wrote ownership state: %#v", plan.finalSnapshot())
+			if len(plan.nextSnapshot().Links) != 0 {
+				t.Fatalf("local plan wrote ownership state: %#v", plan.nextSnapshot())
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -1333,31 +1331,27 @@ func TestPlanExampleUpdateDoesNotOverwriteLocal(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanCrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
+func TestPlanCrossModuleOwnershipBlocksLocal(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(*testing.T, *planFixture, string, string)
-		want  Decision
 	}{
 		{
-			name: "absent target creates local",
+			name: "absent target remains owned",
 			setup: func(*testing.T, *planFixture, string, string) {
 			},
-			want: DecisionCreateLocal,
 		},
 		{
-			name: "user file keeps local",
+			name: "user file remains owned",
 			setup: func(t *testing.T, fixture *planFixture, target, _ string) {
 				fixture.fileAbsolute(t, target, "user")
 			},
-			want: "",
 		},
 		{
-			name: "matching old symlink keeps local",
+			name: "matching old symlink remains owned",
 			setup: func(t *testing.T, fixture *planFixture, target, source string) {
 				fixture.symlink(t, source, target)
 			},
-			want: "",
 		},
 	}
 
@@ -1383,13 +1377,9 @@ func TestPlanCrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
 
 			plan := fixture.build(t, []config.Module{module}, snapshot)
 
-			if test.want == "" {
-				assertDecisions(t, plan, DecisionForget)
-			} else {
-				assertDecisions(t, plan, test.want, DecisionForget)
-			}
-			if len(plan.Problems()) != 0 {
-				t.Fatalf("Build() = %#v, want local decision plus stale forget", plan)
+			assertDecisions(t, plan, conflictDecision, DecisionForget)
+			if got := firstIssue(plan, IssueBlocker).Code; got != IssueCodeOwnershipConflict {
+				t.Fatalf("Build() blocker code = %q, want ownership-conflict", got)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -1425,8 +1415,8 @@ func TestPlanStateOwnedSymlinkDriftIsConflict(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision)
-	if len(plan.Problems()) == 0 {
-		t.Fatal("Build() Problems is empty, want conflict")
+	if len(plan.Issues) == 0 {
+		t.Fatal("Build() Issues is empty, want conflict")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1471,7 +1461,7 @@ func TestPlanParentSymlinkDriftRejectsUpdate(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision)
-	if plan.Problems()[0].Reason == "" {
+	if plan.Issues[0].Reason == "" {
 		t.Fatal("Build() conflict has empty reason")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1501,7 +1491,7 @@ func TestPlanParentSymlinkDriftRejectsPruneButContinues(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Problems()) != 0 {
+	if len(plan.Issues) != 0 {
 		t.Fatal("Build() has conflict, want stale drift to be non-blocking")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1589,39 +1579,8 @@ func (fixture *planFixture) build(
 	if err != nil {
 		t.Fatalf("buildPlan() error = %v", err)
 	}
-	expected := make(map[state.Key]bool, len(snapshot.Links))
-	for key := range snapshot.Links {
-		expected[key] = true
-	}
-	for _, module := range modules {
-		for _, link := range module.Links {
-			expected[state.Key{ModuleID: module.ID, PlacementID: link.ID}] = true
-		}
-		for _, local := range module.Locals {
-			expected[state.Key{ModuleID: module.ID, PlacementID: local.ID}] = true
-		}
-	}
-	seen := make(map[state.Key]bool, len(plan.transitions))
-	for _, planned := range plan.transitions {
-		key := state.Key{
-			ModuleID:    planned.moduleID,
-			PlacementID: planned.placementID,
-		}
-		if seen[key] {
-			t.Fatalf("buildPlan() returned duplicate transition key %#v: %#v", key, plan)
-		}
-		seen[key] = true
-	}
-	if len(seen) != len(expected) {
-		t.Fatalf("buildPlan() transition keys = %#v, want desired/state union %#v", seen, expected)
-	}
-	for key := range expected {
-		if !seen[key] {
-			t.Fatalf("buildPlan() omitted transition key %#v: %#v", key, plan)
-		}
-	}
-	for _, problem := range plan.Problems() {
-		if problem.Kind == ProblemBlocked {
+	for _, issue := range plan.Issues {
+		if issue.Severity == IssueBlocker && issue.Code == IssueCodeControlBoundary {
 			t.Fatalf("buildPlan() returned blocker: %#v", plan)
 		}
 	}
@@ -1736,7 +1695,7 @@ func assertDecisions(t *testing.T, plan Plan, want ...Decision) {
 		}
 		wantActions = append(wantActions, decision)
 	}
-	actions := plan.Actions()
+	actions := plan.Actions
 	gotActions := make([]Decision, len(actions))
 	for index, action := range actions {
 		gotActions[index] = action.Decision
@@ -1744,11 +1703,17 @@ func assertDecisions(t *testing.T, plan Plan, want ...Decision) {
 			t.Fatalf("Build() forget action has empty reason: %#v", action)
 		}
 	}
-	if !slices.Equal(gotActions, wantActions) || len(plan.Problems()) != wantProblems {
+	gotBlockers := 0
+	for _, issue := range plan.Issues {
+		if issue.Severity == IssueBlocker {
+			gotBlockers++
+		}
+	}
+	if !slices.Equal(gotActions, wantActions) || gotBlockers != wantProblems {
 		t.Fatalf(
-			"Build() actions = %v problems = %d, want actions = %v problems = %d; plan=%#v",
+			"Build() actions = %v blockers = %d, want actions = %v blockers = %d; plan=%#v",
 			gotActions,
-			len(plan.Problems()),
+			gotBlockers,
 			wantActions,
 			wantProblems,
 			plan,
@@ -1757,14 +1722,51 @@ func assertDecisions(t *testing.T, plan Plan, want ...Decision) {
 }
 
 func firstDecision(plan Plan) Decision {
-	if len(plan.Problems()) != 0 {
-		return conflictDecision
+	for _, issue := range plan.Issues {
+		if issue.Severity == IssueBlocker {
+			return conflictDecision
+		}
 	}
-	actions := plan.Actions()
+	actions := plan.Actions
 	if len(actions) != 0 {
 		return actions[0].Decision
 	}
 	return ""
+}
+
+func countIssues(plan Plan, severity IssueSeverity) int {
+	count := 0
+	for _, issue := range plan.Issues {
+		if issue.Severity == severity {
+			count++
+		}
+	}
+	return count
+}
+
+func firstIssue(plan Plan, severity IssueSeverity) Issue {
+	for _, issue := range plan.Issues {
+		if issue.Severity == severity {
+			return issue
+		}
+	}
+	return Issue{}
+}
+
+func issueForPlacement(
+	plan Plan,
+	severity IssueSeverity,
+	moduleID string,
+	placementID string,
+) Issue {
+	for _, issue := range plan.Issues {
+		if issue.Severity == severity &&
+			issue.ModuleID == moduleID &&
+			issue.PlacementID == placementID {
+			return issue
+		}
+	}
+	return Issue{}
 }
 
 type treeEntry struct {

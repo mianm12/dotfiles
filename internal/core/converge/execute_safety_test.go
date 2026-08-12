@@ -254,7 +254,7 @@ func TestStaleLinkForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.
 	if result.TargetsChanged || result.StateChanged {
 		t.Fatalf("executePlan(failing forget commit) result = %#v, want no completed change", result)
 	}
-	actions := plan.Actions()
+	actions := plan.Actions
 	if len(actions) != 1 ||
 		actions[0].Decision != DecisionForget ||
 		actions[0].Reason == "" {
