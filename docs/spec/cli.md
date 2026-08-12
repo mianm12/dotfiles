@@ -5,7 +5,7 @@ dot init [REPOSITORY] [--profile NAME]...
 dot select add MODULE
 dot select remove MODULE
 dot status
-dot apply [--dry-run]
+dot apply [-n|--dry-run]
 dot paths
 dot version
 dot help [COMMAND]
@@ -60,6 +60,8 @@ dot help [COMMAND]
 - `dot apply` 收敛全部 effective modules，并处理 state 中不再 active 的 stale links。
 - `apply` 永不修改 machine selection；先用 `dot select add/remove` 改变 selection，再运行全量
   `dot apply`。
+- `-n` 是 `--dry-run` 的等价短参数；两者遵循[Status 与 dry-run](#status-与-dry-run)定义的
+  只读分析规则。
 - `dot apply MODULE` 是用法错误，返回 `2`，stdout 为空，且不读取或修改 control、target 或
   state；不提供 compatibility alias、弃用期或静默忽略。
 - Apply 失败且可能已经部分应用时只提示重跑全量 `dot apply`。

@@ -30,19 +30,22 @@ target = "~/.extra"
 	}
 	assertSnapshotUnchanged(t, before)
 
-	code, stdout, stderr = fixture.runInjected("apply", "--dry-run")
-	if code != exitOK ||
-		stdout != "converged\n" ||
-		strings.Contains(stdout, "create-link") ||
-		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf(
-			"apply --dry-run = (%d, %q, %q), want empty current selection",
-			code,
-			stdout,
-			stderr,
-		)
+	for _, dryRunFlag := range []string{"--dry-run", "-n"} {
+		code, stdout, stderr = fixture.runInjected("apply", dryRunFlag)
+		if code != exitOK ||
+			stdout != "converged\n" ||
+			strings.Contains(stdout, "create-link") ||
+			!strings.Contains(stderr, "state is missing") {
+			t.Fatalf(
+				"apply %s = (%d, %q, %q), want empty current selection",
+				dryRunFlag,
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, before)
 	}
-	assertSnapshotUnchanged(t, before)
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 		t.Fatalf("extra_modules = %v, want unchanged", extras)
 	}
