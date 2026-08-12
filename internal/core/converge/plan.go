@@ -32,7 +32,7 @@ type transitionDraft struct {
 	activeProblem  *Problem
 	cleanup        *Action
 	cleanupProblem *Problem
-	scheduled      []Action
+	actionIndexes  []int
 }
 
 // buildPlan observes the filesystem without mutating it and returns a deterministic
@@ -47,7 +47,7 @@ func buildPlan(request planRequest) (Plan, error) {
 	if err != nil {
 		if isPlanningProblem(err) {
 			return Plan{
-				Problems:   pathProblems(err),
+				problems:   pathProblems(err),
 				finalState: cloneSnapshot(request.State),
 			}, nil
 		}
@@ -346,13 +346,13 @@ func finalizeDrafts(
 	cleanupOrder []*transitionDraft,
 ) Plan {
 	plan := Plan{
-		Transitions: make([]Transition, 0, len(drafts)),
-		Problems:    make([]Problem, 0),
+		transitions: make([]transition, 0, len(drafts)),
+		problems:    make([]Problem, 0),
 	}
-	sequence := 0
+	active := make([]*transitionDraft, 0, len(drafts))
 	for _, draft := range drafts {
 		if draft.activeProblem != nil {
-			plan.Problems = append(plan.Problems, *draft.activeProblem)
+			plan.problems = append(plan.problems, *draft.activeProblem)
 		}
 		if draft.active == nil || draft.activeProblem != nil {
 			continue
@@ -361,33 +361,73 @@ func finalizeDrafts(
 			stateAlreadyFinal(snapshot, draft.key, recordForDesired(*draft.desired)) {
 			continue
 		}
-		draft.active.Order = sequence
-		sequence++
-		draft.scheduled = append(draft.scheduled, *draft.active)
+		active = append(active, draft)
+	}
+	slices.SortStableFunc(active, func(left, right *transitionDraft) int {
+		return actionPhase(left.active.Decision) - actionPhase(right.active.Decision)
+	})
+	actionIndexByDraft := make(map[*transitionDraft]int, len(active))
+	for _, draft := range active {
+		actionIndex := len(plan.actions)
+		plan.actions = append(plan.actions, *draft.active)
+		draft.actionIndexes = append(draft.actionIndexes, actionIndex)
+		actionIndexByDraft[draft] = actionIndex
+		if draft.active.Decision == DecisionCreateLocal ||
+			draft.active.Decision == DecisionCreateLink {
+			plan.schedule = append(plan.schedule, executionStep{
+				operation:   executionPrepareParent,
+				actionIndex: actionIndex,
+			})
+		}
+	}
+	for _, draft := range active {
+		plan.schedule = append(plan.schedule, executionStep{
+			operation:   executionApplyAction,
+			actionIndex: actionIndexByDraft[draft],
+		})
 	}
 	for _, draft := range cleanupOrder {
 		if draft.cleanupProblem != nil {
-			plan.Problems = append(plan.Problems, *draft.cleanupProblem)
+			plan.problems = append(plan.problems, *draft.cleanupProblem)
 			continue
 		}
-		draft.cleanup.Order = sequence
-		sequence++
-		draft.scheduled = append(draft.scheduled, *draft.cleanup)
+		actionIndex := len(plan.actions)
+		plan.actions = append(plan.actions, *draft.cleanup)
+		draft.actionIndexes = append(draft.actionIndexes, actionIndex)
+		plan.schedule = append(plan.schedule, executionStep{
+			operation:   executionApplyAction,
+			actionIndex: actionIndex,
+		})
 	}
 	for _, draft := range drafts {
-		transition := Transition{
-			ModuleID:    draft.key.ModuleID,
-			PlacementID: draft.key.PlacementID,
-			Actions:     append([]Action(nil), draft.scheduled...),
+		planned := transition{
+			moduleID:      draft.key.ModuleID,
+			placementID:   draft.key.PlacementID,
+			actionIndexes: append([]int(nil), draft.actionIndexes...),
 		}
 		if draft.desired != nil {
-			transition.Desired = true
-			transition.FinalRecord = recordForDesired(*draft.desired)
+			planned.desired = true
+			planned.finalRecord = recordForDesired(*draft.desired)
 		}
-		plan.Transitions = append(plan.Transitions, transition)
+		plan.transitions = append(plan.transitions, planned)
 	}
-	plan.finalState = finalState(snapshot, plan.Transitions)
+	plan.finalState = finalState(snapshot, plan.transitions)
 	return plan
+}
+
+func actionPhase(decision Decision) int {
+	switch decision {
+	case DecisionCreateLink, DecisionCreateLocal:
+		return 0
+	case DecisionUpdate:
+		return 1
+	case DecisionAdopt, DecisionKeep, DecisionRepairState:
+		return 2
+	case DecisionPrune, DecisionForget:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func stateAlreadyFinal(
@@ -411,15 +451,15 @@ func recordForDesired(desired desiredPlacement) state.Record {
 	return record
 }
 
-func finalState(snapshot state.Snapshot, transitions []Transition) state.Snapshot {
+func finalState(snapshot state.Snapshot, transitions []transition) state.Snapshot {
 	result := cloneSnapshot(snapshot)
-	for _, transition := range transitions {
+	for _, planned := range transitions {
 		key := state.Key{
-			ModuleID:    transition.ModuleID,
-			PlacementID: transition.PlacementID,
+			ModuleID:    planned.moduleID,
+			PlacementID: planned.placementID,
 		}
-		if transition.Desired {
-			result.Records[key] = transition.FinalRecord
+		if planned.desired {
+			result.Records[key] = planned.finalRecord
 			continue
 		}
 		delete(result.Records, key)

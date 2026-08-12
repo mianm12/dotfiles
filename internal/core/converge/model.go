@@ -4,7 +4,6 @@ package converge
 
 import (
 	"errors"
-	"sort"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
@@ -127,7 +126,6 @@ type planRequest struct {
 // ExpectedLinkDestination preserve the state facts that the executor must
 // recheck before update or prune.
 type Action struct {
-	Order                   int
 	ModuleID                string
 	PlacementID             string
 	Kind                    state.Kind
@@ -152,41 +150,77 @@ type Problem struct {
 	Reason      string
 }
 
-// Transition is the sole final-state decision for one logical placement key.
-// Desired transitions publish FinalRecord after every Action succeeds. Stale
-// transitions remove the key from FinalState.
-type Transition struct {
-	ModuleID    string
-	PlacementID string
-	Desired     bool
-	FinalRecord state.Record
-	Actions     []Action
+// transition is the sole final-state decision for one logical placement key.
+// Desired transitions publish finalRecord after every action succeeds. Stale
+// transitions remove the key from finalState.
+type transition struct {
+	moduleID      string
+	placementID   string
+	desired       bool
+	finalRecord   state.Record
+	actionIndexes []int
 }
 
-// Plan contains one Transition per logical key and all blocking Problems.
+type executionOperation uint8
+
+const (
+	executionPrepareParent executionOperation = iota
+	executionApplyAction
+)
+
+type executionStep struct {
+	operation   executionOperation
+	actionIndex int
+}
+
+type scheduledExecution struct {
+	operation executionOperation
+	action    Action
+}
+
+// Plan contains one transition per logical key, its execution schedule, and all
+// blocking problems. Its slices are private so callers cannot create or mutate
+// plans that violate planner invariants.
 // finalState is computed by the planner from transition facts, never by the
 // executor from action order.
 type Plan struct {
-	Transitions []Transition
-	Problems    []Problem
+	transitions []transition
+	problems    []Problem
+	actions     []Action
+	schedule    []executionStep
 	finalState  state.Snapshot
 }
 
 // Executable reports whether the plan is safe to execute.
 func (plan Plan) Executable() bool {
-	return len(plan.Problems) == 0
+	return len(plan.problems) == 0
 }
 
-// Actions returns the explicit executor actions in their global plan order.
+// Actions returns a copy of the executable actions in their real execution order.
 func (plan Plan) Actions() []Action {
 	actions := make([]Action, 0)
-	for _, transition := range plan.Transitions {
-		actions = append(actions, transition.Actions...)
+	for _, step := range plan.schedule {
+		if step.operation == executionApplyAction {
+			actions = append(actions, plan.actions[step.actionIndex])
+		}
 	}
-	sort.SliceStable(actions, func(left, right int) bool {
-		return actions[left].Order < actions[right].Order
-	})
 	return actions
+}
+
+// Problems returns a copy of every reason the plan cannot be executed.
+func (plan Plan) Problems() []Problem {
+	return append([]Problem(nil), plan.problems...)
+}
+
+func (plan Plan) executionSteps() []scheduledExecution {
+	steps := make([]scheduledExecution, len(plan.schedule))
+	for index, step := range plan.schedule {
+		steps[index] = scheduledExecution{
+			operation: step.operation,
+			action:    plan.actions[step.actionIndex],
+		}
+	}
+	return steps
 }
 
 func (plan Plan) finalSnapshot() state.Snapshot {

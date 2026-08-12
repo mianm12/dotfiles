@@ -96,7 +96,8 @@ dot help [COMMAND]
   Dry-run 与 status 均直接显示 `action kind=... module=... placement=... target=...` 和
   `problem kind=...`；forget Action 与 Problem 必须包含结构化 reason。Inactive inventory 仍以
   fact 表达，但不伪造 Transition。全局 blocker 不绕开后做局部规划：Transitions 为空，Problem
-  完整写 stdout。输入 warning 仍写 stderr。
+  完整写 stdout。输入 warning 仍写 stderr。Action 的投影顺序与真实 mutation 消费的公开 Action
+  顺序相同；创建 parent 的内部 schedule step 不单独投影。
 - Status 只要形成完整 analysis 就返回成功，即使其中有 pending、conflict 或 blocker。
   Mutation dry-run 能形成 Report 后，若 `Plan` 不可执行则完整输出后返回 `1`；否则返回成功。
   Create、update、prune 或 forget Action 本身不改变 dry-run 退出码。没有 `--check`。配置、manifest 或 state

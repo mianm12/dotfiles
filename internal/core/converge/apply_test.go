@@ -181,7 +181,7 @@ target = "~/.app"
 	writeMutationFile(t, target, "private")
 
 	result, err := Apply(fixture.environment())
-	if err == nil || len(result.Report.Plan.Problems) == 0 || result.TargetsChanged || result.StateChanged {
+	if err == nil || len(result.Report.Plan.Problems()) == 0 || result.TargetsChanged || result.StateChanged {
 		t.Fatalf("Apply(ordinary file) = (%#v, %v), want read-only conflict", result, err)
 	}
 	if contents, readErr := os.ReadFile(target); readErr != nil || string(contents) != "private" {
@@ -250,7 +250,7 @@ target = "~/.config/app/child"
 	)
 
 	result, err := Apply(fixture.environment())
-	if err == nil || len(result.Report.Plan.Problems) == 0 || result.TargetsChanged || result.StateChanged {
+	if err == nil || len(result.Report.Plan.Problems()) == 0 || result.TargetsChanged || result.StateChanged {
 		t.Fatalf("Apply(target topology) = (%#v, %v), want read-only blocker", result, err)
 	}
 	assertApplyBookkeepingMissing(t, fixture)
@@ -476,7 +476,7 @@ target = "~/.app"
 	writeMutationFile(t, target, "arrived while locked")
 	result, err := applyLocked(environment, preflight.fingerprint)
 	if !errors.Is(err, ErrBlocked) ||
-		len(result.Report.Plan.Problems) != 1 ||
+		len(result.Report.Plan.Problems()) != 1 ||
 		result.TargetsChanged || result.StateChanged {
 		t.Fatalf("applyLocked(filesystem drift) = (%#v, %v), want fresh conflict", result, err)
 	}

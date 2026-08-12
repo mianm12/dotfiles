@@ -91,7 +91,7 @@ func TestPlanIndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionPrune)
-	if len(plan.Problems) != 0 {
+	if len(plan.Problems()) != 0 {
 		t.Fatal("Build() has conflict, want independent alias target followed by stale prune")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -168,7 +168,7 @@ func TestPlanRejectsActiveTargetTraversingStateOwnedParentLink(t *testing.T) {
 			}
 
 			assertDecisions(t, plan, conflictDecision, conflictDecision)
-			if got := plan.Problems[0].Reason; !strings.Contains(
+			if got := plan.Problems()[0].Reason; !strings.Contains(
 				got,
 				`state-owned link from module "stale" placement "tree"`,
 			) {
@@ -204,7 +204,7 @@ func TestPlanRejectsAdoptedLinkTraversedByEffectiveDesiredTarget(t *testing.T) {
 	plan := fixture.build(t, modules, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, DecisionCreateLink)
-	if got := plan.Problems[0].Reason; !strings.Contains(
+	if got := plan.Problems()[0].Reason; !strings.Contains(
 		got,
 		`effective module "child" placement "config"`,
 	) {
@@ -256,7 +256,7 @@ func TestPlanRejectsResolvedDriftKeepTraversedByEffectiveDesiredTarget(
 	plan := fixture.build(t, modules, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, DecisionCreateLink)
-	if got := plan.Problems[0].Reason; !strings.Contains(
+	if got := plan.Problems()[0].Reason; !strings.Contains(
 		got,
 		`effective module "child" placement "config"`,
 	) {
@@ -297,7 +297,7 @@ func TestPlanRejectsRepairStateTraversedByEffectiveDesiredTarget(t *testing.T) {
 	plan := fixture.build(t, modules, snapshot)
 
 	assertDecisions(t, plan, conflictDecision, DecisionCreateLink)
-	if got := plan.Problems[0].Reason; !strings.Contains(
+	if got := plan.Problems()[0].Reason; !strings.Contains(
 		got,
 		`effective module "child" placement "config"`,
 	) {
@@ -361,7 +361,7 @@ func TestFullPlanRejectsLinkUpdateTraversedByDesiredTarget(t *testing.T) {
 			}
 
 			assertDecisions(t, plan, conflictDecision, conflictDecision)
-			if got := plan.Problems[0].Reason; !strings.Contains(
+			if got := plan.Problems()[0].Reason; !strings.Contains(
 				got,
 				`effective module "child" placement "config"`,
 			) {
@@ -494,10 +494,10 @@ func TestFullPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 			}
 			if test.want == conflictDecision &&
 				!strings.Contains(
-					plan.Problems[0].Reason,
+					plan.Problems()[0].Reason,
 					`effective module "child" placement "config"`,
 				) {
-				t.Fatalf("rebind conflict reason = %q", plan.Problems[0].Reason)
+				t.Fatalf("rebind conflict reason = %q", plan.Problems()[0].Reason)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -570,13 +570,13 @@ func TestFullPlanRejectsStaleCleanupTraversedByDesired(
 
 			assertDecisions(t, plan, conflictDecision, conflictDecision)
 			found := false
-			for _, problem := range plan.Problems {
+			for _, problem := range plan.Problems() {
 				if strings.Contains(problem.Reason, `active module "active" placement "child"`) {
 					found = true
 				}
 			}
 			if !found {
-				t.Fatalf("problems = %#v, want stale cleanup dependent child", plan.Problems)
+				t.Fatalf("problems = %#v, want stale cleanup dependent child", plan.Problems())
 			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
@@ -610,8 +610,8 @@ func TestPlanDoesNotConfuseIndependentAliasWithOwnedLinkTraversal(t *testing.T) 
 
 	plan := fixture.build(t, modules, snapshot)
 
-	assertDecisions(t, plan, DecisionUpdate, DecisionCreateLink)
-	if len(plan.Problems) != 0 {
+	assertDecisions(t, plan, DecisionCreateLink, DecisionUpdate)
+	if len(plan.Problems()) != 0 {
 		t.Fatalf("Build() = %#v, want independent alias to remain executable", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -651,7 +651,7 @@ func TestPlanRejectsUpdateBeforeTraversedStalePrune(t *testing.T) {
 	}, snapshot)
 
 	assertDecisions(t, plan, DecisionUpdate, conflictDecision)
-	if got := plan.Problems[0].Reason; !strings.Contains(
+	if got := plan.Problems()[0].Reason; !strings.Contains(
 		got,
 		`active link update from module "parent" placement "tree"`,
 	) {
@@ -707,7 +707,7 @@ func TestPlanConflictedUpdateDoesNotBlockIndependentStaleCleanup(t *testing.T) {
 	if plan.Actions()[0].ModuleID != "stale" {
 		t.Fatalf("executable cleanup = %#v, want stale prune", plan.Actions())
 	}
-	for _, problem := range plan.Problems {
+	for _, problem := range plan.Problems() {
 		if problem.ModuleID == "stale" {
 			t.Fatalf("stale cleanup was blocked by a conflicted update: %#v", plan)
 		}
@@ -982,7 +982,7 @@ func TestPlanDoesNotTreatDriftedParentLinkAsStateOwned(t *testing.T) {
 	}
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Problems) != 0 {
+	if len(plan.Problems()) != 0 {
 		t.Fatalf("Build() = %#v, want drifted state link to remain unowned", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1029,7 +1029,7 @@ func TestPlanDoesNotTreatResolvedParentDriftAsStateOwned(t *testing.T) {
 	}
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Problems) != 0 {
+	if len(plan.Problems()) != 0 {
 		t.Fatalf("Build() = %#v, want resolved state drift to remain unowned", plan)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1271,7 +1271,7 @@ func TestPlanDriftedStaleLinkForgetsAndDoesNotBlock(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Problems) != 0 {
+	if len(plan.Problems()) != 0 {
 		t.Fatal("Build() has conflict, want drifted stale link to remain non-blocking")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1296,23 +1296,23 @@ func TestPlanTargetChangeCreatesBeforePrune(t *testing.T) {
 	if actions[0].Target != newTarget || actions[1].Target != oldTarget {
 		t.Fatalf("Build() targets = %#v, want new target before old target", actions)
 	}
-	if len(plan.Transitions) != 1 {
-		t.Fatalf("Build() transitions = %#v, want one logical-key transition", plan.Transitions)
+	if len(plan.transitions) != 1 {
+		t.Fatalf("Build() transitions = %#v, want one logical-key transition", plan.transitions)
 	}
-	transition := plan.Transitions[0]
-	if !transition.Desired ||
-		transition.ModuleID != "app" ||
-		transition.PlacementID != "config" ||
-		len(transition.Actions) != 2 ||
-		transition.FinalRecord.Target != newTarget {
-		t.Fatalf("Build() transition = %#v, want desired move to new target", transition)
+	planned := plan.transitions[0]
+	if !planned.desired ||
+		planned.moduleID != "app" ||
+		planned.placementID != "config" ||
+		len(planned.actionIndexes) != 2 ||
+		planned.finalRecord.Target != newTarget {
+		t.Fatalf("Build() transition = %#v, want desired move to new target", planned)
 	}
 	final := plan.finalSnapshot()
 	wantKey := state.Key{ModuleID: "app", PlacementID: "config"}
 	if len(final.Records) != 1 || final.Records[wantKey].Target != newTarget {
 		t.Fatalf("Build() FinalState = %#v, want only new target", final)
 	}
-	plan.Transitions[0].Actions[0], plan.Transitions[0].Actions[1] = plan.Transitions[0].Actions[1], plan.Transitions[0].Actions[0]
+	plan.transitions[0].actionIndexes[0], plan.transitions[0].actionIndexes[1] = plan.transitions[0].actionIndexes[1], plan.transitions[0].actionIndexes[0]
 	ordered := plan.Actions()
 	if ordered[0].Target != newTarget || ordered[1].Target != oldTarget {
 		t.Fatalf("Plan.Actions() = %#v, want explicit global action order", ordered)
@@ -1460,7 +1460,7 @@ func TestPlanCrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
 			plan := fixture.build(t, []config.Module{module}, snapshot)
 
 			assertDecisions(t, plan, test.want, DecisionForget)
-			if len(plan.Problems) != 0 {
+			if len(plan.Problems()) != 0 {
 				t.Fatalf("Build() = %#v, want local decision plus stale forget", plan)
 			}
 			assertTreeUnchanged(t, fixture.root, before)
@@ -1497,7 +1497,7 @@ func TestPlanStateOwnedSymlinkDriftIsConflict(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision)
-	if len(plan.Problems) == 0 {
+	if len(plan.Problems()) == 0 {
 		t.Fatal("Build() Problems is empty, want conflict")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1546,7 +1546,7 @@ func TestPlanParentSymlinkDriftRejectsUpdate(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, conflictDecision)
-	if plan.Problems[0].Reason == "" {
+	if plan.Problems()[0].Reason == "" {
 		t.Fatal("Build() conflict has empty reason")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1576,7 +1576,7 @@ func TestPlanParentSymlinkDriftRejectsPruneButContinues(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, plan, DecisionCreateLink, DecisionForget)
-	if len(plan.Problems) != 0 {
+	if len(plan.Problems()) != 0 {
 		t.Fatal("Build() has conflict, want stale drift to be non-blocking")
 	}
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1676,11 +1676,11 @@ func (fixture *planFixture) build(
 			expected[state.Key{ModuleID: module.ID, PlacementID: local.ID}] = true
 		}
 	}
-	seen := make(map[state.Key]bool, len(plan.Transitions))
-	for _, transition := range plan.Transitions {
+	seen := make(map[state.Key]bool, len(plan.transitions))
+	for _, planned := range plan.transitions {
 		key := state.Key{
-			ModuleID:    transition.ModuleID,
-			PlacementID: transition.PlacementID,
+			ModuleID:    planned.moduleID,
+			PlacementID: planned.placementID,
 		}
 		if seen[key] {
 			t.Fatalf("buildPlan() returned duplicate transition key %#v: %#v", key, plan)
@@ -1695,7 +1695,7 @@ func (fixture *planFixture) build(
 			t.Fatalf("buildPlan() omitted transition key %#v: %#v", key, plan)
 		}
 	}
-	for _, problem := range plan.Problems {
+	for _, problem := range plan.Problems() {
 		if problem.Kind == ProblemBlocked {
 			t.Fatalf("buildPlan() returned blocker: %#v", plan)
 		}
@@ -1820,11 +1820,11 @@ func assertDecisions(t *testing.T, plan Plan, want ...Decision) {
 			t.Fatalf("Build() forget action has empty reason: %#v", action)
 		}
 	}
-	if !slices.Equal(gotActions, wantActions) || len(plan.Problems) != wantProblems {
+	if !slices.Equal(gotActions, wantActions) || len(plan.Problems()) != wantProblems {
 		t.Fatalf(
 			"Build() actions = %v problems = %d, want actions = %v problems = %d; plan=%#v",
 			gotActions,
-			len(plan.Problems),
+			len(plan.Problems()),
 			wantActions,
 			wantProblems,
 			plan,
@@ -1833,7 +1833,7 @@ func assertDecisions(t *testing.T, plan Plan, want ...Decision) {
 }
 
 func firstDecision(plan Plan) Decision {
-	if len(plan.Problems) != 0 {
+	if len(plan.Problems()) != 0 {
 		return conflictDecision
 	}
 	actions := plan.Actions()

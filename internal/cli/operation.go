@@ -74,7 +74,7 @@ func withCoreRecovery(err error) error {
 }
 
 func hasControlProblem(plan converge.Plan) bool {
-	for _, problem := range plan.Problems {
+	for _, problem := range plan.Problems() {
 		if problem.Code == converge.ProblemCodeControlTopology ||
 			problem.Code == converge.ProblemCodeControlBoundary {
 			return true

@@ -32,8 +32,9 @@
 - mutation、state commit 或 lock release 失败后不把未完成 Action 投影成成功；
 - 每个成功 mutation 场景重复执行相同 apply，并断言没有新的文件系统 mutation。
 
-Planner 的内部断言应直接覆盖一个 key 一个 Transition、Action 顺序和 FinalState；CLI 测试只验证
-用户能观察的 facts/actions/problems/warnings，不复制 planner 的内部状态机。
+Planner 的内部断言应直接覆盖一个 key 一个 Transition、Action/真实 execution schedule 同序和
+FinalState；CLI 测试只验证用户能观察的 facts/actions/problems/warnings，不复制 planner 的内部
+状态机，也不手工构造可能违反不变量的 Plan。
 
 ## 合成环境与私人数据
 

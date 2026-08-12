@@ -158,6 +158,12 @@ func TestExecutionDoesNotUpdateUntilAllCreatesSucceed(t *testing.T) {
 		},
 	})
 	plan, loaded := prepareExecution(t, request)
+	actions := plan.Actions()
+	if len(actions) != 2 ||
+		actions[0].Decision != DecisionCreateLocal ||
+		actions[1].Decision != DecisionUpdate {
+		t.Fatalf("Plan.Actions() = %#v, want real create-before-update order", actions)
+	}
 	_, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
 	if err == nil {
 		t.Fatal("executePlan() error = nil, want create failure")
@@ -278,7 +284,7 @@ func TestExecutionRejectsConflictBeforeArtifactOrStateMutation(t *testing.T) {
 	before := snapshotFiles(t, target)
 	plan, loaded := prepareExecution(t, request)
 	result, err := executePlan(request.Home, fixture.state, plan, loaded, commitState)
-	if err == nil || len(plan.Problems) == 0 {
+	if err == nil || len(plan.Problems()) == 0 {
 		t.Fatalf("executePlan() = (%#v, %v), plan %#v; want deterministic conflict", result, err, plan)
 	}
 	assertFilesUnchanged(t, before)
