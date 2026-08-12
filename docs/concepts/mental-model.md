@@ -32,7 +32,8 @@ flowchart LR
   后执行它。
 
 规范中的完整输入和规划规则分别见
-[selection](../spec/selection.md)、[placements](../spec/placements.md)、
+[selection](../spec/selection.md)、[modules and platforms](../spec/modules-and-platforms.md)、
+[placements](../spec/placements.md)、
 [state and ownership](../spec/state-and-ownership.md) 与 [planning](../spec/planning.md)。
 
 ## Selection 与 convergence 是两步

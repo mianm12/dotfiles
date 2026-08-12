@@ -4,7 +4,8 @@ Profiles 解决“哪些机器复用同一组 modules”，platform matching 解
 是否适用、选择哪个 variant”。两者职责不同：profile 不包含条件逻辑，variant 也不改变机器
 selection。
 
-精确解析规则以[selection 规范](../spec/selection.md)为准。本指南提供建模与操作路径。
+Profile 与 machine selection 规则见[selection 规范](../spec/selection.md)，module 与 platform
+解析见[modules and platforms 规范](../spec/modules-and-platforms.md)。本指南提供建模与操作路径。
 
 ## 选择 profile 还是直接 module
 
@@ -129,7 +130,7 @@ dot status
 
 Profile 选中但 not-applicable 是合法结果，并可触发旧 ownership cleanup；direct/extra selection
 not-applicable 或 indeterminate 的 mutation 边界不同。不要从本表推导删除行为，精确规则见
-[selection](../spec/selection.md)、[planning](../spec/planning.md)与
+[modules and platforms](../spec/modules-and-platforms.md)、[planning](../spec/planning.md)与
 [mutation](../spec/mutation-and-recovery.md)。
 
 ## 多机器变更顺序

@@ -1,72 +1,76 @@
 # 测试架构
 
-本文规定测试所有权和验证层次。产品结果由对应的 [`../spec/`](../spec/) 规则 owner 定义，
-测试提供当前实现证据。
+测试证明当前实现是否满足[产品规范](../spec/README.md)和
+[架构边界](overview.md)，不反向创造产品规则。本页定义测试放置、隔离和门禁层次；具体命令的
+事实来源是 [Makefile](../../Makefile) 与 CI workflows。
 
-## 所有权
+## 测试放置
 
-- `internal/cli` 的跨层测试按 init、select、apply、status、analysis、placement、safety、
-  recovery 和 full convergence 等用户行为域组织。
-- CLI 的命令语法、错误映射和输出格式由 `commands_test.go` 覆盖。
-- Config、paths 与 state 在各自 package 覆盖局部模型与失败边界；converge 按 selection、
-  analysis、planning、execution、lock 与 recovery 的具体行为组织测试。
-- Storage 覆盖私有文件首次发布、相同内容精确 no-op、替换、权限与异常目录项；config/state
-  只覆盖各自编码和语义校验；converge 覆盖编码结果进入统一发布原语的调用边界。
-- Paths 覆盖确定阻塞与不可确定 I/O 的 typed resolution classification；converge planning 测试
-  只验证分类对应的 prune/forget 策略，不依赖 errno 或 `PathError` 包装形状。
-- Paths 覆盖 `ResolvedControls` 零值 fail closed、单次 topology 快照和 target overlap 复用；
-  converge 覆盖 planner 只接收该快照，以及锁内 assessment 会重新解析而不复用锁前身份。
-- Converge 负责固定 Environment、单次 lock ownership、selection publication、锁前完整 artifact
-  preflight、锁内重新分析与 fresh Plan 的跨层测试；直接调用 `converge.Apply` 的 deterministic
-  blocker 必须验证 state root 与 lock 均未创建。Lock 测试覆盖获取、释放、busy 和异常目录项；
-  execution 测试覆盖 plan 执行、changed-target 复核、state commit 与恢复事实。
-- `cmd/dot` 只保留最小进程级 smoke；完整公开行为通过 `cli.Run` 测试。
-- CLI 合成环境集中在 `internal/cli/testenv_test.go`，不创建跨 package 通用测试框架。
-- CLI 分别验证 status/dry-run 的当前 selection forget、成功 state commit 后的过去式 forget
-  结果，以及 mutation/state commit/lock release 失败时不输出未完成 Action。
-- Converge planning 直接断言每个 state key 最多一个 Transition、target move 合并为同一
-  Transition 的多个 Action，以及 FinalState 不依赖 executor 的 Action 遍历顺序；execution
-  测试断言 executor 不增量编辑 state。
+| 层次 | 主要拥有的证据 |
+| --- | --- |
+| `internal/storage` | 私有文件首次发布、相同内容 no-op、替换、权限和异常目录项 |
+| `internal/core/paths` | Target/source 解析、control topology、确定阻塞与不确定 I/O 分类 |
+| `internal/core/state` | State schema、严格解码、版本、稳定编码和安全字段 |
+| `internal/core/config` | Machine/repository/module 配置、profile、platform applicability 与 variants |
+| `internal/core/converge` | Selection resolution、analysis、planning、lock、execution、commit 与 recovery |
+| `internal/cli` | 公开命令、跨层用户故事、输出、退出码和完整失败边界 |
+| `cmd/dot` | 最小进程级 smoke |
+| `internal/architecture` | Production internal imports 与第三方 owner 的精确 allowlist |
 
-## 合成环境
+局部模型在 owner package 测试；用户可观察的完整调用路径在 `internal/cli` 测试。不要把所有行为
+塞进进程级测试，也不要为了复用 fixture 创建跨 package 通用测试框架。CLI 合成环境集中在
+`internal/cli/testenv_test.go`。
+
+## 必须跨层证明的边界
+
+- Init/select 只发布 machine selection，不读取 state 或修改 target；
+- status/dry-run 严格只读，并对完整 effective selection 与 stale state 建立同一 analysis；
+- Platform matching 使用注入的 known/unknown OS、distro、arch 合成值，不依赖运行测试的 host；
+- apply 锁前零写入 preflight、锁内 fresh analysis、changed-target 复核和 state commit；
+- deterministic blocker 不创建 state root、lock、target 或临时文件；
+- link/local ownership、forget/prune、目录 traversal 与 control boundary 不越权 mutation；
+- mutation、state commit 或 lock release 失败后不把未完成 Action 投影成成功；
+- 每个成功 mutation 场景重复执行相同 apply，并断言没有新的文件系统 mutation。
+
+Planner 的内部断言应直接覆盖一个 key 一个 Transition、Action 顺序和 FinalState；CLI 测试只验证
+用户能观察的 facts/actions/problems/warnings，不复制 planner 的内部状态机。
+
+## 合成环境与私人数据
 
 文件系统测试使用 `t.TempDir` 和绝对路径，显式隔离 HOME、repository、machine config、state
-和 lock。测试不得读取或写入真实 HOME、私人 modules、machine config、state 或 lock。
+与 lock。测试不得读取或写入真实 HOME、私人 modules、machine config、state 或 lock。
 
-唯一例外是 config package 的 tracked-repository smoke：它只读当前 checkout 的 `dot.toml`
-与 recognized modules，验证实际仓库配置可以在支持的平台矩阵中解析；不读取 HOME、machine
-config、state 或 lock，也不执行 CLI 或 mutation。
+唯一例外是 config package 的 tracked-repository smoke：它只读当前 checkout 的 `dot.toml` 与
+recognized modules，在支持的平台矩阵中验证 tracked 配置；它不读取 HOME 控制文件，也不执行
+CLI 或 mutation。
 
-每个成功 mutation 场景再次执行相同 apply，并断言没有新的文件系统 mutation。真实缺陷先
-转化为脱敏、最小、合成复现，再进入回归套件和永久门禁。
+真实缺陷先转化为脱敏、最小、合成复现。无法在合成环境证明的真实机器观察必须单独标为
+Operational，不用本地偶然成功替代测试。
 
 ## 验证层次
 
-- Focused tests：开发期间快速验证变更 package 和直接消费者。
-- Fast tests：`make test` 快速运行全部 Go 测试。
-- Full gate：`make check` 验证 module checksum、tidy、format、lint、全量 race tests，并
-  构建生产二进制、校验 `version` 构建信息。
-- Fuzz：`make fuzz` 持续攻击 state decoder、target expression 与 os-release ID parser
-  安全边界。独立 workflow 只在每周计划或手动触发时运行，不响应 Pull Request，也不作为
-  required check；Pull Request 继续只运行确定性门禁。Fuzz 失败时保留 Go 写出的最小失败
-  输入，供本地回归。
-- Vulnerability：`make vuln` 使用 `tools/go.mod` tool directive 固定的 `govulncheck` 扫描可达
-  漏洞，不加入本地离线 `make check`；仓库 workflow 在相关 Go Pull Request、每周计划和手动
-  触发时运行它，但不作为 required check。
-- 双平台 CI：macOS 与 Ubuntu 在 Pull Request 上运行同一 `make check`，并作为 `main` 的
-  required checks。
-- Coverage：不设置简单的全局百分比阈值；永久门禁优先直接覆盖 control/placement topology、
-  platform indeterminate 零写入、state/input 类型、forget/prune、mutation 恢复与重复收敛等
-  关键安全行为。
+| 层次 | 入口 | 何时使用 |
+| --- | --- | --- |
+| Focused | `go test` 指定 package / test | 开发期间验证变更 owner 与直接消费者 |
+| Fast | `make test` | 快速运行全部 Go tests |
+| Full gate | `make check` | Module/tidy/format/lint/race/build/version 的当前平台完整门禁 |
+| Fuzz | `make fuzz` | State decoder、target expression、os-release parser 的边界攻击 |
+| Vulnerability | `make vuln` | 固定工具版本的可达漏洞扫描 |
+| Dual-platform CI | macOS 与 Ubuntu workflows | Pull Request 上运行同一 `make check` |
 
-## 架构约束
+Fuzz 与 vulnerability 的远程触发、required 状态和版本以当前 workflows / `tools/go.mod` 为准，
+不在本文复制调度配置。Coverage 不设置简单全局百分比阈值；永久门禁优先覆盖数据完整性与失败
+边界，而不是追求无上下文的数字。
 
-架构测试只解析生产 Go 文件的 imports，并以显式允许边表约束
-[`overview.md`](overview.md) 定义的层次。Lock、target mutation、machine selection publication
-和 state commit 都由 `internal/core/converge` 单独拥有；machine selection 没有公开 publication
-API。因此 ownership 由 package/API 结构表达，不再维护按函数名扫描 AST 的第二套白名单。
-新增反向依赖或越层依赖必须先作为架构变更审查，不能靠测试白名单静默放行。
+## 架构约束测试
 
-同一测试还双向校验 [`overview.md`](overview.md) 定义的生产代码直接第三方依赖精确
-allowlist。未列出的第三方 import、错误 owner 和已经不存在的陈旧白名单边都必须失败；
-tool、transitive 与测试依赖不属于该边表。
+`internal/architecture/dependencies_test.go` 解析 production Go imports，并双向检查
+[架构概览](overview.md#package-地图)中的内部依赖边和第三方 owner：
+
+- 代码出现未列出的 package/import/owner 时失败；
+- allowlist 保留已经不存在的 package 或 edge 时也失败；
+- 标准库、tests、tools 与 transitive dependencies 不混入 production 表。
+
+Lock、target mutation、machine selection publication 和 state commit 由
+`internal/core/converge` 的 package/API 边界集中表达，不再建立按函数名扫描的第二套 ownership
+白名单。新增反向依赖或越层依赖必须先作为架构变化审查，不能靠单向放宽测试通过。

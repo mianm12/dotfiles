@@ -1,7 +1,7 @@
 # Placements 与路径边界
 
-Placement ID 在所属 module 的 `links` 和 `locals` 中共同唯一。Source/example 必须显式声明；
-`module.toml` 不会被隐式链接。
+Placement ID 使用 `[a-z0-9][a-z0-9_-]*`，并在所属 module 的 `links` 和 `locals` 中共同唯一。
+Source/example 必须显式声明；`module.toml` 不会被隐式链接。
 
 ## Link
 

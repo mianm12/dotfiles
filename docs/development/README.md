@@ -23,7 +23,8 @@
 | 你要改变什么 | 先看哪里 | 主要证据 |
 | --- | --- | --- |
 | 公开命令、输出类别或退出码 | [CLI 规范](../spec/cli.md) | `internal/cli` 测试与进程 smoke |
-| repository、profile、module、platform 解析 | [selection 规范](../spec/selection.md) | `core/config`、`core/converge` 与 CLI 跨层测试 |
+| repository、profile、machine selection | [selection 规范](../spec/selection.md) | `core/config`、`core/converge` 与 CLI 跨层测试 |
+| module 发现、applicability、variants | [modules 规范](../spec/modules-and-platforms.md) | `core/config`、`core/converge` 与 CLI 跨层测试 |
 | source、target 或路径关系 | [placements 规范](../spec/placements.md) | `core/paths` 与 safety/placement 测试 |
 | ownership 或持久 state | [state 规范](../spec/state-and-ownership.md) | `core/state`、planning/execution 测试 |
 | action eligibility 或冲突判定 | [planning 规范](../spec/planning.md) | converge planning 与 CLI analysis 测试 |

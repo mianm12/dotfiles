@@ -1,104 +1,85 @@
 # 架构概览
 
-本文描述当前 Go 实现的结构，不是产品行为契约。产品规则以
-[`../spec/README.md`](../spec/README.md) 为准。
+本文描述当前 Go 实现的稳定职责、数据流和依赖边，不定义产品行为。产品结果以
+[产品规范索引](../spec/README.md)为准；关键 convergence 取舍的理由见
+[ADR 0001](../decisions/0001-convergence-v3.md)。内部类型、函数和系统调用以当前代码为证据，
+不在本页维护镜像。
 
-## 数据流
+## 系统数据流
 
-```text
-repository desired + machine selection + state + actual filesystem
-  -> status / dry-run: converge.Analyze
-       -> resolve one immutable ResolvedControls snapshot
-       -> resolve selection + state + targets against that snapshot -> Report
-  -> apply: converge.Apply
-       -> converge.Analyze (full read-only preflight)
-       -> acquire the lock path captured by the preflight snapshot
-       -> converge.Analyze (fresh locked inputs, fresh ResolvedControls and Plan)
-       -> compare machine semantic fingerprint
-       -> execute fresh locked Plan + verify changed targets + commit state
-  -> release lock
-  -> CLI Report / typed-error projection
+```mermaid
+flowchart TD
+    I["Repository + machine selection + state + filesystem"]
+    A["完整只读 analysis"]
+    R["Report\nFacts + Plan + warnings"]
+    O["CLI status / dry-run 投影"]
+    P["Apply 校验锁前 preflight"]
+    L["获取 preflight 捕获的 lock"]
+    F["锁内重新 Analyze\n使用 fresh inputs 与 fresh path snapshot"]
+    X["执行 fresh Plan\n复核 changed targets"]
+    C["提交 FinalState"]
 
-init/select -> converge.Initialize / SelectAdd / SelectRemove
-            -> operation-specific preflight + lock + reload + atomic config publication + release
+    I --> A --> R --> O
+    A --> P --> L --> F --> X --> C
 ```
 
-核心业务逻辑与 CLI、文件发布和进程退出分离。`cmd/dot` 只把进程 IO/环境交给 `cli.Run` 并以
-其结果退出。CLI 只构造 `converge.Environment`、调用公开函数并投影 `Report` 或 typed error；不
-解析 selection、不规划、不读取 state、不拥有 lock，也不提交 target 或 state。
+`status` 与 dry-run 调用 `converge.Analyze`，只投影完整只读 analysis。`apply` 在锁前使用同一个
+analysis 实现做零写入 preflight，取得该次快照中的 lock 后，在锁内重新读取输入和路径身份；
+锁前 Plan 不进入执行。
 
-`converge.Analyze` 是唯一完整只读分析入口。每次 analysis 先把 repository、machine config、state
-和 lock 的词法路径及解析身份固定为一个不可变 `paths.ResolvedControls`。Selection 与 platform
-只解析一次；planner 的完整 target-set 校验和全部 stale control-boundary 判断只消费该快照，
-不能接收 raw controls，也不能重新解析 control topology。私有 analysis 最终只保留 Report、
-loaded state、ResolvedControls 和 machine semantic fingerprint；公开 `Report` 只包含客观
-ModuleFacts、`Plan{Transitions, Problems}` 与 warnings。Planner 对每个 state key 最多构造一个
-Transition，并一次性计算私有不可变 FinalState；executor 只执行 Action 和提交该 FinalState。
+`init`、`select add` 与 `select remove` 走较窄的 selection mutation 路径：操作级 preflight →
+lock → reload → 原子发布 machine config。它们不读取 state，也不规划或修改 target。
 
-`converge.Apply` 在锁前调用同一分析实现完成完整零写入检查，并使用该次快照固定的 lock 路径
-获取单次 lock。锁内再次调用同一实现，生成一份 fresh ResolvedControls 和 fresh Plan；只执行这份
-锁内结果。锁前 Plan、resolved modules 和 state 不进入执行；fingerprint 只用于拒绝锁前后
-machine selection 漂移。这里的“一次解析”以单次 analysis 为边界，不会把锁前 filesystem 身份
-错误复用到锁内重分析。
+## 核心职责与不变量
 
-Status 与 dry-run 对全部 effective modules 与全部 state-only stale records 运行同一次全量规划。
-Selection、control topology 或 target-set blocker 使 Transitions 为空并生成 Problems；不会过滤
-blocked module 后再次局部规划。
+1. **CLI 只负责边界投影。** `internal/cli` 解析参数、构造环境、调用 core，并把 Report 或 typed
+   error 转成 stdout/stderr 与退出码；不拥有 selection 解析、planning、lock、target mutation
+   或 state commit。
+2. **Converge 是编排与 mutation 的唯一 owner。** 完整 analysis、selection resolution、Plan、
+   lock、target mutation、结果复核和 config/state commit 都在 `internal/core/converge` 收口。
+3. **一次 analysis 只使用一个 control topology 快照。** `internal/core/paths` 把 HOME、config、
+   state、lock 与 repository 的词法/解析身份固定为不可变 `ResolvedControls`；planner 不接收并行
+   raw-control 路径，也不自行重新解析 topology。
+4. **一个 placement key 只有一个最终决定。** Planner 为每个 `(module, placement)` 生成一个
+   Transition，并一次性计算 FinalState；executor 执行有序 Actions，不在执行途中增量修补 state。
+5. **锁内事实优先。** Apply 只执行锁内重新 analysis 得到的 Plan；锁前 selection fingerprint 只
+   用于检测 machine selection 漂移，不让旧 filesystem、state 或 resolved identity 泄漏到执行。
+6. **私有控制文件发布集中。** `internal/storage` 提供 config/state 的私有原子发布边界；业务层不
+   各自实现覆盖、权限和临时文件协议。
 
-公开给 CLI 的 core 接口是：
+这些是内部 ownership 约束。公开的全量加载、path、planning、锁和恢复行为仍分别由
+[CLI](../spec/cli.md)、[placements](../spec/placements.md)、[planning](../spec/planning.md)与
+[mutation](../spec/mutation-and-recovery.md)规范拥有。
 
-```go
-type Environment struct {
-    Home       string
-    ConfigPath string
-    StatePath  string
-    LockPath   string
-    Platform   config.Platform
-}
+## Package 地图
 
-type Report struct {
-    Facts    []ModuleFact
-    Plan     Plan
-    Warnings []string
-}
-
-func Analyze(Environment) (Report, error)
-func Apply(Environment) (ApplyResult, error)
-func Initialize(Environment, string, []string) (SelectionResult, error)
-func SelectAdd(Environment, string) (SelectionResult, error)
-func SelectRemove(Environment, string) (SelectionResult, error)
-```
-
-这些函数以单次调用固定 HOME 与 control paths，并通过词法 `defer` 释放内部 lock；不存在
-可复制、可复用或需要 closing 状态的 Session/Ownership 对象，也不通过通用 request enum 或
-callback workflow 组合 selection 操作。Lock release 失败与 mutation 错误合并为窄 typed
-error，已完成写入不回滚；重跑命令文案由 CLI 决定。
-
-## Package 职责
-
-| Package | 职责 |
+| Package | 唯一职责 |
 | --- | --- |
-| `internal/storage` | 私有控制目录边界，以及私有控制文件的唯一原子覆盖发布原语 |
-| `internal/core/paths` | HOME target、source、不可变 ResolvedControls、控制路径边界和路径解析结果分类 |
-| `internal/core/state` | ownership state 模型与编解码 |
-| `internal/core/config` | repository、machine 和 module 配置解析 |
-| `internal/core/converge` | selection resolution、完整分析、全量规划、lock、target mutation、changed-target 复核与 state/config commit 的唯一 owner |
-| `internal/cli` | 命令参数、Environment 构造、Report/typed-error 输出和退出码 |
-| `cmd/dot` | 进程入口 |
+| `internal/buildinfo` | 构建版本数据 |
+| `internal/storage` | 私有控制目录与控制文件原子发布原语 |
+| `internal/core/paths` | HOME target/source 解析、control topology 与路径事实分类 |
+| `internal/core/state` | Ownership state 模型、校验与编解码 |
+| `internal/core/config` | Repository、machine、module 配置加载和 platform matching |
+| `internal/core/converge` | Selection、analysis、planning、lock、mutation、复核与 commit |
+| `internal/cli` | 命令语法、环境构造、公开输出与退出码 |
+| `cmd/dot` | 最小进程入口 |
 
-允许的依赖总体从左向右推进：
+生产 package 的直接内部依赖由 `internal/architecture/dependencies_test.go` 双向固定：
 
-```text
-storage / paths / state
-        -> config
-        -> converge
-        -> cli -> cmd/dot
-```
+| Source | 允许直接 import |
+| --- | --- |
+| `internal/buildinfo`、`internal/storage`、`internal/core/paths`、`internal/core/state` | 无内部依赖 |
+| `internal/core/config` | `internal/core/paths` |
+| `internal/core/converge` | `internal/core/config`、`internal/core/paths`、`internal/core/state`、`internal/storage` |
+| `internal/cli` | `internal/buildinfo`、`internal/core/config`、`internal/core/converge` |
+| `cmd/dot` | `internal/cli` |
 
-实际允许边由架构测试中的显式表固定。生产 package 不得反向依赖，也不得为了省事越过该表；
-需要改变边界时，先说明职责变化并同步架构说明和机械约束。
+未列出的边、缺失的既有边和未知 production package 都会使架构测试失败。需要改变依赖时，先
+说明职责为何移动，再同步本页、代码和机械约束；不能只放宽 allowlist。
 
-生产代码的直接第三方依赖同样由架构测试按精确 import path 固定：
+## 第三方依赖 owner
+
+架构测试同样双向固定生产代码的直接第三方 import：
 
 | 第三方 package | 唯一 owner |
 | --- | --- |
@@ -107,46 +88,16 @@ storage / paths / state
 | `github.com/pelletier/go-toml/v2` | `internal/core/config` |
 | `github.com/spf13/cobra` | `internal/cli` |
 
-标准库、仓库内部 import、测试依赖、tool-only module 和间接 module 不进入该表。它只约束
-`cmd/`、`internal/` 中 production Go 文件实际存在的直接边；新增或移动第三方 import 必须先
-作为架构变化审查。
+标准库、repository 内部 import、测试依赖、tool-only module 和 transitive dependency 不进入该表。
+工具版本与调用入口由 `tools/go.mod` 和 [Makefile](../../Makefile)拥有。
 
-## 实现选择
+## 修改架构时
 
-实现使用 Go，优先标准库和窄职责依赖。运行时依赖是：
+先回答三个问题：
 
-- Cobra：CLI 解析。
-- `go-toml/v2`：配置解析，并通过 `DisallowUnknownFields` 严格加载。
-- `gofrs/flock`：单进程 mutation lock。
-- `renameio/v2`：仅由 `internal/storage` 用于私有 control file 的原子覆盖发布。
+1. 需要集中表达的唯一不变量是什么，当前为何无法由既有 owner 表达？
+2. 哪个 package 应拥有决定，哪些调用方只消费结果？
+3. 哪个架构测试、跨层行为测试和规范 owner 能证明变化没有建立第二真相源？
 
-`golangci-lint` 与 `govulncheck` 通过 `tools/go.mod` 的 `tool` directive 固定版本，并从仓库
-根目录使用 `go tool -modfile=tools/go.mod` 调用。工具 module graph 与产品 module graph
-隔离，也不属于生产代码第三方 import allowlist。Makefile 拥有的 Go 命令固定使用
-`GOWORK=off`，包括解析 buildinfo package 的 module 查询；被忽略的本地或父目录 workspace
-不得改变门禁、生产构建 graph 或版本注入。
-
-Local 与新文件的不可覆盖发布不使用 rename：先写 `0600` 临时文件，再以 `os.Link` 发布到
-target；已存在时得到 `EEXIST`，同时保证内容完整、不可覆盖和原子出现。
-
-Config 与 state 各自负责编码和语义校验；converge 发布 machine config 和提交 ownership
-snapshot 时统一调用 `storage.PublishPrivateFile(path, data)`。该函数在相同内容时执行
-零 metadata 写入的严格 no-op，在实际发布时负责 `0700/0600` 权限、renameio 原子替换和
-temporary file cleanup。
-Paths 在系统调用边界把解析失败分类为确定的 namespace 阻塞或不可确定的 I/O 失败；converge
-中的规划代码只消费 typed classification，不检查 `PathError` 包装或平台 errno。
-`paths.ResolveControls` 是 control topology 的唯一构造入口。其返回值封装已解析身份，只暴露
-cleaned lexical paths、整组 placement 校验和单 target overlap 判断；零值 fail closed。Converge
-不会保留与该快照并行的 raw-control planner 路径。
-
-不引入 Viper、虚拟文件系统、DI、事务、workflow、state-machine、日志、color/TUI 或通用
-dotfiles framework。Distro 检测解析 `/etc/os-release`，HOME 使用 `os.UserHomeDir`，state
-编解码使用标准库 `encoding/json` 与 `DisallowUnknownFields`。
-
-以下细节由实现与测试决定：
-
-- 内部 struct、interface、函数和错误类型。
-- State JSON 缩进、字段顺序和可选诊断字段。
-- Config/state/lock 的精确路径。
-- 原子发布与 link update 的具体系统调用。
-- 人类可读输出的排版。
+普通内部类型或算法调整由最简单的当前实现决定，不需要 ADR。只有难以逆转、跨多个区域且未来
+仍需理解理由的选择才进入 [ADR](../decisions/README.md)。
