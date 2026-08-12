@@ -5,7 +5,7 @@
 - [`spec/README.md`](spec/README.md)：唯一产品与行为规范集合，以及每条规则的 owner。
 - [`architecture/overview.md`](architecture/overview.md)：当前实现结构和依赖方向。
 - [`architecture/testing.md`](architecture/testing.md)：测试所有权与机械门禁。
-- [`decisions/README.md`](decisions/README.md)：未来 ADR 的适用边界。
+- [`decisions/README.md`](decisions/README.md)：ADR 索引与适用边界。
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md)：变更分级、验证证据与 Git 交付。
 - [`archive/README.md`](archive/README.md)：只读历史 Git 指针。
 
