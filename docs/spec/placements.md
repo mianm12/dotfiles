@@ -25,31 +25,19 @@ target = "~/.config/example/config"
 - Target 规范化后必须位于逻辑 HOME 下。
 - `dot` 创建指向绝对 source 的 symlink。
 
-### 目录 source 的语义与选型
+### 目录 source
 
-目录 source 表示一个完整 symlink placement。`dot` 只规划、记录和验证 target 这一条目录
-symlink，不递归解释或记录其 descendants；source 内新增、删除或修改内容会直接反映到 target，
-不需要再次 apply。通过 target 写入的内容也会进入 repository 中的 source 目录。
+- 目录 source 表示一个完整 symlink placement。`dot` 只规划、记录和验证 target 这一条目录
+  symlink，不递归解释或记录 descendants。
+- Source 内新增、删除或修改内容直接反映到 target，不需要再次 apply；通过 target 写入的内容
+  也直接进入 repository 中的 source 目录。
+- `dot` 不自动递归展开目录、不执行 tree folding，也不把共享目录复制到 target。
+- 把已有 directory link 改为其 target 下的 leaf placements 时，必须满足
+  [`planning.md` 的类型与层级迁移规则](planning.md#placement-类型与层级迁移)，不能在一次
+  desired 变更中同时删除 parent link 并加入 descendants。
 
-因此，目录 link 应仅用于封闭共享树：目录内所有内容都应由 repository 直接承载，并且应用不会
-在其中写入不应进入 repository 的本机私有内容、缓存或运行状态。需要共享配置与本机内容共存时，
-不要把该目录本身声明为 directory link；保持对应 target 目录为真实目录，分别声明其下具体文件的
-links 和需要在缺失时初始化的 locals。自动递归展开目录、tree folding 和共享文件复制不属于当前
-产品。把已有 directory link 改为这些 leaf placements 时，必须使用
-[`planning.md` 的两阶段迁移](planning.md#两阶段-placement-迁移)，不能在一次 desired 变更中
-同时删除 parent link 并加入 descendants。
-
-#### 目录部署决策树
-
-```mermaid
-flowchart TD
-    A{"目录是否为封闭共享树？<br/>所有 descendants 都应直接映射 repository，<br/>且不存在本机私有内容或应用生成状态"}
-    A -->|是| B["对目录声明一个 [[links]]<br/>部署为整目录 symlink"]
-    A -->|否| C["不链接整个目录<br/>保持 target 为真实目录并按内容分别声明"]
-    C --> D["共享文件<br/>分别声明文件 [[links]]"]
-    C --> E["本机初始化文件<br/>声明 [[locals]]"]
-    C --> F["需要自动递归展开或复制<br/>当前不支持"]
-```
+目录 link、真实目录加 leaf links 和 locals 的选型建议及操作示例见
+[`管理 modules 与 placements`](../guides/manage-modules.md#文件-link目录-link-还是-leaf-placements)。
 
 ## Local
 

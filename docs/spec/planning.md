@@ -17,7 +17,8 @@ Status 的公开投影
 
 State 中 placement 的 kind 与当前 desired 的 kind 不一致（同一 ID 在 link 与 local 之间互换）
 是 conflict，不尝试自动收敛。改用新 placement ID 仍受 actual target 与 ownership 规则约束，
-不是通用的类型转换方式；显式转换使用下文的[两阶段 placement 迁移](#两阶段-placement-迁移)。
+不是通用的类型转换方式；显式转换受下文的
+[placement 类型与层级迁移](#placement-类型与层级迁移)约束。
 
 Active target 的父路径解析链经过一条仍有完整 state ownership 证据的 link 时为 conflict。
 该守卫包括仅存在于 state 的 link，避免 active action 先写入其当前 destination，
@@ -50,28 +51,29 @@ placement Transition；已由 `select remove` 移出 extra selection 的目标�
 state placements 仍按 stale prune/forget 规则处理。真实 mutation 阻断边界由
 [`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
 
-### 两阶段 placement 迁移
+### Placement 类型与层级迁移
 
-同一 placement ID 在 link 与 local 之间变更 kind，或把一个 directory link 改为其 target 下的
-leaf placements，都不能在一次 desired 变更中自动迁移。每个受影响 HOME 必须分别完成：
+同一 placement 在 link 与 local 之间变更 kind，或把一个 directory link 改为其 target 下的
+leaf placements，都不能在一次 desired 变更中自动迁移，并满足以下规则：
 
-1. 阶段一的 desired 只删除旧 placement，不加入 replacement。Directory-link 迁移还要求所有
-   effective modules 都不声明父路径解析链经过旧 link 的 descendants。
-2. 运行全量 `dot apply`。若 mutation 失败或提示可能部分完成，保持阶段一的 desired，并按
-   [`mutation-and-recovery.md`](mutation-and-recovery.md#中断恢复) 重跑到成功；不能仅凭 actual
-   target 已消失推断 state 已提交。
-3. 检查旧 target。Prune 只删除仍匹配 ownership 的 link；forget 和 local cleanup 都保留 actual。
-   进入阶段二前，用户必须先安全处理保留的数据或目录项。尤其 local 转 link 时，仍存在的 local
-   会让新 link conflict；link 转 local 时，阶段一保留的任意 actual 都会被 local 当作已有目录项
-   keep；directory-link 迁移时，旧 parent target 必须 absent 或是用户确认的真实目录。
-4. 阶段二再加入 replacement 或 descendants 并 apply；普通 target、ownership 与 conflict 规则
-   继续适用。
+- 每个受影响 HOME 必须先收敛一个只删除旧 placement、尚未加入 replacement 的阶段一 desired。
+  Directory-link 迁移的阶段一还要求全部 effective modules 都不声明父路径解析链经过旧 link 的
+  descendants。
+- 阶段一只有在全量 apply 成功并提交 state 后才完成；actual target 已消失不能单独证明完成。
+  Mutation 失败或提示可能部分完成时，必须保持阶段一 desired，并按
+  [`mutation-and-recovery.md`](mutation-and-recovery.md#中断恢复)重跑到成功。
+- Prune 只删除仍满足 ownership 的 link；forget 与 local cleanup 保留 actual。用户必须在阶段二
+  前处理会阻塞 replacement 的保留数据或目录项，`dot` 不自动转换、导入或覆盖它们。
+- 阶段二加入 replacement 或 descendants 后，仍应用普通 target、ownership、control-path 与
+  conflict 规则；阶段一不会为任意新 placement 建立删除或覆盖授权。
+- Module 已因 selection 移除或已确定 not-applicable 而退出 desired 时，先按
+  [`cli.md`](cli.md#apply) 与 [`cli.md`](cli.md#select)收敛 cleanup；apply 不会把 inactive module
+  重新加入 selection。Indeterminate applicability 不表示退出 desired。
+- 多机 repository 中，每个仍有旧 record 的 HOME 都必须完成阶段一，不能从旧 desired 直接跳到
+  阶段二。
 
-若 module 已因 selection 移除或已确定 not-applicable 而退出 desired，按
-[`cli.md`](cli.md#apply) 与 [`cli.md`](cli.md#select) 的规则先调整 selection，再执行全量
-`dot apply` cleanup；apply 不会把 inactive module 重新加入 selection。Indeterminate
-applicability 不表示退出 desired，仍按安全规则阻断；应先恢复平台判定或用 `select remove`
-移除 direct selection 来源。多机仓库中每个仍有旧 record 的 HOME 都不得跳过阶段一。
+逐步操作、多机器清单和 link/local、directory-link 场景见
+[`安全迁移 placements`](../guides/safe-migrations.md)。
 
 ## Link
 

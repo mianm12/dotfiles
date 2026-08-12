@@ -95,3 +95,6 @@ repository、config、state 和 lock；开发约束见[测试架构](../architec
 
 如果某个操作需要 `dot` 猜测“这个已有数据大概可以覆盖或删除”，当前正确结果通常就是拒绝。
 先让 ownership 事实变得明确，再收敛；不要添加静默 fallback 来制造成功表象。
+
+需要把原则应用到具体输出时，继续阅读[故障排查](../guides/troubleshooting.md)；需要转换 placement
+类型或目录层级时，使用[安全迁移指南](../guides/safe-migrations.md)。

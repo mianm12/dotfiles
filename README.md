@@ -54,6 +54,7 @@ tests，并构建生产二进制、校验 `version` 构建信息，CI 在 macOS 
 - [知识库首页](docs/README.md)：按新用户、使用者、开发者和设计审查任务查找内容；
 - [安全入门教程](docs/getting-started.md)：在隔离 HOME 中完成第一次收敛；
 - [工作模型](docs/concepts/mental-model.md)：理解 desired、selection、state、filesystem 与 plan；
+- [使用指南](docs/README.md#常用任务)：管理 modules、profiles、平台差异、迁移与故障排查；
 - [产品规范索引](docs/spec/README.md)：唯一产品行为契约；
 - [开发者入口](docs/development/README.md)：从需求定位到代码、测试和交付；
 - [贡献与 Git 约定](CONTRIBUTING.md)：变更分级、验证证据与 PR 流程。
