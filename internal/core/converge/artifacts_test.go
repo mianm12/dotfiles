@@ -95,9 +95,8 @@ func TestExecutionDoesNotPruneUntilAllActiveCreatesSucceed(t *testing.T) {
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "old", PlacementID: "file"}: {
-				Kind:            state.KindLink,
 				Target:          staleTarget,
 				ResolvedTarget:  resolvedStale.Resolved(),
 				LinkDestination: staleDestination,
@@ -124,7 +123,7 @@ func TestExecutionDoesNotPruneUntilAllActiveCreatesSucceed(t *testing.T) {
 	if loadErr != nil {
 		t.Fatalf("state.Load() error = %v", loadErr)
 	}
-	if _, exists := loaded.Snapshot.Records[state.Key{ModuleID: "old", PlacementID: "file"}]; !exists {
+	if _, exists := loaded.Snapshot.Links[state.Key{ModuleID: "old", PlacementID: "file"}]; !exists {
 		t.Fatal("old state was committed before active changes completed")
 	}
 }
@@ -173,7 +172,7 @@ func TestExecutionDoesNotUpdateUntilAllCreatesSucceed(t *testing.T) {
 	if loadErr != nil {
 		t.Fatalf("state.Load() error = %v", loadErr)
 	}
-	if got := loaded.Snapshot.Records[state.Key{ModuleID: "base", PlacementID: "file"}].LinkDestination; got != oldSource {
+	if got := loaded.Snapshot.Links[state.Key{ModuleID: "base", PlacementID: "file"}].LinkDestination; got != oldSource {
 		t.Fatalf("state destination = %q, want unchanged %q", got, oldSource)
 	}
 }
@@ -205,7 +204,7 @@ func TestExecutionMovesTargetBeforePruning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Load() error = %v", err)
 	}
-	record := loaded.Snapshot.Records[state.Key{ModuleID: "base", PlacementID: "file"}]
+	record := loaded.Snapshot.Links[state.Key{ModuleID: "base", PlacementID: "file"}]
 	if record.Target != newTarget || record.LinkDestination != source {
 		t.Fatalf("new state record = %#v, want new target", record)
 	}
@@ -246,7 +245,7 @@ func TestExecutionUpdatesOwnedLinkAndCommitsVerifiedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Load() error = %v", err)
 	}
-	if got := loaded.Snapshot.Records[state.Key{ModuleID: "base", PlacementID: "file"}].LinkDestination; got != newSource {
+	if got := loaded.Snapshot.Links[state.Key{ModuleID: "base", PlacementID: "file"}].LinkDestination; got != newSource {
 		t.Fatalf("state destination = %q, want %q", got, newSource)
 	}
 
@@ -510,7 +509,7 @@ func TestLocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
 		t.Fatalf("executePlan(recovery) error = %v", err)
 	}
 	if recovered.TargetsChanged || !recovered.StateChanged {
-		t.Fatalf("executePlan(recovery) = %#v, want keep plus state commit", recovered)
+		t.Fatalf("executePlan(recovery) = %#v, want local no-op plus empty state commit", recovered)
 	}
 	before := snapshotFiles(t, target, fixture.state)
 	plan, loaded = prepareExecution(t, request)
@@ -537,15 +536,14 @@ func TestFullExecutionRepeatApplyDoesNotMutateSettledTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveTarget(base) error = %v", err)
 	}
-	baseState := state.Record{
-		Kind:            state.KindLink,
+	baseState := state.LinkRecord{
 		Target:          baseTarget,
 		ResolvedTarget:  resolvedBase.Resolved(),
 		LinkDestination: baseSource,
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "base", PlacementID: "file"}: baseState,
 		},
 	})
@@ -582,7 +580,7 @@ func TestFullExecutionRepeatApplyDoesNotMutateSettledTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Load() error = %v", err)
 	}
-	if got := loaded.Snapshot.Records[state.Key{ModuleID: "base", PlacementID: "file"}]; !reflect.DeepEqual(got, baseState) {
+	if got := loaded.Snapshot.Links[state.Key{ModuleID: "base", PlacementID: "file"}]; !reflect.DeepEqual(got, baseState) {
 		t.Fatalf("base state = %#v, want unchanged %#v", got, baseState)
 	}
 
@@ -645,9 +643,10 @@ func TestCommitStateCreatesAndReplacesWithPrivatePermissions(t *testing.T) {
 	}
 
 	updated := cloneSnapshot(initial)
-	updated.Records[state.Key{ModuleID: "base", PlacementID: "local"}] = state.Record{
-		Kind:   state.KindLocal,
-		Target: filepath.Join(fixture.home, ".local"),
+	updated.Links[state.Key{ModuleID: "base", PlacementID: "file"}] = state.LinkRecord{
+		Target:          filepath.Join(fixture.home, ".link"),
+		ResolvedTarget:  filepath.Join(fixture.home, ".link"),
+		LinkDestination: filepath.Join(fixture.repository, "modules", "base", "file"),
 	}
 	if err := commitState(fixture.state, updated); err != nil {
 		t.Fatalf("commitState(updated) error = %v", err)
@@ -663,7 +662,7 @@ func TestCommitStateCreatesAndReplacesWithPrivatePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Load() error = %v", err)
 	}
-	if !reflect.DeepEqual(loaded.Snapshot, updated) {
+	if !state.Equal(loaded.Snapshot, updated) {
 		t.Fatalf("loaded state = %#v, want %#v", loaded.Snapshot, updated)
 	}
 }
@@ -789,9 +788,8 @@ func (fixture fixture) writeLinkState(t *testing.T, target, destination string) 
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "base", PlacementID: "file"}: {
-				Kind:            state.KindLink,
 				Target:          target,
 				ResolvedTarget:  resolved.Resolved(),
 				LinkDestination: destination,

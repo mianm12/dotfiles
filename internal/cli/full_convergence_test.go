@@ -220,9 +220,8 @@ target = "~/.shared/child"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "stale", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
 				Target:          parentTarget,
 				ResolvedTarget:  resolvedParent.Resolved(),
 				LinkDestination: oldTree,
@@ -312,15 +311,13 @@ target = "~/access/child"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
 				Target:          parentTarget,
 				ResolvedTarget:  resolvedParent.Resolved(),
 				LinkDestination: oldSource,
 			},
 			{ModuleID: "child", PlacementID: "config"}: {
-				Kind:            state.KindLink,
 				Target:          lexicalChild,
 				ResolvedTarget:  resolvedChild.Resolved(),
 				LinkDestination: childSource,
@@ -378,9 +375,8 @@ target = "~/.shared/child"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "stale", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
 				Target:          parentTarget,
 				ResolvedTarget:  resolvedParent.Resolved(),
 				LinkDestination: recordedTree,
@@ -403,10 +399,10 @@ target = "~/.shared/child"
 	destination := filepath.Join(fixture.repository, "modules", "active", "config")
 	assertCLILink(t, filepath.Join(userTree, "child"), destination)
 	loaded := loadTestState(t, fixture)
-	if _, exists := loaded.Records[state.Key{ModuleID: "stale", PlacementID: "tree"}]; exists {
+	if _, exists := loaded.Links[state.Key{ModuleID: "stale", PlacementID: "tree"}]; exists {
 		t.Fatal("full apply retained stale state")
 	}
-	if _, exists := loaded.Records[state.Key{ModuleID: "active", PlacementID: "child"}]; !exists {
+	if _, exists := loaded.Links[state.Key{ModuleID: "active", PlacementID: "child"}]; !exists {
 		t.Fatal("full apply did not record active child")
 	}
 
@@ -437,9 +433,8 @@ target = "~/.shared/child"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "stale", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
 				Target:          parentTarget,
 				ResolvedTarget:  resolvedParent.Resolved(),
 				LinkDestination: oldTree,

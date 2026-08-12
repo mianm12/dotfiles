@@ -65,16 +65,6 @@ type SelectionResult struct {
 	ProfileSelected bool
 }
 
-// Kind exposes placement kinds needed to project committed cleanup results.
-type Kind = state.Kind
-
-const (
-	// KindLink identifies a managed symbolic-link placement.
-	KindLink = state.KindLink
-	// KindLocal identifies a user-owned local-file placement.
-	KindLocal = state.KindLocal
-)
-
 // Decision is the result of applying the ordered planning rules to one desired
 // or stale placement.
 type Decision string
@@ -128,7 +118,6 @@ type planRequest struct {
 type Action struct {
 	ModuleID                string
 	PlacementID             string
-	Kind                    state.Kind
 	Decision                Decision
 	Target                  string
 	ResolvedTarget          string
@@ -157,7 +146,7 @@ type transition struct {
 	moduleID      string
 	placementID   string
 	desired       bool
-	finalRecord   state.Record
+	finalRecord   state.LinkRecord
 	actionIndexes []int
 }
 

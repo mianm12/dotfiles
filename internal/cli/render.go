@@ -159,14 +159,9 @@ func printForgotOwnership(
 		if action.Decision != converge.DecisionForget {
 			continue
 		}
-		evidence := "ownership"
-		if action.Kind == converge.KindLocal {
-			evidence = "provenance"
-		}
 		if _, err := fmt.Fprintf(
 			command.ErrOrStderr(),
-			"warning: forgot %s for %s/%s %s",
-			evidence,
+			"warning: forgot ownership for %s/%s %s",
 			action.ModuleID,
 			action.PlacementID,
 			action.Target,

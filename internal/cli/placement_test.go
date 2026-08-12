@@ -94,7 +94,7 @@ target = "~/.app-new"
 			filepath.Join(fixture.repository, "modules", "app", "new"),
 		)
 		loaded := loadTestState(t, fixture)
-		if records := loaded.Records; len(records) != 1 {
+		if records := loaded.Links; len(records) != 1 {
 			t.Fatalf("state records = %#v, want only new placement", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
@@ -132,7 +132,7 @@ target = "~/.app"
 		t.Fatalf("phase-one apply = (%d, %q)", code, stderr)
 	}
 	assertCLIMissing(t, parent)
-	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+	if records := loadTestState(t, fixture).Links; len(records) != 0 {
 		t.Fatalf("state after phase one = %#v, want no records", records)
 	}
 	assertApplyNoMutation(t, fixture, fixture.run)
@@ -289,6 +289,17 @@ target = "~/.app.local"
 			} else {
 				assertSnapshotUnchanged(t, beforeTarget)
 			}
+			if links := loadTestState(t, fixture).Links; len(links) != 0 {
+				t.Fatalf("local apply wrote ownership state: %#v", links)
+			}
+			encodedState, err := os.ReadFile(fixture.state)
+			if err != nil {
+				t.Fatalf("os.ReadFile(state) error = %v", err)
+			}
+			if !strings.Contains(string(encodedState), `"version": 4`) ||
+				!strings.Contains(string(encodedState), `"links": []`) {
+				t.Fatalf("local-only state = %q, want empty state v4", encodedState)
+			}
 			assertApplyNoMutation(t, fixture, fixture.run)
 
 			example := filepath.Join(
@@ -313,6 +324,19 @@ target = "~/.app.local"
 					t.Fatalf("local after example update = (%q, %v), want original", data, err)
 				}
 			}
+
+			writeModuleManifest(t, fixture, "app", "")
+			beforeTarget = snapshotPaths(t, target)
+			code, stdout, stderr = fixture.run("apply")
+			if code != exitOK || stderr != "" {
+				t.Fatalf("apply after local exits desired = (%d, %q, %q)", code, stdout, stderr)
+			}
+			assertCLINoMutationResult(t, stdout)
+			assertSnapshotUnchanged(t, beforeTarget)
+			if links := loadTestState(t, fixture).Links; len(links) != 0 {
+				t.Fatalf("state after local exits desired = %#v, want no ownership", links)
+			}
+			assertApplyNoMutation(t, fixture, fixture.run)
 		})
 	}
 }
@@ -400,7 +424,7 @@ target = "~/.shared"
 		if err != nil || string(data) != "local" {
 			t.Fatalf("local after phase one = (%q, %v), want preserved", data, err)
 		}
-		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		if records := loadTestState(t, fixture).Links; len(records) != 0 {
 			t.Fatalf("state after phase one = %#v, want no records", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
@@ -469,7 +493,7 @@ target = "~/.shared"
 		}
 		target := filepath.Join(fixture.home, ".shared")
 		assertCLIMissing(t, target)
-		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		if records := loadTestState(t, fixture).Links; len(records) != 0 {
 			t.Fatalf("state after phase one = %#v, want no records", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
@@ -563,7 +587,7 @@ target = "~/alias/config"
 		}
 		assertCLILink(t, filepath.Join(firstParent, "config"), destination)
 		assertCLILink(t, filepath.Join(secondParent, "config"), destination)
-		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		if records := loadTestState(t, fixture).Links; len(records) != 0 {
 			t.Fatalf("state records = %#v, want stale ownership forgotten", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)

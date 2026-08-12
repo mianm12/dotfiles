@@ -28,7 +28,7 @@ func TestLoadStateMissingWarnsAndContinues(t *testing.T) {
 	if !loaded.Missing || loaded.Warning == "" {
 		t.Fatalf("Load(missing) = %#v, want missing with warning", loaded)
 	}
-	if loaded.Snapshot.Home != home || len(loaded.Snapshot.Records) != 0 {
+	if loaded.Snapshot.Home != home || len(loaded.Snapshot.Links) != 0 {
 		t.Fatalf("missing snapshot = %#v, want empty state bound to %q", loaded.Snapshot, home)
 	}
 	assertTreeUnchanged(t, root, before)
@@ -51,7 +51,7 @@ func TestLoadInvalidLegacyAndTooNewStateRejectReadOnly(t *testing.T) {
 			name: "unknown field",
 			document: func(home string) string {
 				return fmt.Sprintf(
-					`{"version":3,"home":%q,"records":[],"unknown":true}`,
+					`{"version":4,"home":%q,"links":[],"unknown":true}`,
 					home,
 				)
 			},
@@ -72,9 +72,16 @@ func TestLoadInvalidLegacyAndTooNewStateRejectReadOnly(t *testing.T) {
 			want: corestate.ErrLegacyVersion,
 		},
 		{
+			name: "legacy version 3",
+			document: func(home string) string {
+				return fmt.Sprintf(`{"version":3,"home":%q,"records":[]}`, home)
+			},
+			want: corestate.ErrLegacyVersion,
+		},
+		{
 			name: "too new",
 			document: func(string) string {
-				return `{"version":4}`
+				return `{"version":5}`
 			},
 			want: corestate.ErrTooNew,
 		},
@@ -82,7 +89,7 @@ func TestLoadInvalidLegacyAndTooNewStateRejectReadOnly(t *testing.T) {
 			name: "home mismatch",
 			document: func(home string) string {
 				return fmt.Sprintf(
-					`{"version":3,"home":%q,"records":[]}`,
+					`{"version":4,"home":%q,"links":[]}`,
 					filepath.Join(home, "other"),
 				)
 			},
@@ -92,7 +99,7 @@ func TestLoadInvalidLegacyAndTooNewStateRejectReadOnly(t *testing.T) {
 			name: "missing link safety field",
 			document: func(home string) string {
 				return fmt.Sprintf(
-					`{"version":3,"home":%q,"records":[{"module_id":"app","placement_id":"config","kind":"link","target":%q,"resolved_target":%q}]}`,
+					`{"version":4,"home":%q,"links":[{"module_id":"app","placement_id":"config","target":%q,"resolved_target":%q}]}`,
 					home,
 					filepath.Join(home, ".config", "app"),
 					filepath.Join(home, ".config", "app"),
@@ -120,7 +127,7 @@ func TestLoadInvalidLegacyAndTooNewStateRejectReadOnly(t *testing.T) {
 				t.Fatalf("Load() = (%#v, %v), want %v", loaded, err, test.want)
 			}
 			if loaded.Missing || loaded.Warning != "" ||
-				loaded.Snapshot.Home != "" || loaded.Snapshot.Records != nil {
+				loaded.Snapshot.Home != "" || loaded.Snapshot.Links != nil {
 				t.Fatalf("Load(error) returned partial result %#v", loaded)
 			}
 			assertTreeUnchanged(t, root, before)

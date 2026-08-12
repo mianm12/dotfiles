@@ -18,10 +18,11 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 	fixture.writeMachine(t, []string{"base"}, nil)
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "old", PlacementID: "config"}: {
-				Kind:   state.KindLocal,
-				Target: filepath.Join(fixture.home, ".config", "old"),
+				Target:          filepath.Join(fixture.home, ".config", "old"),
+				ResolvedTarget:  filepath.Join(fixture.home, ".config", "old"),
+				LinkDestination: filepath.Join(fixture.repository, "modules", "old", "config"),
 			},
 		},
 	})
@@ -92,7 +93,7 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 			)
 		}
 		if !strings.Contains(stderr.String(), "synthetic input warning") ||
-			!strings.Contains(stderr.String(), "forgot provenance") ||
+			!strings.Contains(stderr.String(), "forgot ownership") ||
 			!strings.Contains(stderr.String(), quotedReason) {
 			t.Fatalf(
 				"finishMutation() stderr = %q, want completed forget result",
@@ -113,10 +114,11 @@ target = "~/.new"
 	fixture.writeMachine(t, []string{"base"}, nil)
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "old", PlacementID: "stale"}: {
-				Kind:   state.KindLocal,
-				Target: filepath.Join(fixture.home, ".old"),
+				Target:          filepath.Join(fixture.home, ".old"),
+				ResolvedTarget:  filepath.Join(fixture.home, ".old"),
+				LinkDestination: filepath.Join(fixture.repository, "modules", "old", "stale"),
 			},
 		},
 	})
@@ -166,10 +168,11 @@ target = "~/.new"
 	fixture.writeMachine(t, []string{"base"}, nil)
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "old", PlacementID: "stale"}: {
-				Kind:   state.KindLocal,
-				Target: filepath.Join(fixture.home, ".old"),
+				Target:          filepath.Join(fixture.home, ".old"),
+				ResolvedTarget:  filepath.Join(fixture.home, ".old"),
+				LinkDestination: filepath.Join(fixture.repository, "modules", "old", "stale"),
 			},
 		},
 	})
@@ -177,6 +180,10 @@ target = "~/.new"
 	analysis := analyzeOperationReport(t, fixture)
 	if analysis.Plan.Executable() {
 		t.Fatal("Analyze() plan is executable, want app target conflict")
+	}
+	actions := analysis.Plan.Actions()
+	if len(actions) != 2 || actions[1].Decision != converge.DecisionForget {
+		t.Fatalf("Analyze() actions = %#v, want create then forget", actions)
 	}
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
@@ -190,7 +197,7 @@ target = "~/.new"
 	if !strings.Contains(output, "fact module=old selection=none state=present\n") ||
 		!strings.Contains(output, "action kind=create-link module=new placement=config") ||
 		!strings.Contains(output, "forget") ||
-		!strings.Contains(output, `reason="local left desired; local targets are never pruned"`) ||
+		!strings.Contains(output, "reason="+strconv.Quote(actions[1].Reason)) ||
 		!strings.Contains(output, "problem kind=conflict module=app placement=config") ||
 		!strings.Contains(output, `reason="actual target is regular file"`) {
 		t.Fatalf(

@@ -118,7 +118,7 @@ target = "~/.extra"
 		t.Fatalf("cleanup apply = (%d, %q)", code, stderr)
 	}
 	assertCLIMissing(t, target)
-	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+	if records := loadTestState(t, fixture).Links; len(records) != 0 {
 		t.Fatalf("state records = %#v, want empty", records)
 	}
 }

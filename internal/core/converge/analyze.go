@@ -206,14 +206,14 @@ func statusModuleIDs(
 	for _, id := range machine.ExtraModules {
 		set[id] = true
 	}
-	for key := range snapshot.Records {
+	for key := range snapshot.Links {
 		set[key.ModuleID] = true
 	}
 	return sortedAnalysisSet(set)
 }
 
 func stateHasModule(snapshot state.Snapshot, moduleID string) bool {
-	for key := range snapshot.Records {
+	for key := range snapshot.Links {
 		if key.ModuleID == moduleID {
 			return true
 		}

@@ -461,15 +461,13 @@ target = "~/owned"
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
 				Target:          parentTarget,
 				ResolvedTarget:  resolvedParent.Resolved(),
 				LinkDestination: oldSource,
 			},
 			{ModuleID: "stale", PlacementID: "child"}: {
-				Kind:            state.KindLink,
 				Target:          staleTarget,
 				ResolvedTarget:  resolvedStale.Resolved(),
 				LinkDestination: staleSource,
@@ -759,203 +757,185 @@ target = "~/.config/dot/managed"
 }
 
 func TestApplyForgetsStaleTargetOverlappingControlPath(t *testing.T) {
-	for _, kind := range []state.Kind{state.KindLink, state.KindLocal} {
-		t.Run(string(kind), func(t *testing.T) {
-			fixture := newCLITestEnv(t, `base = []`)
-			fixture.repository = filepath.Join(fixture.home, "repository")
-			writeCLIFile(
-				t,
-				filepath.Join(fixture.repository, "dot.toml"),
-				"version = 1\n[profiles]\nbase = []\n",
-			)
-			fixture.writeMachine(t, []string{"base"}, nil)
-			target := fixture.repository
-			record := state.Record{
-				Kind:   kind,
-				Target: target,
-			}
-			if kind == state.KindLink {
-				resolvedTarget, err := filepath.EvalSymlinks(target)
-				if err != nil {
-					t.Fatalf("filepath.EvalSymlinks(target) error = %v", err)
-				}
-				record.ResolvedTarget = resolvedTarget
-				record.LinkDestination = filepath.Join(fixture.repository, "removed")
-			}
-			fixture.writeState(t, state.Snapshot{
-				Home: fixture.home,
-				Records: map[state.Key]state.Record{
-					{ModuleID: "old", PlacementID: "stale"}: record,
-				},
-			})
-			beforeTarget := snapshotTree(t, target)
-
-			code, stdout, stderr := fixture.run("apply")
-
-			if code != exitOK ||
-				!strings.Contains(stdout, "forget") ||
-				!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
-				!strings.Contains(stderr, "overlaps a protected control path") {
-				t.Fatalf(
-					"apply = (%d, %q, %q), want state-only forget",
-					code,
-					stdout,
-					stderr,
-				)
-			}
-			assertSnapshotUnchanged(t, beforeTarget)
-			if records := loadTestState(t, fixture).Records; len(records) != 0 {
-				t.Fatalf("state records after forget = %#v, want empty", records)
-			}
-
-			assertApplyNoMutation(t, fixture, fixture.run)
+	t.Run("link", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = []`)
+		fixture.repository = filepath.Join(fixture.home, "repository")
+		writeCLIFile(
+			t,
+			filepath.Join(fixture.repository, "dot.toml"),
+			"version = 1\n[profiles]\nbase = []\n",
+		)
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target := fixture.repository
+		resolvedTarget, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatalf("filepath.EvalSymlinks(target) error = %v", err)
+		}
+		record := state.LinkRecord{
+			Target:          target,
+			ResolvedTarget:  resolvedTarget,
+			LinkDestination: filepath.Join(fixture.repository, "removed"),
+		}
+		fixture.writeState(t, state.Snapshot{
+			Home: fixture.home,
+			Links: map[state.Key]state.LinkRecord{
+				{ModuleID: "old", PlacementID: "stale"}: record,
+			},
 		})
-	}
+		beforeTarget := snapshotTree(t, target)
+
+		code, stdout, stderr := fixture.run("apply")
+
+		if code != exitOK ||
+			!strings.Contains(stdout, "forget") ||
+			!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
+			!strings.Contains(stderr, "overlaps a protected control path") {
+			t.Fatalf(
+				"apply = (%d, %q, %q), want state-only forget",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, beforeTarget)
+		if records := loadTestState(t, fixture).Links; len(records) != 0 {
+			t.Fatalf("state records after forget = %#v, want empty", records)
+		}
+
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
 }
 
 func TestApplyForgetsStaleTargetContainingStateRootWithoutChangingEntry(t *testing.T) {
-	for _, kind := range []state.Kind{state.KindLink, state.KindLocal} {
-		t.Run(string(kind), func(t *testing.T) {
-			fixture := newCLITestEnv(t, `base = []`)
-			fixture.writeMachine(t, []string{"base"}, nil)
-			target := filepath.Join(fixture.home, ".local")
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				t.Fatalf("os.MkdirAll(target) error = %v", err)
-			}
-			record := state.Record{
-				Kind:   kind,
-				Target: target,
-			}
-			if kind == state.KindLink {
-				resolvedTarget, err := filepath.EvalSymlinks(target)
-				if err != nil {
-					t.Fatalf("filepath.EvalSymlinks(target) error = %v", err)
-				}
-				record.ResolvedTarget = resolvedTarget
-				record.LinkDestination = filepath.Join(fixture.repository, "removed")
-			}
-			fixture.writeState(t, state.Snapshot{
-				Home: fixture.home,
-				Records: map[state.Key]state.Record{
-					{ModuleID: "old", PlacementID: "stale"}: record,
-				},
-			})
-			beforeTarget := snapshotPaths(t, target)
-
-			code, stdout, stderr := fixture.run("apply")
-
-			if code != exitOK ||
-				!strings.Contains(stdout, "forget") ||
-				!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
-				!strings.Contains(stderr, "overlaps a protected control path") {
-				t.Fatalf(
-					"apply = (%d, %q, %q), want state-only forget",
-					code,
-					stdout,
-					stderr,
-				)
-			}
-			assertSnapshotUnchanged(t, beforeTarget)
-			if records := loadTestState(t, fixture).Records; len(records) != 0 {
-				t.Fatalf("state records after forget = %#v, want empty", records)
-			}
-
-			assertApplyNoMutation(t, fixture, fixture.run)
+	t.Run("link", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = []`)
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target := filepath.Join(fixture.home, ".local")
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(target) error = %v", err)
+		}
+		resolvedTarget, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatalf("filepath.EvalSymlinks(target) error = %v", err)
+		}
+		record := state.LinkRecord{
+			Target:          target,
+			ResolvedTarget:  resolvedTarget,
+			LinkDestination: filepath.Join(fixture.repository, "removed"),
+		}
+		fixture.writeState(t, state.Snapshot{
+			Home: fixture.home,
+			Links: map[state.Key]state.LinkRecord{
+				{ModuleID: "old", PlacementID: "stale"}: record,
+			},
 		})
-	}
+		beforeTarget := snapshotPaths(t, target)
+
+		code, stdout, stderr := fixture.run("apply")
+
+		if code != exitOK ||
+			!strings.Contains(stdout, "forget") ||
+			!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
+			!strings.Contains(stderr, "overlaps a protected control path") {
+			t.Fatalf(
+				"apply = (%d, %q, %q), want state-only forget",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, beforeTarget)
+		if records := loadTestState(t, fixture).Links; len(records) != 0 {
+			t.Fatalf("state records after forget = %#v, want empty", records)
+		}
+
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
 }
 
 func TestStaleTargetEqualToLockIsReadOnlyUntilStateOnlyForget(t *testing.T) {
-	for _, kind := range []state.Kind{state.KindLink, state.KindLocal} {
-		t.Run(string(kind), func(t *testing.T) {
-			completedForget := "forgot ownership"
-			if kind == state.KindLocal {
-				completedForget = "forgot provenance"
-			}
-			fixture := newCLITestEnv(t, `base = []`)
-			fixture.writeMachine(t, []string{"base"}, nil)
-			record := state.Record{
-				Kind:   kind,
-				Target: fixture.lock,
-			}
-			if kind == state.KindLink {
-				target, err := corepaths.ResolveTarget(
-					fixture.home,
-					"~/.local/state/dot/lock",
-				)
-				if err != nil {
-					t.Fatalf("ResolveTarget(lock) error = %v", err)
-				}
-				record.ResolvedTarget = target.Resolved()
-				record.LinkDestination = filepath.Join(fixture.repository, "removed")
-			}
-			fixture.writeState(t, state.Snapshot{
-				Home: fixture.home,
-				Records: map[state.Key]state.Record{
-					{ModuleID: "old", PlacementID: "stale"}: record,
-				},
-			})
-			assertCLIMissing(t, fixture.lock)
-			beforeReadOnly := snapshotTree(t, fixture.root)
-
-			code, stdout, stderr := fixture.run("status")
-			if code != exitOK ||
-				!strings.Contains(stdout, "fact module=old selection=none state=present") ||
-				!strings.Contains(stdout, "forget") ||
-				!strings.Contains(stdout, "overlaps a protected control path") ||
-				stderr != "" {
-				t.Fatalf(
-					"status = (%d, %q, %q), want structured stale forget",
-					code,
-					stdout,
-					stderr,
-				)
-			}
-			assertSnapshotUnchanged(t, beforeReadOnly)
-			assertCLIMissing(t, fixture.lock)
-
-			code, stdout, stderr = fixture.run("apply", "--dry-run")
-			if code != exitOK ||
-				!strings.Contains(stdout, "forget") ||
-				!strings.Contains(stdout, "overlaps a protected control path") ||
-				stderr != "" {
-				t.Fatalf(
-					"apply --dry-run = (%d, %q, %q), want prospective forget",
-					code,
-					stdout,
-					stderr,
-				)
-			}
-			assertSnapshotUnchanged(t, beforeReadOnly)
-			assertCLIMissing(t, fixture.lock)
-
-			code, stdout, stderr = fixture.run("apply")
-			if code != exitOK ||
-				!strings.Contains(stdout, "forget") ||
-				!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
-				!strings.Contains(stderr, completedForget) ||
-				!strings.Contains(stderr, "overlaps a protected control path") {
-				t.Fatalf(
-					"apply = (%d, %q, %q), want state-only forget",
-					code,
-					stdout,
-					stderr,
-				)
-			}
-			lockInfo, statErr := os.Lstat(fixture.lock)
-			if statErr != nil || !lockInfo.Mode().IsRegular() {
-				t.Fatalf("lock after mutation = (%v, %v), want advisory regular file", lockInfo, statErr)
-			}
-			if lockInfo.Mode()&fs.ModeSymlink != 0 {
-				t.Fatalf("lock mode = %v, want direct regular file", lockInfo.Mode())
-			}
-			if records := loadTestState(t, fixture).Records; len(records) != 0 {
-				t.Fatalf("state records after forget = %#v, want empty", records)
-			}
-
-			assertApplyNoMutation(t, fixture, fixture.run)
+	t.Run("link", func(t *testing.T) {
+		completedForget := "forgot ownership"
+		fixture := newCLITestEnv(t, `base = []`)
+		fixture.writeMachine(t, []string{"base"}, nil)
+		target, err := corepaths.ResolveTarget(
+			fixture.home,
+			"~/.local/state/dot/lock",
+		)
+		if err != nil {
+			t.Fatalf("ResolveTarget(lock) error = %v", err)
+		}
+		record := state.LinkRecord{
+			Target:          fixture.lock,
+			ResolvedTarget:  target.Resolved(),
+			LinkDestination: filepath.Join(fixture.repository, "removed"),
+		}
+		fixture.writeState(t, state.Snapshot{
+			Home: fixture.home,
+			Links: map[state.Key]state.LinkRecord{
+				{ModuleID: "old", PlacementID: "stale"}: record,
+			},
 		})
-	}
+		assertCLIMissing(t, fixture.lock)
+		beforeReadOnly := snapshotTree(t, fixture.root)
+
+		code, stdout, stderr := fixture.run("status")
+		if code != exitOK ||
+			!strings.Contains(stdout, "fact module=old selection=none state=present") ||
+			!strings.Contains(stdout, "forget") ||
+			!strings.Contains(stdout, "overlaps a protected control path") ||
+			stderr != "" {
+			t.Fatalf(
+				"status = (%d, %q, %q), want structured stale forget",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, beforeReadOnly)
+		assertCLIMissing(t, fixture.lock)
+
+		code, stdout, stderr = fixture.run("apply", "--dry-run")
+		if code != exitOK ||
+			!strings.Contains(stdout, "forget") ||
+			!strings.Contains(stdout, "overlaps a protected control path") ||
+			stderr != "" {
+			t.Fatalf(
+				"apply --dry-run = (%d, %q, %q), want prospective forget",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, beforeReadOnly)
+		assertCLIMissing(t, fixture.lock)
+
+		code, stdout, stderr = fixture.run("apply")
+		if code != exitOK ||
+			!strings.Contains(stdout, "forget") ||
+			!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
+			!strings.Contains(stderr, completedForget) ||
+			!strings.Contains(stderr, "overlaps a protected control path") {
+			t.Fatalf(
+				"apply = (%d, %q, %q), want state-only forget",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		lockInfo, statErr := os.Lstat(fixture.lock)
+		if statErr != nil || !lockInfo.Mode().IsRegular() {
+			t.Fatalf("lock after mutation = (%v, %v), want advisory regular file", lockInfo, statErr)
+		}
+		if lockInfo.Mode()&fs.ModeSymlink != 0 {
+			t.Fatalf("lock mode = %v, want direct regular file", lockInfo.Mode())
+		}
+		if records := loadTestState(t, fixture).Links; len(records) != 0 {
+			t.Fatalf("state records after forget = %#v, want empty", records)
+		}
+
+		assertApplyNoMutation(t, fixture, fixture.run)
+	})
 }
 
 func TestApplyRejectsInvalidStateWithoutMutation(t *testing.T) {
@@ -978,7 +958,13 @@ func TestApplyRejectsInvalidStateWithoutMutation(t *testing.T) {
 			want:         "legacy state version",
 			wantPathHint: true,
 		},
-		{name: "too new", document: `{"version":4}`, want: "state version is newer"},
+		{
+			name:         "legacy v3",
+			document:     `{"version":3,"home":"/old","records":[]}`,
+			want:         "legacy state version",
+			wantPathHint: true,
+		},
+		{name: "too new", document: `{"version":5}`, want: "state version is newer"},
 	}
 
 	for _, test := range tests {

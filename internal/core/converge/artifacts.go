@@ -3,7 +3,6 @@ package converge
 import (
 	"fmt"
 	"path/filepath"
-	"reflect"
 
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
@@ -34,7 +33,7 @@ func executePlan(
 		}, mutation.wrapError(err)
 	}
 
-	stateChanged := loaded.Missing || !reflect.DeepEqual(loaded.Snapshot, next)
+	stateChanged := loaded.Missing || !state.Equal(loaded.Snapshot, next)
 	if stateChanged {
 		if err := commit(statePath, next); err != nil {
 			commitErr := fmt.Errorf(
@@ -76,11 +75,11 @@ func conflictError(plan Plan) error {
 
 func cloneSnapshot(snapshot state.Snapshot) state.Snapshot {
 	cloned := state.Snapshot{
-		Home:    snapshot.Home,
-		Records: make(map[state.Key]state.Record, len(snapshot.Records)),
+		Home:  snapshot.Home,
+		Links: make(map[state.Key]state.LinkRecord, len(snapshot.Links)),
 	}
-	for key, record := range snapshot.Records {
-		cloned.Records[key] = record
+	for key, link := range snapshot.Links {
+		cloned.Links[key] = link
 	}
 	return cloned
 }

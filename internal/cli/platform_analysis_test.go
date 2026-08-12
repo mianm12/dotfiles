@@ -325,7 +325,7 @@ func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 			if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 				t.Fatalf("extra_modules = %v, want empty", extras)
 			}
-			if records := loadTestState(t, fixture).Records; len(records) != 0 {
+			if records := loadTestState(t, fixture).Links; len(records) != 0 {
 				t.Fatalf("state records = %#v, want empty", records)
 			}
 			if test.drift {
@@ -338,7 +338,7 @@ func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 	}
 }
 
-func TestRemoveUncertainExtraForgetsLocalWithoutDeletingUserData(t *testing.T) {
+func TestRemoveUncertainExtraLeavesLocalOutsideState(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "gated", `
 [match]
@@ -382,9 +382,11 @@ target = "~/.gated.local"
 
 	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitOK ||
-		!strings.Contains(stdout, "state_changed=true") {
+		!strings.Contains(stdout, "targets_changed=false state_changed=false") ||
+		strings.Contains(stdout, "forget") ||
+		stderr != "" {
 		t.Fatalf(
-			"apply after select remove = (%d, %q, %q), want local forget",
+			"apply after select remove = (%d, %q, %q), want no-op outside state",
 			code,
 			stdout,
 			stderr,
@@ -394,7 +396,7 @@ target = "~/.gated.local"
 	if err != nil || string(data) != "user-owned" {
 		t.Fatalf("local after remove = (%q, %v), want preserved user data", data, err)
 	}
-	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+	if records := loadTestState(t, fixture).Links; len(records) != 0 {
 		t.Fatalf("state records = %#v, want empty", records)
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)

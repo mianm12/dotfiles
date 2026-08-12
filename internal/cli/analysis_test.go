@@ -282,8 +282,8 @@ target = "~/.app"
 		t.Fatalf("cleanup apply = (%d, %q, %q)", code, stdout, stderr)
 	}
 	assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
-	if records := loadTestState(t, fixture).Records; len(records) != 0 {
-		t.Fatalf("state records = %#v, want cleanup complete", records)
+	if links := loadTestState(t, fixture).Links; len(links) != 0 {
+		t.Fatalf("state links = %#v, want cleanup complete", links)
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)
 }
@@ -300,10 +300,11 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 			if withState {
 				fixture.writeState(t, state.Snapshot{
 					Home: fixture.home,
-					Records: map[state.Key]state.Record{
-						{ModuleID: "gone", PlacementID: "local"}: {
-							Kind:   state.KindLocal,
-							Target: filepath.Join(fixture.home, ".gone"),
+					Links: map[state.Key]state.LinkRecord{
+						{ModuleID: "gone", PlacementID: "config"}: {
+							Target:          filepath.Join(fixture.home, ".gone"),
+							ResolvedTarget:  filepath.Join(fixture.home, ".gone"),
+							LinkDestination: filepath.Join(fixture.repository, "modules", "gone", "config"),
 						},
 					},
 				})

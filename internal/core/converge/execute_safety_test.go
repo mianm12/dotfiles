@@ -216,16 +216,17 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 	assertExecutorPathUnchanged(t, beforeState)
 }
 
-func TestForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.T) {
+func TestStaleLinkForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.T) {
 	fixture := newFixture(t)
-	target := filepath.Join(fixture.home, ".config", "app.local")
+	target := filepath.Join(fixture.home, ".config", "app")
 	writeExecutorFile(t, target, "personal")
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
-			{ModuleID: "app", PlacementID: "local"}: {
-				Kind:   state.KindLocal,
-				Target: target,
+		Links: map[state.Key]state.LinkRecord{
+			{ModuleID: "app", PlacementID: "config"}: {
+				Target:          target,
+				ResolvedTarget:  target,
+				LinkDestination: filepath.Join(fixture.repository, "modules", "app", "config"),
 			},
 		},
 	})

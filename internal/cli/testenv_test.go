@@ -445,9 +445,8 @@ func writeLinkState(
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "app", PlacementID: "config"}: {
-				Kind:            state.KindLink,
 				Target:          target,
 				ResolvedTarget:  resolved.Resolved(),
 				LinkDestination: destination,

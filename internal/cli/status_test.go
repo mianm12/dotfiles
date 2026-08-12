@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestStatusReportsExistingLocalWithoutProvenanceAsPending(t *testing.T) {
+func TestStatusReportsExistingLocalWithoutStateAction(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `
 [[locals]]
@@ -24,9 +24,9 @@ target = "~/.app.local"
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
-		!strings.Contains(stdout, "action kind=keep module=app placement=local") ||
+		strings.Contains(stdout, "action kind=") ||
 		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("status before provenance = (%d, %q, %q), want pending", code, stdout, stderr)
+		t.Fatalf("status before empty state = (%d, %q, %q), want local no-op", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, beforeStatus)
 	assertCLIMissing(t, fixture.state)
@@ -36,7 +36,7 @@ target = "~/.app.local"
 	if code != exitOK ||
 		!strings.Contains(stdout, "state_changed=true") ||
 		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("apply local provenance = (%d, %q, %q), want state-only mutation", code, stdout, stderr)
+		t.Fatalf("apply local = (%d, %q, %q), want empty state initialization", code, stdout, stderr)
 	}
 	if data, err := os.ReadFile(target); err != nil || string(data) != "personal" {
 		t.Fatalf("local after apply = (%q, %v), want preserved", data, err)
@@ -45,9 +45,9 @@ target = "~/.app.local"
 	beforeRepeat := snapshotPaths(t, fixture.config, fixture.state, fixture.lock, target)
 	code, stdout, stderr = fixture.run("status")
 	if code != exitOK || stderr != "" ||
-		!strings.Contains(stdout, "fact module=app selection=profile state=present") ||
+		!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
 		strings.Contains(stdout, "action kind=") {
-		t.Fatalf("status after provenance = (%d, %q, %q), want converged", code, stdout, stderr)
+		t.Fatalf("status after empty state = (%d, %q, %q), want local no-op", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, beforeRepeat)
 	assertApplyNoMutation(t, fixture, fixture.run)

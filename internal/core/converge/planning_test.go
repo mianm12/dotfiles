@@ -22,7 +22,7 @@ func TestPlanSourceContentChangeIsNoOp(t *testing.T) {
 	source := fixture.file(t, "repo/modules/app/config", "before")
 	target := fixture.target(".config/app/config")
 	fixture.symlink(t, source, target)
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"config": linkRecord(target, fixture.resolved(t, target), source),
 	})
 	module := linkModule("app", "config", source, "~/.config/app/config")
@@ -49,7 +49,7 @@ func TestPlanAddAndSafeStalePruneAreOrdered(t *testing.T) {
 	oldTarget := fixture.target(".config/app/old")
 	fixture.symlink(t, oldSource, oldTarget)
 	newTarget := fixture.target(".config/app/new")
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"old": linkRecord(oldTarget, fixture.resolved(t, oldTarget), oldSource),
 	})
 	module := linkModule("app", "new", newSource, "~/.config/app/new")
@@ -74,7 +74,7 @@ func TestPlanIndependentAliasUnderStaleSourceDoesNotBlockPrune(t *testing.T) {
 	}
 	staleTarget := fixture.target("stale")
 	fixture.symlink(t, oldDestination, staleTarget)
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"old": linkRecord(
 			staleTarget,
 			fixture.resolved(t, staleTarget),
@@ -136,7 +136,7 @@ func TestPlanRejectsActiveTargetTraversingStateOwnedParentLink(t *testing.T) {
 			fixture.symlink(t, oldTree, parent)
 			snapshot := state.Snapshot{
 				Home: fixture.home,
-				Records: map[state.Key]state.Record{
+				Links: map[state.Key]state.LinkRecord{
 					{ModuleID: "stale", PlacementID: "tree"}: linkRecord(
 						parent,
 						fixture.resolved(t, parent),
@@ -193,8 +193,8 @@ func TestPlanRejectsAdoptedLinkTraversedByEffectiveDesiredTarget(t *testing.T) {
 		linkModule("child", "config", childSource, "~/access/child"),
 	}
 	snapshot := state.Snapshot{
-		Home:    fixture.home,
-		Records: map[state.Key]state.Record{},
+		Home:  fixture.home,
+		Links: map[state.Key]state.LinkRecord{},
 	}
 	before := snapshotTree(t, fixture.root)
 
@@ -229,7 +229,7 @@ func TestPlanRejectsResolvedDriftKeepTraversedByEffectiveDesiredTarget(
 	recordedResolved := fixture.resolved(t, parentTarget)
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parentTarget,
 				recordedResolved,
@@ -276,7 +276,7 @@ func TestPlanRejectsRepairStateTraversedByEffectiveDesiredTarget(t *testing.T) {
 	fixture.symlink(t, filepath.Join(parentTarget, "out"), fixture.target("access"))
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parentTarget,
 				fixture.resolved(t, parentTarget),
@@ -331,7 +331,7 @@ func TestFullPlanRejectsLinkUpdateTraversedByDesiredTarget(t *testing.T) {
 			)
 			snapshot := state.Snapshot{
 				Home: fixture.home,
-				Records: map[state.Key]state.Record{
+				Links: map[state.Key]state.LinkRecord{
 					{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 						parentTarget,
 						fixture.resolved(t, parentTarget),
@@ -385,7 +385,7 @@ func TestFullPlanAllowsFullyOwnedKeepTraversedByDesired(
 	childSource := fixture.file(t, "repo/modules/child/config", "child")
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parentTarget,
 				fixture.resolved(t, parentTarget),
@@ -459,7 +459,7 @@ func TestFullPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 			childSource := fixture.file(t, "repo/modules/child/config", "child")
 			snapshot := state.Snapshot{
 				Home: fixture.home,
-				Records: map[state.Key]state.Record{
+				Links: map[state.Key]state.LinkRecord{
 					{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 						recordedTarget,
 						recordedResolved,
@@ -537,7 +537,7 @@ func TestFullPlanRejectsStaleCleanupTraversedByDesired(
 			fixture.symlink(t, oldTree, parent)
 			snapshot := state.Snapshot{
 				Home: fixture.home,
-				Records: map[state.Key]state.Record{
+				Links: map[state.Key]state.LinkRecord{
 					{ModuleID: "stale", PlacementID: "tree"}: linkRecord(
 						parent,
 						fixture.resolved(t, parent),
@@ -594,7 +594,7 @@ func TestPlanDoesNotConfuseIndependentAliasWithOwnedLinkTraversal(t *testing.T) 
 	childSource := fixture.file(t, "repo/modules/active/config", "active")
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parent,
 				fixture.resolved(t, parent),
@@ -631,7 +631,7 @@ func TestPlanRejectsUpdateBeforeTraversedStalePrune(t *testing.T) {
 	fixture.symlink(t, staleSource, filepath.Join(outside, "child"))
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parentTarget,
 				fixture.resolved(t, parentTarget),
@@ -677,7 +677,7 @@ func TestPlanConflictedUpdateDoesNotBlockIndependentStaleCleanup(t *testing.T) {
 	fixture.symlink(t, staleSource, filepath.Join(outside, "stale"))
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parentTarget,
 				fixture.resolved(t, parentTarget),
@@ -729,7 +729,7 @@ func TestPlanAllowsUpdateBeforeIndependentStalePrune(t *testing.T) {
 	fixture.symlink(t, staleSource, filepath.Join(outside, "child"))
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parentTarget,
 				fixture.resolved(t, parentTarget),
@@ -767,7 +767,7 @@ func TestPlanAllowsUpdateWithTraversedDriftedStaleForget(t *testing.T) {
 	fixture.symlink(t, userSource, filepath.Join(outside, "child"))
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parentTarget,
 				fixture.resolved(t, parentTarget),
@@ -805,7 +805,7 @@ func TestPlanOrdersTraversedStalePrunesChildFirst(t *testing.T) {
 	childResolved := fixture.resolved(t, childTarget)
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "app", PlacementID: "a-parent"}: linkRecord(
 				parentTarget,
 				fixture.resolved(t, parentTarget),
@@ -852,7 +852,7 @@ func TestPlanCollapsesDuplicateStaleOwnershipToOnePrune(t *testing.T) {
 	resolved := fixture.resolved(t, firstTarget)
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "app", PlacementID: "a-first"}:  linkRecord(firstTarget, resolved, source),
 			{ModuleID: "app", PlacementID: "b-second"}: linkRecord(secondTarget, resolved, source),
 		},
@@ -880,7 +880,7 @@ func TestPlanKeepsIndependentStalePrunesWithSameDestination(t *testing.T) {
 	fixture.symlink(t, source, secondTarget)
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "app", PlacementID: "a-first"}: linkRecord(
 				firstTarget,
 				fixture.resolved(t, firstTarget),
@@ -920,7 +920,7 @@ func TestFullPlanRejectsUpdateWithStaleDependency(t *testing.T) {
 	fixture.symlink(t, staleSource, filepath.Join(outside, "child"))
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "parent", PlacementID: "tree"}: linkRecord(
 				parentTarget,
 				fixture.resolved(t, parentTarget),
@@ -960,7 +960,7 @@ func TestPlanDoesNotTreatDriftedParentLinkAsStateOwned(t *testing.T) {
 	source := fixture.file(t, "repo/modules/active/config", "active")
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "stale", PlacementID: "tree"}: linkRecord(
 				parent,
 				fixture.resolved(t, parent),
@@ -1007,7 +1007,7 @@ func TestPlanDoesNotTreatResolvedParentDriftAsStateOwned(t *testing.T) {
 	source := fixture.file(t, "repo/modules/active/config", "active")
 	snapshot := state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "stale", PlacementID: "tree"}: linkRecord(
 				recordTarget,
 				recordResolved,
@@ -1063,7 +1063,7 @@ func TestPlanStaleLinkInsideControlPathIsForgotten(t *testing.T) {
 
 			source := fixture.file(t, "old-repo/source", "old")
 			fixture.symlink(t, source, target)
-			snapshot := fixture.snapshot(map[string]state.Record{
+			snapshot := fixture.snapshot(map[string]state.LinkRecord{
 				"stale": linkRecord(
 					target,
 					fixture.resolved(t, target),
@@ -1087,39 +1087,6 @@ func TestPlanStaleLinkInsideControlPathIsForgotten(t *testing.T) {
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
-}
-
-func TestPlanRejectsUnknownStaleKindBeforeControlOverlapFallback(t *testing.T) {
-	fixture := newPlanFixture(t)
-	controls := fixture.controls
-	controls.Repository = fixture.target("repository")
-	if err := os.MkdirAll(controls.Repository, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(repository) error = %v", err)
-	}
-	snapshot := fixture.snapshot(map[string]state.Record{
-		"stale": {
-			Kind:   state.Kind("unknown"),
-			Target: controls.Repository,
-		},
-	})
-	before := snapshotTree(t, fixture.root)
-
-	plan, err := buildPlan(planRequest{
-		Home:     fixture.home,
-		Controls: resolveTestControls(t, controls),
-		State:    snapshot,
-	})
-
-	if !errors.Is(err, state.ErrInvalid) {
-		t.Fatalf("Build() = (%#v, %v), want invalid state error", plan, err)
-	}
-	if !strings.Contains(err.Error(), `unsupported kind "unknown"`) {
-		t.Fatalf("Build() error = %q, want unsupported kind", err)
-	}
-	if len(plan.Actions()) != 0 {
-		t.Fatalf("Build() plan = %#v, want empty plan", plan)
-	}
-	assertTreeUnchanged(t, fixture.root, before)
 }
 
 func TestPlanStaleLinkContainingControlPathIsForgotten(t *testing.T) {
@@ -1142,56 +1109,12 @@ func TestPlanStaleLinkContainingControlPathIsForgotten(t *testing.T) {
 			}
 
 			source := fixture.file(t, "old-repo/source", "old")
-			snapshot := fixture.snapshot(map[string]state.Record{
+			snapshot := fixture.snapshot(map[string]state.LinkRecord{
 				"stale": linkRecord(
 					target,
 					fixture.resolved(t, target),
 					source,
 				),
-			})
-			before := snapshotTree(t, fixture.root)
-
-			plan, err := buildPlan(planRequest{
-				Home:     fixture.home,
-				Controls: resolveTestControls(t, controls),
-				State:    snapshot,
-			})
-			if err != nil {
-				t.Fatalf("Build() error = %v", err)
-			}
-			assertDecisions(t, plan, DecisionForget)
-			if got := plan.Actions()[0].Reason; got != "stale target overlaps a protected control path" {
-				t.Fatalf("forget reason = %q", got)
-			}
-			assertTreeUnchanged(t, fixture.root, before)
-		})
-	}
-}
-
-func TestPlanStaleLocalContainingControlPathIsForgotten(t *testing.T) {
-	for _, controlName := range []string{"repository", "config", "state", "lock"} {
-		t.Run(controlName, func(t *testing.T) {
-			fixture := newPlanFixture(t)
-			controls := fixture.controls
-			target := fixture.target("managed")
-			switch controlName {
-			case "repository":
-				controls.Repository = filepath.Join(target, "repository")
-			case "config":
-				controls.Config = filepath.Join(target, "dot", "config.toml")
-			case "state":
-				controls.State = filepath.Join(target, "dot", "state.json")
-				controls.Lock = filepath.Join(target, "dot", "lock")
-			case "lock":
-				controls.State = filepath.Join(target, "dot", "state.json")
-				controls.Lock = filepath.Join(target, "dot", "lock")
-			}
-
-			snapshot := fixture.snapshot(map[string]state.Record{
-				"stale": {
-					Kind:   state.KindLocal,
-					Target: target,
-				},
 			})
 			before := snapshotTree(t, fixture.root)
 
@@ -1223,7 +1146,7 @@ func TestPlanStaleResolvedAliasOverlappingControlPathIsForgotten(t *testing.T) {
 	if err := os.WriteFile(resolved, []byte("control data"), 0o600); err != nil {
 		t.Fatalf("os.WriteFile(resolved target) error = %v", err)
 	}
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"stale": linkRecord(
 			target,
 			resolved,
@@ -1262,7 +1185,7 @@ func TestPlanDriftedStaleLinkForgetsAndDoesNotBlock(t *testing.T) {
 	userSource := fixture.file(t, "user/owned", "user")
 	oldTarget := fixture.target(".config/app/old")
 	fixture.symlink(t, userSource, oldTarget)
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"old": linkRecord(oldTarget, fixture.resolved(t, oldTarget), oldSource),
 	})
 	module := linkModule("app", "new", newSource, "~/.config/app/new")
@@ -1283,7 +1206,7 @@ func TestPlanTargetChangeCreatesBeforePrune(t *testing.T) {
 	oldTarget := fixture.target(".old/app")
 	newTarget := fixture.target(".config/app")
 	fixture.symlink(t, source, oldTarget)
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"config": linkRecord(oldTarget, fixture.resolved(t, oldTarget), source),
 	})
 	module := linkModule("app", "config", source, "~/.config/app")
@@ -1309,7 +1232,7 @@ func TestPlanTargetChangeCreatesBeforePrune(t *testing.T) {
 	}
 	final := plan.finalSnapshot()
 	wantKey := state.Key{ModuleID: "app", PlacementID: "config"}
-	if len(final.Records) != 1 || final.Records[wantKey].Target != newTarget {
+	if len(final.Links) != 1 || final.Links[wantKey].Target != newTarget {
 		t.Fatalf("Build() FinalState = %#v, want only new target", final)
 	}
 	plan.transitions[0].actionIndexes[0], plan.transitions[0].actionIndexes[1] = plan.transitions[0].actionIndexes[1], plan.transitions[0].actionIndexes[0]
@@ -1317,14 +1240,14 @@ func TestPlanTargetChangeCreatesBeforePrune(t *testing.T) {
 	if ordered[0].Target != newTarget || ordered[1].Target != oldTarget {
 		t.Fatalf("Plan.Actions() = %#v, want explicit global action order", ordered)
 	}
-	delete(final.Records, wantKey)
-	if got := plan.finalSnapshot().Records[wantKey].Target; got != newTarget {
+	delete(final.Links, wantKey)
+	if got := plan.finalSnapshot().Links[wantKey].Target; got != newTarget {
 		t.Fatalf("Plan FinalState changed through returned snapshot: got %q", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanLocalAbsentCreatesAndEveryExistingEntryKeeps(t *testing.T) {
+func TestPlanLocalAbsentCreatesAndEveryExistingEntryIsNoOp(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(*testing.T, *planFixture, string)
@@ -1341,7 +1264,7 @@ func TestPlanLocalAbsentCreatesAndEveryExistingEntryKeeps(t *testing.T) {
 			setup: func(t *testing.T, fixture *planFixture, target string) {
 				fixture.fileAbsolute(t, target, "user")
 			},
-			want: DecisionKeep,
+			want: "",
 		},
 		{
 			name: "directory",
@@ -1350,7 +1273,7 @@ func TestPlanLocalAbsentCreatesAndEveryExistingEntryKeeps(t *testing.T) {
 					t.Fatalf("os.MkdirAll(target) error = %v", err)
 				}
 			},
-			want: DecisionKeep,
+			want: "",
 		},
 		{
 			name: "symlink",
@@ -1358,14 +1281,14 @@ func TestPlanLocalAbsentCreatesAndEveryExistingEntryKeeps(t *testing.T) {
 				source := fixture.file(t, "user/local", "user")
 				fixture.symlink(t, source, target)
 			},
-			want: DecisionKeep,
+			want: "",
 		},
 		{
 			name: "dangling symlink",
 			setup: func(t *testing.T, fixture *planFixture, target string) {
 				fixture.symlink(t, fixture.path("missing"), target)
 			},
-			want: DecisionKeep,
+			want: "",
 		},
 	}
 
@@ -1380,7 +1303,14 @@ func TestPlanLocalAbsentCreatesAndEveryExistingEntryKeeps(t *testing.T) {
 
 			plan := fixture.build(t, []config.Module{module}, fixture.snapshot(nil))
 
-			assertDecisions(t, plan, test.want)
+			if test.want == "" {
+				assertDecisions(t, plan)
+			} else {
+				assertDecisions(t, plan, test.want)
+			}
+			if len(plan.finalSnapshot().Links) != 0 {
+				t.Fatalf("local plan wrote ownership state: %#v", plan.finalSnapshot())
+			}
 			assertTreeUnchanged(t, fixture.root, before)
 		})
 	}
@@ -1392,18 +1322,12 @@ func TestPlanExampleUpdateDoesNotOverwriteLocal(t *testing.T) {
 	target := fixture.target(".config/app/config.local")
 	fixture.fileAbsolute(t, target, "user")
 	module := localModule("app", "local", example, "~/.config/app/config.local")
-	snapshot := fixture.snapshot(map[string]state.Record{
-		"local": {
-			Kind:   state.KindLocal,
-			Target: target,
-		},
-	})
 	if err := os.WriteFile(example, []byte("after"), 0o600); err != nil {
 		t.Fatalf("os.WriteFile(example) error = %v", err)
 	}
 	before := snapshotTree(t, fixture.root)
 
-	plan := fixture.build(t, []config.Module{module}, snapshot)
+	plan := fixture.build(t, []config.Module{module}, fixture.snapshot(nil))
 
 	assertDecisions(t, plan)
 	assertTreeUnchanged(t, fixture.root, before)
@@ -1426,14 +1350,14 @@ func TestPlanCrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
 			setup: func(t *testing.T, fixture *planFixture, target, _ string) {
 				fixture.fileAbsolute(t, target, "user")
 			},
-			want: DecisionKeep,
+			want: "",
 		},
 		{
 			name: "matching old symlink keeps local",
 			setup: func(t *testing.T, fixture *planFixture, target, source string) {
 				fixture.symlink(t, source, target)
 			},
-			want: DecisionKeep,
+			want: "",
 		},
 	}
 
@@ -1446,7 +1370,7 @@ func TestPlanCrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
 			test.setup(t, fixture, target, oldSource)
 			snapshot := state.Snapshot{
 				Home: fixture.home,
-				Records: map[state.Key]state.Record{
+				Links: map[state.Key]state.LinkRecord{
 					{ModuleID: "old", PlacementID: "link"}: linkRecord(
 						target,
 						fixture.resolved(t, target),
@@ -1459,7 +1383,11 @@ func TestPlanCrossModuleStaleLinkDoesNotBlockLocal(t *testing.T) {
 
 			plan := fixture.build(t, []config.Module{module}, snapshot)
 
-			assertDecisions(t, plan, test.want, DecisionForget)
+			if test.want == "" {
+				assertDecisions(t, plan, DecisionForget)
+			} else {
+				assertDecisions(t, plan, test.want, DecisionForget)
+			}
 			if len(plan.Problems()) != 0 {
 				t.Fatalf("Build() = %#v, want local decision plus stale forget", plan)
 			}
@@ -1489,7 +1417,7 @@ func TestPlanStateOwnedSymlinkDriftIsConflict(t *testing.T) {
 	target := fixture.target(".config/app/config")
 	fixture.symlink(t, userSource, target)
 	module := linkModule("app", "config", source, "~/.config/app/config")
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"config": linkRecord(target, fixture.resolved(t, target), source),
 	})
 	before := snapshotTree(t, fixture.root)
@@ -1503,16 +1431,13 @@ func TestPlanStateOwnedSymlinkDriftIsConflict(t *testing.T) {
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestPlanPlacementKindChangeIsConflict(t *testing.T) {
+func TestPlanLinkOwnershipToDesiredLocalIsConflict(t *testing.T) {
 	fixture := newPlanFixture(t)
-	source := fixture.file(t, "repo/modules/app/config", "config")
+	source := fixture.file(t, "repo/modules/app/config.local.example", "example")
 	target := fixture.target(".config/app/config")
-	module := linkModule("app", "config", source, "~/.config/app/config")
-	snapshot := fixture.snapshot(map[string]state.Record{
-		"config": {
-			Kind:   state.KindLocal,
-			Target: target,
-		},
+	module := localModule("app", "config", source, "~/.config/app/config")
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
+		"config": linkRecord(target, fixture.resolved(t, target), source),
 	})
 	before := snapshotTree(t, fixture.root)
 
@@ -1532,7 +1457,7 @@ func TestPlanParentSymlinkDriftRejectsUpdate(t *testing.T) {
 	newSource := fixture.file(t, "repo/modules/app/new", "new")
 	oldResolved := filepath.Join(oldParent, "config")
 	fixture.symlink(t, oldSource, oldResolved)
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"config": linkRecord(parentLink+"/config", fixture.resolved(t, parentLink+"/config"), oldSource),
 	})
 	if err := os.Remove(parentLink); err != nil {
@@ -1561,7 +1486,7 @@ func TestPlanParentSymlinkDriftRejectsPruneButContinues(t *testing.T) {
 	source := fixture.file(t, "repo/modules/app/config", "config")
 	oldResolved := filepath.Join(oldParent, "config")
 	fixture.symlink(t, source, oldResolved)
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"old": linkRecord(parentLink+"/config", fixture.resolved(t, parentLink+"/config"), source),
 	})
 	if err := os.Remove(parentLink); err != nil {
@@ -1591,7 +1516,7 @@ func TestPlanParentSymlinkDriftWithAbsentNewLeafForgets(t *testing.T) {
 	source := fixture.file(t, "repo/modules/app/config", "config")
 	oldTarget := filepath.Join(oldParent, "config")
 	fixture.symlink(t, source, oldTarget)
-	snapshot := fixture.snapshot(map[string]state.Record{
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
 		"old": linkRecord(
 			parentLink+"/config",
 			fixture.resolved(t, parentLink+"/config"),
@@ -1664,8 +1589,8 @@ func (fixture *planFixture) build(
 	if err != nil {
 		t.Fatalf("buildPlan() error = %v", err)
 	}
-	expected := make(map[state.Key]bool, len(snapshot.Records))
-	for key := range snapshot.Records {
+	expected := make(map[state.Key]bool, len(snapshot.Links))
+	for key := range snapshot.Links {
 		expected[key] = true
 	}
 	for _, module := range modules {
@@ -1703,12 +1628,12 @@ func (fixture *planFixture) build(
 	return plan
 }
 
-func (fixture *planFixture) snapshot(records map[string]state.Record) state.Snapshot {
-	flat := make(map[state.Key]state.Record, len(records))
+func (fixture *planFixture) snapshot(records map[string]state.LinkRecord) state.Snapshot {
+	flat := make(map[state.Key]state.LinkRecord, len(records))
 	for placementID, record := range records {
 		flat[state.Key{ModuleID: "app", PlacementID: placementID}] = record
 	}
-	return state.Snapshot{Home: fixture.home, Records: flat}
+	return state.Snapshot{Home: fixture.home, Links: flat}
 }
 
 func (fixture *planFixture) path(relative string) string {
@@ -1792,9 +1717,8 @@ func localModule(moduleID, placementID, example, target string) config.Module {
 	}
 }
 
-func linkRecord(target, resolved, destination string) state.Record {
-	return state.Record{
-		Kind:            state.KindLink,
+func linkRecord(target, resolved, destination string) state.LinkRecord {
+	return state.LinkRecord{
 		Target:          target,
 		ResolvedTarget:  resolved,
 		LinkDestination: destination,
