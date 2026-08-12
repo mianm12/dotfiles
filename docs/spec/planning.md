@@ -2,136 +2,128 @@
 
 ## Actual filesystem
 
-Target 使用 `lstat` 区分 absent、symlink、regular file、directory 和 special。Local 只关心
-目录项是否存在，不读取或跟随已有对象。
+Target 使用 `lstat` 区分 absent、symlink、regular file、directory 和 special。Local 只关心目录项
+是否存在，不读取或跟随已有对象。
+
+## Plan 模型
+
+一次完整 planning 生成：
+
+- 一串按语义 phase 排列的 Actions，唯一表达可执行变化及公开顺序；
+- 结构化 Issues，其中 warning 不阻断执行，任一 blocker 使 plan 不可执行；
+- 在完整 active desired set 已确定且 Plan 可执行时，由全部 active desired links 直接计算的完整
+  NextState。
+
+Planner 不保存每个 key 的 Transition、Action 索引或独立 execution schedule。NextState 不从 Action
+顺序推导；blocked Plan 没有可提交 NextState。无文件系统或 ownership 变化的 placement 不生成 keep
+Action。
+
+Action 顺序固定为：
+
+1. `create-local`、`create-link`；
+2. `update`；
+3. `adopt`、`repair-state`；
+4. `prune`、`forget`。
+
+每个 phase 内按 module ID、placement ID、target 稳定排序。Action 表示语义变化，不逐项展示
+parent preparation、复核或 state commit 等内部 syscall。Status、dry-run 与 blocked apply 的公开
+投影由 [`cli.md`](cli.md#status-与-dry-run)定义；真实执行边界由
+[`mutation-and-recovery.md`](mutation-and-recovery.md)定义。
 
 ## 通用决策规则
 
-全量 plan 内任一 placement 在规划阶段落到 conflict 时，plan 不可执行。Planner 对每个逻辑
-`(module_id, placement_id)` 恰好生成一个 Transition；同一个 key 的 active desired 与旧 target
-cleanup 必须合并在该 Transition 中，不能形成两个互相补偿的状态决策。Transition 可包含多个
-有序 Action，例如先创建新 target、再 prune 旧 target，但只声明一个最终 ownership 事实。
-Status 的公开投影
-与退出码只由 [`cli.md`](cli.md#status-与-dry-run) 定义。执行前后的写入边界见
-[`mutation-and-recovery.md`](mutation-and-recovery.md)。
+- 全部 effective desired placements 与 state-only stale links 必须进入同一次 planning。Profile 选中
+  且已确定 not-applicable 的 module 退出 desired，其旧 links 继续按 stale 规则处理；indeterminate
+  module 不表示退出 desired，并产生 blocker。
+- Control topology 自身无效时整条 planning 被阻断，不能使用 stale 宽容规则绕过。Active target
+  与 control family 重叠同样是 blocker。Stale link 与 control family 重叠时只允许 forget，不能
+  prune 或以其他 Action 修改 actual。
+- 其他 module 的 state 已 owns 同一 active target 时产生 ownership blocker，不自动 transfer。
+- Active desired target 的当前父路径解析链经过任何仍有完整 state ownership 的 managed link
+  entry 时产生 topology blocker。普通、不由 `dot` ownership state 管理的 ancestor symlink 继续
+  按 [`placements.md`](placements.md#路径身份与边界)允许。
+- Adopt、repair-state 或 update 若会建立或改变一个被其他 active/stale target 当前 traversal 的
+  managed link namespace，则产生 topology blocker。Planner 不建立跨 placement 调度来规避该
+  blocker；用户必须按下文两阶段迁移。
+- 同一 link key 的 target move 在新旧 target 没有 equality、alias、ancestry 或 traversal 依赖时
+  可以一次规划：先 create/adopt 新 target，再 prune/forget 旧 target，并只在 NextState 保存新
+  ownership。存在上述依赖时产生 topology blocker。
+- Existing v4 link ownership 与同 key 的当前 desired local 构成 placement-type blocker；不能在
+  一次 desired 变更中隐式把 link 转成 local。Local 转成 link 没有 provenance state 可用，仍按
+  actual target 的普通 link 规则判断，已有 local 文件会阻断覆盖。
 
-State 中 placement 的 kind 与当前 desired 的 kind 不一致（同一 ID 在 link 与 local 之间互换）
-是 conflict，不尝试自动收敛。改用新 placement ID 仍受 actual target 与 ownership 规则约束，
-不是通用的类型转换方式；显式转换受下文的
-[placement 类型与层级迁移](#placement-类型与层级迁移)约束。
-
-Active target 的父路径解析链经过一条仍有完整 state ownership 证据的 link 时为 conflict。
-该守卫包括仅存在于 state 的 link，避免 active action 先写入其当前 destination，
-而该 link 随后更新或清理后让成功结果失去可达性。只有解析链实际经过该 link 目录项才命中；
-独立 alias 即使最终解析到同一 destination 也不冲突。State target 的 resolved identity 或
-actual raw destination 已漂移时 ownership 不成立，不使用该守卫。
-
-非 conflict active link action 若会改变 link 目录项，或当前 state 尚不能完整 owns
-该 actual link，则成功后会建立或刷新 ownership。若任一 effective desired target 的当前父
-路径解析链经过该 active link 目录项，该 placement 产生 conflict Problem；比较包含全部 effective desired。
-该规则既避免 Adopt、RepairState 或 resolved-drift Keep 首次成功后让相同输入在下一次 apply
-才冲突，也避免 Update 切断其他 desired target 的当前可达性。当前 state 已完整
-owns 同一 resolved link entry 与 raw destination 的 Keep 不改变 namespace 或建立新 ownership
-边界，不使用该 prospective guard；这包括 recorded lexical target 与 desired 不同、但旧
-target 仍能证明同一 ownership 的 rebind。CreateLink 的 actual 尚不存在，因此当前解析链不会
-经过该目录项。该 guard 只把本轮实际生成的 active link Action 视为 parent；没有完整 state
-ownership 且本轮不建立 ownership 的 desired link 不因本规则获得 ownership。
-
-Control topology 自身无效时整条规划失败，不能使用 stale 宽容规则绕过。Active target 与
-control family 重叠仍是 path conflict。仅当 state placement 已退出 desired，且其历史 target
-与当前 control family 重叠时，`dot` 生成带结构化原因的 `forget`：放弃
-ownership/provenance，禁止 prune，不删除、替换或以其他 placement action 修改对应 target。
-该 Action 是 ownership 放弃原因的唯一真相源，具体的只读预告与成功结果文案由
-[`cli.md`](cli.md#status-与-dry-run) 投影。该规则同时适用于 stale link 与 stale local，只处理
-全部 state-only stale records；损坏 state、HOME 不匹配和未知 kind 等输入错误不得降级为 forget。
-
-Profile 选中的 module 已确定 not-applicable 时，其旧 state placements 视为退出 desired，
-继续按本文件的 stale prune/forget 规则规划 cleanup。Effective indeterminate module 不生成
-placement Transition；已由 `select remove` 移出 extra selection 的目标不再 effective，其旧
-state placements 仍按 stale prune/forget 规则处理。真实 mutation 阻断边界由
-[`mutation-and-recovery.md`](mutation-and-recovery.md#安全规则) 定义。
-
-### Placement 类型与层级迁移
-
-同一 placement 在 link 与 local 之间变更 kind，或把一个 directory link 改为其 target 下的
-leaf placements，都不能在一次 desired 变更中自动迁移，并满足以下规则：
-
-- 每个受影响 HOME 必须先收敛一个只删除旧 placement、尚未加入 replacement 的阶段一 desired。
-  Directory-link 迁移的阶段一还要求全部 effective modules 都不声明父路径解析链经过旧 link 的
-  descendants。
-- 阶段一只有在全量 apply 成功并提交 state 后才完成；actual target 已消失不能单独证明完成。
-  Mutation 失败或提示可能部分完成时，必须保持阶段一 desired，并按
-  [`mutation-and-recovery.md`](mutation-and-recovery.md#中断恢复)重跑到成功。
-- Prune 只删除仍满足 ownership 的 link；forget 与 local cleanup 保留 actual。用户必须在阶段二
-  前处理会阻塞 replacement 的保留数据或目录项，`dot` 不自动转换、导入或覆盖它们。
-- 阶段二加入 replacement 或 descendants 后，仍应用普通 target、ownership、control-path 与
-  conflict 规则；阶段一不会为任意新 placement 建立删除或覆盖授权。
-- Module 已因 selection 移除或已确定 not-applicable 而退出 desired 时，先按
-  [`cli.md`](cli.md#apply) 与 [`cli.md`](cli.md#select)收敛 cleanup；apply 不会把 inactive module
-  重新加入 selection。Indeterminate applicability 不表示退出 desired。
-- 多机 repository 中，每个仍有旧 record 的 HOME 都必须完成阶段一，不能从旧 desired 直接跳到
-  阶段二。
-
-逐步操作、多机器清单和 link/local、directory-link 场景见
-[`安全迁移 placements`](../guides/safe-migrations.md)。
+能够可靠加载并观察的独立部分应继续形成 Actions 与 Issues；但 control topology、target set 或
+配置错误导致某部分无法可靠规划时，不伪造该部分 Action。完整 Report 表示所有可确定事实和问题
+都已表达，不表示 blocker 后仍存在一份局部可执行计划。
 
 ## Link
 
-按以下顺序判定，命中即停：能用 desired 或 state 解释的 actual 才有动作，其余一律 conflict。
+Active link 按以下顺序判定，命中即停：
 
-1. 其他 module 的 state 已 owns 同一 target → conflict。
-2. actual 是 regular file、directory 或 special → conflict。
-3. actual absent → 无 state 时 create 并登记；有 state 时按当前 desired create。
-4. actual 是 symlink 且 raw destination == desired：
-   - 无 state → adopt，只写 state。
-   - 有 state 且 state destination == desired → keep（记录的 resolved target 已变则一并修正）。
-   - 有 state 且 state destination != desired（state 落后）→ repair state。
-5. actual 是 symlink 且 raw destination != desired：
-   - 有 state、raw destination == state destination 且 resolved target 未变（仅 desired 改变）→
-     update。
-   - 有 state、raw destination == state destination 但 resolved target 已变 → 拒绝并按 conflict
-     处理。
-   - 其余（无 state 的未知 symlink，或已偏离 state）→ conflict。
+1. 其他 module 的 state 已 owns 同一 target → blocker。
+2. actual 是 regular file、directory 或 special → blocker。
+3. actual absent → `create-link`。
+4. actual 是 symlink 且 raw destination 等于 desired：
+   - 无同 key ownership → `adopt`；
+   - ownership destination 落后但 actual 已等于 desired → `repair-state`；
+   - ownership、resolved target 与 actual 已一致 → 无 Action。
+5. actual 是 symlink 且 raw destination 不等于 desired：
+   - 同 key ownership 完整解释 actual，且 resolved target 未漂移 → `update`；
+   - ownership 的 resolved target 已漂移 → blocker；
+   - 无 ownership 或 actual 已偏离 ownership → blocker。
 
-Stale link 只有在当前 target 仍是 symlink、resolved target 未改变且 raw destination 等于
-state 记录时才允许 prune。Dangling symlink 仍按 raw destination 应用同样规则。
+`adopt` 与 `repair-state` 只改变 NextState；`update` 删除旧 link 前继续携带并复核原 raw destination
+与 resolved target。
 
-Stale link target 与 active desired target 相等时，stale cleanup Action 为 forget 旧
-ownership；该 Action 不覆盖 active placement 按上文规则独立产生的 ownership conflict。
-Active target 的父路径解析链经过 stale link 时，由通用 state-owned link 守卫把 active
-placement 标记为 conflict；stale cleanup 也必须比较全部 effective desired targets。只要 child
-的父路径解析链仍经过该 link，prune Action 不再生成并改为 Problem，避免 cleanup 切断
-desired target。两种 Problem 复用同一个
-traversal 与 ownership 不变量。
+### Stale link
 
-同一 plan 内本可 prune 的 state-owned stale link，如果其当前父路径解析链经过一条将在此前
-执行 Update 的 active link，则 stale cleanup 为 conflict。否则 Update 会先改变 namespace，
-让后续 prune 的 resolved ownership 复核被本轮自身必然破坏，并留下部分完成。该规则只比较
-当前 plan 实际生成的 Update/Prune Action pair；独立 alias 即使到达相同 destination 也不命中。
-恢复时先保持 parent 的旧 destination 并通过一次 desired 变更完成 stale cleanup，再更新
-parent；不能依赖局部命令绕过该依赖。
+Stale link 只有同时满足以下条件才允许 `prune`：
 
-其余 Prune Action 按实际 traversal 依赖排序：child target 的父路径解析链经过
-另一条 stale parent link 时，child 先于 parent；无依赖的 Action 保持稳定 state key 顺序，
-独立 alias 不建立依赖。多个完整 ownership record 若指向同一个当前 target，只由稳定顺序中的
-第一条 Action 代表物理 Prune，其余生成说明事实的 forget Action；不同 target 即使 raw
-destination 相同仍分别 Prune。该归一化不增加删除授权，每条实际 Prune 仍独立携带并在执行前
-复核自己的 resolved target 与 raw destination。
+- actual 仍是 symlink；
+- raw destination 和 resolved target 都与 state ownership 相同；
+- target 与所有 active targets、control families 和其他 stale targets 均无 lexical/resolved
+  equality、alias、ancestor、descendant 或实际 traversal 关系。
 
-Stale link 不满足该守卫时（target 已变成普通文件、目录或 special，raw destination 漂移，或
-resolved target 改变）不是 conflict：用户已接管该 target，`dot` 生成说明事实原因的 forget
-Action，放弃对应 state ownership，不阻塞本轮其余收敛。
+Dangling symlink 仍可按 raw destination 和 resolved identity 应用同一规则。每个实际 prune 在执行
+前独立复核自己的 ownership；不同 link 之间不建立 DAG 或 child-first 拓扑排序。
 
-该宽容规则仅适用于 stale placement——`dot` 对它唯一想做的 Action 是删除，放弃删除不触碰任何
-用户数据；active placement 的漂移仍按上文判定为 conflict。
+以下情况生成带结构化原因的 `forget`，删除 NextState 中的 ownership，但不删除、替换或跟随
+actual：
+
+- target absent；
+- actual 已变成普通文件、目录、special 或 raw destination 漂移；
+- resolved identity 漂移或路径被现存对象阻断而无法继续证明 ownership；
+- target 与 active、control 或其他 stale target 存在上述复杂关系；
+- 多条 stale records 指向同一 lexical/resolved target。
+
+复杂关系产生的 forget 必须同时产生 `stale-preserved` warning Issue，明确 actual 被保留并需要
+人工迁移；所有参与关系的 stale records 都 forget，不选取某一条代表物理删除。普通 drift/absent
+forget 由 Action reason 说明，不阻断其他独立收敛。
+
+该宽容规则仅适用于已经退出 desired 的 link：放弃删除不会触碰用户数据。Active placement 的
+不确定事实仍 fail closed。
+
+## Placement 类型与层级迁移
+
+Link/local 类型转换、directory link 与 descendants 的替换，以及 managed-link traversal blocker
+必须使用两个 desired 阶段：
+
+1. 阶段一只移除旧 link，不加入 replacement/descendants；重复 apply，直到旧 ownership 已 prune
+   或 forget 并成功提交 state。
+2. 用户处理被 forget 后保留且会阻塞新 placement 的 actual，再加入 replacement/descendants 并
+   运行阶段二 apply。
+
+阶段一 actual 已消失不能单独证明完成；必须成功提交 state。Mutation 失败时保持当前 desired，按
+[`mutation-and-recovery.md`](mutation-and-recovery.md#中断恢复)重跑。每个仍有旧 ownership 的
+HOME 都必须分别完成阶段一。详细操作见
+[`安全迁移 placements`](../guides/safe-migrations.md)。
 
 ## Local
 
 | Actual | 行为 |
 | --- | --- |
-| absent | 从 example create |
-| 任意已存在目录项 | keep；不读取、不比较、不分类、不覆盖 |
+| absent | 生成 `create-local`，从 example 创建 |
+| 任意已存在目录项 | 无 Action；不读取、不比较、不分类、不覆盖 |
 
-Example 更新不触发 local 更新；local 被用户删除后下一次 apply 重新创建。Local 退出 desired
-时永不删除；若 state 有记录则生成带原因的 forget Action，只忘记 provenance。Remove/prune
-永不删除 local。
+Example 更新不触发 local 更新；local 被用户删除后下一次 apply 重新创建。Local 不进入 state，退出
+desired 时没有 ownership/provenance Action，也永不由 prune 删除。

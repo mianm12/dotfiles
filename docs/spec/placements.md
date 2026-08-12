@@ -14,9 +14,12 @@ target = "~/.config/example/config"
 
 - Source 相对于 portable root 或 selected variant root。
 - Source 必须存在，其顶层对象只能是普通文件或目录，不得是 symlink 或 special；否则为配置
-  错误、零 mutation。该约束针对 desired source，与 dangling actual 链的规划规则正交。
+  错误且不执行 config、state、placement parent 或 target mutation。Lock-first 已经建立的私有
+  state root/lock bookkeeping 可以保留。该约束针对 desired source，与 dangling actual 链的规划
+  规则正交。
 - Selected root 的解析身份必须位于 module root 内；source/example 经过现存 ancestor symlink
-  解析后的身份必须位于 selected root 内，否则为配置错误、零 mutation。
+  解析后的身份必须位于 selected root 内，否则为配置错误且不修改 config、state、placement parent
+  或 target。
 - Source 目录内部不递归检查，内部 symlink 由用户负责。
 - Link desired identity 由 source 路径决定，不比较 source 内容；仅发生同一路径下内容变化时
   不要求重建 symlink 或更新 state。
@@ -48,15 +51,16 @@ example = "config.local.example"
 target = "~/.config/example/config.local"
 ```
 
-- Example 必须存在且为普通文件，只做字节复制；缺失或类型不符为配置错误、零 mutation。
-- Local 的 create、keep、退出 desired 和 provenance 行为由
+- Example 必须存在且为普通文件，只做字节复制；缺失或类型不符为配置错误且不修改 config、state、
+  placement parent 或 target。
+- Local 的 create、已存在 no-op 和无 state 行为由
   [`planning.md`](planning.md#local) 定义。
 - `*.local.example -> *.local` 是推荐命名，不是语法要求。
 
 ## 路径身份与边界
 
 - HOME、repository、target 以及进入 machine config 或 state 的解析后路径都必须是有效 UTF-8；
-  不支持只能用原始字节表示的文件系统路径，并在 mutation preflight 拒绝。
+  不支持只能用原始字节表示的文件系统路径，并在执行任何业务 mutation 前拒绝。
 - Target 先展开 HOME 并做词法规范化。
 - 对现存 ancestor symlink，解析到其实际父路径；missing suffix 按原名称追加。
 - 每次 convergence analysis 都对全部 effective placements 运行同一次完整 target validation；

@@ -29,7 +29,7 @@ Desired repository + Machine selection + State + Actual filesystem -> Plan
 - 文件或目录 symlink。
 - 目标缺失时从 `*.local.example` 初始化本机 local 文件；已存在时不读取或覆盖。
 - `init`、`select add`、`select remove`、`status`、`apply`、`paths`、`version` 和 `help`。
-- mutation dry-run、最小 ownership state 和单进程锁。
+- mutation dry-run、link-only ownership state 和单进程锁。
 
 ## 非目标
 
@@ -52,6 +52,8 @@ Desired repository + Machine selection + State + Actual filesystem -> Plan
 
 - Repository、manifest 和本机配置由用户本人维护，不对抗恶意输入。
 - 只用一把文件锁避免多个 `dot` mutation 并发；不协调编辑器、软件或用户同时修改文件。
+- Mutation 采用 lock-first。安全取锁边界通过后，后续 blocker 可以留下私有 state root/lock
+  bookkeeping，但不会修改 machine config、state、placement parent 或 target。
 - Status 与 dry-run 的并发可见性和恢复方式由
   [`cli.md` 的对应规则](cli.md#status-与-dry-run) 定义。
 - 路径身份只按 [`placements.md`](placements.md#路径身份与边界) 定义的有限关系比较。不保证
