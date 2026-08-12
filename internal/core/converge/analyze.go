@@ -126,7 +126,7 @@ func buildAnalysisPlan(
 ) (Plan, error) {
 	if len(problems) != 0 {
 		return Plan{
-			Problems:   append([]Problem(nil), problems...),
+			problems:   append([]Problem(nil), problems...),
 			finalState: cloneSnapshot(snapshot),
 		}, nil
 	}
@@ -240,15 +240,17 @@ func cloneReport(report Report) Report {
 
 func clonePlan(plan Plan) Plan {
 	cloned := Plan{
-		Transitions: make([]Transition, len(plan.Transitions)),
-		Problems:    append([]Problem(nil), plan.Problems...),
+		transitions: make([]transition, len(plan.transitions)),
+		problems:    append([]Problem(nil), plan.problems...),
+		actions:     append([]Action(nil), plan.actions...),
+		schedule:    append([]executionStep(nil), plan.schedule...),
 		finalState:  cloneSnapshot(plan.finalState),
 	}
-	for index, transition := range plan.Transitions {
-		cloned.Transitions[index] = transition
-		cloned.Transitions[index].Actions = append(
-			[]Action(nil),
-			transition.Actions...,
+	for index, planned := range plan.transitions {
+		cloned.transitions[index] = planned
+		cloned.transitions[index].actionIndexes = append(
+			[]int(nil),
+			planned.actionIndexes...,
 		)
 	}
 	return cloned

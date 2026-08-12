@@ -3,31 +3,37 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/mianm12/dotfiles/internal/core/converge"
+	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/spf13/cobra"
 )
 
 func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
-	forget := converge.Action{
-		ModuleID:    "old",
-		PlacementID: "config",
-		Kind:        converge.KindLink,
-		Decision:    converge.DecisionForget,
-		Target:      "/tmp/home/.config",
-		Reason:      `stale destination "changed"`,
-	}
-	result := converge.ApplyResult{
-		Report: converge.Report{
-			Plan: converge.Plan{Transitions: []converge.Transition{{
-				ModuleID:    forget.ModuleID,
-				PlacementID: forget.PlacementID,
-				Actions:     []converge.Action{forget},
-			}}},
-			Warnings: []string{"synthetic input warning"},
+	fixture := newCLITestEnv(t, `base = []`)
+	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Records: map[state.Key]state.Record{
+			{ModuleID: "old", PlacementID: "config"}: {
+				Kind:   state.KindLocal,
+				Target: filepath.Join(fixture.home, ".config", "old"),
+			},
 		},
+	})
+	report := analyzeOperationReport(t, fixture)
+	report.Warnings = []string{"synthetic input warning"}
+	actions := report.Plan.Actions()
+	if len(actions) != 1 || actions[0].Decision != converge.DecisionForget {
+		t.Fatalf("Analyze() actions = %#v, want one forget", actions)
+	}
+	forget := actions[0]
+	result := converge.ApplyResult{
+		Report:       report,
 		StateChanged: true,
 	}
 
@@ -76,7 +82,7 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("finishMutation() error = %v", err)
 		}
-		quotedReason := `reason="stale destination \"changed\""`
+		quotedReason := "reason=" + strconv.Quote(forget.Reason)
 		if !strings.Contains(stdout.String(), "forget") ||
 			!strings.Contains(stdout.String(), "module=old placement=config") ||
 			!strings.Contains(stdout.String(), quotedReason) {
@@ -86,7 +92,7 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 			)
 		}
 		if !strings.Contains(stderr.String(), "synthetic input warning") ||
-			!strings.Contains(stderr.String(), "forgot ownership") ||
+			!strings.Contains(stderr.String(), "forgot provenance") ||
 			!strings.Contains(stderr.String(), quotedReason) {
 			t.Fatalf(
 				"finishMutation() stderr = %q, want completed forget result",
@@ -97,26 +103,33 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 }
 
 func TestOperationReportRendersEveryActionWithQuotedReason(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "new"
+source = "new"
+target = "~/.new"
+`, map[string]string{"new": "portable"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Records: map[state.Key]state.Record{
+			{ModuleID: "old", PlacementID: "stale"}: {
+				Kind:   state.KindLocal,
+				Target: filepath.Join(fixture.home, ".old"),
+			},
+		},
+	})
+	analysis := analyzeOperationReport(t, fixture)
+	actions := analysis.Plan.Actions()
+	if len(actions) != 2 ||
+		actions[0].Decision != converge.DecisionCreateLink ||
+		actions[1].Decision != converge.DecisionForget {
+		t.Fatalf("Analyze() actions = %#v, want create then forget", actions)
+	}
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
-	analysis := converge.Report{
-		Plan: converge.Plan{Transitions: []converge.Transition{
-			{ModuleID: "app", PlacementID: "new", Actions: []converge.Action{{
-				ModuleID:    "app",
-				PlacementID: "new",
-				Decision:    converge.DecisionCreateLink,
-				Target:      "/tmp/home/.new",
-			}}},
-			{ModuleID: "old", PlacementID: "stale", Actions: []converge.Action{{
-				ModuleID:    "old",
-				PlacementID: "stale",
-				Decision:    converge.DecisionForget,
-				Target:      "/tmp/home/.old",
-				Reason:      `actual target is "user-owned"`,
-			}}},
-		}},
-	}
 
 	if err := printOperationReport(command, analysis); err != nil {
 		t.Fatalf("printOperationReport() error = %v", err)
@@ -127,7 +140,7 @@ func TestOperationReportRendersEveryActionWithQuotedReason(t *testing.T) {
 		!strings.Contains(output, "forget") ||
 		!strings.Contains(
 			output,
-			`reason="actual target is \"user-owned\""`,
+			"reason="+strconv.Quote(actions[1].Reason),
 		) {
 		t.Fatalf(
 			"printOperationReport() stdout = %q, want every structured action",
@@ -137,44 +150,37 @@ func TestOperationReportRendersEveryActionWithQuotedReason(t *testing.T) {
 }
 
 func TestStatusAnalysisProjectsFactsActionsAndProblems(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app", "new"]`)
+	fixture.writeModule(t, "app", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`, map[string]string{"config": "portable"})
+	fixture.writeModule(t, "new", `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.new"
+`, map[string]string{"config": "portable"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	fixture.writeState(t, state.Snapshot{
+		Home: fixture.home,
+		Records: map[state.Key]state.Record{
+			{ModuleID: "old", PlacementID: "stale"}: {
+				Kind:   state.KindLocal,
+				Target: filepath.Join(fixture.home, ".old"),
+			},
+		},
+	})
+	writeCLIFile(t, filepath.Join(fixture.home, ".app"), "personal")
+	analysis := analyzeOperationReport(t, fixture)
+	if analysis.Plan.Executable() {
+		t.Fatal("Analyze() plan is executable, want app target conflict")
+	}
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
-	analysis := converge.Report{
-		Facts: []converge.ModuleFact{{
-			ID:           "old",
-			Selection:    "none",
-			StatePresent: true,
-		}},
-		Plan: converge.Plan{Transitions: []converge.Transition{
-			{ModuleID: "app", PlacementID: "new", Actions: []converge.Action{{
-				ModuleID:    "app",
-				PlacementID: "new",
-				Decision:    converge.DecisionCreateLink,
-				Target:      "/tmp/home/.new",
-			}}},
-			{ModuleID: "old", PlacementID: "stale", Actions: []converge.Action{{
-				ModuleID:    "old",
-				PlacementID: "stale",
-				Decision:    converge.DecisionForget,
-				Target:      "/tmp/home/.old",
-				Reason:      "stale target is absent",
-			}}},
-		}, Problems: []converge.Problem{
-			{
-				Kind:        converge.ProblemConflict,
-				ModuleID:    "app",
-				PlacementID: "config",
-				Target:      "/tmp/home/.app",
-				Reason:      "actual target is regular file",
-			},
-			{
-				Kind:     converge.ProblemBlocked,
-				ModuleID: "global",
-				Reason:   "synthetic path conflict",
-			},
-		}},
-	}
 
 	if err := printStatusAnalysis(command, analysis); err != nil {
 		t.Fatalf("printStatusAnalysis() error = %v", err)
@@ -182,17 +188,29 @@ func TestStatusAnalysisProjectsFactsActionsAndProblems(t *testing.T) {
 
 	output := stdout.String()
 	if !strings.Contains(output, "fact module=old selection=none state=present\n") ||
-		!strings.Contains(output, "action kind=create-link module=app placement=new") ||
+		!strings.Contains(output, "action kind=create-link module=new placement=config") ||
 		!strings.Contains(output, "forget") ||
-		!strings.Contains(output, `reason="stale target is absent"`) ||
+		!strings.Contains(output, `reason="local left desired; local targets are never pruned"`) ||
 		!strings.Contains(output, "problem kind=conflict module=app placement=config") ||
-		!strings.Contains(output, `reason="actual target is regular file"`) ||
-		!strings.Contains(output, `problem kind=blocked module=global reason="synthetic path conflict"`) {
+		!strings.Contains(output, `reason="actual target is regular file"`) {
 		t.Fatalf(
 			"printStatusAnalysis() stdout = %q, want facts, actions, and problems",
 			output,
 		)
 	}
+}
+
+func analyzeOperationReport(t *testing.T, fixture *cliTestEnv) converge.Report {
+	t.Helper()
+	context, err := resolveContext(fixture.env)
+	if err != nil {
+		t.Fatalf("resolveContext() error = %v", err)
+	}
+	report, err := converge.Analyze(context.environment())
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	return report
 }
 
 func TestStatusAnalysisRendersObjectiveModuleFacts(t *testing.T) {

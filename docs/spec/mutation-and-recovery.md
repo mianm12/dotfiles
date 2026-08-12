@@ -7,7 +7,7 @@ converge.Analyze read-only preflight
   -> strict load config/state 与全部 effective manifests
   -> resolve desired and observe actual
   -> validate control topology and supported path conflicts
-  -> build Transitions, Actions, Problems and one immutable FinalState
+  -> build Transitions, Problems, one immutable FinalState and one execution schedule
   -> revalidate complete control topology and acquire mutation lock
   -> converge.Analyze again: strict reload, re-resolve, revalidate and replan
   -> reject machine semantic fingerprint drift
@@ -45,6 +45,9 @@ converge.Analyze read-only preflight
   随后复核 changed targets 并提交同一 Plan 已计算好的 FinalState。Executor 不从 Action 顺序
   增量推导或修补 ownership state。锁前 Report、Plan、resolved modules
   和 state 均不得进入执行。
+- Plan 是 phase 与执行顺序的唯一 owner。Parent preparation 是 Plan 内部 schedule step；公开
+  Action 按 create、update、adopt/keep/repair、child-first prune/forget 排列。Executor 只顺序
+  消费 schedule，不得再次按 Decision 扫描、分组或重排。
 - Lock 释放失败属于 partial mutation 失败；state commit 失败同样返回 partial。已经发布的
   selection、target 或 state 不回滚，具体重跑文案由 CLI 投影。
 - [`placements.md`](placements.md#control-path-topology) 定义的私有 control root 路径边界

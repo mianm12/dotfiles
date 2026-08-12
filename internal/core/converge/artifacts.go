@@ -61,8 +61,8 @@ func loadState(path, home string) (state.Loaded, error) {
 }
 
 func conflictError(plan Plan) error {
-	if len(plan.Problems) != 0 {
-		problem := plan.Problems[0]
+	if len(plan.problems) != 0 {
+		problem := plan.problems[0]
 		return fmt.Errorf(
 			"plan %s for %s/%s: %s",
 			problem.Kind,

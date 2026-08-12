@@ -41,7 +41,8 @@ lock → reload → 原子发布 machine config。它们不读取 state，也不
    state、lock 与 repository 的词法/解析身份固定为不可变 `ResolvedControls`；planner 不接收并行
    raw-control 路径，也不自行重新解析 topology。
 4. **一个 placement key 只有一个最终决定。** Planner 为每个 `(module, placement)` 生成一个
-   Transition，并一次性计算 FinalState；executor 执行有序 Actions，不在执行途中增量修补 state。
+   Transition，并一次性计算 FinalState 与唯一 execution schedule；executor 顺序消费 schedule，
+   不按 Decision 重新分组，也不在执行途中增量修补 state。
 5. **锁内事实优先。** Apply 只执行锁内重新 analysis 得到的 Plan；锁前 selection fingerprint 只
    用于检测 machine selection 漂移，不让旧 filesystem、state 或 resolved identity 泄漏到执行。
 6. **私有控制文件发布集中。** `internal/storage` 提供 config/state 的私有原子发布边界；业务层不

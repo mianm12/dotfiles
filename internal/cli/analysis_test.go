@@ -132,8 +132,8 @@ func TestFullMutationAnalysisCompleteness(t *testing.T) {
 			analysis.Facts[0].Selection != "extra" ||
 			analysis.Facts[1].ID != "gone" ||
 			analysis.Facts[1].Selection != "extra" ||
-			len(analysis.Plan.Problems) != 1 ||
-			analysis.Plan.Problems[0].ModuleID != "gone" {
+			len(analysis.Plan.Problems()) != 1 ||
+			analysis.Plan.Problems()[0].ModuleID != "gone" {
 			t.Fatalf(
 				"incomplete full modules = %#v, want unknown peer plus blocker",
 				analysis.Facts,

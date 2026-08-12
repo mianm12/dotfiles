@@ -18,59 +18,24 @@ type mutationRun struct {
 }
 
 func (run *mutationRun) apply(plan Plan) error {
-	actions := plan.Actions()
-	for _, action := range actions {
-		if action.Decision != DecisionCreateLocal &&
-			action.Decision != DecisionCreateLink {
-			continue
+	for _, step := range plan.executionSteps() {
+		var err error
+		switch step.operation {
+		case executionPrepareParent:
+			err = run.ensureParent(step.action.Target)
+		case executionApplyAction:
+			err = run.applyAction(step.action)
+		default:
+			err = fmt.Errorf("unsupported execution operation %d", step.operation)
 		}
-		if err := run.ensureParent(action.Target); err != nil {
-			return actionError(action, err)
-		}
-	}
-	for _, action := range actions {
-		if action.Decision != DecisionCreateLocal &&
-			action.Decision != DecisionCreateLink {
-			continue
-		}
-		if err := run.applyActive(action); err != nil {
-			return actionError(action, err)
-		}
-	}
-	for _, action := range actions {
-		if action.Decision != DecisionUpdate {
-			continue
-		}
-		if err := run.applyActive(action); err != nil {
-			return actionError(action, err)
-		}
-	}
-	for _, action := range actions {
-		if action.Decision != DecisionAdopt &&
-			action.Decision != DecisionKeep &&
-			action.Decision != DecisionRepairState {
-			continue
-		}
-		if err := run.applyActive(action); err != nil {
-			return actionError(action, err)
-		}
-	}
-
-	for _, action := range actions {
-		if action.Decision != DecisionPrune &&
-			action.Decision != DecisionForget {
-			continue
-		}
-		if action.Decision == DecisionPrune {
-			if err := run.removeOwnedLink(action); err != nil {
-				return actionError(action, err)
-			}
+		if err != nil {
+			return actionError(step.action, err)
 		}
 	}
 	return nil
 }
 
-func (run *mutationRun) applyActive(action Action) error {
+func (run *mutationRun) applyAction(action Action) error {
 	switch action.Decision {
 	case DecisionCreateLocal:
 		if err := run.createLocal(action.Source, action.Target); err != nil {
@@ -92,8 +57,12 @@ func (run *mutationRun) applyActive(action Action) error {
 		return run.verifyLink(action)
 	case DecisionAdopt, DecisionKeep, DecisionRepairState:
 		return nil
+	case DecisionPrune:
+		return run.removeOwnedLink(action)
+	case DecisionForget:
+		return nil
 	default:
-		return fmt.Errorf("unsupported active decision %q", action.Decision)
+		return fmt.Errorf("unsupported action decision %q", action.Decision)
 	}
 }
 

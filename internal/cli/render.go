@@ -15,7 +15,7 @@ func printPlan(command *cobra.Command, plan converge.Plan, warnings []string) er
 		return err
 	}
 	actions := plan.Actions()
-	if len(actions) == 0 && len(plan.Problems) == 0 {
+	if len(actions) == 0 && len(plan.Problems()) == 0 {
 		if _, err := fmt.Fprintln(command.OutOrStdout(), "converged"); err != nil {
 			return fmt.Errorf("write plan: %w", err)
 		}
@@ -76,7 +76,7 @@ func printOperationReport(
 		}
 		printed = true
 	}
-	for _, problem := range report.Plan.Problems {
+	for _, problem := range report.Plan.Problems() {
 		if err := printProblem(command, problem); err != nil {
 			return fmt.Errorf("write operation problem: %w", err)
 		}
@@ -248,7 +248,7 @@ func printStatusAnalysis(
 			return fmt.Errorf("write status action: %w", err)
 		}
 	}
-	for _, problem := range report.Plan.Problems {
+	for _, problem := range report.Plan.Problems() {
 		if err := printProblem(command, problem); err != nil {
 			return fmt.Errorf("write status problem: %w", err)
 		}
