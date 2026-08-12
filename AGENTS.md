@@ -9,8 +9,8 @@
 ## 仓库地图
 
 - `docs/README.md`：按读者任务组织的知识库入口与页面职责边界。
-- `docs/getting-started.md`、`docs/concepts/`、`docs/glossary.md`：教程、心智模型与术语解释，
-  不建立产品契约。
+- `docs/getting-started.md`、`docs/guides/`、`docs/concepts/`、`docs/glossary.md`：教程、任务
+  指南、心智模型与术语解释，不建立产品契约。
 - `docs/development/README.md`：开发导航，把变更路由到规范、架构、测试和贡献流程。
 - `docs/spec/README.md`：产品规范索引和规则 owner；`docs/spec/**` 整体是唯一产品契约。
 - `docs/architecture/`：内部结构、依赖方向和测试所有权。

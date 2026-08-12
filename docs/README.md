@@ -7,8 +7,8 @@
 
 | 你是谁 / 你要做什么 | 建议路径 |
 | --- | --- |
-| 第一次接触 `dot` | [安全跑通一次](getting-started.md) → [理解工作模型](concepts/mental-model.md) |
-| 正在使用或排查 `dot` | [所有权与安全边界](concepts/ownership-and-safety.md) → [公共 CLI 规范](spec/cli.md) |
+| 第一次接触 `dot` | [安全跑通一次](getting-started.md) → [理解工作模型](concepts/mental-model.md) → [管理 modules](guides/manage-modules.md) |
+| 正在使用或排查 `dot` | [故障排查](guides/troubleshooting.md) → [所有权与安全边界](concepts/ownership-and-safety.md) → [公共 CLI 规范](spec/cli.md) |
 | 准备修改代码 | [开发者入口](development/README.md) → [产品规范索引](spec/README.md) → [架构概览](architecture/overview.md) |
 | 让 Agent 参与开发 | [AGENTS.md](../AGENTS.md) → [共享上下文方式](development/README.md#人与-agent-共用同一套上下文) → 相关 spec owner 与测试 |
 | 正在审查设计 | [产品定义](spec/product.md) → [架构概览](architecture/overview.md) → [ADR 索引](decisions/README.md) |
@@ -19,6 +19,15 @@
 [CONTRIBUTING](../CONTRIBUTING.md)；Agent 还必须遵守最近的
 [AGENTS.md](../AGENTS.md)。
 
+## 常用任务
+
+| 任务 | 指南 |
+| --- | --- |
+| 启用、停用、新增或移除 module | [管理 modules 与 placements](guides/manage-modules.md) |
+| 组织机器角色，处理 macOS/Linux 差异 | [管理 profiles 与平台差异](guides/profiles-and-platforms.md) |
+| 转换 link/local，或把目录 link 拆成 leaf placements | [安全迁移 placements](guides/safe-migrations.md) |
+| 定位 selection、target、state、platform 或恢复问题 | [故障排查](guides/troubleshooting.md) |
+
 ## 按问题查找
 
 | 问题 | 去哪里 |
@@ -26,6 +35,10 @@
 | 怎样在不碰真实 HOME 的情况下试用？ | [安全跑通一次](getting-started.md) |
 | repository、selection、state 和文件系统如何共同工作？ | [工作模型](concepts/mental-model.md) |
 | 为什么 `dot` 拒绝覆盖某个 target？ | [所有权与安全边界](concepts/ownership-and-safety.md) |
+| 怎样启用或编写一个 module？ | [管理 modules](guides/manage-modules.md) |
+| 怎样配置 profiles 或 platform variants？ | [Profiles 与平台差异](guides/profiles-and-platforms.md) |
+| 为什么某些 placement 变更必须分两阶段？ | [安全迁移](guides/safe-migrations.md) |
+| 某个 warning、problem 或失败应该怎样排查？ | [故障排查](guides/troubleshooting.md) |
 | 某个命令或持久格式的精确定义是什么？ | [产品规范索引](spec/README.md) |
 | 代码应该放在哪一层、由谁负责？ | [架构概览](architecture/overview.md) |
 | 一个行为应该在哪一层测试？ | [测试架构](architecture/testing.md) |

@@ -123,6 +123,9 @@ test -n "$DOT_TUTORIAL_ROOT" && rm -rf -- "$DOT_TUTORIAL_ROOT"
 ## 接下来读什么
 
 - [工作模型](concepts/mental-model.md)：理解一次 convergence 的四类输入；
+- [管理 modules 与 placements](guides/manage-modules.md)：开始组织真实配置；
+- [Profiles 与平台差异](guides/profiles-and-platforms.md)：为多台机器建立 selection；
 - [所有权与安全边界](concepts/ownership-and-safety.md)：理解为什么某些 target 会被拒绝；
+- [故障排查](guides/troubleshooting.md)：从 action、problem 和 warning 定位输入事实；
 - [术语表](glossary.md)：快速查询 module、placement、state 等词；
 - [开发者入口](development/README.md)：开始阅读和修改代码。
