@@ -19,7 +19,9 @@ Safety-critical 必须由另一位评审者或单独的审查任务主动寻找�
 
 ## 日常开发流程
 
-1. 从 `docs/README.md` 定位本次规则的唯一 owner，判断风险等级和失败边界。
+1. 从 [`docs/README.md`](docs/README.md) 按任务进入知识库；开发变更可从
+   [`docs/development/README.md`](docs/development/README.md) 定位本次规则的唯一 owner，判断
+   风险等级和失败边界。
 2. Repo-tracked 修改从短生命周期分支开始；Agent 在干净且已确认与远端一致的 `main` 上默认
    按“分支与提交”的统一规则创建 `<type>/<slug>`。若 `main` dirty、ahead、behind 或
    diverged，停止并报告。
@@ -41,6 +43,11 @@ completed plans。
 
 改变用户行为、持久化格式、所有权/清理语义、安全不变量或已接受风险时，先更新规范。
 内部拆分和实现手段由 architecture 文档、代码和测试表达。
+
+教程、概念、术语表和 README 是面向读者的解释与导航层，不建立第二份产品契约。文档变更先
+按 [`docs/README.md`](docs/README.md) 的信息架构确认页面职责：精确规则只进入对应 spec
+owner，内部结构只进入 architecture，难以逆转的理由才进入 ADR。所有新增页面必须从已有入口
+可达，并链接回更权威的依据。
 
 同类反馈第二次出现时，不再只留在对话或 review comment 中：
 

@@ -12,35 +12,27 @@ placements、dry-run、ownership state 和单进程 mutation lock。
 `help`。完整行为和安全边界以[产品规范集合](docs/spec/README.md)为准，当前实现证据以代码、
 测试和 CI 为准。
 
-## 快速开始
+## 开始使用
+
+第一次接触项目，建议先按[安全入门教程](docs/getting-started.md)在临时 HOME 中跑通完整流程；
+它不会读取或修改真实机器的 config、state、lock 或配置 target。
+
+确认工作模型和 target 后，真实机器上的最短路径是：
 
 ```sh
 make build
+bin/dot paths
 bin/dot init /absolute/path/to/dotfiles
+bin/dot select add starship
+bin/dot apply --dry-run
 bin/dot apply
 bin/dot status
 ```
 
-需要调整 profiles、修正 repository 绑定或定位旧 state 时，先查看当前 binary 使用的本机
-文件位置：
-
-```sh
-bin/dot paths
-```
-
-该命令只显示路径，不读取或创建这些文件。
-
-当前仓库提供跨 macOS/Linux 的 `starship` module。初始 selection 为空，可按机器单独启用：
-
-```sh
-bin/dot select add starship
-bin/dot apply --dry-run
-bin/dot apply
-```
-
 `select` 只改本机 selection，`apply` 才收敛 target。`apply` 不会覆盖已有普通文件、目录或未知
 symlink；启用 module 前应先人工检查并迁移冲突 target。`dot` 不负责安装软件，也不提供自动
-导入、backup 或 rollback。
+导入、backup 或 rollback。工作原理见[核心心智模型](docs/concepts/mental-model.md)，数据安全
+边界见[所有权与安全](docs/concepts/ownership-and-safety.md)。
 
 ## 开发验证
 
@@ -59,9 +51,9 @@ tests，并构建生产二进制、校验 `version` 构建信息，CI 在 macOS 
 
 ## 文档
 
-- [产品规范索引](docs/spec/README.md)
-- [架构概览](docs/architecture/overview.md)
-- [测试架构](docs/architecture/testing.md)
-- [文档索引](docs/README.md)
-- [历史恢复指针](docs/archive/README.md)
-- [贡献与 Git 约定](CONTRIBUTING.md)
+- [知识库首页](docs/README.md)：按新用户、使用者、开发者和设计审查任务查找内容；
+- [安全入门教程](docs/getting-started.md)：在隔离 HOME 中完成第一次收敛；
+- [工作模型](docs/concepts/mental-model.md)：理解 desired、selection、state、filesystem 与 plan；
+- [产品规范索引](docs/spec/README.md)：唯一产品行为契约；
+- [开发者入口](docs/development/README.md)：从需求定位到代码、测试和交付；
+- [贡献与 Git 约定](CONTRIBUTING.md)：变更分级、验证证据与 PR 流程。
