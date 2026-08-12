@@ -1664,6 +1664,18 @@ func (fixture *planFixture) build(
 	if err != nil {
 		t.Fatalf("buildPlan() error = %v", err)
 	}
+	expected := make(map[state.Key]bool, len(snapshot.Records))
+	for key := range snapshot.Records {
+		expected[key] = true
+	}
+	for _, module := range modules {
+		for _, link := range module.Links {
+			expected[state.Key{ModuleID: module.ID, PlacementID: link.ID}] = true
+		}
+		for _, local := range module.Locals {
+			expected[state.Key{ModuleID: module.ID, PlacementID: local.ID}] = true
+		}
+	}
 	seen := make(map[state.Key]bool, len(plan.Transitions))
 	for _, transition := range plan.Transitions {
 		key := state.Key{
@@ -1674,6 +1686,14 @@ func (fixture *planFixture) build(
 			t.Fatalf("buildPlan() returned duplicate transition key %#v: %#v", key, plan)
 		}
 		seen[key] = true
+	}
+	if len(seen) != len(expected) {
+		t.Fatalf("buildPlan() transition keys = %#v, want desired/state union %#v", seen, expected)
+	}
+	for key := range expected {
+		if !seen[key] {
+			t.Fatalf("buildPlan() omitted transition key %#v: %#v", key, plan)
+		}
 	}
 	for _, problem := range plan.Problems {
 		if problem.Kind == ProblemBlocked {
