@@ -83,7 +83,7 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
-	plan, inputWarnings, err := buildAnalysisPlan(
+	plan, err := buildAnalysisPlan(
 		environment.Home,
 		controls,
 		selection.modules,
@@ -93,12 +93,16 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
+	warnings := make([]string, 0, 1)
+	if loaded.Warning != "" {
+		warnings = append(warnings, loaded.Warning)
+	}
 	report := newReport(
 		loaded.Snapshot,
 		selection.sources,
 		selection.observations,
 		plan,
-		appendWarning(loaded.Warning, inputWarnings),
+		warnings,
 		statusModuleIDs(repository, machine, loaded.Snapshot),
 	)
 	fingerprint, err := machineFingerprint(machine)
@@ -119,12 +123,12 @@ func buildAnalysisPlan(
 	resolvedModules []config.Module,
 	snapshot state.Snapshot,
 	problems []Problem,
-) (Plan, []string, error) {
+) (Plan, error) {
 	if len(problems) != 0 {
 		return Plan{
 			Problems:   append([]Problem(nil), problems...),
 			finalState: cloneSnapshot(snapshot),
-		}, nil, nil
+		}, nil
 	}
 
 	plan, err := buildPlan(planRequest{
@@ -134,16 +138,9 @@ func buildAnalysisPlan(
 		State:    snapshot,
 	})
 	if err != nil {
-		return Plan{}, nil, err
+		return Plan{}, err
 	}
-	warnings := make([]string, 0)
-	for _, problem := range plan.Problems {
-		if problem.Code == ProblemCodeControlBoundary &&
-			!slices.Contains(warnings, problem.Reason) {
-			warnings = append(warnings, problem.Reason)
-		}
-	}
-	return plan, warnings, nil
+	return plan, nil
 }
 
 func newReport(
@@ -231,14 +228,6 @@ func sortedAnalysisSet(values map[string]bool) []string {
 	}
 	slices.Sort(result)
 	return result
-}
-
-func appendWarning(warning string, warnings []string) []string {
-	result := make([]string, 0, len(warnings)+1)
-	if warning != "" {
-		result = append(result, warning)
-	}
-	return append(result, warnings...)
 }
 
 func cloneReport(report Report) Report {
