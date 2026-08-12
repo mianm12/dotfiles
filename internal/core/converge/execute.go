@@ -45,7 +45,7 @@ func (run *mutationRun) applyAction(action Action) error {
 		if err := run.createLocal(action.Source, action.Target); err != nil {
 			return err
 		}
-		return verifyLocal(action.Target)
+		return run.verifyLocal(action)
 	case DecisionCreateLink:
 		if err := run.ensureParent(action.Target); err != nil {
 			return err
@@ -233,13 +233,24 @@ func (run *mutationRun) resolveTarget(target string) (corepaths.Target, error) {
 	return resolved, nil
 }
 
-func verifyLocal(target string) error {
-	info, err := os.Lstat(target)
+func (run *mutationRun) verifyLocal(action Action) error {
+	resolved, err := run.resolveTarget(action.Target)
 	if err != nil {
-		return fmt.Errorf("re-read changed local %q: %w", target, err)
+		return err
+	}
+	if resolved.Resolved() != action.ResolvedTarget {
+		return fmt.Errorf(
+			"changed target resolved to %q, want %q",
+			resolved.Resolved(),
+			action.ResolvedTarget,
+		)
+	}
+	info, err := os.Lstat(action.Target)
+	if err != nil {
+		return fmt.Errorf("re-read changed local %q: %w", action.Target, err)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("changed local %q is not a regular file", target)
+		return fmt.Errorf("changed local %q is not a regular file", action.Target)
 	}
 	return nil
 }

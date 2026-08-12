@@ -136,6 +136,55 @@ func TestExecutionUpdateRechecksResolvedParent(t *testing.T) {
 	assertExecutorPathUnchanged(t, secondBefore)
 }
 
+func TestExecutionCreateLocalPostCheckRejectsResolvedParentDrift(t *testing.T) {
+	root, home := newExecutorRoot(t)
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	for _, directory := range []string{first, second} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
+		}
+	}
+	parent := filepath.Join(home, "current")
+	if err := os.Symlink(first, parent); err != nil {
+		t.Fatalf("os.Symlink(first parent) error = %v", err)
+	}
+	target := filepath.Join(parent, "local")
+	resolved, err := corepaths.ResolveTarget(home, "~/current/local")
+	if err != nil {
+		t.Fatalf("ResolveTarget() error = %v", err)
+	}
+	if err := os.Remove(parent); err != nil {
+		t.Fatalf("os.Remove(parent) error = %v", err)
+	}
+	if err := os.Symlink(second, parent); err != nil {
+		t.Fatalf("os.Symlink(second parent) error = %v", err)
+	}
+	source := filepath.Join(root, "local.example")
+	writeExecutorFile(t, source, "example")
+
+	run := mutationRun{home: home}
+	err = run.apply(Plan{Actions: []Action{{
+		Decision:       DecisionCreateLocal,
+		ModuleID:       "app",
+		PlacementID:    "local",
+		Target:         target,
+		ResolvedTarget: resolved.Resolved(),
+		Source:         source,
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "changed target resolved") {
+		t.Fatalf("create-local after parent drift error = %v, want resolved post-check", err)
+	}
+	assertFailure(t, err, FailureStageExecute, true, RecoveryRerunApply)
+	if _, err := os.Lstat(filepath.Join(first, "local")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("first local error = %v, want missing", err)
+	}
+	data, err := os.ReadFile(filepath.Join(second, "local"))
+	if err != nil || string(data) != "example" {
+		t.Fatalf("second local = (%q, %v), want published partial file", data, err)
+	}
+}
+
 func TestVerifyAbsentRejectsReappearedTarget(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")

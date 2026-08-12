@@ -215,7 +215,7 @@ func recordUsage(
 		if !exists {
 			continue
 		}
-		if placement.kind == placementLocal || samePlacementTarget(placement, record) {
+		if placement.kind == placementLocal || placement.target.Lexical() == record.Target {
 			used[placement.key] = true
 		}
 	}

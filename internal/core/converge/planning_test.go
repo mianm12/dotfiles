@@ -417,22 +417,19 @@ func TestFullPlanAllowsFullyOwnedKeepTraversedByDesired(
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
-func TestFullPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
+func TestFullPlanGuardsAliasTargetChangeWithNamespaceDependency(
 	t *testing.T,
 ) {
 	tests := []struct {
 		name           string
 		removeOldAlias bool
-		want           Decision
 	}{
 		{
-			name: "existing ownership remains valid",
-			want: "",
+			name: "resolved alias target move",
 		},
 		{
-			name:           "recorded alias no longer proves ownership",
+			name:           "recorded alias missing during target move",
 			removeOldAlias: true,
-			want:           conflictDecision,
 		},
 	}
 
@@ -492,12 +489,12 @@ func TestFullPlanGuardsAliasRebindOnlyWhenOwnershipNeedsRefresh(
 				t.Fatalf("Build() error = %v", err)
 			}
 
-			if test.want == "" {
-				assertDecisions(t, plan, conflictDecision, conflictDecision)
+			if !test.removeOldAlias {
+				assertDecisions(t, plan, conflictDecision, conflictDecision, DecisionForget)
 			} else {
-				assertDecisions(t, plan, conflictDecision, DecisionCreateLink)
+				assertDecisions(t, plan, conflictDecision, DecisionCreateLink, DecisionForget)
 			}
-			if test.want == conflictDecision &&
+			if test.removeOldAlias &&
 				!strings.Contains(
 					issueForPlacement(plan, IssueBlocker, "parent", "tree").Reason,
 					`traversed by desired child/config`,
@@ -1395,6 +1392,41 @@ func TestPlanUnknownCorrectSymlinkAdopts(t *testing.T) {
 	plan := fixture.build(t, []config.Module{module}, fixture.snapshot(nil))
 
 	assertDecisions(t, plan, DecisionAdopt)
+	assertTreeUnchanged(t, fixture.root, before)
+}
+
+func TestPlanRejectsSameKeyAliasTargetChange(t *testing.T) {
+	fixture := newPlanFixture(t)
+	source := fixture.file(t, "repo/modules/app/config", "config")
+	realParent := fixture.dir(t, "targets")
+	oldAlias := fixture.target("old-alias")
+	newAlias := fixture.target("new-alias")
+	fixture.symlink(t, realParent, oldAlias)
+	fixture.symlink(t, realParent, newAlias)
+	oldTarget := filepath.Join(oldAlias, "config")
+	newTarget := filepath.Join(newAlias, "config")
+	fixture.symlink(t, source, filepath.Join(realParent, "config"))
+	snapshot := fixture.snapshot(map[string]state.LinkRecord{
+		"config": linkRecord(oldTarget, fixture.resolved(t, oldTarget), source),
+	})
+	module := linkModule("app", "config", source, "~/new-alias/config")
+	before := snapshotTree(t, fixture.root)
+
+	plan := fixture.build(t, []config.Module{module}, snapshot)
+
+	assertDecisions(t, plan, conflictDecision, DecisionForget)
+	issue := issueForPlacement(plan, IssueBlocker, "app", "config")
+	if issue.Code != IssueCodeTopologyConflict ||
+		issue.Target != newTarget ||
+		!strings.Contains(issue.Reason, "shares lexical or resolved identity") {
+		t.Fatalf("alias target change issue = %#v, want topology blocker", issue)
+	}
+	if plan.Executable() {
+		t.Fatalf("alias target change Plan = %#v, want blocked", plan)
+	}
+	if got := plan.Actions[0].Target; got != oldTarget {
+		t.Fatalf("alias target change stale target = %q, want %q", got, oldTarget)
+	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
 
