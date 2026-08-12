@@ -85,7 +85,8 @@ func TestSelectAddRejectsUnknownAndUnavailableModulesWithoutMutation(t *testing.
 			if code != exitError || stdout != "" || !strings.Contains(stderr, test.want) {
 				t.Fatalf("select add = (%d, %q, %q), want %q", code, stdout, stderr, test.want)
 			}
-			assertSnapshotUnchanged(t, before)
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
+			assertCLIMissing(t, fixture.state)
 		})
 	}
 }

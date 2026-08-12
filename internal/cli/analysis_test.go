@@ -219,7 +219,7 @@ os = ["macos"]
 		code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 
 		if code != exitError ||
-			!strings.Contains(stdout, "problem kind=blocked module=gated") ||
+			!strings.Contains(stdout, "issue severity=blocker code=selection-not-applicable module=gated") ||
 			!strings.Contains(stdout, "not applicable") ||
 			!strings.Contains(stderr, "state is missing") ||
 			strings.Contains(stderr, "error:") {
@@ -318,7 +318,7 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 					stdout,
 					`reason="selected module \"gone\" does not exist"`,
 				) ||
-				!strings.Contains(stdout, "problem kind=blocked module=gone") {
+				!strings.Contains(stdout, "issue severity=blocker code=selection-not-applicable module=gone") {
 				t.Fatalf(
 					"status missing selected module = (%d, %q), want blocked unknown convergence",
 					code,
@@ -354,7 +354,7 @@ target = "~/.app"
 		if code != exitOK ||
 			!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
 			!strings.Contains(stdout, `reason="control paths conflict:`) ||
-			!strings.Contains(stdout, "problem kind=blocked") {
+			!strings.Contains(stdout, "issue severity=blocker code=control-topology") {
 			t.Fatalf(
 				"status topology blocker = (%d, %q), want blocked unknown convergence",
 				code,

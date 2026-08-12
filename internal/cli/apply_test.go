@@ -62,11 +62,15 @@ target = "~/.gated"
 	before := snapshotTree(t, explicit.root)
 
 	code, stdout, stderr = explicit.runInjected("apply")
-	if code != exitError || stdout != "" ||
-		!strings.Contains(stderr, "not applicable") {
-		t.Fatalf("extra apply = (%d, %q, %q), want not-applicable failure", code, stdout, stderr)
+	if code != exitError ||
+		!strings.Contains(stdout, "issue severity=blocker code=selection-not-applicable module=gated") ||
+		!strings.Contains(stdout, "not applicable") ||
+		!strings.Contains(stderr, "state is missing") ||
+		strings.Contains(stderr, "error:") {
+		t.Fatalf("extra apply = (%d, %q, %q), want blocked outcome", code, stdout, stderr)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, explicit)
+	assertCLIMissing(t, explicit.state)
 	if extras := explicit.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "gated" {
 		t.Fatalf("extra_modules = %v, want unchanged gated selection", extras)
 	}

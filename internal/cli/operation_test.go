@@ -48,7 +48,15 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 		runErr error
 	}{
 		{name: "state commit failure", runErr: errors.New("synthetic state commit failure")},
-		{name: "lock release failure", runErr: converge.ErrPartial},
+		{
+			name: "lock release failure",
+			runErr: &converge.Failure{
+				Stage:    converge.FailureStageLockRelease,
+				Partial:  true,
+				Recovery: converge.RecoveryRerunApply,
+				Cause:    errors.New("synthetic lock release failure"),
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -106,6 +114,75 @@ func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
 			)
 		}
 	})
+}
+
+func TestFinishMutationProjectsBlockedReportWithoutDuplicateError(t *testing.T) {
+	result := converge.ApplyResult{
+		Status: converge.ApplyStatusBlocked,
+		Report: converge.Report{Plan: converge.Plan{Issues: []converge.Issue{
+			{
+				Severity: converge.IssueWarning,
+				Code:     converge.IssueCodeStateMissing,
+				Reason:   "state is missing",
+				Recovery: converge.RecoveryNone,
+			},
+			{
+				Severity:    converge.IssueBlocker,
+				Code:        converge.IssueCodeTargetConflict,
+				ModuleID:    "app",
+				PlacementID: "config",
+				Target:      "/home/user/.app",
+				Reason:      "actual target is a regular file",
+				Recovery:    converge.RecoveryManualMigration,
+			},
+		}}},
+	}
+	var stdout, stderr bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+
+	err := finishMutation(command, result, nil, "dot apply")
+	if !errors.Is(err, errAnalysisBlocked) {
+		t.Fatalf("finishMutation(blocked) error = %v, want silent sentinel", err)
+	}
+	if got, want := stdout.String(), "issue severity=blocker code=target-conflict module=app placement=config target=\"/home/user/.app\" reason=\"actual target is a regular file\" recovery=manual-migration\n"; got != want {
+		t.Fatalf("blocked stdout = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), "issue severity=warning code=state-missing reason=\"state is missing\" recovery=none\n"; got != want {
+		t.Fatalf("blocked stderr = %q, want %q", got, want)
+	}
+}
+
+func TestRecoveryInstructionUsesOnlyTypedRecovery(t *testing.T) {
+	for _, test := range []struct {
+		recovery converge.Recovery
+		want     string
+	}{
+		{recovery: converge.RecoveryNone, want: ""},
+		{recovery: converge.RecoveryInit, want: "; run `dot init`"},
+		{recovery: converge.RecoveryPaths, want: "; run `dot paths`"},
+		{recovery: converge.RecoveryArchiveState, want: "; locate state with `dot paths`, then archive or remove it outside dot"},
+		{recovery: converge.RecoveryManualMigration, want: "; perform the reported manual migration, then rerun"},
+		{recovery: converge.RecoveryRerunApply, want: "; rerun the complete command"},
+	} {
+		if got := recoveryInstruction(test.recovery); got != test.want {
+			t.Fatalf("recoveryInstruction(%q) = %q, want %q", test.recovery, got, test.want)
+		}
+	}
+}
+
+func TestIncompleteAnalysisRendersTypedFailureOnStderr(t *testing.T) {
+	fixture := newCLITestEnv(t, "base = []")
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runInjected("status")
+	if code != exitError || stdout != "" ||
+		!strings.Contains(stderr, "failure stage=analysis partial=false recovery=init") ||
+		!strings.Contains(stderr, "run `dot init`") {
+		t.Fatalf("status before init = (%d, %q, %q), want typed analysis failure", code, stdout, stderr)
+	}
+	assertSnapshotUnchanged(t, before)
 }
 
 func TestOperationReportRendersEveryActionWithQuotedReason(t *testing.T) {
@@ -203,7 +280,7 @@ target = "~/.new"
 		!strings.Contains(output, "action kind=create-link module=new placement=config") ||
 		!strings.Contains(output, "forget") ||
 		!strings.Contains(output, "reason="+strconv.Quote(actions[1].Reason)) ||
-		!strings.Contains(output, "problem kind=conflict module=app placement=config") ||
+		!strings.Contains(output, "issue severity=blocker code=target-conflict module=app placement=config") ||
 		!strings.Contains(output, `reason="actual target is regular file"`) {
 		t.Fatalf(
 			"printStatusAnalysis() stdout = %q, want facts, actions, and problems",

@@ -3,33 +3,19 @@
 package converge
 
 import (
-	"errors"
-
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
-var (
-	// ErrBlocked reports a fully expressed safety blocker or a changed preflight.
-	ErrBlocked = errors.New("convergence blocked")
-	// ErrPartial reports that a mutation may have changed targets or control data.
-	ErrPartial = errors.New("convergence may be partially applied")
-	// ErrUninitialized reports that no machine selection exists yet.
-	ErrUninitialized = errors.New("machine is not initialized")
-	// ErrControl reports that control paths or entries cannot be used safely.
-	ErrControl = errors.New("invalid convergence control")
-	// ErrState reports that ownership state cannot be read reliably.
-	ErrState = errors.New("unreadable convergence state")
-)
-
-// Environment fixes every machine-specific input for one convergence call.
+// Environment fixes the invocation paths for one convergence call and defers
+// platform observation until the authoritative analysis boundary.
 type Environment struct {
 	Home       string
 	ConfigPath string
 	StatePath  string
 	LockPath   string
-	Platform   config.Platform
+	Platform   func() config.Platform
 }
 
 // ModuleFact contains only observed or resolved facts for one inventory module.
@@ -50,8 +36,19 @@ type Report struct {
 	Plan  Plan
 }
 
-// ApplyResult reports a successfully committed convergence run.
+// ApplyStatus distinguishes an applied mutation from a complete blocked
+// analysis. Runtime failures return the zero status with a *Failure.
+type ApplyStatus uint8
+
+// Apply result statuses are complete non-error outcomes.
+const (
+	ApplyStatusApplied ApplyStatus = iota + 1
+	ApplyStatusBlocked
+)
+
+// ApplyResult reports one complete apply outcome.
 type ApplyResult struct {
+	Status         ApplyStatus
 	Report         Report
 	TargetsChanged bool
 	StateChanged   bool

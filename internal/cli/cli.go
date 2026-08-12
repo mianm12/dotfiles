@@ -10,6 +10,7 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/mianm12/dotfiles/internal/core/config"
+	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
@@ -69,7 +70,7 @@ func run(args []string, env environment) int {
 		return output.finish(exitUsage)
 	}
 	if err := root.Execute(); err != nil {
-		if errors.Is(err, errDryRunBlocked) {
+		if errors.Is(err, errAnalysisBlocked) {
 			return output.finish(exitError)
 		}
 		code := exitError
@@ -77,10 +78,29 @@ func run(args []string, env environment) int {
 		if errors.As(err, &usage) {
 			code = exitUsage
 		}
-		root.PrintErrf("error: %v\n", err)
+		root.PrintErrf("error: %v%s\n", err, recoveryInstruction(converge.RecoveryForFailure(err)))
 		return output.finish(code)
 	}
 	return output.finish(exitOK)
+}
+
+func recoveryInstruction(recovery converge.Recovery) string {
+	switch recovery {
+	case converge.RecoveryNone:
+		return ""
+	case converge.RecoveryInit:
+		return "; run `dot init`"
+	case converge.RecoveryPaths:
+		return "; run `dot paths`"
+	case converge.RecoveryArchiveState:
+		return "; locate state with `dot paths`, then archive or remove it outside dot"
+	case converge.RecoveryManualMigration:
+		return "; perform the reported manual migration, then rerun"
+	case converge.RecoveryRerunApply:
+		return "; rerun the complete command"
+	default:
+		return ""
+	}
 }
 
 func newRootCommand(env environment) *cobra.Command {

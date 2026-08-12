@@ -357,15 +357,56 @@ func assertSnapshotUnchanged(t *testing.T, before filesystemSnapshot) {
 		}
 		after = snapshotExactPaths(t, paths...)
 	}
-	if len(after) != len(before.entries) {
+	assertSnapshotEntriesEqual(t, before.entries, after)
+}
+
+func assertOnlyLockBookkeepingChanged(
+	t *testing.T,
+	before filesystemSnapshot,
+	fixture *cliTestEnv,
+) {
+	t.Helper()
+	after := snapshotTree(t, before.root).entries
+	stateRoot := filepath.Dir(fixture.state)
+	ignore := func(entry pathSnapshot) bool {
+		if entry.path == fixture.lock {
+			return true
+		}
+		fromHome, err := filepath.Rel(fixture.home, entry.path)
+		if err != nil || fromHome == ".." ||
+			strings.HasPrefix(fromHome, ".."+string(filepath.Separator)) {
+			return false
+		}
+		toStateRoot, err := filepath.Rel(entry.path, stateRoot)
+		return err == nil && toStateRoot != ".." &&
+			!strings.HasPrefix(toStateRoot, ".."+string(filepath.Separator))
+	}
+	filter := func(entries []pathSnapshot) []pathSnapshot {
+		filtered := make([]pathSnapshot, 0, len(entries))
+		for _, entry := range entries {
+			if !ignore(entry) {
+				filtered = append(filtered, entry)
+			}
+		}
+		return filtered
+	}
+	assertSnapshotEntriesEqual(t, filter(before.entries), filter(after))
+	if info, err := os.Lstat(fixture.lock); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("lock bookkeeping = (%v, %v), want regular file", info, err)
+	}
+}
+
+func assertSnapshotEntriesEqual(t *testing.T, before, after []pathSnapshot) {
+	t.Helper()
+	if len(after) != len(before) {
 		t.Fatalf(
 			"filesystem entry count changed: before=%d after=%d",
-			len(before.entries),
+			len(before),
 			len(after),
 		)
 	}
-	for index := range before.entries {
-		oldEntry := before.entries[index]
+	for index := range before {
+		oldEntry := before[index]
 		newEntry := after[index]
 		if oldEntry.path != newEntry.path ||
 			oldEntry.mode != newEntry.mode ||

@@ -20,7 +20,17 @@ type mutationRun struct {
 func (run *mutationRun) apply(plan Plan) error {
 	for _, action := range plan.Actions {
 		if err := run.applyAction(action); err != nil {
-			return actionError(action, err)
+			recovery := RecoveryNone
+			if run.started {
+				recovery = RecoveryRerunApply
+			}
+			return newFailure(
+				FailureStageExecute,
+				run.started,
+				recovery,
+				&action,
+				err,
+			)
 		}
 	}
 	return nil
@@ -223,13 +233,6 @@ func (run *mutationRun) resolveTarget(target string) (corepaths.Target, error) {
 	return resolved, nil
 }
 
-func (run *mutationRun) wrapError(err error) error {
-	if !run.started {
-		return err
-	}
-	return fmt.Errorf("%w: %w", ErrPartial, err)
-}
-
 func verifyLocal(target string) error {
 	info, err := os.Lstat(target)
 	if err != nil {
@@ -239,15 +242,4 @@ func verifyLocal(target string) error {
 		return fmt.Errorf("changed local %q is not a regular file", target)
 	}
 	return nil
-}
-
-func actionError(action Action, err error) error {
-	return fmt.Errorf(
-		"%s %s/%s target %q: %w",
-		action.Decision,
-		action.ModuleID,
-		action.PlacementID,
-		action.Target,
-		err,
-	)
 }

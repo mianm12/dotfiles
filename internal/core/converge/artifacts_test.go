@@ -167,6 +167,14 @@ func TestExecutionDoesNotUpdateUntilAllCreatesSucceed(t *testing.T) {
 	if err == nil {
 		t.Fatal("executePlan() error = nil, want create failure")
 	}
+	assertFailure(t, err, FailureStageExecute, false, RecoveryNone)
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Action == nil ||
+		failure.Action.Decision != DecisionCreateLocal ||
+		failure.Action.ModuleID != "create" ||
+		failure.Action.PlacementID != "file" {
+		t.Fatalf("execute failure action = %#v, want create/file create-local", failure)
+	}
 	assertSymlink(t, target, oldSource)
 	loaded, loadErr := state.Load(fixture.state, fixture.home)
 	if loadErr != nil {
@@ -445,9 +453,10 @@ func TestStateCommitFailureLeavesSafeArtifactForRerun(t *testing.T) {
 	result, err := executePlan(request.Home, fixture.state, plan, loaded, func(string, state.Snapshot) error {
 		return errors.New("injected commit failure")
 	})
-	if err == nil || !strings.Contains(err.Error(), "partially applied") {
+	if err == nil {
 		t.Fatalf("executePlan() = (%#v, %v), want partial-apply error", result, err)
 	}
+	assertFailure(t, err, FailureStageStateCommit, true, RecoveryRerunApply)
 	assertSymlink(t, filepath.Join(fixture.home, ".file"), source)
 	if _, err := os.Lstat(fixture.state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state path error = %v, want missing", err)
@@ -483,9 +492,10 @@ func TestLocalCreateBeforeStateFailureConvergesOnRerun(t *testing.T) {
 	result, err := executePlan(request.Home, fixture.state, plan, loaded, func(string, state.Snapshot) error {
 		return errors.New("injected commit failure")
 	})
-	if err == nil || !strings.Contains(err.Error(), "partially applied") {
+	if err == nil {
 		t.Fatalf("executePlan() = (%#v, %v), want partial-apply error", result, err)
 	}
+	assertFailure(t, err, FailureStageStateCommit, true, RecoveryRerunApply)
 	if !result.TargetsChanged {
 		t.Fatalf("executePlan() = %#v, want published local", result)
 	}

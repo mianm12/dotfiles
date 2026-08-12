@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,7 +58,7 @@ func printWarningIssues(command *cobra.Command, issues []converge.Issue) error {
 		if issue.Severity != converge.IssueWarning {
 			continue
 		}
-		if _, err := fmt.Fprintf(command.ErrOrStderr(), "warning: %s\n", issue.Reason); err != nil {
+		if err := writeIssue(command.ErrOrStderr(), issue); err != nil {
 			return fmt.Errorf("write warning: %w", err)
 		}
 	}
@@ -83,7 +84,7 @@ func printOperationReport(
 			continue
 		}
 		if err := printIssue(command, issue); err != nil {
-			return fmt.Errorf("write operation problem: %w", err)
+			return fmt.Errorf("write operation issue: %w", err)
 		}
 		printed = true
 	}
@@ -96,55 +97,40 @@ func printOperationReport(
 }
 
 func printIssue(command *cobra.Command, issue converge.Issue) error {
-	reason := issue.Reason
-	if issue.Recovery == converge.RecoveryPaths {
-		reason += "; run `dot paths`"
-	}
+	return writeIssue(command.OutOrStdout(), issue)
+}
+
+func writeIssue(writer io.Writer, issue converge.Issue) error {
 	if _, err := fmt.Fprintf(
-		command.OutOrStdout(),
-		"problem kind=%s",
-		legacyProblemKind(issue),
+		writer,
+		"issue severity=%s code=%s",
+		issue.Severity,
+		issue.Code,
 	); err != nil {
 		return err
 	}
 	if issue.ModuleID != "" {
-		if _, err := fmt.Fprintf(command.OutOrStdout(), " module=%s", issue.ModuleID); err != nil {
+		if _, err := fmt.Fprintf(writer, " module=%s", issue.ModuleID); err != nil {
 			return err
 		}
 	}
 	if issue.PlacementID != "" {
-		if _, err := fmt.Fprintf(command.OutOrStdout(), " placement=%s", issue.PlacementID); err != nil {
+		if _, err := fmt.Fprintf(writer, " placement=%s", issue.PlacementID); err != nil {
 			return err
 		}
 	}
 	if issue.Target != "" {
-		if _, err := fmt.Fprintf(command.OutOrStdout(), " target=%s", strconv.Quote(issue.Target)); err != nil {
+		if _, err := fmt.Fprintf(writer, " target=%s", strconv.Quote(issue.Target)); err != nil {
 			return err
 		}
 	}
-	if issue.Code != "" {
-		if _, err := fmt.Fprintf(command.OutOrStdout(), " code=%s", issue.Code); err != nil {
-			return err
-		}
-	}
-	_, err := fmt.Fprintf(command.OutOrStdout(), " reason=%s\n", strconv.Quote(reason))
+	_, err := fmt.Fprintf(
+		writer,
+		" reason=%s recovery=%s\n",
+		strconv.Quote(issue.Reason),
+		issue.Recovery,
+	)
 	return err
-}
-
-func legacyProblemKind(issue converge.Issue) string {
-	switch issue.Code {
-	case converge.IssueCodeTargetConflict:
-		if issue.Target == "" {
-			return "blocked"
-		}
-		return "conflict"
-	case converge.IssueCodeOwnershipConflict,
-		converge.IssueCodeTopologyConflict,
-		converge.IssueCodePlacementTypeChange:
-		return "conflict"
-	default:
-		return "blocked"
-	}
 }
 
 func hasBlockerIssue(issues []converge.Issue) bool {
@@ -274,7 +260,7 @@ func printStatusAnalysis(
 			continue
 		}
 		if err := printIssue(command, issue); err != nil {
-			return fmt.Errorf("write status problem: %w", err)
+			return fmt.Errorf("write status issue: %w", err)
 		}
 	}
 	return nil

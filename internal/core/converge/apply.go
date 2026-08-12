@@ -1,71 +1,74 @@
 package converge
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
+	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/mianm12/dotfiles/internal/storage"
 )
 
-// Apply performs a complete read-only preflight, acquires the lock, repeats
-// the same analysis from current inputs, and executes only the locked plan.
+var errMachineUninitialized = errors.New("machine is not initialized")
+
+// Apply validates only the lock acquisition boundary before acquiring the
+// mutation lock. Its one complete analysis and Plan are formed inside the
+// lock from current inputs.
 func Apply(environment Environment) (result ApplyResult, err error) {
-	preflight, blockedResult, err := prepareApply(environment)
-	if err != nil {
-		return blockedResult, err
-	}
-	release, err := acquire(preflight.controls)
+	environment, err = prepareMutationEnvironment(environment)
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	defer func() { err = joinReleaseError(err, release()) }()
-	return applyLocked(environment, preflight.fingerprint)
-}
-
-type applyPreflight struct {
-	controls    corepaths.ResolvedControls
-	fingerprint []byte
-}
-
-func prepareApply(environment Environment) (applyPreflight, ApplyResult, error) {
-	preflight, err := analyzeEnvironment(environment)
+	release, err := acquireLock(filepath.Dir(environment.LockPath), environment.LockPath)
 	if err != nil {
-		return applyPreflight{}, ApplyResult{}, err
+		return ApplyResult{}, newFailure(
+			FailureStageLock,
+			false,
+			RecoveryNone,
+			nil,
+			err,
+		)
 	}
-	if !preflight.report.Plan.Executable() {
-		result := ApplyResult{Report: preflight.report}
-		return applyPreflight{}, result, blockedError(preflight.report.Plan)
-	}
-	return applyPreflight{
-		controls:    preflight.controls,
-		fingerprint: append([]byte(nil), preflight.fingerprint...),
-	}, ApplyResult{}, nil
+	defer func() {
+		releaseErr := release()
+		if releaseErr != nil {
+			result.Status = 0
+		}
+		err = joinReleaseFailure(err, releaseErr)
+	}()
+	return applyLocked(environment)
 }
 
-func applyLocked(environment Environment, expectedFingerprint []byte) (ApplyResult, error) {
-	locked, err := analyzeEnvironment(environment)
+func applyLocked(environment Environment) (ApplyResult, error) {
+	locked, err := analyzePreparedEnvironment(environment)
 	if err != nil {
-		return ApplyResult{}, err
-	}
-	if !bytes.Equal(expectedFingerprint, locked.fingerprint) {
-		return ApplyResult{Report: locked.report}, fmt.Errorf(
-			"%w: machine config changed while waiting for the mutation lock",
-			ErrBlocked,
+		return ApplyResult{}, newFailure(
+			FailureStageAnalysis,
+			false,
+			recoveryForAnalysisFailure(err),
+			nil,
+			err,
 		)
 	}
 	if !locked.report.Plan.Executable() {
-		return ApplyResult{Report: locked.report}, blockedError(locked.report.Plan)
+		return ApplyResult{
+			Status: ApplyStatusBlocked,
+			Report: locked.report,
+		}, nil
 	}
 	controlPaths, err := locked.controls.Paths()
 	if err != nil {
-		return ApplyResult{}, err
+		return ApplyResult{}, newFailure(
+			FailureStageAnalysis,
+			false,
+			RecoveryPaths,
+			nil,
+			err,
+		)
 	}
 	execution, runErr := executePlan(
 		locked.loaded.Snapshot.Home,
@@ -79,11 +82,34 @@ func applyLocked(environment Environment, expectedFingerprint []byte) (ApplyResu
 		TargetsChanged: execution.TargetsChanged,
 		StateChanged:   execution.StateChanged,
 	}
-	return result, runErr
+	if runErr != nil {
+		return result, runErr
+	}
+	result.Status = ApplyStatusApplied
+	return result, nil
 }
 
-func blockedError(plan Plan) error {
-	return fmt.Errorf("%w: %w", ErrBlocked, conflictError(plan))
+func prepareMutationEnvironment(environment Environment) (Environment, error) {
+	normalized, err := normalizeEnvironment(environment)
+	if err != nil {
+		return Environment{}, newFailure(
+			FailureStageInput,
+			false,
+			RecoveryNone,
+			nil,
+			err,
+		)
+	}
+	if err := validateLockBoundary(normalized); err != nil {
+		return Environment{}, newFailure(
+			FailureStageInput,
+			false,
+			RecoveryPaths,
+			nil,
+			err,
+		)
+	}
+	return normalized, nil
 }
 
 func normalizeEnvironment(environment Environment) (Environment, error) {
@@ -110,6 +136,13 @@ func normalizeEnvironment(environment Environment) (Environment, error) {
 		LockPath:   lockPath,
 		Platform:   environment.Platform,
 	}, nil
+}
+
+func resolvePlatform(environment Environment) (config.Platform, error) {
+	if environment.Platform == nil {
+		return config.Platform{}, fmt.Errorf("platform resolver is unavailable")
+	}
+	return environment.Platform(), nil
 }
 
 func cleanAbsolute(label, path string) (string, error) {
@@ -147,7 +180,14 @@ func validateControls(controls corepaths.Controls) (corepaths.ResolvedControls, 
 	return resolved, nil
 }
 
-func validateEnvironmentControls(environment Environment) error {
+func validateLockBoundary(environment Environment) error {
+	if err := corepaths.ValidateLockBoundary(
+		environment.ConfigPath,
+		environment.StatePath,
+		environment.LockPath,
+	); err != nil {
+		return controlError{cause: err}
+	}
 	return validateControlEntries(
 		environment.ConfigPath,
 		environment.StatePath,
@@ -193,40 +233,19 @@ func (err controlError) Unwrap() error {
 	return err.cause
 }
 
-func (err controlError) Is(target error) bool {
-	return target == ErrControl
-}
-
-func acquire(controls corepaths.ResolvedControls) (func() error, error) {
-	paths, err := controls.Paths()
-	if err != nil {
-		return nil, err
-	}
-	return acquireLock(filepath.Dir(paths.Lock), paths.Lock)
-}
-
 func requireMachine(path string) (config.Machine, error) {
 	machine, exists, err := config.LoadMachine(path)
 	if err != nil {
 		return config.Machine{}, err
 	}
 	if !exists {
-		return config.Machine{}, fmt.Errorf("%w: machine config %q is missing", ErrUninitialized, path)
+		return config.Machine{}, fmt.Errorf(
+			"%w: machine config %q is missing",
+			errMachineUninitialized,
+			path,
+		)
 	}
 	return machine, nil
-}
-
-func machineFingerprint(machine config.Machine) ([]byte, error) {
-	semantic := cloneMachine(machine)
-	semantic.Profiles = sortedUnique(semantic.Profiles)
-	semantic.ExtraModules = sortedUnique(semantic.ExtraModules)
-	return config.MarshalMachine(semantic)
-}
-
-func sortedUnique(values []string) []string {
-	result := append([]string(nil), values...)
-	slices.Sort(result)
-	return slices.Compact(result)
 }
 
 func cloneMachine(machine config.Machine) config.Machine {
@@ -238,10 +257,35 @@ func cloneMachine(machine config.Machine) config.Machine {
 	}
 }
 
-func joinReleaseError(runErr, releaseErr error) error {
+func recoveryForAnalysisFailure(err error) Recovery {
+	var control controlError
+	switch {
+	case errors.Is(err, errMachineUninitialized):
+		return RecoveryInit
+	case errors.Is(err, state.ErrInvalid),
+		errors.Is(err, state.ErrLegacyVersion),
+		errors.Is(err, state.ErrTooNew),
+		errors.Is(err, state.ErrHomeMismatch):
+		return RecoveryArchiveState
+	case errors.As(err, &control):
+		return RecoveryPaths
+	default:
+		return RecoveryNone
+	}
+}
+
+func joinReleaseFailure(runErr, releaseErr error) error {
 	if releaseErr == nil {
 		return runErr
 	}
-	partial := fmt.Errorf("%w: release mutation lock: %w", ErrPartial, releaseErr)
-	return errors.Join(runErr, partial)
+	cause := fmt.Errorf("release mutation lock: %w", releaseErr)
+	if runErr != nil {
+		cause = errors.Join(runErr, cause)
+	}
+	return &Failure{
+		Stage:    FailureStageLockRelease,
+		Partial:  true,
+		Recovery: RecoveryRerunApply,
+		Cause:    cause,
+	}
 }

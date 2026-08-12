@@ -148,8 +148,8 @@ target = "~/.pending"
 		!strings.Contains(stdout, "fact module=first selection=profile") ||
 		!strings.Contains(stdout, "fact module=second selection=profile") ||
 		!strings.Contains(stdout, "fact module=pending selection=profile") ||
-		!strings.Contains(stdout, "problem kind=blocked module=first placement=config") ||
-		!strings.Contains(stdout, "problem kind=blocked module=second placement=config") ||
+		!strings.Contains(stdout, "issue severity=blocker code=target-conflict module=first placement=config") ||
+		!strings.Contains(stdout, "issue severity=blocker code=target-conflict module=second placement=config") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"status = (%d, %q, %q), want conflict plus independent pending status",
@@ -174,7 +174,7 @@ func TestStatusReportsCrossModuleUpdatePruneConflict(t *testing.T) {
 		!strings.Contains(stderr, "actual preserved") ||
 		!strings.Contains(stdout, "fact module=stale selection=none state=present") ||
 		!strings.Contains(stdout, "action kind=forget module=stale placement=child") ||
-		!strings.Contains(stdout, "problem kind=conflict module=parent placement=tree") ||
+		!strings.Contains(stdout, "issue severity=blocker code=topology-conflict module=parent placement=tree") ||
 		!strings.Contains(
 			stdout,
 			"active link cannot be owned or changed while traversed by state stale/child",
@@ -243,8 +243,8 @@ target = "~/.second"
 
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
-		!strings.Contains(stdout, "problem kind=conflict module=app placement=first target="+strconv.Quote(first)) ||
-		!strings.Contains(stdout, "problem kind=conflict module=app placement=second target="+strconv.Quote(second)) ||
+		!strings.Contains(stdout, "issue severity=blocker code=target-conflict module=app placement=first target="+strconv.Quote(first)) ||
+		!strings.Contains(stdout, "issue severity=blocker code=target-conflict module=app placement=second target="+strconv.Quote(second)) ||
 		strings.Count(stdout, `reason="actual target is regular file"`) != 2 ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(

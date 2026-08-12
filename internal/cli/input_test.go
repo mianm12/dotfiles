@@ -68,7 +68,12 @@ target = "~/.app"
 					stderr,
 				)
 			}
-			assertSnapshotUnchanged(t, before)
+			if input == "root manifest" || input == "module manifest" {
+				assertOnlyLockBookkeepingChanged(t, before, fixture)
+				assertCLIMissing(t, fixture.state)
+			} else {
+				assertSnapshotUnchanged(t, before)
+			}
 		})
 	}
 }
@@ -104,7 +109,11 @@ target = "~/.good"
 				stderr,
 			)
 		}
-		assertSnapshotUnchanged(t, before)
+		if len(args) == 1 && args[0] == "apply" {
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
+		} else {
+			assertSnapshotUnchanged(t, before)
+		}
 	}
 
 	code, stdout, stderr := fixture.runProcess("apply")
@@ -162,6 +171,10 @@ func TestCommandsRejectLegacyStateWithoutMutation(t *testing.T) {
 				stderr,
 			)
 		}
-		assertSnapshotUnchanged(t, before)
+		if len(args) == 1 && args[0] == "apply" {
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
+		} else {
+			assertSnapshotUnchanged(t, before)
+		}
 	}
 }

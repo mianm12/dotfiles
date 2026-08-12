@@ -173,12 +173,12 @@ target = "~/real/tree/child"
 			if want == "" {
 				want = "conflict"
 			}
-			if code != exitError || stdout != "" || !strings.Contains(stderr, want) {
-				t.Fatalf("apply = (%d, %q, %q), want preflight %q failure", code, stdout, stderr, want)
+			if code != exitError ||
+				(!strings.Contains(stdout, want) && !strings.Contains(stderr, want)) {
+				t.Fatalf("apply = (%d, %q, %q), want %q failure", code, stdout, stderr, want)
 			}
-			assertSnapshotUnchanged(t, before)
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
 			assertCLIMissing(t, fixture.state)
-			assertCLIMissing(t, fixture.lock)
 		})
 	}
 }
@@ -261,11 +261,11 @@ target = "~/alias/child"
 	code, stdout, stderr = fixture.runInjected("apply")
 
 	if code != exitError ||
-		stdout != "" ||
+		!strings.Contains(stdout, "issue severity=blocker code=topology-conflict") ||
 		!strings.Contains(
-			stderr,
+			stdout,
 			"target traverses state-owned link",
-		) {
+		) || strings.Contains(stderr, "error:") {
 		t.Fatalf(
 			"apply after rebind = (%d, %q, %q), want active-link traversal conflict",
 			code,
@@ -273,7 +273,7 @@ target = "~/alias/child"
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	assertCLIMissing(
 		t,
 		filepath.Join(oldRepository, "modules", "app", "old", "child"),
@@ -322,12 +322,13 @@ target = "~/access/child"
 	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitError ||
-		stdout != "" ||
+		!strings.Contains(stdout, "issue severity=blocker code=topology-conflict") ||
 		!strings.Contains(
-			stderr,
+			stdout,
 			"active link cannot be owned or changed while traversed",
 		) ||
-		!strings.Contains(stderr, `desired child/config`) {
+		!strings.Contains(stdout, `desired child/config`) ||
+		strings.Contains(stderr, "error:") {
 		t.Fatalf(
 			"apply = (%d, %q, %q), want prospective ownership conflict",
 			code,
@@ -335,10 +336,9 @@ target = "~/access/child"
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	assertCLIMissing(t, filepath.Join(outside, "child"))
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
 }
 
 func TestApplyRejectsUpdateThatWouldInvalidateStalePruneBeforeMutation(
@@ -369,15 +369,15 @@ func TestApplyRejectsUpdateThatWouldInvalidateStalePruneBeforeMutation(
 	code, stdout, stderr = fixture.run("apply")
 
 	if code != exitError ||
-		stdout != "" ||
+		!strings.Contains(stdout, "issue severity=blocker code=topology-conflict") ||
 		!strings.Contains(
-			stderr,
+			stdout,
 			"active link cannot be owned or changed while traversed by state stale/child",
 		) ||
 		!strings.Contains(
-			stderr,
+			stdout,
 			`parent/tree`,
-		) {
+		) || strings.Contains(stderr, "error:") {
 		t.Fatalf(
 			"apply = (%d, %q, %q), want preflight update/prune conflict",
 			code,
@@ -385,11 +385,10 @@ func TestApplyRejectsUpdateThatWouldInvalidateStalePruneBeforeMutation(
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	assertCLILink(t, topology.parentTarget, topology.oldSource)
 	assertCLILink(t, topology.staleActual, topology.staleSource)
 	assertCLIMissing(t, filepath.Join(topology.newSource, "out"))
-	assertCLIMissing(t, fixture.lock)
 }
 
 type parentUpdateStaleCLIEnv struct {
@@ -547,10 +546,9 @@ target = "`+test.target+`"
 					stderr,
 				)
 			}
-			assertSnapshotUnchanged(t, before)
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
 			assertCLIMissing(t, fixture.config)
 			assertCLIMissing(t, fixture.state)
-			assertCLIMissing(t, fixture.lock)
 		})
 	}
 }
@@ -577,10 +575,9 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 		)
 
 		assertCLIControlTopologyFailure(t, code, stdout, stderr, repository)
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 		assertCLIMissing(t, fixture.config)
 		assertCLIMissing(t, fixture.state)
-		assertCLIMissing(t, fixture.lock)
 	})
 
 	tests := []struct {
@@ -623,9 +620,9 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 
 			if test.readOnlyAnalysis {
 				if code != test.wantCode ||
-					!strings.Contains(stdout, "blocked") ||
+					!strings.Contains(stdout, "issue severity=blocker code=control-topology") ||
 					!strings.Contains(stdout, fixture.repository) ||
-					!strings.Contains(stdout, "run `dot paths`") {
+					!strings.Contains(stdout, "recovery=paths") {
 					t.Fatalf(
 						"analysis = (%d, %q, %q), want complete topology blocker",
 						code,
@@ -642,9 +639,13 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 					fixture.repository,
 				)
 			}
-			assertSnapshotUnchanged(t, before)
+			if test.readOnlyAnalysis {
+				assertSnapshotUnchanged(t, before)
+				assertCLIMissing(t, fixture.lock)
+			} else {
+				assertOnlyLockBookkeepingChanged(t, before, fixture)
+			}
 			assertCLIMissing(t, fixture.state)
-			assertCLIMissing(t, fixture.lock)
 			if test.name == "select remove before publication" {
 				extras := fixture.loadMachine(t).ExtraModules
 				if len(extras) != 1 || extras[0] != "app" {
@@ -682,9 +683,8 @@ func TestCommandsRejectControlTopologyWithoutMutation(t *testing.T) {
 			stderr,
 			repositoryAlias,
 		)
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 		assertCLIMissing(t, fixture.state)
-		assertCLIMissing(t, fixture.lock)
 	})
 }
 
@@ -694,11 +694,12 @@ func assertCLIControlTopologyFailure(
 	stdout, stderr, conflictPath string,
 ) {
 	t.Helper()
+	combined := stdout + stderr
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "control paths conflict") ||
-		!strings.Contains(stderr, conflictPath) ||
-		!strings.Contains(stderr, "run `dot paths`") {
+		!strings.Contains(combined, "control paths conflict") ||
+		!strings.Contains(combined, conflictPath) ||
+		(!strings.Contains(combined, "recovery=paths") &&
+			!strings.Contains(combined, "run `dot paths`")) {
 		t.Fatalf(
 			"command = (%d, %q, %q), want topology error naming %q and dot paths",
 			code,
@@ -724,27 +725,27 @@ target = "~/.config/dot/managed"
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=app selection=profile") ||
-		!strings.Contains(stdout, "problem kind=blocked module=app placement=config") ||
+		!strings.Contains(stdout, "issue severity=blocker code=control-boundary module=app placement=config") ||
 		!strings.Contains(stdout, "code=control-boundary") ||
 		!strings.Contains(stdout, target) ||
 		!strings.Contains(stdout, filepath.Dir(fixture.config)) ||
-		!strings.Contains(stdout, "run `dot paths`") ||
+		!strings.Contains(stdout, "recovery=paths") ||
 		!strings.Contains(stderr, "state is missing") ||
 		strings.Contains(stderr, target) ||
-		strings.Contains(stderr, "run `dot paths`") {
+		strings.Contains(stderr, "recovery=paths") {
 		t.Fatalf("status = (%d, %q, %q), want read-only conflict", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
 
 	code, stdout, stderr = fixture.run("apply", "--dry-run")
 	if code != exitError ||
-		!strings.Contains(stdout, "blocked") ||
+		!strings.Contains(stdout, "issue severity=blocker code=control-boundary") ||
 		!strings.Contains(stdout, target) ||
 		!strings.Contains(stdout, filepath.Dir(fixture.config)) ||
-		!strings.Contains(stdout, "run `dot paths`") ||
+		!strings.Contains(stdout, "recovery=paths") ||
 		!strings.Contains(stderr, "state is missing") ||
 		strings.Contains(stderr, target) ||
-		strings.Contains(stderr, "run `dot paths`") {
+		strings.Contains(stderr, "recovery=paths") {
 		t.Fatalf(
 			"apply --dry-run = (%d, %q, %q), want complete blocker analysis",
 			code,
@@ -988,8 +989,7 @@ target = "~/.app"
 				(test.wantPathHint && !strings.Contains(stderr, "dot paths")) {
 				t.Fatalf("apply = (%d, %q, %q), want %q failure", code, stdout, stderr, test.want)
 			}
-			assertSnapshotUnchanged(t, before)
-			assertCLIMissing(t, fixture.lock)
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
 			assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
 		})
 	}

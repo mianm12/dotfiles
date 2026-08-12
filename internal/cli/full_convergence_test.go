@@ -99,7 +99,12 @@ target = "~/.good"
 					stderr,
 				)
 			}
-			assertSnapshotUnchanged(t, before)
+			if len(args) == 1 && args[0] == "apply" {
+				assertOnlyLockBookkeepingChanged(t, before, fixture)
+				assertCLIMissing(t, fixture.state)
+			} else {
+				assertSnapshotUnchanged(t, before)
+			}
 		})
 	}
 }
@@ -129,15 +134,16 @@ target = "~/.selected"
 	before := snapshotTree(t, fixture.root)
 	code, stdout, stderr := fixture.run("apply")
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "target paths conflict") {
-		t.Fatalf("full apply = (%d, %q, %q), want target conflict", code, stdout, stderr)
+		!strings.Contains(stdout, "issue severity=blocker code=target-conflict") ||
+		!strings.Contains(stdout, "target paths conflict") ||
+		!strings.Contains(stderr, "state is missing") ||
+		strings.Contains(stderr, "error:") {
+		t.Fatalf("full apply = (%d, %q, %q), want blocked target conflict", code, stdout, stderr)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	assertCLIMissing(t, filepath.Join(fixture.home, ".selected"))
 	assertCLIMissing(t, filepath.Join(fixture.home, ".shared"))
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
 }
 
 func TestFullApplyRejectsTargetRelationshipBeforeMutation(t *testing.T) {
@@ -162,8 +168,8 @@ target = "~/.tree/child"
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=effective selection=profile") ||
 		!strings.Contains(stdout, "fact module=selected selection=extra") ||
-		!strings.Contains(stdout, "problem kind=blocked module=effective") ||
-		!strings.Contains(stdout, "problem kind=blocked module=selected") ||
+		!strings.Contains(stdout, "issue severity=blocker code=target-conflict module=effective") ||
+		!strings.Contains(stdout, "issue severity=blocker code=target-conflict module=selected") ||
 		!strings.Contains(stdout, "target paths conflict") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf("full status = (%d, %q, %q), want target conflict report", code, stdout, stderr)
@@ -181,16 +187,17 @@ target = "~/.tree/child"
 	code, stdout, stderr = fixture.run("apply")
 
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "target paths conflict") {
-		t.Fatalf("full apply = (%d, %q, %q), want target conflict", code, stdout, stderr)
+		!strings.Contains(stdout, "issue severity=blocker code=target-conflict") ||
+		!strings.Contains(stdout, "target paths conflict") ||
+		!strings.Contains(stderr, "state is missing") ||
+		strings.Contains(stderr, "error:") {
+		t.Fatalf("full apply = (%d, %q, %q), want blocked target conflict", code, stdout, stderr)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "selected" {
 		t.Fatalf("extra_modules = %v, want unchanged [selected]", extras)
 	}
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
 	if content, err := os.ReadFile(filepath.Join(fixture.home, ".tree")); err != nil || string(content) != "user" {
 		t.Fatalf("ordinary parent changed: content=%q error=%v", content, err)
 	}
@@ -233,8 +240,9 @@ target = "~/.shared/child"
 	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "traverses state-owned link") {
+		!strings.Contains(stdout, "issue severity=blocker code=topology-conflict") ||
+		!strings.Contains(stdout, "traverses state-owned link") ||
+		strings.Contains(stderr, "error:") {
 		t.Fatalf(
 			"full apply = (%d, %q, %q), want parent ownership conflict",
 			code,
@@ -242,12 +250,11 @@ target = "~/.shared/child"
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "active" {
 		t.Fatalf("extra_modules = %v, want unchanged [active]", extras)
 	}
 	assertCLIMissing(t, filepath.Join(oldTree, "child"))
-	assertCLIMissing(t, fixture.lock)
 }
 
 func TestFullApplyRejectsParentUpdateTraversedByEffectiveChild(t *testing.T) {
@@ -329,9 +336,10 @@ target = "~/access/child"
 	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitError ||
-		stdout != "" ||
-		(!strings.Contains(stderr, "active link cannot be owned or changed while traversed") &&
-			!strings.Contains(stderr, "target traverses state-owned link")) {
+		!strings.Contains(stdout, "issue severity=blocker code=topology-conflict") ||
+		(!strings.Contains(stdout, "active link cannot be owned or changed while traversed") &&
+			!strings.Contains(stdout, "target traverses state-owned link")) ||
+		strings.Contains(stderr, "error:") {
 		t.Fatalf(
 			"full parent update = (%d, %q, %q), want traversal conflict",
 			code,
@@ -339,11 +347,10 @@ target = "~/access/child"
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	assertCLILink(t, parentTarget, oldSource)
 	assertCLILink(t, childTarget, childSource)
 	assertCLIMissing(t, filepath.Join(newSource, "out"))
-	assertCLIMissing(t, fixture.lock)
 }
 
 func TestFullApplyThroughDriftedParentConvergesAndForgetsStaleState(
@@ -446,8 +453,9 @@ target = "~/.shared/child"
 	code, stdout, stderr := fixture.run("apply")
 
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "traverses state-owned link") {
+		!strings.Contains(stdout, "issue severity=blocker code=topology-conflict") ||
+		!strings.Contains(stdout, "traverses state-owned link") ||
+		strings.Contains(stderr, "error:") {
 		t.Fatalf(
 			"full apply = (%d, %q, %q), want dependency conflict",
 			code,
@@ -455,7 +463,6 @@ target = "~/.shared/child"
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	assertCLIMissing(t, filepath.Join(oldTree, "child"))
-	assertCLIMissing(t, fixture.lock)
 }

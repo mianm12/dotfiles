@@ -645,6 +645,37 @@ func TestResolveControlsReportsLexicalOverlapBeforeBlockedResolution(t *testing.
 	}
 }
 
+func TestValidateLockBoundaryDoesNotRequireRepository(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config", "machine.toml")
+	statePath := filepath.Join(root, "state", "state.json")
+	lockPath := filepath.Join(root, "state", "lock")
+	before := snapshotTree(t, root)
+
+	if err := corepaths.ValidateLockBoundary(configPath, statePath, lockPath); err != nil {
+		t.Fatalf("ValidateLockBoundary() error = %v", err)
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("lock boundary validation mutated fixture\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestValidateLockBoundaryRejectsConfigStateFamilyOverlap(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "controls", "machine.toml")
+	statePath := filepath.Join(root, "controls", "state", "state.json")
+	lockPath := filepath.Join(root, "controls", "state", "lock")
+	before := snapshotTree(t, root)
+
+	err := corepaths.ValidateLockBoundary(configPath, statePath, lockPath)
+	if !errors.Is(err, corepaths.ErrControlTopology) {
+		t.Fatalf("ValidateLockBoundary() error = %v, want topology conflict", err)
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("lock boundary validation mutated fixture\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
 func TestResolveControlsRequiresDistinctStateSiblings(t *testing.T) {
 	tests := []struct {
 		name  string

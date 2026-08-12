@@ -23,7 +23,7 @@ func runStatus(command *cobra.Command, env environment) error {
 	}
 	report, err := converge.Analyze(context.environment())
 	if err != nil {
-		return withCoreRecovery(err)
+		return err
 	}
 	return printStatusAnalysis(command, report)
 }

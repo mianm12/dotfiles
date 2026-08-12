@@ -58,7 +58,7 @@ func TestInitWithoutProfilesCreatesEmptySelection(t *testing.T) {
 	assertCLIMissing(t, fixture.state)
 }
 
-func TestInitValidationFailureIsStrictlyReadOnly(t *testing.T) {
+func TestInitValidationFailureLeavesOnlyLockBookkeeping(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["missing"]`)
 	before := snapshotTree(t, fixture.root)
 
@@ -71,10 +71,9 @@ func TestInitValidationFailureIsStrictlyReadOnly(t *testing.T) {
 	if code != exitError || stdout != "" || !strings.Contains(stderr, "missing module") {
 		t.Fatalf("init = (%d, %q, %q), want profile validation failure", code, stdout, stderr)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	assertCLIMissing(t, fixture.config)
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
 }
 
 func TestInitRejectsExplicitEmptyRepositoryWithoutMutation(t *testing.T) {

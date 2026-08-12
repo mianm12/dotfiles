@@ -377,11 +377,13 @@ target = "~/.app"
 		}
 		before := snapshotTree(t, fixture.root)
 		code, stdout, stderr = fixture.run("apply")
-		if code != exitError || stdout != "" ||
-			!strings.Contains(stderr, "actual symlink is not explained by desired or state") {
+		if code != exitError ||
+			!strings.Contains(stdout, "issue severity=blocker code=target-conflict") ||
+			!strings.Contains(stdout, "actual symlink is not explained by desired or state") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("apply after drift = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 	})
 
 	t.Run("local to link requires two-stage cleanup and user handling", func(t *testing.T) {
@@ -410,11 +412,13 @@ target = "~/.shared"
 `)
 		before := snapshotTree(t, fixture.root)
 		code, stdout, stderr := fixture.run("apply")
-		if code != exitError || stdout != "" ||
-			!strings.Contains(stderr, "actual target is regular file") {
+		if code != exitError ||
+			!strings.Contains(stdout, "issue severity=blocker code=target-conflict") ||
+			!strings.Contains(stdout, "actual target is regular file") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("apply after kind change = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 
 		writeModuleManifest(t, fixture, "app", "")
 		code, _, stderr = fixture.run("apply")
@@ -439,8 +443,10 @@ target = "~/.shared"
 `)
 		before = snapshotTree(t, fixture.root)
 		code, stdout, stderr = fixture.run("apply")
-		if code != exitError || stdout != "" ||
-			!strings.Contains(stderr, "actual target is regular file") {
+		if code != exitError ||
+			!strings.Contains(stdout, "issue severity=blocker code=target-conflict") ||
+			!strings.Contains(stdout, "actual target is regular file") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf(
 				"phase-two apply with retained local = (%d, %q, %q), want conflict",
 				code,
@@ -448,7 +454,7 @@ target = "~/.shared"
 				stderr,
 			)
 		}
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 
 		preserved := filepath.Join(fixture.root, "preserved-local")
 		if err := os.Rename(target, preserved); err != nil {
@@ -553,11 +559,13 @@ target = "~/alias/config"
 		before := snapshotTree(t, fixture.root)
 
 		code, stdout, stderr := fixture.run("apply")
-		if code != exitError || stdout != "" ||
-			!strings.Contains(stderr, "resolved target changed since state was recorded") {
+		if code != exitError ||
+			!strings.Contains(stdout, "issue severity=blocker code=topology-conflict") ||
+			!strings.Contains(stdout, "resolved target changed since state was recorded") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("apply after parent drift = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 		assertCLILink(t, filepath.Join(firstParent, "config"), oldDestination)
 		assertCLILink(t, filepath.Join(secondParent, "config"), oldDestination)
 	})
@@ -725,9 +733,8 @@ target = "~/.invalid"
 					!strings.Contains(stderr, "example")) {
 				t.Fatalf("apply = (%d, %q, %q), want strict source/example failure", code, stdout, stderr)
 			}
-			assertSnapshotUnchanged(t, before)
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
 			assertCLIMissing(t, fixture.state)
-			assertCLIMissing(t, fixture.lock)
 			assertCLIMissing(t, filepath.Join(fixture.home, ".invalid"))
 		})
 	}

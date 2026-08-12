@@ -23,10 +23,9 @@ func (source selectionSource) label() string {
 }
 
 type analysis struct {
-	report      Report
-	loaded      state.Loaded
-	controls    corepaths.ResolvedControls
-	fingerprint []byte
+	report   Report
+	loaded   state.Loaded
+	controls corepaths.ResolvedControls
 }
 
 // Analyze reloads every convergence input and returns one complete read-only
@@ -40,13 +39,24 @@ func Analyze(environment Environment) (Report, error) {
 }
 
 func analyzeEnvironment(environment Environment) (analysis, error) {
-	environment, err := normalizeEnvironment(environment)
+	environment, err := prepareMutationEnvironment(environment)
 	if err != nil {
 		return analysis{}, err
 	}
-	if err := validateEnvironmentControls(environment); err != nil {
-		return analysis{}, err
+	prepared, err := analyzePreparedEnvironment(environment)
+	if err != nil {
+		return analysis{}, newFailure(
+			FailureStageAnalysis,
+			false,
+			recoveryForAnalysisFailure(err),
+			nil,
+			err,
+		)
 	}
+	return prepared, nil
+}
+
+func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 	machine, err := requireMachine(environment.ConfigPath)
 	if err != nil {
 		return analysis{}, err
@@ -69,7 +79,11 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
-	selection, err := resolveSelection(repository, machine, environment.Platform)
+	platform, err := resolvePlatform(environment)
+	if err != nil {
+		return analysis{}, err
+	}
+	selection, err := resolveSelection(repository, machine, platform)
 	if err != nil {
 		return analysis{}, err
 	}
@@ -103,15 +117,10 @@ func analyzeEnvironment(environment Environment) (analysis, error) {
 		plan,
 		statusModuleIDs(repository, machine, loaded.Snapshot),
 	)
-	fingerprint, err := machineFingerprint(machine)
-	if err != nil {
-		return analysis{}, err
-	}
 	return analysis{
-		report:      report,
-		loaded:      loaded,
-		controls:    controls,
-		fingerprint: fingerprint,
+		report:   report,
+		loaded:   loaded,
+		controls: controls,
 	}, nil
 }
 

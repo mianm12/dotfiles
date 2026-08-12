@@ -32,7 +32,7 @@ func runApply(
 	if dryRun {
 		report, err := converge.Analyze(context.environment())
 		if err != nil {
-			return withCoreRecovery(err)
+			return err
 		}
 		return printDryRunAnalysis(command, report)
 	}

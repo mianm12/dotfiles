@@ -52,7 +52,7 @@ func runSelectAdd(command *cobra.Command, moduleID string, env environment) erro
 	}
 	result, runErr := converge.SelectAdd(context.environment(), moduleID)
 	if runErr != nil {
-		return finishSelectionMutation(runErr, "dot select add "+moduleID)
+		return runErr
 	}
 	return printSelectionResult(
 		command,
@@ -69,7 +69,7 @@ func runSelectRemove(command *cobra.Command, moduleID string, env environment) e
 	}
 	result, runErr := converge.SelectRemove(control.environment(), moduleID)
 	if runErr != nil {
-		return finishSelectionMutation(runErr, "dot select remove "+moduleID)
+		return runErr
 	}
 	message := fmt.Sprintf("direct selection for module %s is absent; run dot apply", moduleID)
 	if result.ProfileSelected {

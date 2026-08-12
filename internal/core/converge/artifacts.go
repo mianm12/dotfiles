@@ -22,7 +22,13 @@ func executePlan(
 	commit stateCommitter,
 ) (executionResult, error) {
 	if !plan.Executable() {
-		return executionResult{}, conflictError(plan)
+		return executionResult{}, newFailure(
+			FailureStageExecute,
+			false,
+			RecoveryManualMigration,
+			nil,
+			conflictError(plan),
+		)
 	}
 
 	next := plan.nextSnapshot()
@@ -30,7 +36,7 @@ func executePlan(
 	if err := mutation.apply(plan); err != nil {
 		return executionResult{
 			TargetsChanged: mutation.changed,
-		}, mutation.wrapError(err)
+		}, err
 	}
 
 	stateChanged := loaded.Missing || !state.Equal(loaded.Snapshot, next)
@@ -41,8 +47,14 @@ func executePlan(
 				err,
 			)
 			return executionResult{
-				TargetsChanged: mutation.changed,
-			}, fmt.Errorf("%w: %w", ErrPartial, commitErr)
+					TargetsChanged: mutation.changed,
+				}, newFailure(
+					FailureStageStateCommit,
+					true,
+					RecoveryRerunApply,
+					nil,
+					commitErr,
+				)
 		}
 	}
 	return executionResult{
@@ -54,7 +66,7 @@ func executePlan(
 func loadState(path, home string) (state.Loaded, error) {
 	loaded, err := state.Load(path, home)
 	if err != nil {
-		return state.Loaded{}, fmt.Errorf("%w: %w", ErrState, err)
+		return state.Loaded{}, fmt.Errorf("load ownership state: %w", err)
 	}
 	return loaded, nil
 }

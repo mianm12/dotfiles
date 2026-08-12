@@ -186,11 +186,11 @@ func TestStateCommitFailureLeavesRecoverableFacts(t *testing.T) {
 	})
 	if err == nil ||
 		!strings.Contains(err.Error(), "injected state commit failure") ||
-		!strings.Contains(err.Error(), "partially applied") ||
 		!first.TargetsChanged ||
 		first.StateChanged {
 		t.Fatalf("executePlan(failing commit) = (%#v, %v), want recoverable partial failure", first, err)
 	}
+	assertFailure(t, err, FailureStageStateCommit, true, RecoveryRerunApply)
 	assertExecutorLink(t, target, source)
 	if _, err := os.Lstat(controlPaths.State); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("state after failed commit error = %v, want missing", err)
@@ -247,10 +247,10 @@ func TestStaleLinkForgetCommitFailureDoesNotCompleteOwnershipRemoval(t *testing.
 
 	if err == nil ||
 		!strings.Contains(err.Error(), "injected forget commit failure") ||
-		!strings.Contains(err.Error(), "state was not committed") ||
-		!errors.Is(err, ErrPartial) {
+		!strings.Contains(err.Error(), "state was not committed") {
 		t.Fatalf("executePlan(failing forget commit) error = %v, want partial classification", err)
 	}
+	assertFailure(t, err, FailureStageStateCommit, true, RecoveryRerunApply)
 	if result.TargetsChanged || result.StateChanged {
 		t.Fatalf("executePlan(failing forget commit) result = %#v, want no completed change", result)
 	}
