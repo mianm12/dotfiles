@@ -1,6 +1,6 @@
 # 0002: Convergence V4 分离语义计划、执行与 ownership
 
-状态：Proposed
+状态：Accepted
 日期：2026-08-13
 
 ## 背景
@@ -85,5 +85,5 @@ resolved target 与 raw link destination。只有 active desired set 完整确�
   维持 DAG 调度器。
 - State v4 是首次发布前的破坏性切换。回滚旧二进制时必须同时恢复归档的 v3 state；V4 本身不增加
   migration、reset、backup 或兼容引擎。
-- 本 ADR 在 state、planner、mutation/CLI 和架构门禁全部切换并通过安全验收前保持 Proposed；完成
-  后才改为 Accepted。产品规则仍由 `docs/spec/**` 的对应 owner 定义。
+- State、planner、mutation/CLI 与架构门禁已经完成原子切换，并通过行为、安全边界与依赖政策验收；
+  本 ADR 因而为 Accepted。产品规则仍由 `docs/spec/**` 的对应 owner 定义。

@@ -676,6 +676,71 @@ func TestValidateLockBoundaryRejectsConfigStateFamilyOverlap(t *testing.T) {
 	}
 }
 
+func TestValidateLockBoundaryRejectsResolvedControlAliases(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, string) (string, string, string)
+	}{
+		{
+			name: "config root aliases state root",
+			setup: func(t *testing.T, root string) (string, string, string) {
+				stateRoot := filepath.Join(root, "state-control")
+				if err := os.MkdirAll(stateRoot, 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(state root) error = %v", err)
+				}
+				configRoot := filepath.Join(root, "config-alias")
+				if err := os.Symlink(stateRoot, configRoot); err != nil {
+					t.Fatalf("os.Symlink(config root) error = %v", err)
+				}
+				return filepath.Join(configRoot, "machine.toml"),
+					filepath.Join(stateRoot, "state.json"),
+					filepath.Join(stateRoot, "lock")
+			},
+		},
+		{
+			name: "state and lock entries alias one file",
+			setup: func(t *testing.T, root string) (string, string, string) {
+				stateRoot := filepath.Join(root, "state-control")
+				if err := os.MkdirAll(stateRoot, 0o700); err != nil {
+					t.Fatalf("os.MkdirAll(state root) error = %v", err)
+				}
+				destination := filepath.Join(root, "shared-control-file")
+				if err := os.WriteFile(destination, []byte("shared"), 0o600); err != nil {
+					t.Fatalf("os.WriteFile(shared) error = %v", err)
+				}
+				statePath := filepath.Join(stateRoot, "state.json")
+				lockPath := filepath.Join(stateRoot, "lock")
+				if err := os.Symlink(destination, statePath); err != nil {
+					t.Fatalf("os.Symlink(state) error = %v", err)
+				}
+				if err := os.Symlink(destination, lockPath); err != nil {
+					t.Fatalf("os.Symlink(lock) error = %v", err)
+				}
+				return filepath.Join(root, "config-control", "machine.toml"),
+					statePath,
+					lockPath
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			configPath, statePath, lockPath := test.setup(t, root)
+			before := snapshotTree(t, root)
+
+			err := corepaths.ValidateLockBoundary(configPath, statePath, lockPath)
+
+			if !errors.Is(err, corepaths.ErrControlTopology) {
+				t.Fatalf("ValidateLockBoundary() error = %v, want resolved topology conflict", err)
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("lock boundary validation mutated fixture\nbefore=%v\nafter=%v", before, after)
+			}
+		})
+	}
+}
+
 func TestResolveControlsRequiresDistinctStateSiblings(t *testing.T) {
 	tests := []struct {
 		name  string

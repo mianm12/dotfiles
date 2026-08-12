@@ -13,7 +13,7 @@ flowchart LR
     M["Machine selection\nprofiles + direct modules"]
     S["Ownership state\n过去由 dot 验证的证据"]
     F["Actual filesystem\n当前 target 事实"]
-    P["Plan\nactions + problems"]
+    P["Plan\nactions + issues"]
     R --> P
     M --> P
     S --> P
@@ -28,7 +28,7 @@ flowchart LR
   清理；它不是期望配置的第二份副本。
 - **Actual filesystem** 是计划时观察到的真实 target。已有普通文件、目录和未知 symlink 不会
   因为 manifest 想要同一路径就自动变成 `dot` 所有。
-- **Plan** 把上述输入收敛为 actions 和 problems。`status` / dry-run 展示它，`apply` 在安全复核
+- **Plan** 把上述输入收敛为有序 actions 和结构化 issues。`status` / dry-run 展示它，`apply` 在安全复核
   后执行它。
 
 规范中的完整输入和规划规则分别见
@@ -68,7 +68,7 @@ Desired 只能说明“现在希望这里有什么”，不能证明“现在这
 
 - 删除 manifest 条目不会自动赋予删除任意 target 的权限；
 - state 丢失后仍可创建当前 desired，但可能失去发现历史 link 的能力；
-- target 漂移会使旧 ownership 证据不足，系统应报告 problem 或忘记证据，而不是强制覆盖。
+- target 漂移会使旧 ownership 证据不足，系统应报告 blocker issue 或忘记证据，而不是强制覆盖。
 
 需要从用户角度理解这些边界，继续阅读
 [所有权与安全边界](ownership-and-safety.md)；持久格式和精确判定只在

@@ -49,7 +49,7 @@ parent preparation、复核或 state commit 等内部 syscall。Status、dry-run
   可以一次规划：先 create/adopt 新 target，再 prune/forget 旧 target，并只在 NextState 保存新
   ownership。存在上述依赖时产生 topology blocker。
 - Existing v4 link ownership 与同 key 的当前 desired local 构成 placement-type blocker；不能在
-  一次 desired 变更中隐式把 link 转成 local。Local 转成 link 没有 provenance state 可用，仍按
+  一次 desired 变更中隐式把 link 转成 local。Local 转成 link 没有 ownership state 证据可用，仍按
   actual target 的普通 link 规则判断，已有 local 文件会阻断覆盖。
 
 能够可靠加载并观察的独立部分应继续形成 Actions 与 Issues；但 control topology、target set 或
@@ -130,4 +130,4 @@ HOME 都必须分别完成阶段一。详细操作见
 | 任意已存在目录项 | 无 Action；不读取、不比较、不分类、不覆盖 |
 
 Example 更新不触发 local 更新；local 被用户删除后下一次 apply 重新创建。Local 不进入 state，退出
-desired 时没有 ownership/provenance Action，也永不由 prune 删除。
+desired 时没有 ownership Action，也永不由 prune 删除。

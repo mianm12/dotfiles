@@ -233,7 +233,7 @@ target = "~/.new"
 	}
 }
 
-func TestStatusAnalysisProjectsFactsActionsAndProblems(t *testing.T) {
+func TestStatusAnalysisProjectsFactsActionsAndIssues(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app", "new"]`)
 	fixture.writeModule(t, "app", `
 [[links]]
@@ -283,7 +283,7 @@ target = "~/.new"
 		!strings.Contains(output, "issue severity=blocker code=target-conflict module=app placement=config") ||
 		!strings.Contains(output, `reason="actual target is regular file"`) {
 		t.Fatalf(
-			"printStatusAnalysis() stdout = %q, want facts, actions, and problems",
+			"printStatusAnalysis() stdout = %q, want facts, actions, and issues",
 			output,
 		)
 	}

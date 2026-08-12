@@ -30,7 +30,7 @@ dot status
 ```
 
 `select add` 只写 machine config 中的直接 selection。Dry-run 中出现的每个 target 都应由你确认；
-已有普通文件、目录或未知 symlink 会产生 problem，不会被自动导入或覆盖。
+已有普通文件、目录或未知 symlink 会产生 blocker issue，不会被自动导入或覆盖。
 
 当前仓库中的 `starship` 是最小实例：
 
@@ -146,7 +146,7 @@ profile 意图。删除 repository 文件和在每台 HOME 中完成 cleanup 是
 ## 完成检查
 
 - `dot status` 中 selection 来源符合预期；
-- dry-run 不包含未审查 target，没有 problem；
+- dry-run 不包含未审查 target，也没有 blocker issue；
 - apply 成功后再次 dry-run 已收敛；
 - local 内容没有被误当作共享 source；
 - repository 变更与 machine-local selection 变更各自由正确 owner 表达。

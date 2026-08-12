@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -307,8 +306,10 @@ func TestStateMapOrderDoesNotChangePlan(t *testing.T) {
 	first := fixture.build(t, nil, snapshot)
 	second := fixture.build(t, nil, snapshot)
 
-	if !reflect.DeepEqual(first, second) {
-		t.Fatalf("Build() is not deterministic\nfirst=%#v\nsecond=%#v", first, second)
+	firstBytes := marshalPlanForTest(t, first)
+	secondBytes := marshalPlanForTest(t, second)
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("Build() bytes differ\nfirst=%s\nsecond=%s", firstBytes, secondBytes)
 	}
 	actions := first.Actions
 	if actions[0].PlacementID != "a" || actions[1].PlacementID != "b" {
@@ -505,7 +506,7 @@ func TestBuildRejectsNestedTargetsForEveryPlacementKindCombination(t *testing.T)
 				State:    fixture.snapshot(nil),
 			})
 			if err != nil || len(plan.Issues) == 0 || plan.Executable() {
-				t.Fatalf("Build() = (%#v, %v), want target problem", plan, err)
+				t.Fatalf("Build() = (%#v, %v), want target blocker", plan, err)
 			}
 			if len(plan.Actions) != 0 {
 				t.Fatalf("Build() returned executable actions %#v", plan)

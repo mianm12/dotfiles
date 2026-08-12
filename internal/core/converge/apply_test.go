@@ -647,7 +647,7 @@ target = "~/.second"
 		t.Fatalf("applyLocked() = (%#v, %v), want fresh second-repository plan", result, err)
 	}
 	if _, err := os.Lstat(firstTarget); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("preflight target error = %v, want missing", err)
+		t.Fatalf("stale analysis target error = %v, want missing", err)
 	}
 	wantSource := filepath.Join(repositoryAlias, "modules", "app", "config")
 	if destination, err := os.Readlink(filepath.Join(fixture.home, ".second")); err != nil || destination != wantSource {

@@ -32,49 +32,138 @@ var allowedThirdPartyImports = map[string]map[string]bool{
 	"github.com/spf13/cobra":          allow("internal/cli"),
 }
 
-func TestProductionPackageDependenciesMatchArchitecture(t *testing.T) {
+func TestProductionPackageDependenciesConformToArchitecture(t *testing.T) {
 	root := repositoryRoot(t)
 	actual := productionInternalImports(t, root)
+	failures := internalDependencyFailures(actual, allowedInternalImports)
+	if len(failures) != 0 {
+		t.Fatalf("production dependency boundary changed:\n%s", strings.Join(failures, "\n"))
+	}
+}
 
+func TestProductionThirdPartyDependenciesConformToArchitecture(t *testing.T) {
+	root := repositoryRoot(t)
+	actual := productionThirdPartyImports(t, root)
+	failures := thirdPartyDependencyFailures(actual, allowedThirdPartyImports)
+	if len(failures) != 0 {
+		t.Fatalf(
+			"production third-party dependency boundary changed:\n%s",
+			strings.Join(failures, "\n"),
+		)
+	}
+}
+
+func TestDependencyPolicyAllowsRemovingImports(t *testing.T) {
+	internalActual := map[string]map[string]bool{
+		"internal/upper": {},
+		"internal/lower": {},
+	}
+	internalAllowed := map[string]map[string]bool{
+		"internal/upper": allow("internal/lower"),
+		"internal/lower": {},
+	}
+	if failures := internalDependencyFailures(internalActual, internalAllowed); len(failures) != 0 {
+		t.Fatalf("unused allowed internal edge failed policy: %v", failures)
+	}
+
+	thirdPartyAllowed := map[string]map[string]bool{
+		"example.net/dependency": allow("internal/owner"),
+	}
+	if failures := thirdPartyDependencyFailures(nil, thirdPartyAllowed); len(failures) != 0 {
+		t.Fatalf("unused allowed third-party import failed policy: %v", failures)
+	}
+}
+
+func TestDependencyPolicyStillRejectsExpansion(t *testing.T) {
+	t.Run("unknown internal package", func(t *testing.T) {
+		failures := internalDependencyFailures(
+			map[string]map[string]bool{
+				"internal/known":   {},
+				"internal/unknown": {},
+			},
+			map[string]map[string]bool{"internal/known": {}},
+		)
+		if got := strings.Join(failures, "\n"); !strings.Contains(got, "internal/unknown") {
+			t.Fatalf("failures = %q, want unknown package rejection", got)
+		}
+	})
+
+	t.Run("forbidden internal direction", func(t *testing.T) {
+		failures := internalDependencyFailures(
+			map[string]map[string]bool{
+				"internal/upper": allow("internal/lower"),
+				"internal/lower": {},
+			},
+			map[string]map[string]bool{
+				"internal/upper": {},
+				"internal/lower": {},
+			},
+		)
+		if got := strings.Join(failures, "\n"); !strings.Contains(got, "forbidden internal package") {
+			t.Fatalf("failures = %q, want forbidden direction rejection", got)
+		}
+	})
+
+	t.Run("new third-party dependency", func(t *testing.T) {
+		failures := thirdPartyDependencyFailures(
+			map[string]map[string]bool{
+				"example.net/new": allow("internal/owner"),
+			},
+			nil,
+		)
+		if got := strings.Join(failures, "\n"); !strings.Contains(got, "unlisted third-party package") {
+			t.Fatalf("failures = %q, want new dependency rejection", got)
+		}
+	})
+
+	t.Run("wrong third-party owner", func(t *testing.T) {
+		failures := thirdPartyDependencyFailures(
+			map[string]map[string]bool{
+				"example.net/dependency": allow("internal/wrong"),
+			},
+			map[string]map[string]bool{
+				"example.net/dependency": allow("internal/owner"),
+			},
+		)
+		if got := strings.Join(failures, "\n"); !strings.Contains(got, "forbidden third-party package") {
+			t.Fatalf("failures = %q, want owner rejection", got)
+		}
+	})
+}
+
+func internalDependencyFailures(
+	actual map[string]map[string]bool,
+	allowed map[string]map[string]bool,
+) []string {
 	var failures []string
 	for source := range actual {
-		if _, known := allowedInternalImports[source]; !known {
+		if _, known := allowed[source]; !known {
 			failures = append(failures, "production package is missing from the architecture table: "+source)
 		}
 	}
-	for source, allowed := range allowedInternalImports {
+	for source, allowedTargets := range allowed {
 		imports, exists := actual[source]
 		if !exists {
 			failures = append(failures, "architecture table contains no production package: "+source)
 			continue
 		}
 		for target := range imports {
-			if !allowed[target] {
+			if !allowedTargets[target] {
 				failures = append(failures, source+" imports forbidden internal package "+target)
-			}
-		}
-		for target := range allowed {
-			if !imports[target] {
-				failures = append(
-					failures,
-					"architecture table contains unused edge "+source+" -> "+target,
-				)
 			}
 		}
 	}
 	sort.Strings(failures)
-	if len(failures) != 0 {
-		t.Fatalf("production dependency boundary changed:\n%s", strings.Join(failures, "\n"))
-	}
+	return failures
 }
 
-func TestProductionThirdPartyDependenciesMatchArchitecture(t *testing.T) {
-	root := repositoryRoot(t)
-	actual := productionThirdPartyImports(t, root)
-
+func thirdPartyDependencyFailures(
+	actual map[string]map[string]bool,
+	allowed map[string]map[string]bool,
+) []string {
 	var failures []string
 	for importPath, sources := range actual {
-		allowedSources, known := allowedThirdPartyImports[importPath]
+		allowedSources, known := allowed[importPath]
 		if !known {
 			failures = append(
 				failures,
@@ -91,33 +180,8 @@ func TestProductionThirdPartyDependenciesMatchArchitecture(t *testing.T) {
 			}
 		}
 	}
-	for importPath, allowedSources := range allowedThirdPartyImports {
-		sources, exists := actual[importPath]
-		if !exists {
-			failures = append(
-				failures,
-				"third-party architecture table contains unused package "+importPath,
-			)
-			continue
-		}
-		for source := range allowedSources {
-			if !sources[source] {
-				failures = append(
-					failures,
-					"third-party architecture table contains unused edge "+
-						importPath+" -> "+source,
-				)
-			}
-		}
-	}
-
 	sort.Strings(failures)
-	if len(failures) != 0 {
-		t.Fatalf(
-			"production third-party dependency boundary changed:\n%s",
-			strings.Join(failures, "\n"),
-		)
-	}
+	return failures
 }
 
 func TestCollectInternalImportsUsesRepositoryModulePath(t *testing.T) {

@@ -1,7 +1,7 @@
 # 所有权与安全边界
 
 `dot` 的第一优先级不是“尽量把配置部署成功”，而是“不把不确定的数据当作自己可以修改的
-数据”。因此，一些看似保守的拒绝和 problem 是产品语义，而不是需要绕过的障碍。
+数据”。因此，一些看似保守的拒绝和 blocker issue 是产品语义，而不是需要绕过的障碍。
 
 本页解释使用时的判断方式；精确 ownership、路径和 mutation 规则仍由
 [产品规范](../spec/README.md)定义。
@@ -23,7 +23,7 @@
 - **Link placement** 可以在 target 缺失时创建 symlink，也可以更新仍满足 ownership 前提的旧
   link。退出 desired 时，只有 ownership 与当前事实仍匹配的 link 才可能被清理。
 - **Local placement** 只在 target 缺失时从 example 初始化私人文件。之后该文件由用户维护，
-  state 只记录来源事实，不授予覆盖或删除权限。
+  不进入 ownership state，也不授予覆盖或删除权限。
 
 Source、target、目录 link 和路径身份的精确定义见
 [placements 规范](../spec/placements.md)，state 证据见
@@ -54,15 +54,15 @@ dot apply
 dot status
 ```
 
-`status` 与 dry-run 是只读分析入口；`apply` 会在 mutation 前重新分析并在锁内使用新计划，避免
-直接执行过期的锁前观察。公开输出和退出码见 [CLI 规范](../spec/cli.md)，内部调用路径见
+`status` 与 dry-run 是无锁只读分析入口；`apply` 获取 mutation lock 后只形成一次权威计划，避免
+把 best-effort 的锁前观察当作执行依据。公开输出和退出码见 [CLI 规范](../spec/cli.md)，内部调用路径见
 [架构概览](../architecture/overview.md)。
 
 分析中常见的词可以这样阅读：
 
 - **action**：若计划可执行，需要发生的显式变化；
-- **problem**：阻止安全规划或执行的事实；
-- **warning**：不会总是阻塞，但需要用户理解的信息；
+- **blocker issue**：阻止安全执行的结构化事实；
+- **warning issue**：不阻塞执行，但需要用户理解的信息；
 - **forget**：丢弃不足以继续授权 mutation 的旧证据，不等于删除用户数据；
 - **prune**：仅在规则证明仍由 `dot` 拥有且未漂移时清理历史 link。
 
@@ -76,7 +76,7 @@ dot status
 1. 不要假设“命令失败”等于“什么都没发生”；
 2. 阅读 stderr 和已完成结果；
 3. 再次运行 `dot status` 或 dry-run；
-4. 处理明确 problem；
+4. 处理明确 blocker issue；
 5. 重跑完整 `dot apply`，不要手工模拟剩余内部步骤。
 
 重复收敛会从新的真实文件系统事实重新计划。更精确的执行顺序和完成边界见

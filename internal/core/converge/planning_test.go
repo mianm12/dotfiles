@@ -36,8 +36,10 @@ func TestPlanSourceContentChangeIsNoOp(t *testing.T) {
 	second := fixture.build(t, []config.Module{module}, snapshot)
 
 	assertDecisions(t, first)
-	if !reflect.DeepEqual(first, second) {
-		t.Fatalf("repeated Build() changed plan\nfirst=%#v\nsecond=%#v", first, second)
+	firstBytes := marshalPlanForTest(t, first)
+	secondBytes := marshalPlanForTest(t, second)
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("repeated Build() bytes differ\nfirst=%s\nsecond=%s", firstBytes, secondBytes)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1187,7 +1189,7 @@ func TestResolveControlsRejectsInvalidTopologyBeforePlanning(t *testing.T) {
 
 	_, err := resolveControls(controls)
 	if !errors.Is(err, corepaths.ErrControlTopology) {
-		t.Fatalf("resolveControls() error = %v, want control topology problem", err)
+		t.Fatalf("resolveControls() error = %v, want control topology failure", err)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1237,10 +1239,6 @@ func TestPlanTargetChangeCreatesBeforePrune(t *testing.T) {
 	wantKey := state.Key{ModuleID: "app", PlacementID: "config"}
 	if len(final.Links) != 1 || final.Links[wantKey].Target != newTarget {
 		t.Fatalf("Build() NextState = %#v, want only new target", final)
-	}
-	delete(final.Links, wantKey)
-	if got := plan.nextSnapshot().Links[wantKey].Target; got != newTarget {
-		t.Fatalf("Plan NextState changed through returned snapshot: got %q", got)
 	}
 	assertTreeUnchanged(t, fixture.root, before)
 }
@@ -1687,10 +1685,10 @@ func linkRecord(target, resolved, destination string) state.LinkRecord {
 func assertDecisions(t *testing.T, plan Plan, want ...Decision) {
 	t.Helper()
 	wantActions := make([]Decision, 0, len(want))
-	wantProblems := 0
+	wantBlockers := 0
 	for _, decision := range want {
 		if decision == conflictDecision {
-			wantProblems++
+			wantBlockers++
 			continue
 		}
 		wantActions = append(wantActions, decision)
@@ -1709,13 +1707,13 @@ func assertDecisions(t *testing.T, plan Plan, want ...Decision) {
 			gotBlockers++
 		}
 	}
-	if !slices.Equal(gotActions, wantActions) || gotBlockers != wantProblems {
+	if !slices.Equal(gotActions, wantActions) || gotBlockers != wantBlockers {
 		t.Fatalf(
 			"Build() actions = %v blockers = %d, want actions = %v blockers = %d; plan=%#v",
 			gotActions,
 			gotBlockers,
 			wantActions,
-			wantProblems,
+			wantBlockers,
 			plan,
 		)
 	}

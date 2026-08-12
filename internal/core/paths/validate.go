@@ -78,10 +78,25 @@ type controlFamily struct {
 	paths []pathIdentity
 }
 
+type coordinationPaths struct {
+	configRoot string
+	config     string
+	stateRoot  string
+	state      string
+	lock       string
+}
+
+type coordinationTopology struct {
+	configRoot pathIdentity
+	config     pathIdentity
+	stateRoot  pathIdentity
+	state      pathIdentity
+	lock       pathIdentity
+}
+
 type controlTopology struct {
-	families []controlFamily
-	state    pathIdentity
-	lock     pathIdentity
+	repository   pathIdentity
+	coordination coordinationTopology
 }
 
 // ResolveControls resolves and validates one control topology without resolving
@@ -108,88 +123,18 @@ func ResolveControls(controls Controls) (ResolvedControls, error) {
 // needed before a mutation may create and acquire its advisory lock. It does
 // not read machine configuration or require a repository path.
 func ValidateLockBoundary(config, state, lock string) error {
-	inputs := []struct {
-		label string
-		path  string
-	}{
-		{label: "machine config", path: config},
-		{label: "state", path: state},
-		{label: "lock", path: lock},
-	}
-	cleaned := make(map[string]string, len(inputs))
-	for _, input := range inputs {
-		lexical, err := cleanAbsolute(input.label, input.path)
-		if err != nil {
-			return err
-		}
-		cleaned[input.label] = lexical
-	}
-
-	configRootPath := filepath.Dir(cleaned["machine config"])
-	stateRootPath := filepath.Dir(cleaned["state"])
-	if !directChild(configRootPath, cleaned["machine config"]) {
-		return fmt.Errorf(
-			"%w: machine config %q must be a direct child of config root %q",
-			ErrControlTopology,
-			cleaned["machine config"],
-			configRootPath,
-		)
-	}
-	if stateRootPath != filepath.Dir(cleaned["lock"]) ||
-		!directChild(stateRootPath, cleaned["state"]) ||
-		!directChild(stateRootPath, cleaned["lock"]) ||
-		cleaned["state"] == cleaned["lock"] {
-		return fmt.Errorf(
-			"%w: state %q and lock %q must be distinct siblings under one state root",
-			ErrControlTopology,
-			cleaned["state"],
-			cleaned["lock"],
-		)
-	}
-
-	lexicalFamilies := []controlFamily{
-		{paths: []pathIdentity{
-			lexicalIdentity("machine config root", configRootPath),
-			lexicalIdentity("machine config", cleaned["machine config"]),
-		}},
-		{paths: []pathIdentity{
-			lexicalIdentity("state root", stateRootPath),
-			lexicalIdentity("state", cleaned["state"]),
-			lexicalIdentity("lock", cleaned["lock"]),
-		}},
-	}
-	if err := validateControlFamilies(lexicalFamilies); err != nil {
-		return err
-	}
-
-	resolved := make(map[string]pathIdentity, len(inputs))
-	for _, input := range inputs {
-		identity, err := resolveIdentity(input.label, cleaned[input.label])
-		if err != nil {
-			return err
-		}
-		resolved[input.label] = identity
-	}
-	configRoot, err := resolveIdentity("machine config root", configRootPath)
+	paths, err := cleanCoordinationPaths(config, state, lock)
 	if err != nil {
 		return err
 	}
-	stateRoot, err := resolveIdentity("state root", stateRootPath)
+	if err := validateCoordinationTopology(paths.lexicalTopology()); err != nil {
+		return err
+	}
+	topology, err := resolveCoordinationTopology(paths)
 	if err != nil {
 		return err
 	}
-	if identitiesOverlap(resolved["state"], resolved["lock"]) {
-		return fmt.Errorf(
-			"%w: state %q and lock %q do not identify distinct siblings",
-			ErrControlTopology,
-			resolved["state"].lexical,
-			resolved["lock"].lexical,
-		)
-	}
-	return validateControlFamilies([]controlFamily{
-		{paths: []pathIdentity{configRoot, resolved["machine config"]}},
-		{paths: []pathIdentity{stateRoot, resolved["state"], resolved["lock"]}},
-	})
+	return validateCoordinationTopology(topology)
 }
 
 // Paths returns the cleaned lexical paths captured by this snapshot.
@@ -218,7 +163,7 @@ func (controls ResolvedControls) TargetOverlaps(target Target) (bool, error) {
 	if err := controls.validate(); err != nil {
 		return false, err
 	}
-	for _, family := range controls.topology.families {
+	for _, family := range controls.topology.families() {
 		for _, control := range family.paths {
 			if identityOverlapsTarget(control, target) {
 				return true, nil
@@ -293,117 +238,121 @@ func validatePlacements(
 }
 
 func resolveControlTopology(controls Controls) (controlTopology, error) {
-	inputs := []struct {
-		label string
-		path  string
-	}{
-		{label: "repository", path: controls.Repository},
-		{label: "machine config", path: controls.Config},
-		{label: "state", path: controls.State},
-		{label: "lock", path: controls.Lock},
-	}
-	cleaned := make(map[string]string, len(inputs))
-	for _, input := range inputs {
-		lexical, err := cleanAbsolute(input.label, input.path)
-		if err != nil {
-			return controlTopology{}, err
-		}
-		cleaned[input.label] = lexical
-	}
-
-	configRootPath := filepath.Dir(cleaned["machine config"])
-	stateRootPath := filepath.Dir(cleaned["state"])
-	if !directChild(configRootPath, cleaned["machine config"]) {
-		return controlTopology{}, fmt.Errorf(
-			"%w: machine config %q must be a direct child of config root %q",
-			ErrControlTopology,
-			cleaned["machine config"],
-			configRootPath,
-		)
-	}
-	if stateRootPath != filepath.Dir(cleaned["lock"]) ||
-		!directChild(stateRootPath, cleaned["state"]) ||
-		!directChild(stateRootPath, cleaned["lock"]) ||
-		cleaned["state"] == cleaned["lock"] {
-		return controlTopology{}, fmt.Errorf(
-			"%w: state %q and lock %q must be distinct siblings under one state root",
-			ErrControlTopology,
-			cleaned["state"],
-			cleaned["lock"],
-		)
-	}
-	if err := validateControlFamilies(controlFamilies(
-		lexicalIdentity("repository", cleaned["repository"]),
-		lexicalIdentity("machine config root", configRootPath),
-		lexicalIdentity("machine config", cleaned["machine config"]),
-		lexicalIdentity("state root", stateRootPath),
-		lexicalIdentity("state", cleaned["state"]),
-		lexicalIdentity("lock", cleaned["lock"]),
-	)); err != nil {
-		return controlTopology{}, err
-	}
-
-	resolved := make(map[string]pathIdentity, len(inputs)+2)
-	for _, input := range inputs {
-		lexical := cleaned[input.label]
-		entry, err := resolveEntry(lexical)
-		if err != nil {
-			return controlTopology{}, fmt.Errorf(
-				"resolve %s path entry %q: %w",
-				input.label,
-				input.path,
-				err,
-			)
-		}
-		actual, err := resolvePath(lexical)
-		if err != nil {
-			return controlTopology{}, fmt.Errorf(
-				"resolve %s path %q: %w",
-				input.label,
-				input.path,
-				err,
-			)
-		}
-		resolved[input.label] = pathIdentity{
-			label:    input.label,
-			lexical:  lexical,
-			entry:    entry,
-			resolved: actual,
-		}
-	}
-
-	configRoot, err := resolveIdentity("machine config root", configRootPath)
+	repository, err := cleanAbsolute("repository", controls.Repository)
 	if err != nil {
 		return controlTopology{}, err
 	}
-	stateRoot, err := resolveIdentity("state root", stateRootPath)
+	coordination, err := cleanCoordinationPaths(controls.Config, controls.State, controls.Lock)
+	if err != nil {
+		return controlTopology{}, err
+	}
+	lexical := controlTopology{
+		repository:   lexicalIdentity("repository", repository),
+		coordination: coordination.lexicalTopology(),
+	}
+	if err := validateControlTopology(lexical); err != nil {
+		return controlTopology{}, err
+	}
+
+	resolvedRepository, err := resolveIdentity("repository", repository)
+	if err != nil {
+		return controlTopology{}, err
+	}
+	resolvedCoordination, err := resolveCoordinationTopology(coordination)
 	if err != nil {
 		return controlTopology{}, err
 	}
 	topology := controlTopology{
-		families: controlFamilies(
-			resolved["repository"],
-			configRoot,
-			resolved["machine config"],
-			stateRoot,
-			resolved["state"],
-			resolved["lock"],
-		),
-		state: resolved["state"],
-		lock:  resolved["lock"],
+		repository:   resolvedRepository,
+		coordination: resolvedCoordination,
 	}
-	if identitiesOverlap(topology.state, topology.lock) {
-		return controlTopology{}, fmt.Errorf(
-			"%w: state %q and lock %q do not identify distinct siblings",
-			ErrControlTopology,
-			topology.state.lexical,
-			topology.lock.lexical,
-		)
-	}
-	if err := validateControlFamilies(topology.families); err != nil {
+	if err := validateControlTopology(topology); err != nil {
 		return controlTopology{}, err
 	}
 	return topology, nil
+}
+
+func cleanCoordinationPaths(config, state, lock string) (coordinationPaths, error) {
+	cleanConfig, err := cleanAbsolute("machine config", config)
+	if err != nil {
+		return coordinationPaths{}, err
+	}
+	cleanState, err := cleanAbsolute("state", state)
+	if err != nil {
+		return coordinationPaths{}, err
+	}
+	cleanLock, err := cleanAbsolute("lock", lock)
+	if err != nil {
+		return coordinationPaths{}, err
+	}
+
+	paths := coordinationPaths{
+		configRoot: filepath.Dir(cleanConfig),
+		config:     cleanConfig,
+		stateRoot:  filepath.Dir(cleanState),
+		state:      cleanState,
+		lock:       cleanLock,
+	}
+	if !directChild(paths.configRoot, paths.config) {
+		return coordinationPaths{}, fmt.Errorf(
+			"%w: machine config %q must be a direct child of config root %q",
+			ErrControlTopology,
+			paths.config,
+			paths.configRoot,
+		)
+	}
+	if paths.stateRoot != filepath.Dir(paths.lock) ||
+		!directChild(paths.stateRoot, paths.state) ||
+		!directChild(paths.stateRoot, paths.lock) ||
+		paths.state == paths.lock {
+		return coordinationPaths{}, fmt.Errorf(
+			"%w: state %q and lock %q must be distinct siblings under one state root",
+			ErrControlTopology,
+			paths.state,
+			paths.lock,
+		)
+	}
+	return paths, nil
+}
+
+func (paths coordinationPaths) lexicalTopology() coordinationTopology {
+	return coordinationTopology{
+		configRoot: lexicalIdentity("machine config root", paths.configRoot),
+		config:     lexicalIdentity("machine config", paths.config),
+		stateRoot:  lexicalIdentity("state root", paths.stateRoot),
+		state:      lexicalIdentity("state", paths.state),
+		lock:       lexicalIdentity("lock", paths.lock),
+	}
+}
+
+func resolveCoordinationTopology(paths coordinationPaths) (coordinationTopology, error) {
+	config, err := resolveIdentity("machine config", paths.config)
+	if err != nil {
+		return coordinationTopology{}, err
+	}
+	state, err := resolveIdentity("state", paths.state)
+	if err != nil {
+		return coordinationTopology{}, err
+	}
+	lock, err := resolveIdentity("lock", paths.lock)
+	if err != nil {
+		return coordinationTopology{}, err
+	}
+	configRoot, err := resolveIdentity("machine config root", paths.configRoot)
+	if err != nil {
+		return coordinationTopology{}, err
+	}
+	stateRoot, err := resolveIdentity("state root", paths.stateRoot)
+	if err != nil {
+		return coordinationTopology{}, err
+	}
+	return coordinationTopology{
+		configRoot: configRoot,
+		config:     config,
+		stateRoot:  stateRoot,
+		state:      state,
+		lock:       lock,
+	}, nil
 }
 
 func resolveIdentity(label, path string) (pathIdentity, error) {
@@ -436,14 +385,55 @@ func lexicalIdentity(label, path string) pathIdentity {
 	}
 }
 
-func controlFamilies(
-	repository, configRoot, config, stateRoot, state, lock pathIdentity,
-) []controlFamily {
+func (topology coordinationTopology) families() []controlFamily {
 	return []controlFamily{
-		{paths: []pathIdentity{repository}},
-		{paths: []pathIdentity{configRoot, config}},
-		{paths: []pathIdentity{stateRoot, state, lock}},
+		{paths: []pathIdentity{topology.configRoot, topology.config}},
+		{paths: []pathIdentity{topology.stateRoot, topology.state, topology.lock}},
 	}
+}
+
+func (topology controlTopology) families() []controlFamily {
+	return []controlFamily{
+		{paths: []pathIdentity{topology.repository}},
+		{paths: []pathIdentity{
+			topology.coordination.configRoot,
+			topology.coordination.config,
+		}},
+		{paths: []pathIdentity{
+			topology.coordination.stateRoot,
+			topology.coordination.state,
+			topology.coordination.lock,
+		}},
+	}
+}
+
+func validateCoordinationTopology(topology coordinationTopology) error {
+	if err := validateStateLockIdentity(topology.state, topology.lock); err != nil {
+		return err
+	}
+	return validateControlFamilies(topology.families())
+}
+
+func validateControlTopology(topology controlTopology) error {
+	if err := validateStateLockIdentity(
+		topology.coordination.state,
+		topology.coordination.lock,
+	); err != nil {
+		return err
+	}
+	return validateControlFamilies(topology.families())
+}
+
+func validateStateLockIdentity(state, lock pathIdentity) error {
+	if !identitiesOverlap(state, lock) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: state %q and lock %q do not identify distinct siblings",
+		ErrControlTopology,
+		state.lexical,
+		lock.lexical,
+	)
 }
 
 func validateControlFamilies(families []controlFamily) error {
@@ -529,7 +519,7 @@ func validateControlBoundaries(
 	placements []ResolvedPlacement,
 ) error {
 	for _, placement := range placements {
-		for _, family := range topology.families {
+		for _, family := range topology.families() {
 			for _, control := range family.paths {
 				if identityOverlapsTarget(control, placement.Target) {
 					return withPlacementLabels(fmt.Errorf(
