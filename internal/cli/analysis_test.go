@@ -52,7 +52,7 @@ target = "~/.extra"
 	}
 }
 
-func TestAnalyzeTreatsMachineSelectionsAsSets(t *testing.T) {
+func TestAnalyzeTreatsSelectionSourcesAsSets(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `
 [[links]]
@@ -62,7 +62,7 @@ target = "~/.app"
 `, map[string]string{"config": "portable"})
 	fixture.writeMachine(
 		t,
-		[]string{"base", "base"},
+		[]string{"base"},
 		[]string{"app", "app"},
 	)
 	context, err := resolveContext(fixture.env)

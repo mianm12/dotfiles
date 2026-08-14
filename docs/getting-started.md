@@ -1,6 +1,6 @@
 # 安全跑通一次 `dot`
 
-本页帮助第一次接触项目的人在一个临时 HOME 中完成 `init → select → dry-run → apply → status`，
+本页帮助第一次接触项目的人在一个临时 HOME 中完成 `init → dry-run → apply → status`，
 不会读取或修改真实用户的 machine config、state、lock 或配置 target。完成后，你会看到
 repository、机器选择和文件系统收敛之间的基本关系。
 
@@ -48,23 +48,24 @@ HOME="$DOT_TUTORIAL_HOME" bin/dot paths
 HOME="$DOT_TUTORIAL_HOME" bin/dot init "$PWD"
 ```
 
-`init` 记录当前绝对 repository 路径，并创建一个空 selection；它不会创建 Starship target。
-可以再次用 `paths` 定位刚生成的 machine config：
+`init` 记录当前绝对 repository 路径，并选择仓库的 `default` profile；它不会创建 Starship
+target。可以再次用 `paths` 定位刚生成的 machine config：
 
 ```sh
 HOME="$DOT_TUTORIAL_HOME" bin/dot paths
 ```
 
-## 3. 选择示例 module
+## 3. 检查默认 selection
 
-仓库当前提供跨 macOS/Linux 的 `starship` module：
+仓库的 `default` profile 当前选择跨 macOS/Linux 的 `starship` module。`init` 与 convergence
+刻意分离，因此 target 仍未创建：
 
 ```sh
-HOME="$DOT_TUTORIAL_HOME" bin/dot select add starship
+test ! -e "$DOT_TUTORIAL_HOME/.config/starship.toml"
 ```
 
-`select add` 只改变机器选择。此时 target 仍未创建，这种“选择已变、文件系统尚未收敛”的状态是
-刻意设计的；详见[工作模型](concepts/mental-model.md)。
+这种“选择已确定、文件系统尚未收敛”的状态是工作模型的一部分。机器特有的直接 module 仍用
+`select add` 管理；本教程无需重复选择已经由 profile 激活的 starship。
 
 ## 4. 先看计划，再执行
 
@@ -119,6 +120,10 @@ test -n "$DOT_TUTORIAL_ROOT" && rm -rf -- "$DOT_TUTORIAL_ROOT"
 `dot` 不会自动导入、备份或覆盖未知数据。需要理解原因时阅读
 [所有权与安全边界](concepts/ownership-and-safety.md)；需要精确规则时回到
 [产品规范索引](spec/README.md)。
+
+真实新机已经 clone 仓库后，可以用根目录的 `./bootstrap.sh --preview-apply` 安装/init 并只预览
+最后的 apply，确认后再运行 `./bootstrap.sh`。Bootstrap 不 clone/pull repository，也不安装 Go、
+Git 或包管理器。
 
 ## 接下来读什么
 

@@ -54,7 +54,7 @@ func LoadMachine(path string) (Machine, bool, error) {
 			ErrInvalidConfiguration,
 		)
 	}
-	if err := validateIDs("profile", document.Profiles); err != nil {
+	if err := validateUniqueIDs("profile", document.Profiles); err != nil {
 		return Machine{}, false, err
 	}
 	if err := validateIDs("extra module", document.ExtraModules); err != nil {

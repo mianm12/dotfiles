@@ -26,6 +26,7 @@ symlink 应用共享配置，通过 local example 初始化不进入 Git 的本�
 - 文件或目录 symlink。
 - 目标缺失时从 `*.local.example` 初始化本机 local 文件；已存在时不读取或覆盖。
 - `init`、`select add`、`select remove`、`status`、`apply`、`paths`、`version` 和 `help`。
+- 从已 clone checkout 安装独立 binary，并用薄 bootstrap 串联 `init` 与首次 `apply`。
 - mutation dry-run、link-only ownership state 和单进程锁。
 
 ## 非目标
@@ -38,6 +39,7 @@ symlink 应用共享配置，通过 local example 初始化不进入 Git 的本�
 - Module 依赖、hook、脚本或任意命令执行。
 - Template 渲染、环境变量注入、秘密管理或加密。
 - 自动 Git pull、commit、push、release 或自更新。
+- Clone repository、安装 Go/Git/包管理器、修改 shell rc 或 `PATH`。
 - 自动导入普通文件、`add` 命令或自动修改仓库 manifest。
 - Force、backup、rollback 或跨路径事务。
 - Windows、daemon、watch、外部并发协调、JSON CLI 输出或完整 doctor。

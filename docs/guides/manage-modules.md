@@ -32,10 +32,10 @@ dot status
 `select add` 只写 machine config 中的直接 selection。Dry-run 中出现的每个 target 都应由你确认；
 已有普通文件、目录或未知 symlink 会标 `skip`，不会被自动导入或覆盖。
 
-当前仓库中的 `starship` 是最小实例：
+当前仓库中的 `starship` 是最小实例，并已由 `default` profile 选择。新机默认 init 后可以直接
+检查它的计划：
 
 ```sh
-dot select add starship
 dot apply --dry-run
 ```
 

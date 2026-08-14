@@ -23,6 +23,7 @@
 
 | 任务 | 指南 |
 | --- | --- |
+| 在新机安装并完成首次收敛 | [安全跑通一次](getting-started.md#在真实-home-使用前) |
 | 启用、停用、新增或移除 module | [管理 modules 与 placements](guides/manage-modules.md) |
 | 组织机器角色，处理 macOS/Linux 差异 | [管理 profiles 与平台差异](guides/profiles-and-platforms.md) |
 | 转换 link/local，或把目录 link 拆成 leaf placements | [安全迁移 placements](guides/safe-migrations.md) |

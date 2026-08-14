@@ -35,10 +35,33 @@ dot help [COMMAND]
 - Repository 省略时使用当前目录，并且必须存在有效 `dot.toml`。
 - Init 只校验 repository 与 active profiles，然后写入 machine config；不读取 state、不观察或
   修改 target，也不执行首次收敛。
-- `--profile` 可重复；省略时初始化为空 selection，不要求仓库为此声明无意义的空 profile。
+- `--profile` 可重复；省略时选择 `default`，repository 未声明该 profile 时失败。显式传入时只
+  选择参数给出的 profiles，不隐式加入 `default`。Profiles 使用集合语义，重复值必须拒绝。
 - 参数或锁内校验失败时不写机器配置；安全取锁边界已经通过时可以留下私有 state root/lock
   bookkeeping。成功后提示用户运行 `dot apply` 完成首次收敛。
-- 已初始化时拒绝再次 init，不提供 reconfigure/rebind。
+- 已初始化且规范化 repository 与 profile 集合相同时，`init` 在锁内重新校验 repository/profile
+  后成功 no-op，保留已有 `extra_modules`，不读取 state 或 target。任一绑定不同则拒绝；不提供
+  reconfigure/rebind。
+
+## 安装与 bootstrap
+
+- `make install` 构建并复制独立的 `dot` 可执行文件；默认目标是 `~/.local/bin/dot`，调用方可用
+  绝对 `INSTALL_DIR` 覆盖目录。新建安装目录和最终 binary 使用 `0755`；已有安装目录不改权限。
+  Binary 先写同目录临时文件再 rename，不能把仓库内 binary 的 symlink 暴露为安装结果；最终
+  `dot` 路径已是目录（含 symlink-to-directory）时必须拒绝，不能把临时文件移进该目录后假成功。
+- Repository 根目录的 `bootstrap.sh` 是薄工作流：它从已 clone 的自身 checkout 依次运行
+  `make install`、已安装 binary 的 `dot init <repository>` 和 `dot apply`。它不解析 placements、
+  state 或 plan，不复制 convergence 逻辑。
+- `bootstrap.sh --preview-apply` 仍会安装 binary 并执行幂等 init，只把最后一步改为
+  `dot apply --dry-run`；该名称明确不承诺整段脚本只读。除这个可选参数外，其他参数在任何
+  mutation 前作为用法错误拒绝。
+- Bootstrap 使用绝对 installed-binary 路径完成内部调用；安装目录不在 `PATH` 时只警告，不使
+  workflow 失败。脚本安全重跑：binary 可重新安装、相同 init 为 no-op、apply 收敛当前 checkout。
+- Git 生命周期在 workflow 外部。Bootstrap 不 clone、pull、切换 branch、处理凭据或解决冲突，
+  也不安装 Go、Git、包管理器、shell 配置或修改 `PATH`。Repository 只有配置内容变化时，外部
+  Git 更新后直接 `dot apply`；Go CLI 源码变化时先 `make install` 或重跑 bootstrap。
+- 不增加 `sync`、`update`、`clean`、`setup` 等 CLI 子命令。卸载 binary 或控制数据是显式人工
+  运维动作，不属于 convergence。
 
 ## Select
 

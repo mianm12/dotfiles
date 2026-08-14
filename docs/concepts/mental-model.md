@@ -46,11 +46,10 @@ ownership。
 1. 你可以先明确“想启用什么”，再通过 `status` 或 dry-run 审查文件系统变化；
 2. `apply` 不需要猜测某次命令只想处理哪个 module，它始终让整台机器回到一个一致状态。
 
-例如教程中的流程是：
+例如默认 profile 的首次流程是：
 
 ```text
-empty selection
-  -> select add starship
+init -> default profile selects starship
   -> starship is desired but target is pending
   -> apply
   -> selection, state and filesystem agree

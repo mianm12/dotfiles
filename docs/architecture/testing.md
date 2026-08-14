@@ -15,6 +15,7 @@
 | `internal/core/converge` | Selection、同一条循环、lock、execution、commit 与 recovery |
 | `internal/cli` | 公开命令、跨层用户故事、输出、退出码和完整失败边界 |
 | `cmd/dot` | 最小进程级 smoke |
+| `tests/bootstrap_test.sh` | 独立 binary 安装、bootstrap 顺序、preview 与重复运行的进程级 smoke |
 
 局部模型在 owner package 测试；用户可观察的完整调用路径在 `internal/cli` 测试。不要把所有行为
 塞进进程级测试，也不要为了复用 fixture 创建跨 package 通用测试框架。CLI 合成环境集中在
@@ -43,9 +44,10 @@ ownership 由行为反例覆盖。CLI 测试只验证用户能观察的 facts、
 文件系统测试使用 `t.TempDir` 和绝对路径，显式隔离 HOME、repository、machine config、state
 与 lock。测试不得读取或写入真实 HOME、私人 modules、machine config、state 或 lock。
 
-唯一例外是 config package 的 tracked-repository smoke：它只读当前 checkout 的 `dot.toml` 与
-recognized modules，在支持的平台矩阵中验证 tracked 配置；它不读取 HOME 控制文件，也不执行
-CLI 或 mutation。
+Config package 的 tracked-repository smoke 可以只读当前 checkout 的 `dot.toml` 与 recognized
+modules。Bootstrap smoke 必须把所需 tracked source 复制到绝对临时 repository，并把 HOME、
+install、build、config、state、lock 和 target 全部留在同一个临时根中。两者都不得读取或修改
+真实 HOME 控制文件或私人 modules。
 
 真实缺陷先转化为脱敏、最小、合成复现。无法在合成环境证明的真实机器观察必须单独标为
 Operational，不用本地偶然成功替代测试。
@@ -55,7 +57,7 @@ Operational，不用本地偶然成功替代测试。
 | 层次 | 入口 | 何时使用 |
 | --- | --- | --- |
 | Focused | `go test` 指定 package / test | 开发期间验证变更 owner 与直接消费者 |
-| Fast | `make test` | 快速运行全部 Go tests |
+| Fast | `make test` | 快速运行全部 Go tests 与隔离 bootstrap smoke |
 | Full gate | `make check` | Module/tidy/format/lint/race/build/version 的当前平台完整门禁 |
 | Fuzz | `make fuzz` | State decoder、target expression、os-release parser 的边界攻击 |
 | Vulnerability | `make vuln` | 固定工具版本的可达漏洞扫描 |

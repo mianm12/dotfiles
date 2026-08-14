@@ -52,10 +52,22 @@ extra_modules = ["tmux"]
 - 一旦存在，其最终目录项本身必须是 regular file。类型检查不跟随最终 symlink，因此
   symlink-to-regular、dangling symlink、directory、FIFO、socket 和 device 都必须在读取内容前
   失败；更高层 ancestor symlink 仍按 control root 规则处理。
-- Active profile 列表可为空；`init` 省略 `--profile` 时写入空列表。
+- Machine config 中的 active profile 列表可以为空。Profiles 使用集合语义：顺序不改变
+  selection，重复 profile 必须拒绝。`init` 新写入配置时按 profile ID 字节序保存；读取已有配置
+  时不要求其原始顺序已经规范化。
+- `init` 省略 `--profile` 时选择唯一默认 profile `default`；repository 未声明 `default` 时失败。
+  一旦显式传入一个或多个 `--profile`，只选择这些 profiles，不再隐式加入 `default`。
 - `init` 写入 profiles；`select add MODULE` 和 `select remove MODULE` 确定性重写
   `extra_modules`；`apply` 不修改 machine config。
 - CLI 重写 machine config 时不承诺保留注释和空行。
+
+`init` 是 repository 与 active profiles 的幂等绑定操作，不是 reconfigure：
+
+- Machine config 不存在时，校验 repository 与 active profiles 后写入新配置，`extra_modules` 为空；
+- 已有配置的规范化 repository 与 active profile 集合都和本次输入相同时，重新校验当前
+  repository/profile 后成功 no-op，不重写配置并保留全部 `extra_modules`；
+- Repository 或 active profile 集合不同时拒绝，不自动 rebind、增删 profile 或清空
+  `extra_modules`。
 
 Init 后修改 active profiles 的受支持方式是先通过 [`dot paths`](cli.md#paths) 定位 machine
 config，手工编辑 `profiles`，再执行全量 `dot apply`。产品不提供 profile 修改或 repository

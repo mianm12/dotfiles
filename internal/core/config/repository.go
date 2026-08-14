@@ -97,7 +97,7 @@ func (repository Repository) ProfileModules(profiles []string) ([]string, error)
 	if !repository.valid {
 		return nil, fmt.Errorf("%w: repository is invalid", ErrInvalidConfiguration)
 	}
-	if err := validateIDs("profile", profiles); err != nil {
+	if err := validateUniqueIDs("profile", profiles); err != nil {
 		return nil, err
 	}
 

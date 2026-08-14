@@ -9,6 +9,8 @@ import (
 	"github.com/mianm12/dotfiles/internal/storage"
 )
 
+const defaultProfileID = "default"
+
 // Initialize creates the first machine selection without converging targets.
 func Initialize(
 	environment Environment,
@@ -23,10 +25,11 @@ func Initialize(
 	if err != nil {
 		return SelectionResult{}, newFailure(false, nil, err)
 	}
+	profiles = canonicalProfiles(profiles)
 	machine := config.Machine{
 		Version:      1,
 		Repository:   repository,
-		Profiles:     append([]string(nil), profiles...),
+		Profiles:     profiles,
 		ExtraModules: []string{},
 	}
 	if _, err := config.MarshalMachine(machine); err != nil {
@@ -102,14 +105,17 @@ func checkInitialize(
 	if err != nil {
 		return SelectionResult{}, err
 	}
-	_, exists, err := config.LoadMachine(environment.ConfigPath)
+	current, exists, err := config.LoadMachine(environment.ConfigPath)
 	if err != nil {
 		return SelectionResult{}, err
 	}
-	if exists {
+	if exists && (current.Repository != machine.Repository ||
+		!sameProfileSet(current.Profiles, machine.Profiles)) {
 		return SelectionResult{}, fmt.Errorf(
-			"machine is already initialized at %q",
+			"machine is already initialized at %q with repository %q and profiles %v",
 			environment.ConfigPath,
+			current.Repository,
+			current.Profiles,
 		)
 	}
 	repository, err := config.OpenRepository(machine.Repository)
@@ -119,7 +125,27 @@ func checkInitialize(
 	if _, err := repository.ProfileModules(machine.Profiles); err != nil {
 		return SelectionResult{}, err
 	}
+	if exists {
+		return SelectionResult{Machine: cloneMachine(current)}, nil
+	}
 	return SelectionResult{Machine: cloneMachine(machine), Changed: true}, nil
+}
+
+func canonicalProfiles(profiles []string) []string {
+	if len(profiles) == 0 {
+		return []string{defaultProfileID}
+	}
+	canonical := append([]string(nil), profiles...)
+	slices.Sort(canonical)
+	return canonical
+}
+
+func sameProfileSet(left, right []string) bool {
+	left = append([]string(nil), left...)
+	right = append([]string(nil), right...)
+	slices.Sort(left)
+	slices.Sort(right)
+	return slices.Equal(left, right)
 }
 
 func checkSelectAdd(environment Environment, moduleID string) (SelectionResult, error) {

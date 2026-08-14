@@ -43,8 +43,10 @@ dot apply --dry-run
 dot apply
 ```
 
-`init` 只发布 machine config，不做首次收敛。省略 `--profile` 会得到空 profile selection，之后
-仍可用 `select add` 添加直接 modules。
+`init` 只发布 machine config，不做首次收敛。省略 `--profile` 会选择 repository 中必须存在的
+`default` profile；显式参数完全替代该默认值。多个 profile 使用集合语义，顺序不影响 selection，
+重复参数会被拒绝。相同 repository 与 profile 集合重复 init 是 no-op，并保留已有直接 selection；
+不同绑定不会被 init 自动重配。
 
 ## 修改已有机器的 active profiles
 
