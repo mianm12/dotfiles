@@ -23,11 +23,19 @@ identity_of() {
 	esac
 }
 
+physical_path() {
+	physical_directory=$(CDPATH= cd -P "$(dirname "$1")" && pwd -P) || return 1
+	printf '%s/%s\n' "$physical_directory" "$(basename "$1")"
+}
+
 source_root=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd -P)
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/dot-bootstrap-test.XXXXXX")
 trap 'rm -rf "$test_root"' 0 1 2 3 15
 
-repository=$test_root/repository
+repository_parent=$test_root/repository-parent
+repository=$repository_parent/repository
+repository_alias_parent=$test_root/repository-alias
+repository_invocation=$repository_alias_parent/repository
 test_home=$test_root/home
 install_root=$test_root/'install*:literal'
 install_dir=$install_root/bin
@@ -40,6 +48,7 @@ go_cache=${GOCACHE:-$(go env GOCACHE)}
 go_module_cache=${GOMODCACHE:-$(go env GOMODCACHE)}
 test_path=$test_root/installX:literal/bin:${PATH-}
 mkdir -p "$repository" "$test_home"
+ln -s "$repository_parent" "$repository_alias_parent"
 tracked_list=$test_root/tracked-files
 git -C "$source_root" ls-files --cached --others --exclude-standard -- \
 	Makefile go.mod go.sum dot.toml cmd internal \
@@ -63,7 +72,7 @@ run_bootstrap() {
 			GOCACHE="$go_cache" \
 			GOMODCACHE="$go_module_cache" \
 			PATH="$test_path" \
-			"$repository/bootstrap.sh" "$@"
+			"$repository_invocation/bootstrap.sh" "$@"
 	)
 }
 
@@ -130,8 +139,19 @@ grep -F 'is not on PATH' "$test_root/preview.err" >/dev/null ||
 
 run_bootstrap >"$test_root/apply.out" 2>"$test_root/apply.err"
 [ -L "$target_path" ] || fail "actual bootstrap did not create starship link"
-[ "$(readlink "$target_path")" = "$repository/modules/starship/starship.toml" ] ||
-	fail "starship link has the wrong destination"
+[ -f "$target_path" ] || fail "starship link does not resolve to a regular file"
+target_destination=$(readlink "$target_path")
+case $target_destination in
+	/*) ;;
+	*) fail "starship link destination is not absolute: $target_destination" ;;
+esac
+expected_destination=$repository/modules/starship/starship.toml
+actual_physical=$(physical_path "$target_destination") ||
+	fail "cannot resolve starship link destination: $target_destination"
+expected_physical=$(physical_path "$expected_destination") ||
+	fail "cannot resolve expected starship fixture: $expected_destination"
+[ "$actual_physical" = "$expected_physical" ] ||
+	fail "starship link destination $target_destination does not identify $expected_destination"
 [ -f "$state_path" ] || fail "actual bootstrap did not create ownership state"
 
 target_before=$(identity_of "$target_path")
