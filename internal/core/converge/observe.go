@@ -23,18 +23,26 @@ type actual struct {
 	linkDestination string
 }
 
-func observeLocal(path string) (bool, error) {
+type localKind uint8
+
+const (
+	localAbsent localKind = iota
+	localPresent
+	localUnreachable
+)
+
+func observeLocal(path string) (localKind, error) {
 	_, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
+		return localAbsent, nil
 	}
 	if errors.Is(err, syscall.ENOTDIR) {
-		return true, nil
+		return localUnreachable, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("inspect local target %q: %w", path, err)
+		return localAbsent, fmt.Errorf("inspect local target %q: %w", path, err)
 	}
-	return true, nil
+	return localPresent, nil
 }
 
 func observeLink(path string) (actual, error) {

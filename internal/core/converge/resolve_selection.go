@@ -21,10 +21,11 @@ type moduleObservation struct {
 
 // selectionResolution is the complete resolution of one machine selection.
 type selectionResolution struct {
-	modules      []config.Module
-	sources      map[string]selectionSource
-	observations map[string]moduleObservation
-	skips        []planned
+	modules           []config.Module
+	sources           map[string]selectionSource
+	observations      map[string]moduleObservation
+	skips             []planned
+	incompleteModules map[string]struct{}
 }
 
 // resolveSelection loads the complete effective selection. Profile not-applicability
@@ -56,9 +57,10 @@ func resolveSelection(
 	}
 	slices.Sort(ids)
 	result := selectionResolution{
-		modules:      make([]config.Module, 0, len(ids)),
-		sources:      sources,
-		observations: make(map[string]moduleObservation, len(ids)),
+		modules:           make([]config.Module, 0, len(ids)),
+		sources:           sources,
+		observations:      make(map[string]moduleObservation, len(ids)),
+		incompleteModules: make(map[string]struct{}),
 	}
 	for _, moduleID := range ids {
 		module, exists, applicability, inspectErr := repository.InspectModule(
@@ -69,6 +71,7 @@ func resolveSelection(
 			return selectionResolution{}, inspectErr
 		}
 		if !exists {
+			result.incompleteModules[moduleID] = struct{}{}
 			result.skips = append(result.skips, skipLine(placementSubject{
 				moduleID: moduleID,
 			}, fmt.Sprintf("selected module %q does not exist", moduleID)))
@@ -89,11 +92,13 @@ func resolveSelection(
 			result.modules = append(result.modules, module)
 		case config.ApplicabilityNotApplicable:
 			if source.extra {
+				result.incompleteModules[moduleID] = struct{}{}
 				result.skips = append(result.skips, skipLine(placementSubject{
 					moduleID: moduleID,
 				}, fmt.Sprintf("module %q is not applicable", moduleID)))
 			}
 		case config.ApplicabilityIndeterminate:
+			result.incompleteModules[moduleID] = struct{}{}
 			result.skips = append(result.skips, skipLine(placementSubject{
 				moduleID: moduleID,
 			}, fmt.Sprintf(

@@ -27,16 +27,16 @@ normalize invocation paths and validate lock acquisition boundary
 - HOME、machine config、state 和 lock 必须是无 NUL、有效 UTF-8 的绝对路径并做词法规范化；
 - machine config 必须是 config 根的直接子项；state 与 lock 必须是同一 state 根下两个不同的
   直接 sibling；
-- config 根必须是直接真实目录；state 根若存在也必须是直接真实目录（均不得是 symlink）；
-  现存 control file 若存在必须是
-  直接 regular file；
+- config 根与 state 根若存在，最终目录项必须是直接真实目录（不得是 symlink）；现存 control
+  file 若存在必须是直接 regular file；
 - config 根与 state 根词法上不得相等或互为祖先/后代。
 
 该阶段不读取 machine/repository/manifest/state 内容，不解析 selection/platform，不观察
 placement target，也不解析控制路径的 ancestor/entry/resolved 交叉身份。失败时不得创建、
 chmod 或修改 root、lock、config、state、parent、target 或 temporary file。
 
-边界通过后只按需创建缺失的私有 state root/lock 并获取 advisory lock；不得在观察 `skip` 前
+边界通过后只按需创建缺失的私有 state root/lock 并获取 advisory lock；config 根仍只由 `init`
+在发布 machine config 时建立。不得在观察 `skip` 前
 chmod 已存在的 root 或 lock。根目录 `0700`、控制文件 `0600` 是不变量：权限不对时由同一循环
 产生显式 `chmod` 行，这一次算变更。Machine 中的 repository、三个控制
 前缀、state 内容、selection、platform、source、desired 与 ownership 均在锁内权威观察中验证。

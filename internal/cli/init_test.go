@@ -1,10 +1,38 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestInitCreatesMissingConfigRootPrivately(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	configRoot := filepath.Dir(fixture.config)
+	if _, err := os.Lstat(configRoot); !os.IsNotExist(err) {
+		t.Fatalf("config root before init error = %v, want missing", err)
+	}
+
+	code, stdout, stderr := fixture.runInjected(
+		"init",
+		fixture.repository,
+		"--profile",
+		"base",
+	)
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "selection_changed=true") {
+		t.Fatalf("init = (%d, %q, %q), want success", code, stdout, stderr)
+	}
+
+	rootInfo, err := os.Lstat(configRoot)
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("config root = (%v, %v), want real directory mode 0700", rootInfo, err)
+	}
+	configInfo, err := os.Lstat(fixture.config)
+	if err != nil || !configInfo.Mode().IsRegular() || configInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("machine config = (%v, %v), want regular file mode 0600", configInfo, err)
+	}
+}
 
 func TestInitWritesOnlyMachineConfig(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)

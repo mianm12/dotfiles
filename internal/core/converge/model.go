@@ -92,10 +92,11 @@ type SelectionResult struct {
 }
 
 type planRequest struct {
-	Home     string
-	Controls corepaths.ResolvedControls
-	Modules  []config.Module
-	State    state.Snapshot
+	Home              string
+	Controls          corepaths.ResolvedControls
+	Modules           []config.Module
+	State             state.Snapshot
+	IncompleteModules map[string]struct{}
 }
 
 type planned struct {

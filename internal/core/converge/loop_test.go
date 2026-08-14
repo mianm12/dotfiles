@@ -106,6 +106,80 @@ func TestLoopLocalAbsentCreatesExistingIsSilent(t *testing.T) {
 	assertOps(t, second)
 }
 
+func TestLoopLocalUnreachableIsSkip(t *testing.T) {
+	fixture := newLoopFixture(t)
+	example := fixture.file("repo/modules/app/local.example", "example")
+	writeLoopFile(t, fixture.target(".blocked"), "not a directory")
+	module := config.Module{
+		ID: "app",
+		Locals: []config.Local{{
+			ID:          "local",
+			ExamplePath: example,
+			Target:      "~/.blocked/local",
+		}},
+	}
+
+	lines := fixture.build(t, []config.Module{module}, fixture.emptyState())
+	assertOps(t, lines, OpSkip)
+	if !strings.Contains(lines[0].Reason, "ancestor is not a directory") {
+		t.Fatalf("local skip reason = %q, want unreachable ancestor", lines[0].Reason)
+	}
+}
+
+func TestLoopIncompleteModuleStateIsNotStale(t *testing.T) {
+	t.Run("matching owned link stays silent", func(t *testing.T) {
+		fixture := newLoopFixture(t)
+		destination := filepath.Join(fixture.root, "blocked-source")
+		if err := os.Symlink(destination, fixture.target(".blocked")); err != nil {
+			t.Fatalf("os.Symlink(blocked) error = %v", err)
+		}
+		owned := fixture.emptyState()
+		owned.Links[state.Key{ModuleID: "blocked", PlacementID: "config"}] = state.LinkRecord{
+			Target: ".blocked",
+			Dest:   destination,
+		}
+		source := fixture.file("repo/modules/ready/config", "ready")
+
+		lines, err := buildLines(planRequest{
+			Home:              fixture.home,
+			Controls:          fixture.controls,
+			Modules:           []config.Module{linkModule("ready", "config", source, "~/.ready")},
+			State:             owned,
+			IncompleteModules: map[string]struct{}{"blocked": {}},
+		})
+		if err != nil {
+			t.Fatalf("buildLines() error = %v", err)
+		}
+		assertOps(t, lines, OpLink)
+	})
+
+	t.Run("owned target still blocks another desired", func(t *testing.T) {
+		fixture := newLoopFixture(t)
+		destination := filepath.Join(fixture.root, "blocked-source")
+		owned := fixture.emptyState()
+		owned.Links[state.Key{ModuleID: "blocked", PlacementID: "config"}] = state.LinkRecord{
+			Target: ".shared",
+			Dest:   destination,
+		}
+		source := fixture.file("repo/modules/ready/config", "ready")
+
+		lines, err := buildLines(planRequest{
+			Home:              fixture.home,
+			Controls:          fixture.controls,
+			Modules:           []config.Module{linkModule("ready", "config", source, "~/.shared")},
+			State:             owned,
+			IncompleteModules: map[string]struct{}{"blocked": {}},
+		})
+		if err != nil {
+			t.Fatalf("buildLines() error = %v", err)
+		}
+		assertOps(t, lines, OpSkip)
+		if !strings.Contains(lines[0].Reason, "stale blocked/config") {
+			t.Fatalf("desired skip reason = %q, want blocked state owner", lines[0].Reason)
+		}
+	})
+}
+
 func TestLoopLinkLocalKindTransitionsAreRefused(t *testing.T) {
 	t.Run("owned link to local", func(t *testing.T) {
 		fixture := newLoopFixture(t)

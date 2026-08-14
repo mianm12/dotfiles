@@ -23,8 +23,9 @@ work = ["work-git"]
 - Profile ID 使用 `[a-z0-9][a-z0-9_-]*`。
 - Profile 值是 [module ID](modules-and-platforms.md#module-发现与加载) 数组，不得重复。
 - 空 profile 合法。
-- Active profile 引用不存在的 module 时配置无效。该规则只针对 repository profile；
-  `extra_modules` 和 state 中引用已删除 module 仍可作为本机 stale 输入清理。
+- Active profile 引用不存在的 module 时配置无效。Missing module 若仍在 `extra_modules` 中，
+  desired 不完整并由 module `skip` 阻断；先 `select remove` 后，其 state records 才成为 stale
+  输入。只有未被当前 selection 引用的 state module 才直接按 stale 规则清理。
 - CLI 不修改 repository profiles；多个 active profiles 只做集合并集，声明与选择顺序不改变
   语义。
 

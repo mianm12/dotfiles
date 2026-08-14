@@ -83,8 +83,9 @@ target = "~/.config/example/config.local"
 
 - Machine config 必须是 config 根的直接子项。
 - State 与 lock 必须是同一 state 根下两个不同的直接 sibling。
-- Repository、config 根与 state 根三个最终目录项都必须是真实目录，不得是 symlink。State 根
-  在只读观察时可以尚不存在，并由 apply 的取锁 bookkeeping 建立；更高层 ancestor symlink 合法。
+- Repository 的最终目录项必须是已存在的真实目录。Config 根与 state 根可以尚不存在；存在时
+  最终目录项必须是真实目录，不得是 symlink。缺失的 config 根只由 `init` 发布 machine config
+  时建立；缺失的 state 根可由 mutation 的取锁 bookkeeping 建立。更高层 ancestor symlink 合法。
 - 三个前缀词法规范化后不得相等或互为祖先/后代。
 - Active desired target 不得与任一前缀相等、包含它或位于其中；否则该 target 标 `skip`。
 - 不解析控制路径的 ancestor/entry/resolved 交叉表示，不建立 control family 图。

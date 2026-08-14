@@ -31,8 +31,8 @@
 - `link` / `file` / `replace` / `remove` / `record` / `forget` 的磁盘效果与账本效果必须成对验证；
 - link/local ownership、forget/remove 与控制前缀不越权 mutation；
 - create 失败不进入 replace/remove；删除前只复核 raw dest；
-- mutation、state commit 或 lock release 失败使用 typed stage/partial/recovery；失败只投影已完成
-  的行；
+- mutation、state commit 或 lock release 失败只通过 cause、可选失败行与 `may_have_changed`
+  表达；失败只投影已完成的行；
 - 每个成功 mutation 场景重复执行相同 apply，并断言没有新的文件系统 mutation。
 
 循环测试保护可观察语义：相同输入得到稳定的行；词法嵌套 skip、stale forget/remove 和执行后

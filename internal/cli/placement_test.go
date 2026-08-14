@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -338,6 +339,51 @@ target = "~/.app.local"
 			}
 			assertApplyNoMutation(t, fixture, fixture.run)
 		})
+	}
+}
+
+func TestLocalWithNonDirectoryAncestorIsSkip(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = ["app"]`)
+	fixture.writeModule(t, "app", `
+[[locals]]
+id = "local"
+example = "local.example"
+target = "~/.blocked/local"
+`, map[string]string{"local.example": "example"})
+	fixture.writeMachine(t, []string{"base"}, nil)
+	blocked := filepath.Join(fixture.home, ".blocked")
+	writeCLIFile(t, blocked, "not a directory")
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, _ := fixture.runInjected("status")
+	if code != exitOK ||
+		!strings.Contains(stdout, "skip module=app placement=local") ||
+		!strings.Contains(stdout, "ancestor is not a directory") ||
+		strings.Contains(stdout, "file module=app placement=local") {
+		t.Fatalf("status unreachable local = (%d, %q), want skip", code, stdout)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, _ = fixture.runInjected("apply", "--dry-run")
+	if code != exitError ||
+		!strings.Contains(stdout, "skip module=app placement=local") ||
+		strings.Contains(stdout, "file module=app placement=local") {
+		t.Fatalf("dry-run unreachable local = (%d, %q), want skip", code, stdout)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr := fixture.runInjected("apply")
+	if code != exitError || !strings.Contains(stderr, "state is missing") ||
+		!strings.Contains(stdout, "skip module=app placement=local") ||
+		strings.Contains(stdout, "file module=app placement=local") {
+		t.Fatalf("apply unreachable local = (%d, %q, %q), want zero-write skip", code, stdout, stderr)
+	}
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
+	if data, err := os.ReadFile(blocked); err != nil || string(data) != "not a directory" {
+		t.Fatalf("blocking ancestor = (%q, %v), want unchanged", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(blocked, "local")); !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("blocked local error = %v, want ENOTDIR", err)
 	}
 }
 

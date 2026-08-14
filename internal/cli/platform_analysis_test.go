@@ -55,7 +55,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 		) ||
 		!strings.Contains(stdout, "synthetic os-release failure") ||
 		!strings.Contains(stdout, "skip module=gated") ||
-		strings.Contains(stdout, "prune") ||
+		strings.Contains(stdout, "remove module=gated") ||
 		strings.Contains(stdout, "forget") {
 		t.Fatalf(
 			"indeterminate status = (%d, %q, %q), want blocker without cleanup",
@@ -71,7 +71,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 		stderr != "" ||
 		!strings.Contains(stdout, "skip module=gated") ||
 		!strings.Contains(stdout, "synthetic os-release failure") ||
-		strings.Contains(stdout, "prune") ||
+		strings.Contains(stdout, "remove module=gated") ||
 		strings.Contains(stdout, "forget") {
 		t.Fatalf(
 			"indeterminate dry-run = (%d, %q, %q), want blocker without cleanup",
@@ -213,7 +213,7 @@ target = "~/.extra"
 	code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 	if code != exitError ||
 		!strings.Contains(stdout, "skip module=uncertain") ||
-		strings.Contains(stdout, "create-link") ||
+		!strings.Contains(stdout, "link module=extra placement=config") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"full dry-run = (%d, %q, %q), want whole-operation blocker",
@@ -227,6 +227,7 @@ target = "~/.extra"
 	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitError ||
 		!strings.Contains(stdout, "skip module=uncertain") ||
+		!strings.Contains(stdout, "link module=extra placement=config") ||
 		!strings.Contains(stdout, "applicability is indeterminate") ||
 		!strings.Contains(stderr, "state is missing") ||
 		strings.Contains(stderr, "error:") {
@@ -295,7 +296,22 @@ func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 					t.Fatalf("os.Symlink(user target) error = %v", err)
 				}
 			}
-			code, stdout, stderr := fixture.runInjected("select", "remove", "gated")
+			before := snapshotTree(t, fixture.root)
+			code, stdout, stderr := fixture.runInjected("status")
+			if code != exitOK || stderr != "" ||
+				!strings.Contains(stdout, "skip module=gated") ||
+				strings.Contains(stdout, "remove module=gated") ||
+				strings.Contains(stdout, "forget module=gated") {
+				t.Fatalf(
+					"status before selection contraction = (%d, %q, %q), want blocker without cleanup",
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			assertSnapshotUnchanged(t, before)
+
+			code, stdout, stderr = fixture.runInjected("select", "remove", "gated")
 			if code != exitOK ||
 				!strings.Contains(stdout, "selection_changed=true") ||
 				stderr != "" {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -316,7 +317,9 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 					stdout,
 					`reason="selected module \"gone\" does not exist"`,
 				) ||
-				!strings.Contains(stdout, "skip module=gone") {
+				!strings.Contains(stdout, "skip module=gone") ||
+				strings.Contains(stdout, "remove module=gone") ||
+				strings.Contains(stdout, "forget module=gone") {
 				t.Fatalf(
 					"status missing selected module = (%d, %q), want blocked unknown convergence",
 					code,
@@ -326,6 +329,57 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 			assertSnapshotUnchanged(t, before)
 		})
 	}
+
+	t.Run("active profile missing module is a configuration failure", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = ["gone"]`)
+		fixture.writeMachine(t, []string{"base"}, nil)
+		before := snapshotTree(t, fixture.root)
+
+		code, stdout, stderr := fixture.runInjected("status")
+
+		if code != exitError || stdout != "" ||
+			!strings.Contains(stderr, "active profile") ||
+			!strings.Contains(stderr, "missing module") {
+			t.Fatalf(
+				"status with missing profile module = (%d, %q, %q), want configuration failure",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, before)
+	})
+
+	t.Run("incomplete module still requires owned actual observation", func(t *testing.T) {
+		fixture := newCLITestEnv(t, `base = []`)
+		fixture.writeMachine(t, []string{"base"}, []string{"gone"})
+		fixture.writeState(t, state.Snapshot{
+			Home: fixture.home,
+			Links: map[state.Key]state.LinkRecord{
+				{ModuleID: "gone", PlacementID: "config"}: {
+					Target: ".loop/config",
+					Dest:   filepath.Join(fixture.repository, "modules", "gone", "config"),
+				},
+			},
+		})
+		if err := os.Symlink(".loop", filepath.Join(fixture.home, ".loop")); err != nil {
+			t.Fatalf("os.Symlink(loop) error = %v", err)
+		}
+		before := snapshotTree(t, fixture.root)
+
+		code, stdout, stderr := fixture.runInjected("status")
+
+		if code != exitError || stdout != "" ||
+			!strings.Contains(stderr, "inspect state link gone/config") {
+			t.Fatalf(
+				"status with unreadable incomplete state = (%d, %q, %q), want analysis failure",
+				code,
+				stdout,
+				stderr,
+			)
+		}
+		assertSnapshotUnchanged(t, before)
+	})
 
 	t.Run("global control topology blocker", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = []`)

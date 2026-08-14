@@ -90,6 +90,7 @@ func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 		selection.modules,
 		loaded.Snapshot,
 		selection.skips,
+		selection.incompleteModules,
 	)
 	if err != nil {
 		return analysis{}, err
@@ -120,33 +121,20 @@ func buildAnalysisLines(
 	resolvedModules []config.Module,
 	snapshot state.Snapshot,
 	skips []planned,
+	incompleteModules map[string]struct{},
 ) ([]planned, error) {
-	if slices.ContainsFunc(skips, func(line planned) bool {
-		return line.Op == OpSkip
-	}) {
-		loopLines, err := buildLines(planRequest{
-			Home:     home,
-			Controls: controls,
-			Modules:  resolvedModules,
-			State:    snapshot,
-		})
-		if err != nil {
-			return nil, err
-		}
-		lines := append(append([]planned(nil), skips...), loopLines...)
-		sortPlanned(lines)
-		return lines, nil
-	}
-
-	lines, err := buildLines(planRequest{
-		Home:     home,
-		Controls: controls,
-		Modules:  resolvedModules,
-		State:    snapshot,
+	loopLines, err := buildLines(planRequest{
+		Home:              home,
+		Controls:          controls,
+		Modules:           resolvedModules,
+		State:             snapshot,
+		IncompleteModules: incompleteModules,
 	})
 	if err != nil {
 		return nil, err
 	}
+	lines := append(append([]planned(nil), skips...), loopLines...)
+	sortPlanned(lines)
 	return lines, nil
 }
 

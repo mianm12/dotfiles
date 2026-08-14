@@ -7,13 +7,15 @@ Issue 类型。公开投影由 [`cli.md`](cli.md#status-与-dry-run) 定义；�
 ## Actual filesystem
 
 Target 使用 `lstat` 词法路径，区分 absent、symlink、regular file、directory 和 special。不跟随
-叶子，也不把祖先 symlink 的解析结果记入身份。Local 只关心目录项是否存在，不读取或跟随已有
-对象。
+叶子，也不把祖先 symlink 的解析结果记入身份。Local 只关心一次 `lstat` 能否确认目录项 absent
+或 present，不读取或跟随已有对象；若 `lstat` 因祖先不是目录而返回 `ENOTDIR`，则该词法叶子为
+unreachable，不得冒充 present。
 
 ## 循环模型
 
 一次完整观察读取：全部 effective desired placements、全部 state records、以及它们词法路径上
-的 actual。然后为每个 desired 和每条不再 desired 的账本记录标一行，或保持沉默。
+的 actual。Desired 不完整的 module 也不跳过 owned actual 观察；任何必要路径读不了仍使分析
+失败。然后为每个 desired 和每条不再 desired 的账本记录标一行，或保持沉默。
 
 无变化的 link/local 不产出行。`record` 只在叶子已正确、账本缺失或字段不对时出现。
 
@@ -34,8 +36,10 @@ Target 使用 `lstat` 词法路径，区分 absent、symlink、regular file、di
 ## 通用决策规则
 
 - 全部 effective desired 与 state-only stale records 进入同一次观察。Profile 选中且已确定
-  not-applicable 的 module 退出 desired，其旧 links 按 stale 规则处理。Indeterminate module 或
-  extra not-applicable module 使 desired 集合不完整：为该 module 标 `skip`，整批不写。
+  not-applicable 的 module 退出 desired，其旧 links 按 stale 规则处理。Missing extra-selected、
+  indeterminate 或 extra not-applicable module 使该 module 的 desired 不完整：为该 module 标一条
+  `skip`，整批不写；其已有 state records 本轮继续参与词法冲突判断，但不得被当作 stale 标
+  `remove` 或 `forget`。其他能够完整观察的 module 仍标出自己的行。
 - 三个控制前缀互相重叠时无法形成循环，见
   [`placements.md`](placements.md#control-path-topology)。这是分析失败，不是 `skip`。
 - Active target 与任一控制前缀词法重叠 → 该 target `skip`。
@@ -89,6 +93,11 @@ Dangling symlink 仍按 raw destination 应用同一规则。每个 `remove` 在
 Stale target 与 active desired 相等或嵌套不是 `forget`：两边都标 `skip`，由上一节的两阶段规则
 处理。合法 v5 state 已拒绝重复或嵌套 target，因此循环不再为多条冲突 stale records 猜测 owner。
 
+Missing extra-selected、indeterminate 或 extra not-applicable 已使 module 的 desired 不完整时，该
+module 的 state records 不是本轮 stale 输入：actual 仍属于必要观察；观察成功后，记录除参与与
+其他 desired 的词法冲突判断外保持沉默，由 module 级 `skip` 表达阻断。Profile 引用 missing
+module 是配置错误；profile-only not-applicable 不适用此冻结规则。
+
 `forget` 的 reason 必须说明为什么不动文件。不另产 warning 行。普通 drift/absent `forget`
 不阻止其他独立行进入同一份观察；但整份观察里只要有 `skip`，这些 `forget` 也不会被执行。
 
@@ -116,6 +125,7 @@ desired 阶段：
 | --- | --- |
 | absent | `file`：从 example 拷贝 |
 | 任意已存在目录项 | 无行；不读取、不比较、不分类、不覆盖 |
+| unreachable（祖先不是目录） | `skip`：无法确认词法叶子 absent 或 present |
 
 Example 更新不触发 local 更新；local 被用户删除后下一次 apply 重新创建。Local 不进入 state，
 退出 desired 时没有账本行，也永不由 `remove` 删除。

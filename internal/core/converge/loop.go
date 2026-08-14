@@ -29,8 +29,8 @@ const (
 )
 
 type activeObservation struct {
-	localExists bool
-	actual      actual
+	local  localKind
+	actual actual
 }
 
 type stateLinkObservation struct {
@@ -41,10 +41,11 @@ type stateLinkObservation struct {
 }
 
 type loopInput struct {
-	desired    []desiredPlacement
-	state      state.Snapshot
-	active     map[state.Key]activeObservation
-	stateLinks map[state.Key]stateLinkObservation
+	desired           []desiredPlacement
+	state             state.Snapshot
+	active            map[state.Key]activeObservation
+	stateLinks        map[state.Key]stateLinkObservation
+	incompleteModules map[string]struct{}
 }
 
 func buildLines(request planRequest) ([]planned, error) {
@@ -56,7 +57,12 @@ func buildLines(request planRequest) ([]planned, error) {
 	if err != nil {
 		return nil, err
 	}
-	input, err := observeLoopInput(request.Controls, desired, request.State)
+	input, err := observeLoopInput(
+		request.Controls,
+		desired,
+		request.State,
+		request.IncompleteModules,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -67,21 +73,23 @@ func observeLoopInput(
 	controls corepaths.ResolvedControls,
 	desired []desiredPlacement,
 	snapshot state.Snapshot,
+	incompleteModules map[string]struct{},
 ) (loopInput, error) {
 	input := loopInput{
-		desired:    append([]desiredPlacement(nil), desired...),
-		state:      snapshot,
-		active:     make(map[state.Key]activeObservation, len(desired)),
-		stateLinks: make(map[state.Key]stateLinkObservation, len(snapshot.Links)),
+		desired:           append([]desiredPlacement(nil), desired...),
+		state:             snapshot,
+		active:            make(map[state.Key]activeObservation, len(desired)),
+		stateLinks:        make(map[state.Key]stateLinkObservation, len(snapshot.Links)),
+		incompleteModules: incompleteModules,
 	}
 
 	for _, placement := range desired {
 		if placement.kind == placementLocal {
-			exists, err := observeLocal(placement.path)
+			local, err := observeLocal(placement.path)
 			if err != nil {
 				return loopInput{}, err
 			}
-			input.active[placement.key] = activeObservation{localExists: exists}
+			input.active[placement.key] = activeObservation{local: local}
 			continue
 		}
 		observed, err := observeLink(placement.path)
@@ -210,6 +218,9 @@ func decide(input loopInput) []planned {
 		if used[key] {
 			continue
 		}
+		if _, incomplete := input.incompleteModules[key.ModuleID]; incomplete {
+			continue
+		}
 		subject := subjectForState(key, input.stateLinks[key])
 		if reason, skipped := staleSkips[key]; skipped {
 			lines = append(lines, skipLine(subject, reason))
@@ -230,8 +241,14 @@ func decideActive(
 ) (*planned, *Line) {
 	subject := subjectForDesired(desired)
 	if desired.kind == placementLocal {
-		if observed.localExists {
+		switch observed.local {
+		case localPresent:
 			return nil, nil
+		case localUnreachable:
+			return nil, skipPtr(
+				subject,
+				"local target is unreachable because an ancestor is not a directory",
+			)
 		}
 		line := fileLine(desired)
 		return &line, nil

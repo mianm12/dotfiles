@@ -75,6 +75,9 @@ dot help [COMMAND]
   `module.toml`，并在同一次循环中检查所有 effective placements 与全部 state-only stale
   records。任一 effective manifest 类型异常、不可读、dangling symlink 或 malformed 时，整次
   观察 fail closed。Init/select 的 manifest 加载例外由各自章节定义。
+- Missing extra-selected、indeterminate 与 extra not-applicable module 是可投影的 `skip`；只要该
+  selection 仍存在，其 state records 不投影 `remove` / `forget`。Active profile 引用 missing
+  module 仍是配置错误并返回 `1`。
 - Inactive repository module manifest 继续延迟加载；无参数 status 可将其列入 inventory，但
   未加载的 applicability 与 variant 显示为 `-`。
 - `dot status MODULE` 与任何其他多余位置参数都是用法错误，返回 `2`，stdout 为空，且不读取或
