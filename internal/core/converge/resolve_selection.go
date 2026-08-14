@@ -19,18 +19,12 @@ type moduleObservation struct {
 	variant       string
 }
 
-// selectionProblem is a module-specific reason the effective selection cannot be applied.
-type selectionProblem struct {
-	moduleID string
-	reason   string
-}
-
 // selectionResolution is the complete resolution of one machine selection.
 type selectionResolution struct {
 	modules      []config.Module
 	sources      map[string]selectionSource
 	observations map[string]moduleObservation
-	problems     []selectionProblem
+	skips        []planned
 }
 
 // resolveSelection loads the complete effective selection. Profile not-applicability
@@ -75,10 +69,9 @@ func resolveSelection(
 			return selectionResolution{}, inspectErr
 		}
 		if !exists {
-			result.problems = append(result.problems, selectionProblem{
+			result.skips = append(result.skips, skipLine(placementSubject{
 				moduleID: moduleID,
-				reason:   fmt.Sprintf("selected module %q does not exist", moduleID),
-			})
+			}, fmt.Sprintf("selected module %q does not exist", moduleID)))
 			continue
 		}
 		observation := moduleObservation{
@@ -96,20 +89,18 @@ func resolveSelection(
 			result.modules = append(result.modules, module)
 		case config.ApplicabilityNotApplicable:
 			if source.extra {
-				result.problems = append(result.problems, selectionProblem{
+				result.skips = append(result.skips, skipLine(placementSubject{
 					moduleID: moduleID,
-					reason:   fmt.Sprintf("module %q is not applicable", moduleID),
-				})
+				}, fmt.Sprintf("module %q is not applicable", moduleID)))
 			}
 		case config.ApplicabilityIndeterminate:
-			result.problems = append(result.problems, selectionProblem{
+			result.skips = append(result.skips, skipLine(placementSubject{
 				moduleID: moduleID,
-				reason: fmt.Sprintf(
-					"module %q applicability is indeterminate: %s",
-					moduleID,
-					applicability.Diagnostic,
-				),
-			})
+			}, fmt.Sprintf(
+				"module %q applicability is indeterminate: %s",
+				moduleID,
+				applicability.Diagnostic,
+			)))
 		default:
 			return selectionResolution{}, fmt.Errorf(
 				"module %q returned invalid applicability %q",

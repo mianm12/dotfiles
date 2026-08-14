@@ -30,7 +30,7 @@ dot status
 ```
 
 `select add` 只写 machine config 中的直接 selection。Dry-run 中出现的每个 target 都应由你确认；
-已有普通文件、目录或未知 symlink 会产生 problem，不会被自动导入或覆盖。
+已有普通文件、目录或未知 symlink 会标 `skip`，不会被自动导入或覆盖。
 
 当前仓库中的 `starship` 是最小实例：
 
@@ -52,11 +52,11 @@ dot status
 ```
 
 `select remove` 只移除 `extra_modules` 来源。如果 active profile 仍选择该 module，它仍然
-effective；命令会明确提示这一点。退出 desired 后，历史 link 是否 prune、ownership 是否
+effective；命令会明确提示这一点。退出 desired 后，历史 link 是否 `remove`、ownership 是否
 forget，以及 local 为什么保留，由[planning 规范](../spec/planning.md)决定。
 
 不要在 `select remove` 后手工删除 state，也不要只清理一个看起来相关的 target：下一次全量
-apply 会把当前 selection 与全部 stale records 放在同一个计划中处理。
+apply 会把当前 selection 与全部 stale records 放在同一条循环中处理。
 
 ## 新增一个 module
 
@@ -136,7 +136,7 @@ flowchart TD
 
 1. 从所有 repository profiles 中移除该 module；
 2. 在仍直接选择它的机器上运行 `dot select remove MODULE_ID`；
-3. 每台有历史记录的机器分别 dry-run 并全量 apply，确认 prune/forget/local 保留结果；
+3. 每台有历史记录的机器分别 dry-run 并全量 apply，确认 `remove` / `forget` / local 保留结果；
 4. 确认不再有 active profile 引用后，再删除 module 目录；
 5. 再次在受影响机器运行 status，确认 repository、selection、state 与文件系统一致。
 
@@ -146,7 +146,7 @@ profile 意图。删除 repository 文件和在每台 HOME 中完成 cleanup 是
 ## 完成检查
 
 - `dot status` 中 selection 来源符合预期；
-- dry-run 不包含未审查 target，没有 problem；
+- dry-run 不包含未审查 target，也没有 `skip`；
 - apply 成功后再次 dry-run 已收敛；
 - local 内容没有被误当作共享 source；
 - repository 变更与 machine-local selection 变更各自由正确 owner 表达。

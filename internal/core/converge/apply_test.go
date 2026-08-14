@@ -1,7 +1,6 @@
 package converge
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -62,7 +61,7 @@ func (fixture mutationFixture) environment() Environment {
 		ConfigPath: fixture.controls.Config,
 		StatePath:  fixture.controls.State,
 		LockPath:   fixture.controls.Lock,
-		Platform:   testPlatform(),
+		Platform:   testPlatform,
 	}
 }
 
@@ -92,17 +91,65 @@ func TestSelectionMutationsOwnConfigOnlyChanges(t *testing.T) {
 	}
 
 	writeMutationFile(t, filepath.Join(fixture.repository, "modules", "app", "module.toml"), "")
+	platformCalls := 0
+	environment.Platform = func() config.Platform {
+		platformCalls++
+		return testPlatform()
+	}
 	result, err = SelectAdd(environment, "app")
 	if err != nil || !result.Changed || len(result.Machine.ExtraModules) != 1 {
 		t.Fatalf("SelectAdd() = (%#v, %v), want app selected", result, err)
+	}
+	if platformCalls != 1 {
+		t.Fatalf("SelectAdd platform resolver calls = %d, want one locked decision", platformCalls)
 	}
 	repeated, err := SelectAdd(environment, "app")
 	if err != nil || repeated.Changed {
 		t.Fatalf("SelectAdd(repeat) = (%#v, %v), want no-op", repeated, err)
 	}
+	if platformCalls != 1 {
+		t.Fatalf("SelectAdd repeat resolved unnecessary platform: calls=%d", platformCalls)
+	}
 }
 
-func TestInitializeRejectsInvalidProfileBeforeLockBookkeeping(t *testing.T) {
+func TestSelectionMutationsDoNotReadStateContentOrTargets(t *testing.T) {
+	fixture := newMutationFixture(t, "base = []")
+	writeMutationFile(t, fixture.controls.State, "not valid state")
+	writeMutationFile(t, filepath.Join(fixture.repository, "modules", "app", "module.toml"), `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`)
+	writeMutationFile(t, filepath.Join(fixture.repository, "modules", "app", "config"), "source")
+	target := filepath.Join(fixture.home, ".app")
+	writeMutationFile(t, target, "personal")
+	stateBefore, err := os.ReadFile(fixture.controls.State)
+	if err != nil {
+		t.Fatalf("os.ReadFile(state) error = %v", err)
+	}
+	targetBefore, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("os.ReadFile(target) error = %v", err)
+	}
+
+	if _, err := Initialize(fixture.environment(), fixture.repository, []string{"base"}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if _, err := SelectAdd(fixture.environment(), "app"); err != nil {
+		t.Fatalf("SelectAdd() error = %v", err)
+	}
+	stateAfter, err := os.ReadFile(fixture.controls.State)
+	if err != nil || string(stateAfter) != string(stateBefore) {
+		t.Fatalf("state after selection mutations = (%q, %v), want unchanged", stateAfter, err)
+	}
+	targetAfter, err := os.ReadFile(target)
+	if err != nil || string(targetAfter) != string(targetBefore) {
+		t.Fatalf("target after selection mutations = (%q, %v), want unchanged", targetAfter, err)
+	}
+}
+
+func TestInitializeRejectsInvalidProfileAfterLockWithoutBusinessMutation(t *testing.T) {
 	fixture := newMutationFixture(t, "base = []")
 	result, err := Initialize(
 		fixture.environment(),
@@ -112,11 +159,12 @@ func TestInitializeRejectsInvalidProfileBeforeLockBookkeeping(t *testing.T) {
 	if err == nil || result.Changed {
 		t.Fatalf("Initialize(invalid profile) = (%#v, %v), want failure", result, err)
 	}
-	for _, path := range []string{fixture.controls.Config, fixture.controls.State, fixture.controls.Lock} {
+	for _, path := range []string{fixture.controls.Config, fixture.controls.State} {
 		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatalf("control path %q error = %v, want missing", path, statErr)
 		}
 	}
+	assertApplyBookkeepingPresent(t, fixture)
 }
 
 func TestSelectRemoveDoesNotDecodeTargetManifest(t *testing.T) {
@@ -150,19 +198,21 @@ target = "~/.app"
 	request := fixture.environment()
 
 	first, err := Apply(request)
-	if err != nil || !first.TargetsChanged || !first.StateChanged {
+	if err != nil || first.Report.HasSkip() ||
+		!first.TargetsChanged || !first.StateChanged {
 		t.Fatalf("Apply(first) = (%#v, %v)", first, err)
 	}
 	if destination, err := os.Readlink(filepath.Join(fixture.home, ".app")); err != nil || destination != source {
 		t.Fatalf("managed link = (%q, %v), want %q", destination, err, source)
 	}
 	second, err := Apply(request)
-	if err != nil || second.TargetsChanged || second.StateChanged {
+	if err != nil || second.Report.HasSkip() ||
+		second.TargetsChanged || second.StateChanged {
 		t.Fatalf("Apply(second) = (%#v, %v), want no-op", second, err)
 	}
 }
 
-func TestApplyRejectsOrdinaryFileBeforeLockBookkeeping(t *testing.T) {
+func TestApplyReturnsBlockedOutcomeAfterLockWithoutBusinessMutation(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	machine := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, machine)
@@ -181,16 +231,94 @@ target = "~/.app"
 	writeMutationFile(t, target, "private")
 
 	result, err := Apply(fixture.environment())
-	if err == nil || len(result.Report.Plan.Problems()) == 0 || result.TargetsChanged || result.StateChanged {
-		t.Fatalf("Apply(ordinary file) = (%#v, %v), want read-only conflict", result, err)
+	if err != nil || !result.Report.HasSkip() ||
+		len(result.Report.Lines) == 0 ||
+		result.TargetsChanged || result.StateChanged {
+		t.Fatalf("Apply(ordinary file) = (%#v, %v), want blocked outcome", result, err)
 	}
 	if contents, readErr := os.ReadFile(target); readErr != nil || string(contents) != "private" {
 		t.Fatalf("ordinary target = (%q, %v), want unchanged", contents, readErr)
 	}
-	assertApplyBookkeepingMissing(t, fixture)
+	if _, statErr := os.Lstat(fixture.controls.State); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("state error = %v, want missing", statErr)
+	}
+	assertApplyBookkeepingPresent(t, fixture)
 }
 
-func TestApplyRejectsMalformedOtherEffectiveManifestBeforeLockBookkeeping(t *testing.T) {
+func TestApplySkipBlocksPermissionRepairThenRepairsOnce(t *testing.T) {
+	fixture := newMutationFixture(t, `base = ["app"]`)
+	publishMutationMachine(t, fixture.controls.Config, fixture.machine([]string{"base"}, nil))
+	writeMutationFile(t, filepath.Join(fixture.repository, "modules", "app", "module.toml"), `
+[[links]]
+id = "config"
+source = "config"
+target = "~/.app"
+`)
+	source := filepath.Join(fixture.repository, "modules", "app", "config")
+	writeMutationFile(t, source, "portable")
+
+	initial, err := Apply(fixture.environment())
+	if err != nil || initial.Report.HasSkip() || !initial.TargetsChanged || !initial.StateChanged {
+		t.Fatalf("Apply(initial) = (%#v, %v), want converged link and state", initial, err)
+	}
+	target := filepath.Join(fixture.home, ".app")
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("os.Remove(managed target) error = %v", err)
+	}
+	writeMutationFile(t, target, "personal")
+
+	controlPaths := []struct {
+		path string
+		mode os.FileMode
+	}{
+		{path: filepath.Dir(fixture.controls.Config), mode: 0o755},
+		{path: fixture.controls.Config, mode: 0o644},
+		{path: filepath.Dir(fixture.controls.State), mode: 0o755},
+		{path: fixture.controls.State, mode: 0o644},
+		{path: fixture.controls.Lock, mode: 0o644},
+	}
+	for _, control := range controlPaths {
+		if err := os.Chmod(control.path, control.mode); err != nil {
+			t.Fatalf("os.Chmod(%q) error = %v", control.path, err)
+		}
+	}
+
+	blocked, err := Apply(fixture.environment())
+	if err != nil || !blocked.Report.HasSkip() || blocked.ControlsChanged ||
+		blocked.TargetsChanged || blocked.StateChanged || countOps(blocked.Report, OpChmod) != len(controlPaths) {
+		t.Fatalf("Apply(blocked) = (%#v, %v), want skip plus five unexecuted chmod lines", blocked, err)
+	}
+	for _, control := range controlPaths {
+		assertMutationMode(t, control.path, control.mode)
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "personal" {
+		t.Fatalf("blocked target = (%q, %v), want personal file preserved", contents, err)
+	}
+
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("os.Remove(personal target) error = %v", err)
+	}
+	repaired, err := Apply(fixture.environment())
+	if err != nil || repaired.Report.HasSkip() || !repaired.ControlsChanged ||
+		!repaired.TargetsChanged || repaired.StateChanged || countLineOps(repaired.Done, OpChmod) != len(controlPaths) {
+		t.Fatalf("Apply(repair) = (%#v, %v), want five chmods and recreated link", repaired, err)
+	}
+	for index, control := range controlPaths {
+		want := storage.PrivateFileMode
+		if index == 0 || index == 2 {
+			want = storage.PrivateDirectoryMode
+		}
+		assertMutationMode(t, control.path, want)
+	}
+
+	again, err := Apply(fixture.environment())
+	if err != nil || again.Report.HasSkip() || again.ControlsChanged ||
+		again.TargetsChanged || again.StateChanged || len(again.Done) != 0 {
+		t.Fatalf("Apply(after repair) = (%#v, %v), want no-op", again, err)
+	}
+}
+
+func TestApplyReportsLockedAnalysisFailureWithoutBusinessMutation(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["broken", "good"]`)
 	machine := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, machine)
@@ -220,10 +348,14 @@ target = "~/.good"
 	if _, statErr := os.Lstat(filepath.Join(fixture.home, ".good")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("good target error = %v, want missing", statErr)
 	}
-	assertApplyBookkeepingMissing(t, fixture)
+	assertFailure(t, err, false)
+	if _, statErr := os.Lstat(fixture.controls.State); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("state error = %v, want missing", statErr)
+	}
+	assertApplyBookkeepingPresent(t, fixture)
 }
 
-func TestApplyRejectsTargetTopologyBeforeLockBookkeeping(t *testing.T) {
+func TestApplyReturnsTargetTopologyBlockedOutcomeAfterLock(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	machine := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, machine)
@@ -250,13 +382,15 @@ target = "~/.config/app/child"
 	)
 
 	result, err := Apply(fixture.environment())
-	if err == nil || len(result.Report.Plan.Problems()) == 0 || result.TargetsChanged || result.StateChanged {
-		t.Fatalf("Apply(target topology) = (%#v, %v), want read-only blocker", result, err)
+	if err != nil || !result.Report.HasSkip() ||
+		len(result.Report.Lines) == 0 ||
+		result.TargetsChanged || result.StateChanged {
+		t.Fatalf("Apply(target topology) = (%#v, %v), want blocked outcome", result, err)
 	}
-	assertApplyBookkeepingMissing(t, fixture)
+	assertApplyBookkeepingPresent(t, fixture)
 }
 
-func TestApplyRejectsControlTopologyBeforeLockBookkeeping(t *testing.T) {
+func TestApplyReturnsRepositoryControlTopologyBlockedOutcomeAfterLock(t *testing.T) {
 	fixture := newMutationFixture(t, "base = []")
 	fixture.controls.Config = filepath.Join(
 		fixture.repository,
@@ -268,15 +402,13 @@ func TestApplyRejectsControlTopologyBeforeLockBookkeeping(t *testing.T) {
 
 	result, err := Apply(fixture.environment())
 	if err == nil || result.TargetsChanged || result.StateChanged {
-		t.Fatalf("Apply(control topology) = (%#v, %v), want read-only blocker", result, err)
+		t.Fatalf("Apply(control topology) = (%#v, %v), want analysis failure", result, err)
 	}
-	if !errors.Is(err, ErrBlocked) {
-		t.Fatalf("Apply(control topology) error = %v, want ErrBlocked", err)
-	}
-	assertApplyBookkeepingMissing(t, fixture)
+	assertFailure(t, err, false)
+	assertApplyBookkeepingPresent(t, fixture)
 }
 
-func TestApplyRejectsIndeterminateSelectionBeforeLockBookkeeping(t *testing.T) {
+func TestApplyReturnsIndeterminateSelectionBlockedOutcomeAfterLock(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	machine := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, machine)
@@ -289,15 +421,14 @@ distro = ["ubuntu"]
 	platform.Distro = config.UnknownPlatformField("distribution is unavailable")
 
 	environment := fixture.environment()
-	environment.Platform = platform
+	environment.Platform = func() config.Platform { return platform }
 	result, err := Apply(environment)
-	if err == nil || result.TargetsChanged || result.StateChanged {
-		t.Fatalf("Apply(indeterminate selection) = (%#v, %v), want read-only blocker", result, err)
+	if err != nil || !result.Report.HasSkip() ||
+		result.TargetsChanged || result.StateChanged ||
+		!reportHasSkipReason(result.Report, "indeterminate") {
+		t.Fatalf("Apply(indeterminate selection) = (%#v, %v), want blocked outcome", result, err)
 	}
-	if !strings.Contains(err.Error(), "indeterminate") {
-		t.Fatalf("Apply(indeterminate selection) error = %v", err)
-	}
-	assertApplyBookkeepingMissing(t, fixture)
+	assertApplyBookkeepingPresent(t, fixture)
 }
 
 func TestApplyRejectsBusyLock(t *testing.T) {
@@ -314,6 +445,7 @@ func TestApplyRejectsBusyLock(t *testing.T) {
 	if !errors.Is(err, ErrBusy) || result.TargetsChanged || result.StateChanged {
 		t.Fatalf("Apply(locked) = (%#v, %v), want ErrBusy", result, err)
 	}
+	assertFailure(t, err, false)
 }
 
 func TestAnalysisAndSelectionRejectSymlinkedConfigRootBeforeReadingMachine(t *testing.T) {
@@ -321,13 +453,6 @@ func TestAnalysisAndSelectionRejectSymlinkedConfigRootBeforeReadingMachine(t *te
 		name string
 		run  func(Environment) error
 	}{
-		{
-			name: "analyze",
-			run: func(environment Environment) error {
-				_, err := Analyze(environment)
-				return err
-			},
-		},
 		{
 			name: "select add",
 			run: func(environment Environment) error {
@@ -350,15 +475,16 @@ func TestAnalysisAndSelectionRejectSymlinkedConfigRootBeforeReadingMachine(t *te
 			}
 
 			err := test.run(fixture.environment())
-			if !errors.Is(err, ErrControl) || !strings.Contains(err.Error(), "symbolic link") {
+			if !strings.Contains(err.Error(), "symbolic link") {
 				t.Fatalf("operation error = %v, want control-root symlink rejection", err)
 			}
+			assertFailure(t, err, false)
 			assertApplyBookkeepingMissing(t, fixture)
 		})
 	}
 }
 
-func TestApplyLockedRejectsMachineDriftWithoutExecutingPreflightPlan(t *testing.T) {
+func TestApplyLockedUsesLatestMachineWithoutPreflightFingerprint(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	initial := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, initial)
@@ -374,17 +500,13 @@ target = "~/.app"
 		"portable",
 	)
 	environment := fixture.environment()
-	report, err := Analyze(environment)
-	if err != nil || !report.Plan.Executable() || len(report.Plan.Actions()) != 1 {
-		t.Fatalf("Analyze() = (%#v, %v), want one executable preflight action", report, err)
-	}
-	preflight, result, err := prepareApply(environment)
-	if err != nil || len(result.Report.Plan.Actions()) != 0 {
-		t.Fatalf("prepareApply() = (%#v, %#v, %v), want executable preflight", preflight, result, err)
-	}
-	release, err := acquire(preflight.controls)
+	prepared, err := prepareMutationEnvironment(environment)
 	if err != nil {
-		t.Fatalf("acquire() error = %v", err)
+		t.Fatalf("prepareMutationEnvironment() error = %v", err)
+	}
+	release, err := acquireLock(filepath.Dir(prepared.LockPath), prepared.LockPath)
+	if err != nil {
+		t.Fatalf("acquireLock() error = %v", err)
 	}
 	defer func() {
 		if err := release(); err != nil {
@@ -393,50 +515,82 @@ target = "~/.app"
 	}()
 
 	publishMutationMachine(t, fixture.controls.Config, fixture.machine(nil, nil))
-	result, err = applyLocked(environment, preflight.fingerprint)
-	if !errors.Is(err, ErrBlocked) ||
-		!strings.Contains(err.Error(), "machine config changed") ||
-		result.TargetsChanged || result.StateChanged {
-		t.Fatalf("applyLocked(machine drift) = (%#v, %v), want ErrBlocked", result, err)
+	result, err := applyLocked(prepared)
+	if err != nil || result.Report.HasSkip() ||
+		result.TargetsChanged || !result.StateChanged {
+		t.Fatalf("applyLocked(latest machine) = (%#v, %v), want empty current selection", result, err)
 	}
 	if _, statErr := os.Lstat(filepath.Join(fixture.home, ".app")); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("target error = %v, want old plan unexecuted", statErr)
+		t.Fatalf("target error = %v, want stale pre-lock selection ignored", statErr)
 	}
-	if _, statErr := os.Lstat(fixture.controls.State); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("state error = %v, want missing", statErr)
+	if _, statErr := os.Lstat(fixture.controls.State); statErr != nil {
+		t.Fatalf("state error = %v, want committed empty v5 state", statErr)
 	}
 }
 
-func TestMachineFingerprintUsesSelectionSetSemantics(t *testing.T) {
+func TestApplyAcquiresLockBeforeReadingMachine(t *testing.T) {
 	fixture := newMutationFixture(t, "base = []")
-	left, err := machineFingerprint(fixture.machine(
-		[]string{"work", "base", "work"},
-		[]string{"shell", "editor", "shell"},
-	))
+	writeMutationFile(t, fixture.controls.Config, "malformed = [")
+	release, err := acquireLock(filepath.Dir(fixture.controls.Lock), fixture.controls.Lock)
 	if err != nil {
-		t.Fatalf("machineFingerprint(left) error = %v", err)
+		t.Fatalf("acquireLock() error = %v", err)
 	}
-	right, err := machineFingerprint(fixture.machine(
-		[]string{"base", "work"},
-		[]string{"editor", "shell"},
-	))
-	if err != nil {
-		t.Fatalf("machineFingerprint(right) error = %v", err)
+	defer func() { _ = release() }()
+
+	environment := fixture.environment()
+	environment.Platform = func() config.Platform {
+		t.Fatal("Apply resolved platform before acquiring the busy lock")
+		return config.Platform{}
 	}
-	if !bytes.Equal(left, right) {
-		t.Fatalf("semantic fingerprints differ:\nleft=%q\nright=%q", left, right)
+	_, err = Apply(environment)
+	if !errors.Is(err, ErrBusy) || strings.Contains(err.Error(), "machine config") {
+		t.Fatalf("Apply(busy, malformed machine) error = %v, want lock failure first", err)
+	}
+	assertFailure(t, err, false)
+}
+
+func TestApplyResolvesPlatformOnceInsideOwnedLock(t *testing.T) {
+	fixture := newMutationFixture(t, "base = []")
+	publishMutationMachine(
+		t,
+		fixture.controls.Config,
+		fixture.machine([]string{"base"}, nil),
+	)
+	environment := fixture.environment()
+	platformCalls := 0
+	environment.Platform = func() config.Platform {
+		platformCalls++
+		return testPlatform()
 	}
 
-	changed, err := machineFingerprint(fixture.machine(
-		[]string{"base"},
-		[]string{"editor", "shell"},
-	))
+	result, err := Apply(environment)
+	if err != nil || result.Report.HasSkip() {
+		t.Fatalf("Apply() = (%#v, %v), want applied outcome", result, err)
+	}
+	if platformCalls != 1 {
+		t.Fatalf("platform resolver calls = %d, want one locked analysis", platformCalls)
+	}
+}
+
+func TestSelectAddAcquiresLockBeforeMachineAndPlatformAnalysis(t *testing.T) {
+	fixture := newMutationFixture(t, "base = []")
+	writeMutationFile(t, fixture.controls.Config, "malformed = [")
+	release, err := acquireLock(filepath.Dir(fixture.controls.Lock), fixture.controls.Lock)
 	if err != nil {
-		t.Fatalf("machineFingerprint(changed) error = %v", err)
+		t.Fatalf("acquireLock() error = %v", err)
 	}
-	if bytes.Equal(left, changed) {
-		t.Fatal("semantic fingerprint ignored a changed profile set")
+	defer func() { _ = release() }()
+	environment := fixture.environment()
+	environment.Platform = func() config.Platform {
+		t.Fatal("SelectAdd resolved platform before acquiring the busy lock")
+		return config.Platform{}
 	}
+
+	_, err = SelectAdd(environment, "app")
+	if !errors.Is(err, ErrBusy) || strings.Contains(err.Error(), "machine config") {
+		t.Fatalf("SelectAdd(busy, malformed machine) error = %v, want lock failure first", err)
+	}
+	assertFailure(t, err, false)
 }
 
 func TestApplyLockedUsesFreshFilesystemAnalysis(t *testing.T) {
@@ -454,17 +608,13 @@ target = "~/.app"
 		"portable",
 	)
 	environment := fixture.environment()
-	report, err := Analyze(environment)
-	if err != nil || !report.Plan.Executable() || len(report.Plan.Actions()) != 1 {
-		t.Fatalf("Analyze() = (%#v, %v), want one executable preflight action", report, err)
-	}
-	preflight, _, err := prepareApply(environment)
+	prepared, err := prepareMutationEnvironment(environment)
 	if err != nil {
-		t.Fatalf("prepareApply() error = %v", err)
+		t.Fatalf("prepareMutationEnvironment() error = %v", err)
 	}
-	release, err := acquire(preflight.controls)
+	release, err := acquireLock(filepath.Dir(prepared.LockPath), prepared.LockPath)
 	if err != nil {
-		t.Fatalf("acquire() error = %v", err)
+		t.Fatalf("acquireLock() error = %v", err)
 	}
 	defer func() {
 		if err := release(); err != nil {
@@ -474,9 +624,9 @@ target = "~/.app"
 
 	target := filepath.Join(fixture.home, ".app")
 	writeMutationFile(t, target, "arrived while locked")
-	result, err := applyLocked(environment, preflight.fingerprint)
-	if !errors.Is(err, ErrBlocked) ||
-		len(result.Report.Plan.Problems()) != 1 ||
+	result, err := applyLocked(prepared)
+	if err != nil || !result.Report.HasSkip() ||
+		countOps(result.Report, OpSkip) != 1 ||
 		result.TargetsChanged || result.StateChanged {
 		t.Fatalf("applyLocked(filesystem drift) = (%#v, %v), want fresh conflict", result, err)
 	}
@@ -488,102 +638,71 @@ target = "~/.app"
 	}
 }
 
-func TestApplyLockedRefreshesResolvedControls(t *testing.T) {
-	fixture := newMutationFixture(t, `base = ["app"]`)
-	secondRepository := filepath.Join(fixture.root, "second-repository")
-	writeMutationFile(
-		t,
-		filepath.Join(secondRepository, "dot.toml"),
-		"version = 1\n[profiles]\nbase = [\"app\"]\n",
-	)
-	repositoryAlias := filepath.Join(fixture.root, "repository-alias")
-	if err := os.Symlink(fixture.repository, repositoryAlias); err != nil {
-		t.Fatalf("os.Symlink(first repository) error = %v", err)
-	}
-	machine := fixture.machine([]string{"base"}, nil)
-	machine.Repository = repositoryAlias
-	publishMutationMachine(t, fixture.controls.Config, machine)
-	writeMutationFile(t, filepath.Join(fixture.repository, "modules", "app", "module.toml"), `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.first"
-`)
-	writeMutationFile(
-		t,
-		filepath.Join(fixture.repository, "modules", "app", "config"),
-		"first",
-	)
-	writeMutationFile(t, filepath.Join(secondRepository, "modules", "app", "module.toml"), `
-[[links]]
-id = "config"
-source = "config"
-target = "~/.second"
-`)
-	writeMutationFile(
-		t,
-		filepath.Join(secondRepository, "modules", "app", "config"),
-		"second",
-	)
-	environment := fixture.environment()
-	preflight, err := analyzeEnvironment(environment)
-	if err != nil {
-		t.Fatalf("analyzeEnvironment() error = %v", err)
-	}
-	firstTarget := filepath.Join(fixture.home, ".first")
-	if len(preflight.report.Plan.Actions()) != 1 ||
-		preflight.report.Plan.Actions()[0].Target != firstTarget {
-		t.Fatalf("preflight plan = %#v, want first-repository target", preflight.report.Plan)
-	}
-	preflightPaths, err := preflight.controls.Paths()
-	if err != nil || preflightPaths.Repository != repositoryAlias {
-		t.Fatalf(
-			"preflight controls = (%#v, %v), want repository %q",
-			preflightPaths,
-			err,
-			repositoryAlias,
-		)
-	}
-	release, err := acquire(preflight.controls)
-	if err != nil {
-		t.Fatalf("acquire() error = %v", err)
-	}
-	defer func() {
-		if err := release(); err != nil {
-			t.Errorf("release() error = %v", err)
-		}
-	}()
-	if err := os.Remove(repositoryAlias); err != nil {
-		t.Fatalf("os.Remove(repository alias) error = %v", err)
-	}
-	if err := os.Symlink(secondRepository, repositoryAlias); err != nil {
-		t.Fatalf("os.Symlink(second repository) error = %v", err)
-	}
-
-	result, err := applyLocked(environment, preflight.fingerprint)
-	if err != nil || !result.TargetsChanged || !result.StateChanged {
-		t.Fatalf("applyLocked() = (%#v, %v), want fresh second-repository plan", result, err)
-	}
-	if _, err := os.Lstat(firstTarget); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("preflight target error = %v, want missing", err)
-	}
-	wantSource := filepath.Join(repositoryAlias, "modules", "app", "config")
-	if destination, err := os.Readlink(filepath.Join(fixture.home, ".second")); err != nil || destination != wantSource {
-		t.Fatalf("locked target = (%q, %v), want %q", destination, err, wantSource)
-	}
-}
-
-func TestJoinReleaseErrorPreservesFailureAndPartialClassification(t *testing.T) {
+func TestJoinReleaseFailureOverridesOutcomeWithTypedPartialFailure(t *testing.T) {
 	runErr := errors.New("synthetic apply failure")
 	releaseErr := errors.New("synthetic release failure")
 
-	err := joinReleaseError(runErr, releaseErr)
+	err := joinReleaseFailure(runErr, releaseErr, true)
 	if !errors.Is(err, runErr) || !errors.Is(err, releaseErr) {
-		t.Fatalf("joinReleaseError() = %v, want both failures", err)
+		t.Fatalf("joinReleaseFailure() = %v, want both failures", err)
 	}
-	if !strings.Contains(err.Error(), "release mutation lock") ||
-		!errors.Is(err, ErrPartial) {
-		t.Fatalf("joinReleaseError() = %q, want release and partial classification", err)
+	if !strings.Contains(err.Error(), "release mutation lock") {
+		t.Fatalf("joinReleaseFailure() = %q, want release context", err)
+	}
+	assertFailure(t, err, true)
+	clean := joinReleaseFailure(nil, releaseErr, false)
+	assertFailure(t, clean, false)
+}
+
+func TestSelectionMutationLockedReportsReleaseFailureAfterPublication(t *testing.T) {
+	fixture := newMutationFixture(t, "base = []")
+	releaseErr := errors.New("synthetic selection release failure")
+	wantMachine := fixture.machine([]string{"base"}, nil)
+	publishedBeforeRelease := false
+
+	result, err := runSelectionMutationLocked(
+		fixture.environment(),
+		func() error {
+			machine, exists, loadErr := config.LoadMachine(fixture.controls.Config)
+			publishedBeforeRelease = loadErr == nil &&
+				exists &&
+				machine.Repository == wantMachine.Repository
+			return releaseErr
+		},
+		func() (SelectionResult, error) {
+			return SelectionResult{Machine: wantMachine, Changed: true}, nil
+		},
+	)
+
+	if !result.Changed || result.Machine.Repository != wantMachine.Repository {
+		t.Fatalf("runSelectionMutationLocked() result = %#v, want published selection", result)
+	}
+	if !publishedBeforeRelease {
+		t.Fatal("selection was not published before the release callback")
+	}
+	if !errors.Is(err, releaseErr) {
+		t.Fatalf("runSelectionMutationLocked() error = %v, want release failure", err)
+	}
+	assertFailure(t, err, true)
+	machine, exists, loadErr := config.LoadMachine(fixture.controls.Config)
+	if loadErr != nil || !exists || machine.Repository != wantMachine.Repository {
+		t.Fatalf(
+			"LoadMachine(published selection) = (%#v, %t, %v), want published machine",
+			machine,
+			exists,
+			loadErr,
+		)
+	}
+}
+
+func TestControlErrorExposesOnlyControlPathSentinel(t *testing.T) {
+	cause := errors.New("control")
+	err := controlError{cause: cause}
+	if !errors.Is(err, ErrControlPaths) || !errors.Is(err, cause) {
+		t.Fatalf("controlError = %v, want control sentinel and cause", err)
+	}
+	if errors.Is(errors.New("control"), ErrControlPaths) {
+		t.Fatal("ordinary error matched ErrControlPaths")
 	}
 }
 
@@ -606,6 +725,72 @@ func assertApplyBookkeepingMissing(t *testing.T, fixture mutationFixture) {
 			t.Fatalf("apply bookkeeping path %q error = %v, want missing", path, err)
 		}
 	}
+}
+
+func assertApplyBookkeepingPresent(t *testing.T, fixture mutationFixture) {
+	t.Helper()
+	if info, err := os.Lstat(filepath.Dir(fixture.controls.State)); err != nil || !info.IsDir() {
+		t.Fatalf("state root = (%v, %v), want directory bookkeeping", info, err)
+	}
+	if info, err := os.Lstat(fixture.controls.Lock); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("lock = (%v, %v), want regular-file bookkeeping", info, err)
+	}
+}
+
+func assertFailure(
+	t *testing.T,
+	err error,
+	mayHaveChanged bool,
+) {
+	t.Helper()
+	var failure *Failure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error = %v, want *Failure", err)
+	}
+	if failure.MayHaveChanged != mayHaveChanged {
+		t.Fatalf("failure = %#v, want may_have_changed=%t", failure, mayHaveChanged)
+	}
+}
+
+func countOps(report Report, op Op) int {
+	count := 0
+	for _, line := range report.Lines {
+		if line.Op == op {
+			count++
+		}
+	}
+	return count
+}
+
+func countLineOps(lines []Line, op Op) int {
+	count := 0
+	for _, line := range lines {
+		if line.Op == op {
+			count++
+		}
+	}
+	return count
+}
+
+func assertMutationMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("os.Lstat(%q) error = %v", path, err)
+	}
+	const modeMask = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if got := info.Mode() & modeMask; got != want {
+		t.Fatalf("mode(%q) = %04o, want %04o", path, got, want)
+	}
+}
+
+func reportHasSkipReason(report Report, fragment string) bool {
+	for _, issue := range report.Lines {
+		if strings.Contains(issue.Reason, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeMutationFile(t *testing.T, path, content string) {

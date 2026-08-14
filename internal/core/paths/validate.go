@@ -3,40 +3,17 @@ package paths
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
-	"slices"
 )
 
 var (
-	// ErrTargetConflict reports placement targets that are equal or nested.
-	ErrTargetConflict = errors.New("target paths conflict")
-	// ErrControlBoundary reports a target overlapping a protected path.
+	// ErrControlBoundary reports a target overlapping a protected prefix.
 	ErrControlBoundary = errors.New("target overlaps a control path")
-	// ErrControlTopology reports control families that are not isolated.
+	// ErrControlTopology reports control prefixes that are not isolated.
 	ErrControlTopology = errors.New("control paths conflict")
 )
-
-type placementError struct {
-	err    error
-	labels []string
-}
-
-func (err *placementError) Error() string { return err.err.Error() }
-
-func (err *placementError) Unwrap() error { return err.err }
-
-// PlacementLabels returns the placement labels attached to a validation error.
-func PlacementLabels(err error) []string {
-	var placed *placementError
-	if !errors.As(err, &placed) {
-		return nil
-	}
-	return slices.Clone(placed.labels)
-}
-
-func withPlacementLabels(err error, labels ...string) error {
-	return &placementError{err: err, labels: slices.Clone(labels)}
-}
 
 // Controls contains the protected paths named by the placement specification.
 type Controls struct {
@@ -46,62 +23,65 @@ type Controls struct {
 	Lock       string
 }
 
-// ResolvedControls is one immutable control-path topology snapshot. Its path
-// identities are resolved exactly once and reused for every target check in
-// the same assessment.
+// ResolvedControls is one cleaned control-path snapshot.
 type ResolvedControls struct {
-	paths    Controls
-	topology controlTopology
-	valid    bool
+	paths Controls
+	valid bool
 }
 
-// Placement is the path information needed before manifest/planner construction.
+// Placement is the path information needed before planner construction.
 type Placement struct {
 	Label  string
 	Target string
 }
 
-// ResolvedPlacement is a validated placement with both path representations.
+// ResolvedPlacement is a validated placement with a lexical target.
 type ResolvedPlacement struct {
 	Label  string
 	Target Target
 }
 
-type pathIdentity struct {
-	label    string
-	lexical  string
-	entry    string
-	resolved string
-}
-
-type controlFamily struct {
-	paths []pathIdentity
-}
-
-type controlTopology struct {
-	families []controlFamily
-	state    pathIdentity
-	lock     pathIdentity
-}
-
-// ResolveControls resolves and validates one control topology without resolving
-// placement targets. The returned snapshot owns the resolved identities used by
-// later validation and overlap checks.
+// ResolveControls cleans and validates one control-prefix snapshot without
+// observing placement targets.
 func ResolveControls(controls Controls) (ResolvedControls, error) {
-	topology, err := resolveControlTopology(controls)
+	repository, err := cleanAbsolute("repository", controls.Repository)
 	if err != nil {
+		return ResolvedControls{}, err
+	}
+	paths, err := cleanCoordinationPaths(controls.Config, controls.State, controls.Lock)
+	if err != nil {
+		return ResolvedControls{}, err
+	}
+	if err := validateControlPrefixes(repository, paths.configRoot, paths.stateRoot); err != nil {
 		return ResolvedControls{}, err
 	}
 	return ResolvedControls{
 		paths: Controls{
-			Repository: filepath.Clean(controls.Repository),
-			Config:     filepath.Clean(controls.Config),
-			State:      filepath.Clean(controls.State),
-			Lock:       filepath.Clean(controls.Lock),
+			Repository: repository,
+			Config:     paths.config,
+			State:      paths.state,
+			Lock:       paths.lock,
 		},
-		topology: topology,
-		valid:    true,
+		valid: true,
 	}, nil
+}
+
+// ValidateLockBoundary validates the config/state coordination needed before a
+// mutation may create and acquire its advisory lock.
+func ValidateLockBoundary(config, state, lock string) error {
+	paths, err := cleanCoordinationPaths(config, state, lock)
+	if err != nil {
+		return err
+	}
+	if prefixesOverlap(paths.configRoot, paths.stateRoot) {
+		return fmt.Errorf(
+			"%w: machine config root %q overlaps state root %q",
+			ErrControlTopology,
+			paths.configRoot,
+			paths.stateRoot,
+		)
+	}
+	return validateExistingRoots(paths.configRoot, paths.stateRoot)
 }
 
 // Paths returns the cleaned lexical paths captured by this snapshot.
@@ -112,29 +92,44 @@ func (controls ResolvedControls) Paths() (Controls, error) {
 	return controls.paths, nil
 }
 
-// Validate resolves and validates a complete placement set against this
-// snapshot. It does not re-resolve the control topology.
-func (controls ResolvedControls) Validate(
+// Expand resolves placement target expressions without consulting the filesystem.
+func (controls ResolvedControls) Expand(
 	home string,
 	placements []Placement,
 ) ([]ResolvedPlacement, error) {
 	if err := controls.validate(); err != nil {
 		return nil, err
 	}
-	return validatePlacements(home, controls.topology, placements)
+	cleanHome, err := cleanAbsolute("HOME", home)
+	if err != nil {
+		return nil, err
+	}
+	resolved := make([]ResolvedPlacement, len(placements))
+	for index, placement := range placements {
+		if placement.Label == "" {
+			return nil, fmt.Errorf("%w: placement %d has an empty label", ErrInvalidPath, index)
+		}
+		target, expandErr := ResolveTarget(cleanHome, placement.Target)
+		if expandErr != nil {
+			return nil, fmt.Errorf("resolve placement %q: %w", placement.Label, expandErr)
+		}
+		resolved[index] = ResolvedPlacement{Label: placement.Label, Target: target}
+	}
+	return resolved, nil
 }
 
-// TargetOverlaps reports whether target intersects a protected control family
-// captured by this snapshot. It does not consult the filesystem.
-func (controls ResolvedControls) TargetOverlaps(target Target) (bool, error) {
+// TargetOverlaps reports whether target intersects a protected control prefix.
+func (controls ResolvedControls) TargetOverlaps(home string, target Target) (bool, error) {
 	if err := controls.validate(); err != nil {
 		return false, err
 	}
-	for _, family := range controls.topology.families {
-		for _, control := range family.paths {
-			if identityOverlapsTarget(control, target) {
-				return true, nil
-			}
+	absolute, err := target.Absolute(home)
+	if err != nil {
+		return false, err
+	}
+	for _, prefix := range controlPrefixes(controls.paths) {
+		if prefixesOverlap(prefix, absolute) {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -147,346 +142,121 @@ func (controls ResolvedControls) validate() error {
 	return nil
 }
 
-func validatePlacements(
-	home string,
-	topology controlTopology,
-	placements []Placement,
-) ([]ResolvedPlacement, error) {
-	cleanHome, err := cleanAbsolute("HOME", home)
-	if err != nil {
-		return nil, err
-	}
-
-	// Diagnose relationships that depend only on declared paths before an
-	// obstructed target ancestor can hide the complete target-set decision.
-	lexical := make([]ResolvedPlacement, len(placements))
-	for index, placement := range placements {
-		if placement.Label == "" {
-			return nil, fmt.Errorf("%w: placement %d has an empty label", ErrInvalidPath, index)
-		}
-		path, expandErr := expandTarget(cleanHome, placement.Target)
-		if expandErr != nil {
-			return nil, fmt.Errorf("resolve placement %q: %w", placement.Label, expandErr)
-		}
-		lexical[index] = ResolvedPlacement{
-			Label: placement.Label,
-			Target: Target{
-				lexical:  path,
-				resolved: path,
-			},
-		}
-	}
-	if err := validateTargetSet(lexical); err != nil {
-		return nil, err
-	}
-	if err := validateControlBoundaries(topology, lexical); err != nil {
-		return nil, err
-	}
-
-	resolved := make([]ResolvedPlacement, len(placements))
-	for index, placement := range placements {
-		target, resolveErr := ResolveTarget(cleanHome, placement.Target)
-		if resolveErr != nil {
-			return nil, fmt.Errorf("resolve placement %q: %w", placement.Label, resolveErr)
-		}
-		resolved[index] = ResolvedPlacement{
-			Label:  placement.Label,
-			Target: target,
-		}
-	}
-
-	if err := validateTargetSet(resolved); err != nil {
-		return nil, err
-	}
-	if err := validateControlBoundaries(topology, resolved); err != nil {
-		return nil, err
-	}
-	return resolved, nil
+type coordinationPaths struct {
+	configRoot string
+	config     string
+	stateRoot  string
+	state      string
+	lock       string
 }
 
-func resolveControlTopology(controls Controls) (controlTopology, error) {
-	inputs := []struct {
+func cleanCoordinationPaths(config, state, lock string) (coordinationPaths, error) {
+	cleanConfig, err := cleanAbsolute("machine config", config)
+	if err != nil {
+		return coordinationPaths{}, err
+	}
+	cleanState, err := cleanAbsolute("state", state)
+	if err != nil {
+		return coordinationPaths{}, err
+	}
+	cleanLock, err := cleanAbsolute("lock", lock)
+	if err != nil {
+		return coordinationPaths{}, err
+	}
+
+	paths := coordinationPaths{
+		configRoot: filepath.Dir(cleanConfig),
+		config:     cleanConfig,
+		stateRoot:  filepath.Dir(cleanState),
+		state:      cleanState,
+		lock:       cleanLock,
+	}
+	if !directChild(paths.configRoot, paths.config) {
+		return coordinationPaths{}, fmt.Errorf(
+			"%w: machine config %q must be a direct child of config root %q",
+			ErrControlTopology,
+			paths.config,
+			paths.configRoot,
+		)
+	}
+	if paths.stateRoot != filepath.Dir(paths.lock) ||
+		!directChild(paths.stateRoot, paths.state) ||
+		!directChild(paths.stateRoot, paths.lock) ||
+		paths.state == paths.lock {
+		return coordinationPaths{}, fmt.Errorf(
+			"%w: state %q and lock %q must be distinct siblings under one state root",
+			ErrControlTopology,
+			paths.state,
+			paths.lock,
+		)
+	}
+	return paths, nil
+}
+
+func validateControlPrefixes(repository, configRoot, stateRoot string) error {
+	prefixes := [...]struct {
 		label string
 		path  string
 	}{
-		{label: "repository", path: controls.Repository},
-		{label: "machine config", path: controls.Config},
-		{label: "state", path: controls.State},
-		{label: "lock", path: controls.Lock},
+		{"repository", repository},
+		{"machine config root", configRoot},
+		{"state root", stateRoot},
 	}
-	cleaned := make(map[string]string, len(inputs))
-	for _, input := range inputs {
-		lexical, err := cleanAbsolute(input.label, input.path)
-		if err != nil {
-			return controlTopology{}, err
-		}
-		cleaned[input.label] = lexical
-	}
-
-	configRootPath := filepath.Dir(cleaned["machine config"])
-	stateRootPath := filepath.Dir(cleaned["state"])
-	if !directChild(configRootPath, cleaned["machine config"]) {
-		return controlTopology{}, fmt.Errorf(
-			"%w: machine config %q must be a direct child of config root %q",
-			ErrControlTopology,
-			cleaned["machine config"],
-			configRootPath,
-		)
-	}
-	if stateRootPath != filepath.Dir(cleaned["lock"]) ||
-		!directChild(stateRootPath, cleaned["state"]) ||
-		!directChild(stateRootPath, cleaned["lock"]) ||
-		cleaned["state"] == cleaned["lock"] {
-		return controlTopology{}, fmt.Errorf(
-			"%w: state %q and lock %q must be distinct siblings under one state root",
-			ErrControlTopology,
-			cleaned["state"],
-			cleaned["lock"],
-		)
-	}
-	if err := validateControlFamilies(controlFamilies(
-		lexicalIdentity("repository", cleaned["repository"]),
-		lexicalIdentity("machine config root", configRootPath),
-		lexicalIdentity("machine config", cleaned["machine config"]),
-		lexicalIdentity("state root", stateRootPath),
-		lexicalIdentity("state", cleaned["state"]),
-		lexicalIdentity("lock", cleaned["lock"]),
-	)); err != nil {
-		return controlTopology{}, err
-	}
-
-	resolved := make(map[string]pathIdentity, len(inputs)+2)
-	for _, input := range inputs {
-		lexical := cleaned[input.label]
-		entry, err := resolveEntry(lexical)
-		if err != nil {
-			return controlTopology{}, fmt.Errorf(
-				"resolve %s path entry %q: %w",
-				input.label,
-				input.path,
-				err,
+	for left := range prefixes {
+		for right := left + 1; right < len(prefixes); right++ {
+			if !prefixesOverlap(prefixes[left].path, prefixes[right].path) {
+				continue
+			}
+			return fmt.Errorf(
+				"%w: %s %q overlaps %s %q",
+				ErrControlTopology,
+				prefixes[left].label,
+				prefixes[left].path,
+				prefixes[right].label,
+				prefixes[right].path,
 			)
 		}
-		actual, err := resolvePath(lexical)
+	}
+	return nil
+}
+
+func validateExistingRoots(roots ...string) error {
+	for _, root := range roots {
+		info, err := os.Lstat(root)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err != nil {
-			return controlTopology{}, fmt.Errorf(
-				"resolve %s path %q: %w",
-				input.label,
-				input.path,
-				err,
+			return fmt.Errorf("%w: inspect control root %q: %w", ErrControlTopology, root, err)
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf(
+				"%w: control root %q is a symbolic link; expected a directory",
+				ErrControlTopology,
+				root,
 			)
 		}
-		resolved[input.label] = pathIdentity{
-			label:    input.label,
-			lexical:  lexical,
-			entry:    entry,
-			resolved: actual,
-		}
-	}
-
-	configRoot, err := resolveIdentity("machine config root", configRootPath)
-	if err != nil {
-		return controlTopology{}, err
-	}
-	stateRoot, err := resolveIdentity("state root", stateRootPath)
-	if err != nil {
-		return controlTopology{}, err
-	}
-	topology := controlTopology{
-		families: controlFamilies(
-			resolved["repository"],
-			configRoot,
-			resolved["machine config"],
-			stateRoot,
-			resolved["state"],
-			resolved["lock"],
-		),
-		state: resolved["state"],
-		lock:  resolved["lock"],
-	}
-	if identitiesOverlap(topology.state, topology.lock) {
-		return controlTopology{}, fmt.Errorf(
-			"%w: state %q and lock %q do not identify distinct siblings",
-			ErrControlTopology,
-			topology.state.lexical,
-			topology.lock.lexical,
-		)
-	}
-	if err := validateControlFamilies(topology.families); err != nil {
-		return controlTopology{}, err
-	}
-	return topology, nil
-}
-
-func resolveIdentity(label, path string) (pathIdentity, error) {
-	lexical, err := cleanAbsolute(label, path)
-	if err != nil {
-		return pathIdentity{}, err
-	}
-	entry, err := resolveEntry(lexical)
-	if err != nil {
-		return pathIdentity{}, fmt.Errorf("resolve %s entry %q: %w", label, path, err)
-	}
-	resolved, err := resolvePath(lexical)
-	if err != nil {
-		return pathIdentity{}, fmt.Errorf("resolve %s %q: %w", label, path, err)
-	}
-	return pathIdentity{
-		label:    label,
-		lexical:  lexical,
-		entry:    entry,
-		resolved: resolved,
-	}, nil
-}
-
-func lexicalIdentity(label, path string) pathIdentity {
-	return pathIdentity{
-		label:    label,
-		lexical:  path,
-		entry:    path,
-		resolved: path,
-	}
-}
-
-func controlFamilies(
-	repository, configRoot, config, stateRoot, state, lock pathIdentity,
-) []controlFamily {
-	return []controlFamily{
-		{paths: []pathIdentity{repository}},
-		{paths: []pathIdentity{configRoot, config}},
-		{paths: []pathIdentity{stateRoot, state, lock}},
-	}
-}
-
-func validateControlFamilies(families []controlFamily) error {
-	for leftIndex, leftFamily := range families {
-		for _, rightFamily := range families[leftIndex+1:] {
-			for _, left := range leftFamily.paths {
-				for _, right := range rightFamily.paths {
-					if !identitiesOverlap(left, right) {
-						continue
-					}
-					return fmt.Errorf(
-						"%w: %s %q (resolved %q) overlaps %s %q (resolved %q)",
-						ErrControlTopology,
-						left.label,
-						left.lexical,
-						left.resolved,
-						right.label,
-						right.lexical,
-						right.resolved,
-					)
-				}
-			}
+		if !info.IsDir() {
+			return fmt.Errorf(
+				"%w: control root %q is not a directory",
+				ErrControlTopology,
+				root,
+			)
 		}
 	}
 	return nil
 }
 
-func validateTargetSet(placements []ResolvedPlacement) error {
-	for leftIndex := range placements {
-		left := placements[leftIndex]
-		for rightIndex := leftIndex + 1; rightIndex < len(placements); rightIndex++ {
-			right := placements[rightIndex]
-			if TargetsEqual(left.Target, right.Target) {
-				return withPlacementLabels(fmt.Errorf(
-					"%w: placements %q target %q and %q target %q resolve to the same target",
-					ErrTargetConflict,
-					left.Label,
-					left.Target.Lexical(),
-					right.Label,
-					right.Target.Lexical(),
-				), left.Label, right.Label)
-			}
-			if TargetStrictlyContains(left.Target, right.Target) {
-				return withPlacementLabels(fmt.Errorf(
-					"%w: placement %q target %q contains placement %q target %q",
-					ErrTargetConflict,
-					left.Label,
-					left.Target.Lexical(),
-					right.Label,
-					right.Target.Lexical(),
-				), left.Label, right.Label)
-			}
-			if TargetStrictlyContains(right.Target, left.Target) {
-				return withPlacementLabels(fmt.Errorf(
-					"%w: placement %q target %q contains placement %q target %q",
-					ErrTargetConflict,
-					right.Label,
-					right.Target.Lexical(),
-					left.Label,
-					left.Target.Lexical(),
-				), right.Label, left.Label)
-			}
-		}
+func controlPrefixes(paths Controls) []string {
+	return []string{
+		paths.Repository,
+		filepath.Dir(paths.Config),
+		filepath.Dir(paths.State),
 	}
-	return nil
 }
 
-// TargetsEqual reports equality in either the lexical or resolved target
-// representation.
-func TargetsEqual(left, right Target) bool {
-	return left.lexical == right.lexical || left.resolved == right.resolved
-}
-
-// TargetStrictlyContains reports strict ancestry in either the lexical or
-// resolved target representation.
-func TargetStrictlyContains(parent, child Target) bool {
-	return strictDescendant(parent.lexical, child.lexical) ||
-		strictDescendant(parent.resolved, child.resolved)
-}
-
-func validateControlBoundaries(
-	topology controlTopology,
-	placements []ResolvedPlacement,
-) error {
-	for _, placement := range placements {
-		for _, family := range topology.families {
-			for _, control := range family.paths {
-				if identityOverlapsTarget(control, placement.Target) {
-					return withPlacementLabels(fmt.Errorf(
-						"%w: placement %q target %q overlaps %s %q",
-						ErrControlBoundary,
-						placement.Label,
-						placement.Target.lexical,
-						control.label,
-						filepath.Clean(control.lexical),
-					), placement.Label)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func identityOverlapsTarget(control pathIdentity, target Target) bool {
-	controls := identityPaths(control)
-	targets := [...]string{target.lexical, target.resolved}
-	for _, controlPath := range controls {
-		for _, targetPath := range targets {
-			if sameOrDescendant(controlPath, targetPath) ||
-				sameOrDescendant(targetPath, controlPath) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func identitiesOverlap(left, right pathIdentity) bool {
-	for _, leftPath := range identityPaths(left) {
-		for _, rightPath := range identityPaths(right) {
-			if sameOrDescendant(leftPath, rightPath) ||
-				sameOrDescendant(rightPath, leftPath) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func identityPaths(identity pathIdentity) [3]string {
-	return [3]string{identity.lexical, identity.entry, identity.resolved}
+func prefixesOverlap(left, right string) bool {
+	return sameOrDescendant(left, right) || sameOrDescendant(right, left)
 }
 
 func directChild(parent, child string) bool {

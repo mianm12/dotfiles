@@ -46,7 +46,7 @@ func runInit(
 		profiles,
 	)
 	if runErr != nil {
-		return finishSelectionMutation(runErr, "dot init")
+		return runErr
 	}
 	return printSelectionResult(
 		command,

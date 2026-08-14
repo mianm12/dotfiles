@@ -34,7 +34,7 @@ os = ["macos"]
 		Repository: root,
 		Profiles:   []string{"base"},
 	}, platform)
-	if err != nil || len(profile.problems) != 0 || len(profile.modules) != 0 {
+	if err != nil || len(profile.skips) != 0 || len(profile.modules) != 0 {
 		t.Fatalf("Resolve(profile not-applicable) = (%#v, %v)", profile, err)
 	}
 	if observation := profile.observations["gated"]; !observation.loaded ||
@@ -47,7 +47,7 @@ os = ["macos"]
 		Repository:   root,
 		ExtraModules: []string{"gated"},
 	}, platform)
-	if err != nil || len(direct.problems) != 1 || direct.problems[0].moduleID != "gated" {
+	if err != nil || len(direct.skips) != 1 || direct.skips[0].ModuleID != "gated" {
 		t.Fatalf("Resolve(direct not-applicable) = (%#v, %v)", direct, err)
 	}
 }
@@ -64,7 +64,7 @@ func TestResolveReportsMissingDirectModule(t *testing.T) {
 		Repository:   root,
 		ExtraModules: []string{"gone"},
 	}, config.Platform{})
-	if err != nil || len(result.problems) != 1 || result.problems[0].moduleID != "gone" {
+	if err != nil || len(result.skips) != 1 || result.skips[0].ModuleID != "gone" {
 		t.Fatalf("Resolve(missing extra) = (%#v, %v)", result, err)
 	}
 }

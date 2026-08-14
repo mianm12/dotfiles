@@ -38,7 +38,7 @@
 | 怎样启用或编写一个 module？ | [管理 modules](guides/manage-modules.md) |
 | 怎样配置 profiles 或 platform variants？ | [Profiles 与平台差异](guides/profiles-and-platforms.md) |
 | 为什么某些 placement 变更必须分两阶段？ | [安全迁移](guides/safe-migrations.md) |
-| 某个 warning、problem 或失败应该怎样排查？ | [故障排查](guides/troubleshooting.md) |
+| 某个 `skip` 或失败应该怎样排查？ | [故障排查](guides/troubleshooting.md) |
 | 某个命令或持久格式的精确定义是什么？ | [产品规范索引](spec/README.md) |
 | 代码应该放在哪一层、由谁负责？ | [架构概览](architecture/overview.md) |
 | 一个行为应该在哪一层测试？ | [测试架构](architecture/testing.md) |

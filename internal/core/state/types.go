@@ -1,12 +1,15 @@
-// Package state defines the ownership state model and its strict version 3
+// Package state defines the ownership state model and its version 5
 // persistence format.
 package state
 
-import "errors"
+import (
+	"errors"
+	"maps"
+)
 
 const (
 	// Version is the only supported state format version.
-	Version = 3
+	Version = 5
 	// MissingWarning explains the recovery limitation when no state file exists.
 	MissingWarning = "state is missing; links removed from desired configuration cannot be discovered"
 )
@@ -14,7 +17,7 @@ const (
 var (
 	// ErrInvalid reports malformed or semantically unsafe state.
 	ErrInvalid = errors.New("invalid state")
-	// ErrLegacyVersion reports an incompatible state version older than v3.
+	// ErrLegacyVersion reports an incompatible state version older than v5.
 	ErrLegacyVersion = errors.New("legacy state version")
 	// ErrTooNew reports a state version newer than this binary supports.
 	ErrTooNew = errors.New("state version is newer than this binary")
@@ -22,35 +25,22 @@ var (
 	ErrHomeMismatch = errors.New("state home does not match current home")
 )
 
-// Kind identifies the ownership semantics of a placement record.
-type Kind string
-
-const (
-	// KindLink records link ownership.
-	KindLink Kind = "link"
-	// KindLocal records local provenance only.
-	KindLocal Kind = "local"
-)
-
-// Key is the stable identity of one ownership or provenance record.
+// Key is the stable identity of one link ownership record.
 type Key struct {
 	ModuleID    string
 	PlacementID string
 }
 
-// Snapshot is one complete state v3 value.
+// Snapshot is one complete state v5 value.
 type Snapshot struct {
-	Home    string
-	Records map[Key]Record
+	Home  string
+	Links map[Key]LinkRecord
 }
 
-// Record contains the minimum ownership or provenance evidence for one key.
-// ResolvedTarget and LinkDestination are set only for links.
-type Record struct {
-	Kind            Kind
-	Target          string
-	ResolvedTarget  string
-	LinkDestination string
+// LinkRecord is the cached ownership evidence for one managed link.
+type LinkRecord struct {
+	Target string
+	Dest   string
 }
 
 // Loaded is the result of reading a state path. Missing state contains a valid
@@ -68,7 +58,13 @@ func New(home string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	return Snapshot{
-		Home:    cleanHome,
-		Records: make(map[Key]Record),
+		Home:  cleanHome,
+		Links: make(map[Key]LinkRecord),
 	}, nil
+}
+
+// Equal reports whether two snapshots contain the same HOME binding and link
+// ownership facts.
+func Equal(left, right Snapshot) bool {
+	return left.Home == right.Home && maps.Equal(left.Links, right.Links)
 }

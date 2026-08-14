@@ -1,7 +1,6 @@
 package converge
 
 import (
-	"errors"
 	"slices"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
@@ -23,144 +22,141 @@ func (source selectionSource) label() string {
 }
 
 type analysis struct {
-	report      Report
-	loaded      state.Loaded
-	controls    corepaths.ResolvedControls
-	fingerprint []byte
+	report   Report
+	planned  []planned
+	loaded   state.Loaded
+	controls corepaths.ResolvedControls
 }
 
 // Analyze reloads every convergence input and returns one complete read-only
-// report. Expressible selection and path blockers are reported as Problems.
+// report. Expressible selection and path refusals are reported as skip lines.
 func Analyze(environment Environment) (Report, error) {
 	prepared, err := analyzeEnvironment(environment)
 	if err != nil {
 		return Report{}, err
 	}
-	return cloneReport(prepared.report), nil
+	return prepared.report, nil
 }
 
 func analyzeEnvironment(environment Environment) (analysis, error) {
-	environment, err := normalizeEnvironment(environment)
+	normalized, err := normalizeEnvironment(environment)
 	if err != nil {
-		return analysis{}, err
+		return analysis{}, newFailure(false, nil, err)
 	}
-	if err := validateEnvironmentControls(environment); err != nil {
-		return analysis{}, err
+	prepared, err := analyzePreparedEnvironment(normalized)
+	if err != nil {
+		return analysis{}, newFailure(false, nil, err)
 	}
+	return prepared, nil
+}
+
+func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 	machine, err := requireMachine(environment.ConfigPath)
 	if err != nil {
 		return analysis{}, err
 	}
 	controlPaths := environmentControls(environment, machine.Repository)
-	problems := make([]Problem, 0, 1)
-	controls, err := resolveControls(controlPaths)
+	controls, err := validateControls(controlPaths)
 	if err != nil {
-		if !errors.Is(err, corepaths.ErrControlTopology) {
-			return analysis{}, err
-		}
-		problems = append(problems, Problem{
-			Kind:   ProblemBlocked,
-			Code:   ProblemCodeControlTopology,
-			Reason: err.Error(),
-		})
+		return analysis{}, err
+	}
+	paths, err := controls.Paths()
+	if err != nil {
+		return analysis{}, err
+	}
+	controlLines, err := planControlModes(paths)
+	if err != nil {
+		return analysis{}, err
 	}
 	repository, err := config.OpenRepository(machine.Repository)
 	if err != nil {
 		return analysis{}, err
 	}
-	selection, err := resolveSelection(repository, machine, environment.Platform)
+	platform, err := resolvePlatform(environment)
 	if err != nil {
 		return analysis{}, err
 	}
-	for _, problem := range selection.problems {
-		problems = append(problems, Problem{
-			Kind:     ProblemBlocked,
-			ModuleID: problem.moduleID,
-			Reason:   problem.reason,
-		})
+	selection, err := resolveSelection(repository, machine, platform)
+	if err != nil {
+		return analysis{}, err
 	}
 	loaded, err := loadState(environment.StatePath, environment.Home)
 	if err != nil {
 		return analysis{}, err
 	}
-	plan, err := buildAnalysisPlan(
+	planned, err := buildAnalysisLines(
 		environment.Home,
 		controls,
 		selection.modules,
 		loaded.Snapshot,
-		problems,
+		selection.skips,
 	)
 	if err != nil {
 		return analysis{}, err
 	}
-	warnings := make([]string, 0, 1)
-	if loaded.Warning != "" {
-		warnings = append(warnings, loaded.Warning)
-	}
-	report := newReport(
-		loaded.Snapshot,
-		selection.sources,
-		selection.observations,
-		plan,
-		warnings,
-		statusModuleIDs(repository, machine, loaded.Snapshot),
-	)
-	fingerprint, err := machineFingerprint(machine)
-	if err != nil {
-		return analysis{}, err
+	planned = append(controlLines, planned...)
+	sortPlanned(planned)
+	report := Report{
+		Facts: newReportFacts(
+			loaded.Snapshot,
+			selection.sources,
+			selection.observations,
+			statusModuleIDs(repository, machine, loaded.Snapshot),
+		),
+		Lines:        publicLines(planned),
+		StateWarning: loaded.Warning,
 	}
 	return analysis{
-		report:      report,
-		loaded:      loaded,
-		controls:    controls,
-		fingerprint: fingerprint,
+		report:   report,
+		planned:  planned,
+		loaded:   loaded,
+		controls: controls,
 	}, nil
 }
 
-func buildAnalysisPlan(
+func buildAnalysisLines(
 	home string,
 	controls corepaths.ResolvedControls,
 	resolvedModules []config.Module,
 	snapshot state.Snapshot,
-	problems []Problem,
-) (Plan, error) {
-	if len(problems) != 0 {
-		return Plan{
-			problems:   append([]Problem(nil), problems...),
-			finalState: cloneSnapshot(snapshot),
-		}, nil
+	skips []planned,
+) ([]planned, error) {
+	if slices.ContainsFunc(skips, func(line planned) bool {
+		return line.Op == OpSkip
+	}) {
+		loopLines, err := buildLines(planRequest{
+			Home:     home,
+			Controls: controls,
+			Modules:  resolvedModules,
+			State:    snapshot,
+		})
+		if err != nil {
+			return nil, err
+		}
+		lines := append(append([]planned(nil), skips...), loopLines...)
+		sortPlanned(lines)
+		return lines, nil
 	}
 
-	plan, err := buildPlan(planRequest{
+	lines, err := buildLines(planRequest{
 		Home:     home,
 		Controls: controls,
 		Modules:  resolvedModules,
 		State:    snapshot,
 	})
 	if err != nil {
-		return Plan{}, err
+		return nil, err
 	}
-	return plan, nil
+	return lines, nil
 }
 
-func newReport(
+func newReportFacts(
 	snapshot state.Snapshot,
 	sources map[string]selectionSource,
 	observations map[string]moduleObservation,
-	plan Plan,
-	warnings []string,
 	moduleIDs []string,
-) Report {
-	return Report{
-		Facts: buildModuleFacts(
-			moduleIDs,
-			sources,
-			observations,
-			snapshot,
-		),
-		Plan:     clonePlan(plan),
-		Warnings: append([]string(nil), warnings...),
-	}
+) []ModuleFact {
+	return buildModuleFacts(moduleIDs, sources, observations, snapshot)
 }
 
 func buildModuleFacts(
@@ -206,14 +202,14 @@ func statusModuleIDs(
 	for _, id := range machine.ExtraModules {
 		set[id] = true
 	}
-	for key := range snapshot.Records {
+	for key := range snapshot.Links {
 		set[key.ModuleID] = true
 	}
 	return sortedAnalysisSet(set)
 }
 
 func stateHasModule(snapshot state.Snapshot, moduleID string) bool {
-	for key := range snapshot.Records {
+	for key := range snapshot.Links {
 		if key.ModuleID == moduleID {
 			return true
 		}
@@ -228,30 +224,4 @@ func sortedAnalysisSet(values map[string]bool) []string {
 	}
 	slices.Sort(result)
 	return result
-}
-
-func cloneReport(report Report) Report {
-	return Report{
-		Facts:    append([]ModuleFact(nil), report.Facts...),
-		Plan:     clonePlan(report.Plan),
-		Warnings: append([]string(nil), report.Warnings...),
-	}
-}
-
-func clonePlan(plan Plan) Plan {
-	cloned := Plan{
-		transitions: make([]transition, len(plan.transitions)),
-		problems:    append([]Problem(nil), plan.problems...),
-		actions:     append([]Action(nil), plan.actions...),
-		schedule:    append([]executionStep(nil), plan.schedule...),
-		finalState:  cloneSnapshot(plan.finalState),
-	}
-	for index, planned := range plan.transitions {
-		cloned.transitions[index] = planned
-		cloned.transitions[index].actionIndexes = append(
-			[]int(nil),
-			planned.actionIndexes...,
-		)
-	}
-	return cloned
 }

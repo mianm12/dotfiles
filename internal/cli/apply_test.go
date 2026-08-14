@@ -29,8 +29,8 @@ target = "~/.gated"
 	fixture.writeMachine(t, []string{"base"}, nil)
 
 	code, _, stderr := fixture.runInjected("apply")
-	if code != exitOK || stderr == "" {
-		t.Fatalf("apply = (%d, %q), want success with missing-state warning", code, stderr)
+	if code != exitOK {
+		t.Fatalf("apply = (%d, %q), want success", code, stderr)
 	}
 	assertCLILink(
 		t,
@@ -62,11 +62,15 @@ target = "~/.gated"
 	before := snapshotTree(t, explicit.root)
 
 	code, stdout, stderr = explicit.runInjected("apply")
-	if code != exitError || stdout != "" ||
-		!strings.Contains(stderr, "not applicable") {
-		t.Fatalf("extra apply = (%d, %q, %q), want not-applicable failure", code, stdout, stderr)
+	if code != exitError ||
+		!strings.Contains(stdout, "skip module=gated") ||
+		!strings.Contains(stdout, "not applicable") ||
+		!strings.Contains(stderr, "state is missing") ||
+		strings.Contains(stderr, "error:") {
+		t.Fatalf("extra apply = (%d, %q, %q), want blocked outcome", code, stdout, stderr)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, explicit)
+	assertCLIMissing(t, explicit.state)
 	if extras := explicit.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "gated" {
 		t.Fatalf("extra_modules = %v, want unchanged gated selection", extras)
 	}
@@ -116,8 +120,8 @@ target = "~/.extra"
 	machineBefore := snapshotPaths(t, fixture.config)
 
 	code, _, stderr := fixture.run("apply")
-	if code != exitOK || stderr == "" {
-		t.Fatalf("apply extra = (%d, %q), want success with missing-state warning", code, stderr)
+	if code != exitOK {
+		t.Fatalf("apply extra = (%d, %q), want success", code, stderr)
 	}
 	assertSnapshotUnchanged(t, machineBefore)
 	assertCLILink(
@@ -159,7 +163,7 @@ os = ["freebsd"]
 	}
 
 	code, _, stderr := fixture.runInjected("apply")
-	if code != exitOK || stderr == "" {
+	if code != exitOK {
 		t.Fatalf("known-mismatch apply = (%d, %q)", code, stderr)
 	}
 	assertCLILink(

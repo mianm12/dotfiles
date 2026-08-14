@@ -40,7 +40,7 @@ target = "~/.app"
 		}
 	}
 	code, stdout, stderr := fixture.run("status")
-	if code != exitOK || !strings.Contains(stdout, "conflict") || stderr == "" {
+	if code != exitOK || !strings.Contains(stdout, "skip") || stderr == "" {
 		t.Fatalf("status conflict = (%d, %q, %q), want successful status", code, stdout, stderr)
 	}
 }

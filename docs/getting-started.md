@@ -80,7 +80,7 @@ HOME="$DOT_TUTORIAL_HOME" bin/dot status
 ```
 
 成功后，临时 HOME 中的 Starship 配置是指向仓库 source 的 symlink；`status` 不应再报告待执行
-action 或 problem：
+循环行或 `skip`：
 
 ```sh
 ls -l "$DOT_TUTORIAL_HOME/.config/starship.toml"
@@ -113,7 +113,7 @@ test -n "$DOT_TUTORIAL_ROOT" && rm -rf -- "$DOT_TUTORIAL_ROOT"
 1. 阅读 [`dot.toml`](../dot.toml) 和准备启用的 `modules/<id>/module.toml`；
 2. 运行 `dot paths`，确认当前 machine config、state 和 lock 的位置；
 3. 检查每个 target 是否已经存在普通文件、目录或未知 symlink；
-4. 使用 `dot apply --dry-run` 阅读全部 action、warning 和 problem；
+4. 使用 `dot apply --dry-run` 阅读全部循环行；
 5. 只有确认冲突已经由你人工处理后才运行 `dot apply`。
 
 `dot` 不会自动导入、备份或覆盖未知数据。需要理解原因时阅读
@@ -126,6 +126,6 @@ test -n "$DOT_TUTORIAL_ROOT" && rm -rf -- "$DOT_TUTORIAL_ROOT"
 - [管理 modules 与 placements](guides/manage-modules.md)：开始组织真实配置；
 - [Profiles 与平台差异](guides/profiles-and-platforms.md)：为多台机器建立 selection；
 - [所有权与安全边界](concepts/ownership-and-safety.md)：理解为什么某些 target 会被拒绝；
-- [故障排查](guides/troubleshooting.md)：从 action、problem 和 warning 定位输入事实；
+- [故障排查](guides/troubleshooting.md)：从循环行和 stderr 提示定位输入事实；
 - [术语表](glossary.md)：快速查询 module、placement、state 等词；
 - [开发者入口](development/README.md)：开始阅读和修改代码。

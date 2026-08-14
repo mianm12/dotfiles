@@ -73,7 +73,7 @@ target = "~/.app"
 	if err != nil {
 		t.Fatalf("analyzeStatus() error = %v", err)
 	}
-	actions := analysis.Plan.Actions()
+	actions := analysis.Lines
 	if len(analysis.Facts) != 1 ||
 		analysis.Facts[0].ID != "app" ||
 		analysis.Facts[0].Selection != "profile+extra" ||
@@ -102,7 +102,7 @@ func TestFullMutationAnalysisCompleteness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}
-		if !analysis.Plan.Executable() || len(analysis.Facts) != 2 ||
+		if analysis.HasSkip() || len(analysis.Facts) != 2 ||
 			analysis.Facts[0].ID != "base" ||
 			analysis.Facts[0].Selection != "profile" ||
 			analysis.Facts[1].ID != "extra" ||
@@ -126,14 +126,13 @@ func TestFullMutationAnalysisCompleteness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("analyzeApply() error = %v", err)
 		}
-		if analysis.Plan.Executable() || len(analysis.Plan.Actions()) != 0 ||
+		if !analysis.HasSkip() ||
 			len(analysis.Facts) != 2 ||
 			analysis.Facts[0].ID != "extra" ||
 			analysis.Facts[0].Selection != "extra" ||
 			analysis.Facts[1].ID != "gone" ||
 			analysis.Facts[1].Selection != "extra" ||
-			len(analysis.Plan.Problems()) != 1 ||
-			analysis.Plan.Problems()[0].ModuleID != "gone" {
+			!hasSkip(analysis, "gone") {
 			t.Fatalf(
 				"incomplete full modules = %#v, want unknown peer plus blocker",
 				analysis.Facts,
@@ -199,7 +198,7 @@ target = "~/.app"
 		code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 
 		if code != exitError ||
-			!strings.Contains(stdout, "conflict") ||
+			!strings.Contains(stdout, "skip") ||
 			!strings.Contains(stdout, `reason="actual target is regular file"`) ||
 			!strings.Contains(stderr, "state is missing") ||
 			strings.Contains(stderr, "error:") {
@@ -220,7 +219,7 @@ os = ["macos"]
 		code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 
 		if code != exitError ||
-			!strings.Contains(stdout, "problem kind=blocked module=gated") ||
+			!strings.Contains(stdout, "skip module=gated") ||
 			!strings.Contains(stdout, "not applicable") ||
 			!strings.Contains(stderr, "state is missing") ||
 			strings.Contains(stderr, "error:") {
@@ -263,13 +262,13 @@ target = "~/.app"
 	if code != exitOK ||
 		stderr != "" ||
 		!strings.Contains(stdout, "fact module=app selection=profile state=present applicability=not-applicable") ||
-		!strings.Contains(stdout, "action kind=prune module=app placement=config") {
+		!strings.Contains(stdout, "remove module=app placement=config") {
 		t.Fatalf("status pending cleanup = (%d, %q, %q)", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
 
 	code, stdout, stderr = fixture.runInjected("apply", "--dry-run")
-	if code != exitOK || stderr != "" || !strings.Contains(stdout, "prune") {
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "remove") {
 		t.Fatalf("cleanup dry-run = (%d, %q, %q)", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, before)
@@ -277,13 +276,12 @@ target = "~/.app"
 	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitOK ||
 		stderr != "" ||
-		!strings.Contains(stdout, "prune") ||
-		!strings.Contains(stdout, "targets_changed=true state_changed=true") {
+		!strings.Contains(stdout, "remove") {
 		t.Fatalf("cleanup apply = (%d, %q, %q)", code, stdout, stderr)
 	}
 	assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
-	if records := loadTestState(t, fixture).Records; len(records) != 0 {
-		t.Fatalf("state records = %#v, want cleanup complete", records)
+	if links := loadTestState(t, fixture).Links; len(links) != 0 {
+		t.Fatalf("state links = %#v, want cleanup complete", links)
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)
 }
@@ -300,10 +298,10 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 			if withState {
 				fixture.writeState(t, state.Snapshot{
 					Home: fixture.home,
-					Records: map[state.Key]state.Record{
-						{ModuleID: "gone", PlacementID: "local"}: {
-							Kind:   state.KindLocal,
-							Target: filepath.Join(fixture.home, ".gone"),
+					Links: map[state.Key]state.LinkRecord{
+						{ModuleID: "gone", PlacementID: "config"}: {
+							Target: ".gone",
+							Dest:   filepath.Join(fixture.repository, "modules", "gone", "config"),
 						},
 					},
 				})
@@ -318,7 +316,7 @@ func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
 					stdout,
 					`reason="selected module \"gone\" does not exist"`,
 				) ||
-				!strings.Contains(stdout, "problem kind=blocked module=gone") {
+				!strings.Contains(stdout, "skip module=gone") {
 				t.Fatalf(
 					"status missing selected module = (%d, %q), want blocked unknown convergence",
 					code,
@@ -349,19 +347,27 @@ target = "~/.app"
 		fixture.writeMachine(t, []string{"base"}, []string{"extra"})
 		before := snapshotTree(t, fixture.root)
 
-		code, stdout, _ := fixture.runInjected("status")
+		code, stdout, stderr := fixture.runInjected("status")
 
-		if code != exitOK ||
-			!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
-			!strings.Contains(stdout, `reason="control paths conflict:`) ||
-			!strings.Contains(stdout, "problem kind=blocked") {
+		if code != exitError ||
+			!strings.Contains(stderr, "control paths conflict") {
 			t.Fatalf(
-				"status topology blocker = (%d, %q), want blocked unknown convergence",
+				"status topology overlap = (%d, %q, %q), want analysis failure",
 				code,
 				stdout,
+				stderr,
 			)
 		}
 		assertSnapshotUnchanged(t, before)
 		assertCLIMissing(t, filepath.Join(fixture.home, ".app"))
 	})
+}
+
+func hasSkip(report converge.Report, moduleID string) bool {
+	for _, line := range report.Lines {
+		if line.Op == converge.OpSkip && line.ModuleID == moduleID {
+			return true
+		}
+	}
+	return false
 }

@@ -14,9 +14,11 @@ target = "~/.config/example/config"
 
 - Source 相对于 portable root 或 selected variant root。
 - Source 必须存在，其顶层对象只能是普通文件或目录，不得是 symlink 或 special；否则为配置
-  错误、零 mutation。该约束针对 desired source，与 dangling actual 链的规划规则正交。
-- Selected root 的解析身份必须位于 module root 内；source/example 经过现存 ancestor symlink
-  解析后的身份必须位于 selected root 内，否则为配置错误、零 mutation。
+  错误且不执行 config、state、placement parent 或 target mutation。Lock-first 已经建立的私有
+  state root/lock bookkeeping 可以保留。该约束针对 desired source，与 dangling actual 链正交。
+- Selected root、source 与 example 只按声明路径做词法规范化、join 和 containment；绝对路径或
+  `..` 逃逸是配置错误。`dot` 不解析 ancestor symlink 来建立另一份 source 身份。
+  Source/example 的最终目录项仍按各自叶子类型规则用 `lstat` 校验。
 - Source 目录内部不递归检查，内部 symlink 由用户负责。
 - Link desired identity 由 source 路径决定，不比较 source 内容；仅发生同一路径下内容变化时
   不要求重建 symlink 或更新 state。
@@ -48,49 +50,46 @@ example = "config.local.example"
 target = "~/.config/example/config.local"
 ```
 
-- Example 必须存在且为普通文件，只做字节复制；缺失或类型不符为配置错误、零 mutation。
-- Local 的 create、keep、退出 desired 和 provenance 行为由
+- Example 必须存在且为普通文件，只做字节复制；缺失或类型不符为配置错误且不修改 config、state、
+  placement parent 或 target。
+- Local 的 create、已存在 no-op 和无 state 行为由
   [`planning.md`](planning.md#local) 定义。
 - `*.local.example -> *.local` 是推荐命名，不是语法要求。
 
 ## 路径身份与边界
 
-- HOME、repository、target 以及进入 machine config 或 state 的解析后路径都必须是有效 UTF-8；
-  不支持只能用原始字节表示的文件系统路径，并在 mutation preflight 拒绝。
-- Target 先展开 HOME 并做词法规范化。
-- 对现存 ancestor symlink，解析到其实际父路径；missing suffix 按原名称追加。
-- 每次 convergence analysis 都对全部 effective placements 运行同一次完整 target validation；
-  任意两个 active desired placements 必须构成 target antichain：规范化 target 或解析后 target
-  相等、互为祖先或后代时拒绝。State-only stale records 不进入该集合，其清理关系由
-  [`planning.md`](planning.md#通用决策规则) 定义。
-- 该不变量不区分 link/local、source 是文件还是目录，也不依赖 actual target 当前类型。
-- Parent symlink 合法；路径关系同时比较 lexical 和 resolved identity。Link state 保存的
-  resolved target 及其变化对应的 Action eligibility 分别由
-  [`state-and-ownership.md`](state-and-ownership.md#ownership-规则) 和
-  [`planning.md`](planning.md#link) 定义。
-- State-owned parent link 与本轮 active link ownership 的实际 traversal 约束由
-  [`planning.md`](planning.md#通用决策规则) 定义；只比较真实经过的 link 目录项，不因独立
-  alias 最终到达同一 destination 而建立关系。
-
-不额外探测 case sensitivity、Unicode alias、filesystem type 或 hard-link identity。
+- HOME、repository、target 以及进入 machine config 或 state 的路径都必须是有效 UTF-8；
+  不支持只能用原始字节表示的文件系统路径，并在执行任何业务 mutation 前拒绝。
+- Target 身份是去掉 `~/` 后的规范化 HOME-relative 词法路径，例如 `.config/app/config`。
+  碰撞与嵌套只比较这一条字符串；观察、控制区比较和 mutation 才在固定 HOME 下派生绝对路径。
+- 祖先 symlink 合法。内核在 `lstat` / `symlink` / `mkdir` 时跟随它们；`dot` 不把解析后的
+  父路径或沿途链接记为身份，也不因两条不同词法路径落到同一磁盘位置而把它们当成同一个
+  target。这是已接受风险，见 [`product.md`](product.md#明确接受的风险)。
+- 每次收敛观察都对全部 effective placements 做同一次词法校验。任意两个 active desired
+  词法路径相等或互为祖先/后代时，两条都标 `skip`，整批不写，见
+  [`planning.md`](planning.md#通用决策规则)。不区分 link/local、source 是文件还是目录，
+  也不依赖 actual target 当前类型。State-only stale records 不进入该集合。
+- 不额外探测 case sensitivity、Unicode alias、filesystem type 或 hard-link identity。
 
 ### Control-path topology
 
-- Config root 是 machine config 的直接父目录；machine config 必须是该 root 的直接子项。
-- State root 是 state 与 lock 的共同直接父目录；state 与 lock 必须是两个不同的 sibling。
-- Config root 与 state root 的最终对象必须是直接的真实目录，不得是 symlink；更高层
-  ancestor symlink 合法。
-- Control family 分为：
-  - repository tree；
-  - config root tree，以及 machine config 目录项与最终解析身份；
-  - state root tree，以及 state/lock 目录项与最终解析身份。
-- 三个 family 在词法规范化、现存 ancestor 解析和最终 control 解析后的任意交叉表示中，不得
-  相等或互为祖先、后代。
-- 参与当前命令 path validation 的 active placement target 不得与任一 control family 相等、
-  包含它或位于其中。
-- 这些关系由同一套只读路径身份比较实现。
-- Control 文件的公开发现入口及输出契约只由 [`cli.md`](cli.md#paths) 定义。
+控制区是三个词法前缀：
 
-Control topology 自身无效或 active target 越界时，规划不可执行。已退出 desired 的 stale
-target 与 control family 重叠时采用不同的保守清理规则，见
-[`planning.md`](planning.md#通用决策规则)。
+- repository 树（`machine` 里的绝对仓库路径）；
+- config 根（machine config 的直接父目录）；
+- state 根（state 与 lock 的共同直接父目录）。
+
+规则：
+
+- Machine config 必须是 config 根的直接子项。
+- State 与 lock 必须是同一 state 根下两个不同的直接 sibling。
+- Repository、config 根与 state 根三个最终目录项都必须是真实目录，不得是 symlink。State 根
+  在只读观察时可以尚不存在，并由 apply 的取锁 bookkeeping 建立；更高层 ancestor symlink 合法。
+- 三个前缀词法规范化后不得相等或互为祖先/后代。
+- Active desired target 不得与任一前缀相等、包含它或位于其中；否则该 target 标 `skip`。
+- 不解析控制路径的 ancestor/entry/resolved 交叉表示，不建立 control family 图。
+- 三个前缀互相重叠时，无法安全形成循环：这是分析失败，不是 placement `skip`。只读命令
+  也不在这种布局上猜测模块或账本。
+- 已退出 desired 的 stale target 与控制前缀词法重叠时只允许 `forget`，不得 `remove`，见
+  [`planning.md`](planning.md#stale-link)。
+- Control 文件的公开发现入口及输出契约只由 [`cli.md`](cli.md#paths) 定义。

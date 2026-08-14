@@ -54,7 +54,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 			"fact module=gated selection=profile state=present applicability=indeterminate ",
 		) ||
 		!strings.Contains(stdout, "synthetic os-release failure") ||
-		!strings.Contains(stdout, "problem kind=blocked module=gated") ||
+		!strings.Contains(stdout, "skip module=gated") ||
 		strings.Contains(stdout, "prune") ||
 		strings.Contains(stdout, "forget") {
 		t.Fatalf(
@@ -69,7 +69,7 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 	code, stdout, stderr = fixture.runInjected("apply", "--dry-run")
 	if code != exitError ||
 		stderr != "" ||
-		!strings.Contains(stdout, "problem kind=blocked module=gated") ||
+		!strings.Contains(stdout, "skip module=gated") ||
 		!strings.Contains(stdout, "synthetic os-release failure") ||
 		strings.Contains(stdout, "prune") ||
 		strings.Contains(stdout, "forget") {
@@ -84,9 +84,10 @@ func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T)
 
 	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "applicability is indeterminate") ||
-		!strings.Contains(stderr, "synthetic os-release failure") {
+		!strings.Contains(stdout, "skip module=gated") ||
+		!strings.Contains(stdout, "applicability is indeterminate") ||
+		!strings.Contains(stdout, "synthetic os-release failure") ||
+		stderr != "" {
 		t.Fatalf(
 			"indeterminate apply = (%d, %q, %q), want zero-write failure",
 			code,
@@ -141,12 +142,14 @@ func TestInactiveIndeterminateModuleIsNotResolvedByStatus(t *testing.T) {
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 		t.Fatalf("extra_modules = %v, want unchanged empty selection", extras)
 	}
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
+	if _, err := os.Lstat(fixture.lock); err != nil {
+		t.Fatalf("lock bookkeeping error = %v", err)
+	}
 	assertCLIMissing(t, filepath.Join(fixture.home, ".gated"))
 }
 
@@ -209,7 +212,7 @@ target = "~/.extra"
 
 	code, stdout, stderr := fixture.runInjected("apply", "--dry-run")
 	if code != exitError ||
-		!strings.Contains(stdout, "blocked module=uncertain") ||
+		!strings.Contains(stdout, "skip module=uncertain") ||
 		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
@@ -223,8 +226,10 @@ target = "~/.extra"
 
 	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, `module "uncertain" applicability is indeterminate`) {
+		!strings.Contains(stdout, "skip module=uncertain") ||
+		!strings.Contains(stdout, "applicability is indeterminate") ||
+		!strings.Contains(stderr, "state is missing") ||
+		strings.Contains(stderr, "error:") {
 		t.Fatalf(
 			"full apply = (%d, %q, %q), want whole-operation failure",
 			code,
@@ -232,12 +237,11 @@ target = "~/.extra"
 			stderr,
 		)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "extra" {
 		t.Fatalf("extra_modules = %v, want unchanged [extra] selection", extras)
 	}
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
 	assertCLIMissing(t, filepath.Join(fixture.home, ".extra"))
 }
 
@@ -314,7 +318,7 @@ func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 
 			code, stdout, stderr = fixture.runInjected("apply")
 			if code != exitOK ||
-				!strings.Contains(stdout, "state_changed=true") {
+				(!strings.Contains(stdout, "remove") && !strings.Contains(stdout, "forget")) {
 				t.Fatalf(
 					"apply after select remove = (%d, %q, %q), want cleanup",
 					code,
@@ -325,7 +329,7 @@ func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 			if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 0 {
 				t.Fatalf("extra_modules = %v, want empty", extras)
 			}
-			if records := loadTestState(t, fixture).Records; len(records) != 0 {
+			if records := loadTestState(t, fixture).Links; len(records) != 0 {
 				t.Fatalf("state records = %#v, want empty", records)
 			}
 			if test.drift {
@@ -338,7 +342,7 @@ func TestRemoveContractsUncertainExtraAndCleansOwnedState(t *testing.T) {
 	}
 }
 
-func TestRemoveUncertainExtraForgetsLocalWithoutDeletingUserData(t *testing.T) {
+func TestRemoveUncertainExtraLeavesLocalOutsideState(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = []`)
 	fixture.writeModule(t, "gated", `
 [match]
@@ -382,9 +386,11 @@ target = "~/.gated.local"
 
 	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitOK ||
-		!strings.Contains(stdout, "state_changed=true") {
+		!strings.Contains(stdout, "converged") ||
+		strings.Contains(stdout, "forget") ||
+		stderr != "" {
 		t.Fatalf(
-			"apply after select remove = (%d, %q, %q), want local forget",
+			"apply after select remove = (%d, %q, %q), want no-op outside state",
 			code,
 			stdout,
 			stderr,
@@ -394,7 +400,7 @@ target = "~/.gated.local"
 	if err != nil || string(data) != "user-owned" {
 		t.Fatalf("local after remove = (%q, %v), want preserved user data", data, err)
 	}
-	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+	if records := loadTestState(t, fixture).Links; len(records) != 0 {
 		t.Fatalf("state records = %#v, want empty", records)
 	}
 	assertApplyNoMutation(t, fixture, fixture.runInjected)
@@ -435,8 +441,9 @@ target = "~/.extra"
 
 	code, stdout, stderr = fixture.runInjected("apply")
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, `module "uncertain" applicability is indeterminate`) {
+		!strings.Contains(stdout, "skip module=uncertain") ||
+		!strings.Contains(stdout, "applicability is indeterminate") ||
+		stderr != "" {
 		t.Fatalf(
 			"apply = (%d, %q, %q), want effective blocker after selection contraction",
 			code,

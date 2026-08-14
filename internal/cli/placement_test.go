@@ -84,8 +84,8 @@ target = "~/.app-new"
 `)
 
 		code, _, stderr = fixture.run("apply")
-		if code != exitOK || !strings.Contains(stderr, "warning") {
-			t.Fatalf("apply with drifted stale link = (%d, %q), want warning success", code, stderr)
+		if code != exitOK {
+			t.Fatalf("apply with drifted stale link = (%d, %q), want success", code, stderr)
 		}
 		assertCLILink(t, oldTarget, userDestination)
 		assertCLILink(
@@ -94,7 +94,7 @@ target = "~/.app-new"
 			filepath.Join(fixture.repository, "modules", "app", "new"),
 		)
 		loaded := loadTestState(t, fixture)
-		if records := loaded.Records; len(records) != 1 {
+		if records := loaded.Links; len(records) != 1 {
 			t.Fatalf("state records = %#v, want only new placement", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
@@ -132,7 +132,7 @@ target = "~/.app"
 		t.Fatalf("phase-one apply = (%d, %q)", code, stderr)
 	}
 	assertCLIMissing(t, parent)
-	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+	if records := loadTestState(t, fixture).Links; len(records) != 0 {
 		t.Fatalf("state after phase one = %#v, want no records", records)
 	}
 	assertApplyNoMutation(t, fixture, fixture.run)
@@ -289,6 +289,17 @@ target = "~/.app.local"
 			} else {
 				assertSnapshotUnchanged(t, beforeTarget)
 			}
+			if links := loadTestState(t, fixture).Links; len(links) != 0 {
+				t.Fatalf("local apply wrote ownership state: %#v", links)
+			}
+			encodedState, err := os.ReadFile(fixture.state)
+			if err != nil {
+				t.Fatalf("os.ReadFile(state) error = %v", err)
+			}
+			if !strings.Contains(string(encodedState), `"version": 5`) ||
+				!strings.Contains(string(encodedState), `"links": []`) {
+				t.Fatalf("local-only state = %q, want empty state v5", encodedState)
+			}
 			assertApplyNoMutation(t, fixture, fixture.run)
 
 			example := filepath.Join(
@@ -313,6 +324,19 @@ target = "~/.app.local"
 					t.Fatalf("local after example update = (%q, %v), want original", data, err)
 				}
 			}
+
+			writeModuleManifest(t, fixture, "app", "")
+			beforeTarget = snapshotPaths(t, target)
+			code, stdout, stderr = fixture.run("apply")
+			if code != exitOK || stderr != "" {
+				t.Fatalf("apply after local exits desired = (%d, %q, %q)", code, stdout, stderr)
+			}
+			assertCLINoMutationResult(t, stdout)
+			assertSnapshotUnchanged(t, beforeTarget)
+			if links := loadTestState(t, fixture).Links; len(links) != 0 {
+				t.Fatalf("state after local exits desired = %#v, want no ownership", links)
+			}
+			assertApplyNoMutation(t, fixture, fixture.run)
 		})
 	}
 }
@@ -335,9 +359,7 @@ target = "~/.app"
 		beforeTarget := snapshotPaths(t, target)
 
 		code, stdout, stderr := fixture.run("apply")
-		if code != exitOK ||
-			!strings.Contains(stdout, "targets_changed=false state_changed=true") ||
-			stderr == "" {
+		if code != exitOK || !strings.Contains(stdout, "record") {
 			t.Fatalf("adopt apply = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, beforeTarget)
@@ -353,10 +375,13 @@ target = "~/.app"
 		}
 		before := snapshotTree(t, fixture.root)
 		code, stdout, stderr = fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		if code != exitError ||
+			!strings.Contains(stdout, "skip") ||
+			!strings.Contains(stdout, "actual symlink is not explained by desired or state") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("apply after drift = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 	})
 
 	t.Run("local to link requires two-stage cleanup and user handling", func(t *testing.T) {
@@ -385,10 +410,13 @@ target = "~/.shared"
 `)
 		before := snapshotTree(t, fixture.root)
 		code, stdout, stderr := fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		if code != exitError ||
+			!strings.Contains(stdout, "skip") ||
+			!strings.Contains(stdout, "actual target is regular file") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf("apply after kind change = (%d, %q, %q), want conflict", code, stdout, stderr)
 		}
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 
 		writeModuleManifest(t, fixture, "app", "")
 		code, _, stderr = fixture.run("apply")
@@ -400,7 +428,7 @@ target = "~/.shared"
 		if err != nil || string(data) != "local" {
 			t.Fatalf("local after phase one = (%q, %v), want preserved", data, err)
 		}
-		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		if records := loadTestState(t, fixture).Links; len(records) != 0 {
 			t.Fatalf("state after phase one = %#v, want no records", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
@@ -413,7 +441,10 @@ target = "~/.shared"
 `)
 		before = snapshotTree(t, fixture.root)
 		code, stdout, stderr = fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
+		if code != exitError ||
+			!strings.Contains(stdout, "skip") ||
+			!strings.Contains(stdout, "actual target is regular file") ||
+			strings.Contains(stderr, "error:") {
 			t.Fatalf(
 				"phase-two apply with retained local = (%d, %q, %q), want conflict",
 				code,
@@ -421,7 +452,7 @@ target = "~/.shared"
 				stderr,
 			)
 		}
-		assertSnapshotUnchanged(t, before)
+		assertOnlyLockBookkeepingChanged(t, before, fixture)
 
 		preserved := filepath.Join(fixture.root, "preserved-local")
 		if err := os.Rename(target, preserved); err != nil {
@@ -469,7 +500,7 @@ target = "~/.shared"
 		}
 		target := filepath.Join(fixture.home, ".shared")
 		assertCLIMissing(t, target)
-		if records := loadTestState(t, fixture).Records; len(records) != 0 {
+		if records := loadTestState(t, fixture).Links; len(records) != 0 {
 			t.Fatalf("state after phase one = %#v, want no records", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
@@ -487,84 +518,6 @@ target = "~/.shared"
 		data, err := os.ReadFile(target)
 		if err != nil || string(data) != "local" {
 			t.Fatalf("local after phase two = (%q, %v), want initialized", data, err)
-		}
-		assertApplyNoMutation(t, fixture, fixture.run)
-	})
-}
-
-func TestApplyRejectsParentSymlinkDrift(t *testing.T) {
-	t.Run("active update is rejected", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = ["app"]`)
-		fixture.writeModule(t, "app", `
-[[links]]
-id = "config"
-source = "old"
-target = "~/alias/config"
-`, map[string]string{
-			"old": "old",
-			"new": "new",
-		})
-		fixture.writeMachine(t, []string{"base"}, nil)
-		firstParent, secondParent, alias := makeParentAlias(t, fixture)
-
-		code, _, stderr := fixture.run("apply")
-		if code != exitOK {
-			t.Fatalf("initial apply = (%d, %q)", code, stderr)
-		}
-		assertApplyNoMutation(t, fixture, fixture.run)
-		moveParentAlias(t, alias, secondParent)
-		oldDestination := filepath.Join(fixture.repository, "modules", "app", "old")
-		if err := os.Symlink(oldDestination, filepath.Join(secondParent, "config")); err != nil {
-			t.Fatalf("os.Symlink(second target) error = %v", err)
-		}
-		writeModuleManifest(t, fixture, "app", `
-[[links]]
-id = "config"
-source = "new"
-target = "~/alias/config"
-`)
-		before := snapshotTree(t, fixture.root)
-
-		code, stdout, stderr := fixture.run("apply")
-		if code != exitError || stdout != "" || !strings.Contains(stderr, "plan conflict") {
-			t.Fatalf("apply after parent drift = (%d, %q, %q), want conflict", code, stdout, stderr)
-		}
-		assertSnapshotUnchanged(t, before)
-		assertCLILink(t, filepath.Join(firstParent, "config"), oldDestination)
-		assertCLILink(t, filepath.Join(secondParent, "config"), oldDestination)
-	})
-
-	t.Run("stale prune warns and forgets", func(t *testing.T) {
-		fixture := newCLITestEnv(t, `base = ["app"]`)
-		fixture.writeModule(t, "app", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/alias/config"
-`, map[string]string{"config": "config"})
-		fixture.writeMachine(t, []string{"base"}, nil)
-		firstParent, secondParent, alias := makeParentAlias(t, fixture)
-
-		code, _, stderr := fixture.run("apply")
-		if code != exitOK {
-			t.Fatalf("initial apply = (%d, %q)", code, stderr)
-		}
-		assertApplyNoMutation(t, fixture, fixture.run)
-		moveParentAlias(t, alias, secondParent)
-		destination := filepath.Join(fixture.repository, "modules", "app", "config")
-		if err := os.Symlink(destination, filepath.Join(secondParent, "config")); err != nil {
-			t.Fatalf("os.Symlink(second target) error = %v", err)
-		}
-		writeModuleManifest(t, fixture, "app", "")
-
-		code, _, stderr = fixture.run("apply")
-		if code != exitOK || !strings.Contains(stderr, "warning") {
-			t.Fatalf("apply stale parent drift = (%d, %q), want warning success", code, stderr)
-		}
-		assertCLILink(t, filepath.Join(firstParent, "config"), destination)
-		assertCLILink(t, filepath.Join(secondParent, "config"), destination)
-		if records := loadTestState(t, fixture).Records; len(records) != 0 {
-			t.Fatalf("state records = %#v, want stale ownership forgotten", records)
 		}
 		assertApplyNoMutation(t, fixture, fixture.run)
 	})
@@ -697,39 +650,9 @@ target = "~/.invalid"
 					!strings.Contains(stderr, "example")) {
 				t.Fatalf("apply = (%d, %q, %q), want strict source/example failure", code, stdout, stderr)
 			}
-			assertSnapshotUnchanged(t, before)
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
 			assertCLIMissing(t, fixture.state)
-			assertCLIMissing(t, fixture.lock)
 			assertCLIMissing(t, filepath.Join(fixture.home, ".invalid"))
 		})
-	}
-}
-
-func makeParentAlias(
-	t *testing.T,
-	fixture *cliTestEnv,
-) (firstParent, secondParent, alias string) {
-	t.Helper()
-	firstParent = filepath.Join(fixture.root, "first-parent")
-	secondParent = filepath.Join(fixture.root, "second-parent")
-	for _, directory := range []string{firstParent, secondParent} {
-		if err := os.Mkdir(directory, 0o700); err != nil {
-			t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
-		}
-	}
-	alias = filepath.Join(fixture.home, "alias")
-	if err := os.Symlink(firstParent, alias); err != nil {
-		t.Fatalf("os.Symlink(first parent) error = %v", err)
-	}
-	return firstParent, secondParent, alias
-}
-
-func moveParentAlias(t *testing.T, alias, destination string) {
-	t.Helper()
-	if err := os.Remove(alias); err != nil {
-		t.Fatalf("os.Remove(alias) error = %v", err)
-	}
-	if err := os.Symlink(destination, alias); err != nil {
-		t.Fatalf("os.Symlink(moved alias) error = %v", err)
 	}
 }

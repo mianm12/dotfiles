@@ -40,3 +40,5 @@ ADR 解释选择理由，不复制产品规范。若决策改变用户行为，�
 状态只在每篇 ADR 正文中记录，索引不复制，避免决策变化后出现两个状态来源。
 
 - [0001: Convergence V3 使用单一状态转换模型](0001-convergence-v3.md)
+- [0002: Convergence V4 分离语义计划、执行与 ownership](0002-convergence-v4.md)
+- [0003: 词法身份与单一收敛循环](0003-lexical-convergence-loop.md)

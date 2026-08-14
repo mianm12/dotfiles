@@ -13,96 +13,153 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestFinishMutationRendersForgetOnlyAfterSuccess(t *testing.T) {
-	fixture := newCLITestEnv(t, `base = []`)
-	fixture.writeMachine(t, []string{"base"}, nil)
-	fixture.writeState(t, state.Snapshot{
-		Home: fixture.home,
-		Records: map[state.Key]state.Record{
-			{ModuleID: "old", PlacementID: "config"}: {
-				Kind:   state.KindLocal,
-				Target: filepath.Join(fixture.home, ".config", "old"),
-			},
-		},
-	})
-	report := analyzeOperationReport(t, fixture)
-	report.Warnings = []string{"synthetic input warning"}
-	actions := report.Plan.Actions()
-	if len(actions) != 1 || actions[0].Decision != converge.DecisionForget {
-		t.Fatalf("Analyze() actions = %#v, want one forget", actions)
-	}
-	forget := actions[0]
+func TestFinishMutationPrintsCompletedLinesOnFailure(t *testing.T) {
 	result := converge.ApplyResult{
-		Report:       report,
-		StateChanged: true,
+		Report: converge.Report{StateWarning: "state is missing; links removed from desired configuration cannot be discovered"},
+		Done: []converge.Line{{
+			Op:          converge.OpLink,
+			ModuleID:    "app",
+			PlacementID: "config",
+			Target:      "/tmp/home/.app",
+		}},
 	}
+	var stdout, stderr bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	runErr := errors.New("synthetic execute failure")
 
+	err := finishMutation(command, result, runErr, "dot apply")
+	if !errors.Is(err, runErr) {
+		t.Fatalf("finishMutation() error = %v, want run error", err)
+	}
+	if !strings.Contains(stdout.String(), "link module=app placement=config") {
+		t.Fatalf("finishMutation() stdout = %q, want completed line", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "warning: state is missing") {
+		t.Fatalf("finishMutation() stderr = %q, want state warning", stderr.String())
+	}
+}
+
+func TestFinishMutationPrintsStateWarningOnSuccess(t *testing.T) {
+	result := converge.ApplyResult{
+		Report: converge.Report{StateWarning: "state is missing; links removed from desired configuration cannot be discovered"},
+		Done: []converge.Line{{
+			Op:          converge.OpLink,
+			ModuleID:    "app",
+			PlacementID: "config",
+			Target:      "/tmp/home/.app",
+		}},
+		TargetsChanged: true,
+		StateChanged:   true,
+	}
+	var stdout, stderr bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+
+	if err := finishMutation(command, result, nil, "dot apply"); err != nil {
+		t.Fatalf("finishMutation() error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "link module=app placement=config") {
+		t.Fatalf("finishMutation() stdout = %q, want completed line", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "warning: state is missing") {
+		t.Fatalf("finishMutation() stderr = %q, want state warning", stderr.String())
+	}
+}
+
+func TestFinishMutationProjectsSkipWithoutDuplicateError(t *testing.T) {
+	result := converge.ApplyResult{
+		Report: converge.Report{
+			StateWarning: "state is missing; links removed from desired configuration cannot be discovered",
+			Lines: []converge.Line{{
+				Op:          converge.OpSkip,
+				ModuleID:    "app",
+				PlacementID: "config",
+				Target:      "/home/user/.app",
+				Reason:      "actual target is a regular file",
+			}},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+
+	err := finishMutation(command, result, nil, "dot apply")
+	if !errors.Is(err, errAnalysisBlocked) {
+		t.Fatalf("finishMutation(skip) error = %v, want silent sentinel", err)
+	}
+	if !strings.Contains(stdout.String(), "skip module=app placement=config") ||
+		!strings.Contains(stdout.String(), strconv.Quote("actual target is a regular file")) {
+		t.Fatalf("blocked stdout = %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "warning: state is missing") {
+		t.Fatalf("blocked stderr = %q", stderr.String())
+	}
+}
+
+func TestPrintLineRendersChmodControlShape(t *testing.T) {
+	var stdout bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&stdout)
+	line := converge.Line{
+		Op:      converge.OpChmod,
+		Control: "state-root",
+		Path:    "/tmp/home/.local/state/dot",
+		Mode:    "0700",
+	}
+	if err := printLine(command, line); err != nil {
+		t.Fatalf("printLine(chmod) error = %v", err)
+	}
+	want := "chmod control=state-root path=\"/tmp/home/.local/state/dot\" mode=0700\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("printLine(chmod) = %q, want %q", got, want)
+	}
+}
+
+func TestRecoveryInstructionClassifiesErrorsAtCLIBoundary(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		runErr error
+		name string
+		err  error
+		want string
 	}{
-		{name: "state commit failure", runErr: errors.New("synthetic state commit failure")},
-		{name: "lock release failure", runErr: converge.ErrPartial},
+		{name: "ordinary", err: errors.New("ordinary"), want: ""},
+		{name: "uninitialized", err: converge.ErrMachineUninitialized, want: "; run `dot init`"},
+		{name: "control paths", err: converge.ErrControlPaths, want: "; run `dot paths`"},
+		{name: "invalid state", err: state.ErrInvalid, want: "; locate state with `dot paths`, then archive or remove it outside dot"},
+		{name: "legacy state", err: state.ErrLegacyVersion, want: "; locate state with `dot paths`, then archive or remove it outside dot"},
+		{name: "home mismatch", err: state.ErrHomeMismatch, want: "; locate state with `dot paths`, then archive or remove it outside dot"},
+		{name: "future state", err: state.ErrTooNew, want: "; preserve state and use a newer `dot` version that supports it"},
+		{
+			name: "mutation may have changed",
+			err:  &converge.Failure{MayHaveChanged: true, Cause: errors.New("mutation")},
+			want: "; rerun the complete command",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			command := &cobra.Command{}
-			command.SetOut(&stdout)
-			command.SetErr(&stderr)
-
-			err := finishMutation(command, result, test.runErr, "dot apply")
-
-			if !errors.Is(err, test.runErr) {
-				t.Fatalf("finishMutation() error = %v, want run error", err)
-			}
-			if stdout.Len() != 0 {
-				t.Fatalf(
-					"finishMutation() stdout = %q, want no action result",
-					stdout.String(),
-				)
-			}
-			if !strings.Contains(stderr.String(), "synthetic input warning") ||
-				strings.Contains(stderr.String(), "forgot ownership") ||
-				strings.Contains(stderr.String(), forget.Reason) {
-				t.Fatalf(
-					"finishMutation() stderr = %q, want only input warning",
-					stderr.String(),
-				)
+			if got := recoveryInstruction(test.err); got != test.want {
+				t.Fatalf("recoveryInstruction(%v) = %q, want %q", test.err, got, test.want)
 			}
 		})
 	}
-
-	t.Run("success", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		command := &cobra.Command{}
-		command.SetOut(&stdout)
-		command.SetErr(&stderr)
-
-		err := finishMutation(command, result, nil, "dot apply")
-		if err != nil {
-			t.Fatalf("finishMutation() error = %v", err)
-		}
-		quotedReason := "reason=" + strconv.Quote(forget.Reason)
-		if !strings.Contains(stdout.String(), "forget") ||
-			!strings.Contains(stdout.String(), "module=old placement=config") ||
-			!strings.Contains(stdout.String(), quotedReason) {
-			t.Fatalf(
-				"finishMutation() stdout = %q, want structured forget action",
-				stdout.String(),
-			)
-		}
-		if !strings.Contains(stderr.String(), "synthetic input warning") ||
-			!strings.Contains(stderr.String(), "forgot provenance") ||
-			!strings.Contains(stderr.String(), quotedReason) {
-			t.Fatalf(
-				"finishMutation() stderr = %q, want completed forget result",
-				stderr.String(),
-			)
-		}
-	})
 }
 
-func TestOperationReportRendersEveryActionWithQuotedReason(t *testing.T) {
+func TestIncompleteAnalysisRendersTypedFailureOnStderr(t *testing.T) {
+	fixture := newCLITestEnv(t, "base = []")
+	before := snapshotTree(t, fixture.root)
+
+	code, stdout, stderr := fixture.runInjected("status")
+	if code != exitError || stdout != "" ||
+		!strings.Contains(stderr, "failure may_have_changed=false") ||
+		!strings.Contains(stderr, "run `dot init`") {
+		t.Fatalf("status before init = (%d, %q, %q), want typed analysis failure", code, stdout, stderr)
+	}
+	assertSnapshotUnchanged(t, before)
+}
+
+func TestOperationReportRendersLoopLines(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `
 [[links]]
@@ -113,43 +170,34 @@ target = "~/.new"
 	fixture.writeMachine(t, []string{"base"}, nil)
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "old", PlacementID: "stale"}: {
-				Kind:   state.KindLocal,
-				Target: filepath.Join(fixture.home, ".old"),
+				Target: ".old",
+				Dest:   filepath.Join(fixture.repository, "modules", "old", "stale"),
 			},
 		},
 	})
 	analysis := analyzeOperationReport(t, fixture)
-	actions := analysis.Plan.Actions()
-	if len(actions) != 2 ||
-		actions[0].Decision != converge.DecisionCreateLink ||
-		actions[1].Decision != converge.DecisionForget {
-		t.Fatalf("Analyze() actions = %#v, want create then forget", actions)
+	if len(analysis.Lines) != 2 ||
+		analysis.Lines[0].Op != converge.OpLink ||
+		analysis.Lines[1].Op != converge.OpForget {
+		t.Fatalf("Analyze() lines = %#v, want link then forget", analysis.Lines)
 	}
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
-
 	if err := printOperationReport(command, analysis); err != nil {
 		t.Fatalf("printOperationReport() error = %v", err)
 	}
-
 	output := stdout.String()
-	if !strings.Contains(output, "create-link") ||
-		!strings.Contains(output, "forget") ||
-		!strings.Contains(
-			output,
-			"reason="+strconv.Quote(actions[1].Reason),
-		) {
-		t.Fatalf(
-			"printOperationReport() stdout = %q, want every structured action",
-			output,
-		)
+	if !strings.Contains(output, "link module=app") ||
+		!strings.Contains(output, "forget module=old") ||
+		!strings.Contains(output, "reason="+strconv.Quote(analysis.Lines[1].Reason)) {
+		t.Fatalf("printOperationReport() stdout = %q", output)
 	}
 }
 
-func TestStatusAnalysisProjectsFactsActionsAndProblems(t *testing.T) {
+func TestStatusAnalysisProjectsFactsAndLines(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app", "new"]`)
 	fixture.writeModule(t, "app", `
 [[links]]
@@ -166,37 +214,30 @@ target = "~/.new"
 	fixture.writeMachine(t, []string{"base"}, nil)
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "old", PlacementID: "stale"}: {
-				Kind:   state.KindLocal,
-				Target: filepath.Join(fixture.home, ".old"),
+				Target: ".old",
+				Dest:   filepath.Join(fixture.repository, "modules", "old", "stale"),
 			},
 		},
 	})
 	writeCLIFile(t, filepath.Join(fixture.home, ".app"), "personal")
 	analysis := analyzeOperationReport(t, fixture)
-	if analysis.Plan.Executable() {
-		t.Fatal("Analyze() plan is executable, want app target conflict")
+	if !analysis.HasSkip() {
+		t.Fatal("Analyze() has no skip, want app target conflict")
 	}
 	var stdout bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&stdout)
-
 	if err := printStatusAnalysis(command, analysis); err != nil {
 		t.Fatalf("printStatusAnalysis() error = %v", err)
 	}
-
 	output := stdout.String()
 	if !strings.Contains(output, "fact module=old selection=none state=present\n") ||
-		!strings.Contains(output, "action kind=create-link module=new placement=config") ||
+		!strings.Contains(output, "link module=new placement=config") ||
 		!strings.Contains(output, "forget") ||
-		!strings.Contains(output, `reason="local left desired; local targets are never pruned"`) ||
-		!strings.Contains(output, "problem kind=conflict module=app placement=config") ||
-		!strings.Contains(output, `reason="actual target is regular file"`) {
-		t.Fatalf(
-			"printStatusAnalysis() stdout = %q, want facts, actions, and problems",
-			output,
-		)
+		!strings.Contains(output, "skip module=app") {
+		t.Fatalf("printStatusAnalysis() stdout = %q", output)
 	}
 }
 
@@ -211,45 +252,4 @@ func analyzeOperationReport(t *testing.T, fixture *cliTestEnv) converge.Report {
 		t.Fatalf("Analyze() error = %v", err)
 	}
 	return report
-}
-
-func TestStatusAnalysisRendersObjectiveModuleFacts(t *testing.T) {
-	var stdout bytes.Buffer
-	command := &cobra.Command{}
-	command.SetOut(&stdout)
-	analysis := converge.Report{Facts: []converge.ModuleFact{
-		{
-			ID:             "named",
-			Selection:      "profile",
-			ManifestLoaded: true,
-			Applicability:  "applicable",
-			Variant:        "ubuntu",
-		},
-		{
-			ID:             "gated",
-			Selection:      "profile",
-			ManifestLoaded: true,
-			Applicability:  "indeterminate",
-			Diagnostic:     "distribution is unavailable",
-		},
-		{
-			ID:             "skipped",
-			Selection:      "profile",
-			ManifestLoaded: true,
-			Applicability:  "not-applicable",
-			StatePresent:   true,
-		},
-	}}
-
-	if err := printStatusAnalysis(command, analysis); err != nil {
-		t.Fatalf("printStatusAnalysis() error = %v", err)
-	}
-
-	want := "fact module=gated selection=profile state=absent applicability=indeterminate " +
-		"reason=\"distribution is unavailable\"\n" +
-		"fact module=named selection=profile state=absent applicability=applicable variant=ubuntu\n" +
-		"fact module=skipped selection=profile state=present applicability=not-applicable\n"
-	if output := stdout.String(); output != want {
-		t.Fatalf("printStatusAnalysis() stdout = %q, want %q", output, want)
-	}
 }

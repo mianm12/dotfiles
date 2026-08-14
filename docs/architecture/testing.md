@@ -8,14 +8,13 @@
 
 | 层次 | 主要拥有的证据 |
 | --- | --- |
-| `internal/storage` | 私有文件首次发布、相同内容 no-op、替换、权限和异常目录项 |
-| `internal/core/paths` | Target/source 解析、control topology、确定阻塞与不确定 I/O 分类 |
-| `internal/core/state` | State schema、严格解码、版本、稳定编码和安全字段 |
+| `internal/storage` | 私有文件首次发布、相同内容但权限不对的修复、替换和异常目录项 |
+| `internal/core/paths` | 词法 target、控制前缀隔离 |
+| `internal/core/state` | State v5 schema、先看 version 再严格解码 |
 | `internal/core/config` | Machine/repository/module 配置、profile、platform applicability 与 variants |
-| `internal/core/converge` | Selection resolution、analysis、planning、lock、execution、commit 与 recovery |
+| `internal/core/converge` | Selection、同一条循环、lock、execution、commit 与 recovery |
 | `internal/cli` | 公开命令、跨层用户故事、输出、退出码和完整失败边界 |
 | `cmd/dot` | 最小进程级 smoke |
-| `internal/architecture` | Production internal imports 与第三方 owner 的精确 allowlist |
 
 局部模型在 owner package 测试；用户可观察的完整调用路径在 `internal/cli` 测试。不要把所有行为
 塞进进程级测试，也不要为了复用 fixture 创建跨 package 通用测试框架。CLI 合成环境集中在
@@ -26,15 +25,18 @@
 - Init/select 只发布 machine selection，不读取 state 或修改 target；
 - status/dry-run 严格只读，并对完整 effective selection 与 stale state 建立同一 analysis；
 - Platform matching 使用注入的 known/unknown OS、distro、arch 合成值，不依赖运行测试的 host；
-- apply 锁前零写入 preflight、锁内 fresh analysis、changed-target 复核和 state commit；
-- deterministic blocker 不创建 state root、lock、target 或临时文件；
-- link/local ownership、forget/prune、目录 traversal 与 control boundary 不越权 mutation；
-- mutation、state commit 或 lock release 失败后不把未完成 Action 投影成成功；
+- apply 在 lock boundary 后获取 lock，锁内再跑同一条循环，有 skip 则不写；
+- 含 skip 的 apply 只允许 state root/lock bookkeeping，config、state、target、placement parent 与
+  local temporary file 保持不变；
+- `link` / `file` / `replace` / `remove` / `record` / `forget` 的磁盘效果与账本效果必须成对验证；
+- link/local ownership、forget/remove 与控制前缀不越权 mutation；
+- create 失败不进入 replace/remove；删除前只复核 raw dest；
+- mutation、state commit 或 lock release 失败使用 typed stage/partial/recovery；失败只投影已完成
+  的行；
 - 每个成功 mutation 场景重复执行相同 apply，并断言没有新的文件系统 mutation。
 
-Planner 的内部断言应直接覆盖一个 key 一个 Transition、Action/真实 execution schedule 同序和
-FinalState；CLI 测试只验证用户能观察的 facts/actions/problems/warnings，不复制 planner 的内部
-状态机，也不手工构造可能违反不变量的 Plan。
+循环测试保护可观察语义：相同输入得到稳定的行；词法嵌套 skip、stale forget/remove 和执行后
+ownership 由行为反例覆盖。CLI 测试只验证用户能观察的 facts、行、恢复提示和退出码。
 
 ## 合成环境与私人数据
 
@@ -63,15 +65,8 @@ Fuzz 与 vulnerability 的远程触发、required 状态和版本以当前 workf
 不在本文复制调度配置。Coverage 不设置简单全局百分比阈值；永久门禁优先覆盖数据完整性与失败
 边界，而不是追求无上下文的数字。
 
-## 架构约束测试
+## 依赖变更证据
 
-`internal/architecture/dependencies_test.go` 解析 production Go imports，并双向检查
-[架构概览](overview.md#package-地图)中的内部依赖边和第三方 owner：
-
-- 代码出现未列出的 package/import/owner 时失败；
-- allowlist 保留已经不存在的 package 或 edge 时也失败；
-- 标准库、tests、tools 与 transitive dependencies 不混入 production 表。
-
-Lock、target mutation、machine selection publication 和 state commit 由
-`internal/core/converge` 的 package/API 边界集中表达，不再建立按函数名扫描的第二套 ownership
-白名单。新增反向依赖或越层依赖必须先作为架构变化审查，不能靠单向放宽测试通过。
+Production imports 与 module graph 是代码事实，不再复制成测试内的 package/第三方 owner 注册表。
+新增 package、反向依赖或第三方依赖时，直接审查 imports、`go.mod`、职责归属和完整 diff；真正的
+安全不变量继续由 owner package 与跨层行为测试证明。

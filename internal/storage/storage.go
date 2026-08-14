@@ -42,35 +42,46 @@ type pendingPrivateFileFactory func(string) (pendingPrivateFile, error)
 // ValidateRoot 只读校验私有控制根目录。目录尚不存在时也通过，由 mutation
 // 在需要写入时调用 EnsureRoot 建立。
 func ValidateRoot(path string) error {
+	_, _, err := InspectRoot(path)
+	return err
+}
+
+// InspectRoot returns the mode and existence of a private directory entry.
+func InspectRoot(path string) (fs.FileMode, bool, error) {
 	cleanPath, err := cleanAbsolute(path)
 	if err != nil {
-		return fmt.Errorf("private root: %w", err)
+		return 0, false, fmt.Errorf("private root: %w", err)
 	}
-	_, _, err = inspectRoot(cleanPath)
-	return err
+	return inspectRoot(cleanPath)
 }
 
 // ValidatePrivateFile read-only validates an existing private file entry.
 // A missing path is valid because mutation may create it later.
 func ValidatePrivateFile(path string) error {
+	_, _, err := InspectPrivateFile(path)
+	return err
+}
+
+// InspectPrivateFile returns the mode and existence of a regular control file.
+func InspectPrivateFile(path string) (fs.FileMode, bool, error) {
 	cleanPath, err := cleanAbsolute(path)
 	if err != nil {
-		return fmt.Errorf("private file: %w", err)
+		return 0, false, fmt.Errorf("private file: %w", err)
 	}
 	info, err := os.Lstat(cleanPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return 0, false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect private file %q: %w", cleanPath, err)
+		return 0, false, fmt.Errorf("inspect private file %q: %w", cleanPath, err)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("private file %q is not a regular file", cleanPath)
+		return 0, false, fmt.Errorf("private file %q is not a regular file", cleanPath)
 	}
-	return nil
+	return info.Mode(), true, nil
 }
 
-// EnsureRoot 建立私有控制根目录，并把现存目录权限收敛为 0700。
+// EnsureRoot 建立缺失的私有控制根目录；现存目录的权限由显式 chmod 行收敛。
 // 最终对象必须是真实目录；更高层的 ancestor symlink 仍然合法。
 func EnsureRoot(path string) error {
 	cleanPath, err := cleanAbsolute(path)
@@ -78,7 +89,7 @@ func EnsureRoot(path string) error {
 		return fmt.Errorf("private root: %w", err)
 	}
 
-	mode, exists, err := inspectRoot(cleanPath)
+	_, exists, err := inspectRoot(cleanPath)
 	if err != nil {
 		return err
 	}
@@ -86,13 +97,13 @@ func EnsureRoot(path string) error {
 		if err := os.MkdirAll(cleanPath, PrivateDirectoryMode); err != nil {
 			return fmt.Errorf("create private root %q: %w", cleanPath, err)
 		}
-		mode, _, err = inspectRoot(cleanPath)
+		_, _, err = inspectRoot(cleanPath)
 		if err != nil {
 			return err
 		}
-	}
-	if err := chmodPrivateIfNeeded(cleanPath, mode, PrivateDirectoryMode); err != nil {
-		return fmt.Errorf("set private root permissions %q: %w", cleanPath, err)
+		if err := os.Chmod(cleanPath, PrivateDirectoryMode); err != nil {
+			return fmt.Errorf("set new private root permissions %q: %w", cleanPath, err)
+		}
 	}
 	return nil
 }
@@ -117,7 +128,7 @@ func inspectRoot(cleanPath string) (fs.FileMode, bool, error) {
 	return info.Mode(), true, nil
 }
 
-// EnsurePrivateFile 建立私有普通文件，并把现存普通文件权限收敛为 0600。
+// EnsurePrivateFile 建立缺失的私有普通文件；现存文件的权限由显式 chmod 行收敛。
 // 调用方必须先建立并校验父目录。
 func EnsurePrivateFile(path string) error {
 	cleanPath, err := cleanAbsolute(path)
@@ -136,9 +147,6 @@ func ensurePrivateFile(cleanPath string, openFile privateFileOpener) error {
 		case inspectErr == nil:
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("private file %q is not a regular file", cleanPath)
-			}
-			if err := chmodPrivateIfNeeded(cleanPath, info.Mode(), PrivateFileMode); err != nil {
-				return fmt.Errorf("set private file permissions %q: %w", cleanPath, err)
 			}
 			return nil
 		case !errors.Is(inspectErr, fs.ErrNotExist):
@@ -163,11 +171,48 @@ func ensurePrivateFile(cleanPath string, openFile privateFileOpener) error {
 	}
 }
 
-func chmodPrivateIfNeeded(path string, current, want fs.FileMode) error {
-	if current&privateModeMask == want {
-		return nil
+// PrivateModeMatches reports whether all permission and special mode bits match.
+func PrivateModeMatches(current, want fs.FileMode) bool {
+	return current&privateModeMask == want
+}
+
+// SetPrivateMode rechecks the final entry type and applies one planned mode repair.
+// It reports whether this call actually changed the entry.
+func SetPrivateMode(path string, want fs.FileMode) (bool, error) {
+	cleanPath, err := cleanAbsolute(path)
+	if err != nil {
+		return false, err
 	}
-	return os.Chmod(path, want)
+	switch want {
+	case PrivateDirectoryMode:
+		current, exists, err := InspectRoot(cleanPath)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, fmt.Errorf("private root %q disappeared before chmod", cleanPath)
+		}
+		if PrivateModeMatches(current, want) {
+			return false, nil
+		}
+	case PrivateFileMode:
+		current, exists, err := InspectPrivateFile(cleanPath)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, fmt.Errorf("private file %q disappeared before chmod", cleanPath)
+		}
+		if PrivateModeMatches(current, want) {
+			return false, nil
+		}
+	default:
+		return false, fmt.Errorf("unsupported private mode %04o", want)
+	}
+	if err := os.Chmod(cleanPath, want); err != nil {
+		return false, fmt.Errorf("set private mode %04o on %q: %w", want, cleanPath, err)
+	}
+	return true, nil
 }
 
 // PublishPrivateFile atomically publishes changed bytes through a private

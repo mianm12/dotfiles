@@ -15,9 +15,10 @@ Placement 迁移最危险的误区，是把“manifest 已经改成最终形态�
 - 同一 placement 从 local 改为 link；
 - 把一个 directory link 改成它的 target 下的 leaf links/locals。
 
-同 kind link 的 target 变化可以由一个 Transition 规划为先建立新 target、再处理旧 target，但
-仍需 dry-run 检查 ownership 和路径依赖。Placement ID 变化也不会自动绕过 actual target 冲突；
-不要把“换 ID”当作类型转换机制。
+同 kind link 的 target 变化在新旧词法 target 相互独立时，可以由同一次 apply 先建立新 target、
+再处理旧 target；词法相等或嵌套时必须两阶段迁移。工具不会识别 alias 或祖先 symlink 穿越；
+用户已知两条词法路径实际相关时，也应主动采用两阶段。Placement ID 变化不会自动绕过 actual
+target 冲突；不要把“换 ID”当作类型转换机制。
 
 ## 迁移前清单
 
@@ -35,7 +36,7 @@ flowchart LR
     O["旧 desired + 旧 ownership"]
     S1["Stage 1 desired：只删除旧 placement"]
     A1["每个 HOME：dry-run + apply + repeat dry-run"]
-    C["检查 prune / forget / 保留的 actual"]
+    C["检查 remove / forget / 保留的 actual"]
     S2["Stage 2 desired：加入 replacement"]
     A2["每个 HOME：dry-run + apply + status"]
     O --> S1 --> A1 --> C --> S2 --> A2
@@ -61,9 +62,9 @@ dot apply --dry-run
 
 ### 检查中间状态
 
-- 仍匹配完整 ownership 的 stale link 可能被 prune；
-- 漂移 link 会 forget ownership 并保留 actual；
-- local 永远保留 actual，只 forget provenance；
+- dest 仍匹配的 stale link 可能被 `remove`；
+- dest 对不上的 link 会 `forget` 并保留 actual；
+- local 永远由用户拥有；退出 desired 不产生清理行，也不删除 actual；
 - 任何保留的路径都必须由用户决定迁移、改名或继续保留，`dot` 不会自动备份或导入。
 
 每台机器的结果可以不同。只有所有受影响 HOME 都完成 Stage 1，并且 replacement target 不再被
@@ -81,12 +82,12 @@ dot status
 dot apply --dry-run
 ```
 
-新的 desired 仍遵循普通 target、ownership、control-path 和 antichain 规则。Stage 1 成功不会
+新的 desired 仍遵循普通词法 target、ownership 和控制前缀规则。Stage 1 成功不会
 给 Stage 2 的任意已有 target 自动授权。
 
 ## Link 转 local
 
-Stage 1 删除 link placement。若旧 link 仍完整 owned，它会被 prune；若已漂移，它会保留，需要
+Stage 1 删除 link placement。若旧 link 的 dest 仍匹配，它会被 `remove`；若已漂移，它会保留，需要
 用户先处理。Stage 2 才声明 local：
 
 ```toml
@@ -96,14 +97,14 @@ example = "config.local.example"
 target = "~/.config/example/config"
 ```
 
-Local 只在 target absent 时从 example 创建。Stage 1 遗留的任何目录项都会被当作已存在而 keep，
-不会被 example 覆盖。使用新 ID 可以让配置意图更清楚，但不能省略 Stage 1。
+Local 只在 target absent 时从 example 创建。Stage 1 遗留的任何目录项都会被当作已存在且不生成
+`file` 行，不会被 example 覆盖。使用新 ID 可以让配置意图更清楚，但不能省略 Stage 1。
 
 ## Local 转 link
 
-Stage 1 删除 local placement 只会 forget provenance，不会删除 local 文件。进入 Stage 2 前，用户
-必须在仓库外决定如何保留内容，并让新 link target absent；否则 link 会因已有普通文件而
-conflict。
+Stage 1 删除 local placement 不产生账本行，也不会删除 local 文件。进入 Stage 2 前，
+用户必须在仓库外决定如何保留内容，并让新 link target absent；否则 link 会因已有普通文件而
+`skip`。
 
 不要把可能含秘密的 local 直接复制进 repository。先审查内容和 Git 历史影响，再独立处理 source。
 

@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	corestate "github.com/mianm12/dotfiles/internal/core/state"
@@ -22,7 +21,7 @@ func TestLoadRequiresDirectRegularFile(t *testing.T) {
 			path: func(t *testing.T, root, home string) string {
 				target := filepath.Join(root, "actual.json")
 				writeStateDocument(t, target, fmt.Sprintf(
-					`{"version":3,"home":%q,"records":[]}`,
+					`{"version":5,"home":%q,"links":[]}`,
 					home,
 				))
 				path := filepath.Join(root, "state.json")
@@ -84,7 +83,7 @@ func TestLoadRequiresDirectRegularFile(t *testing.T) {
 			if loaded.Missing ||
 				loaded.Warning != "" ||
 				loaded.Snapshot.Home != "" ||
-				loaded.Snapshot.Records != nil {
+				loaded.Snapshot.Links != nil {
 				t.Fatalf("Load(error) returned partial result %#v", loaded)
 			}
 			assertTreeUnchanged(t, root, before)
@@ -92,27 +91,29 @@ func TestLoadRequiresDirectRegularFile(t *testing.T) {
 	}
 }
 
-func TestLoadReadsFlatRecordsWithoutMutation(t *testing.T) {
+func TestLoadReadsFlatLinksWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatalf("os.Mkdir(home) error = %v", err)
 	}
 	statePath := filepath.Join(root, "state.json")
-	target := filepath.Join(home, ".config", "kept")
+	target := filepath.Join(".config", "kept")
+	destination := filepath.Join(root, "repo", "kept")
 	document := fmt.Sprintf(
-		`{"version":3,"home":%q,"records":[{"module_id":"kept","placement_id":"local","kind":"local","target":%q}]}`,
+		`{"version":5,"home":%q,"links":[{"module":"kept","placement":"config","target":%q,"dest":%q}]}`,
 		home,
 		target,
+		destination,
 	)
 	writeStateDocument(t, statePath, document)
 	before := snapshotTree(t, root)
 	want := corestate.Snapshot{
 		Home: home,
-		Records: map[corestate.Key]corestate.Record{
-			{ModuleID: "kept", PlacementID: "local"}: {
-				Kind:   corestate.KindLocal,
+		Links: map[corestate.Key]corestate.LinkRecord{
+			{ModuleID: "kept", PlacementID: "config"}: {
 				Target: target,
+				Dest:   destination,
 			},
 		},
 	}
@@ -124,20 +125,20 @@ func TestLoadReadsFlatRecordsWithoutMutation(t *testing.T) {
 	if loaded.Missing || loaded.Warning != "" {
 		t.Fatalf("Load() = %#v, want present state without warning", loaded)
 	}
-	if !reflect.DeepEqual(loaded.Snapshot, want) {
+	if !corestate.Equal(loaded.Snapshot, want) {
 		t.Fatalf("Load() snapshot = %#v, want %#v", loaded.Snapshot, want)
 	}
 	decoded, err := corestate.Decode([]byte(document), home)
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if !reflect.DeepEqual(decoded, want) {
+	if !corestate.Equal(decoded, want) {
 		t.Fatalf("Decode() = %#v, want %#v", decoded, want)
 	}
 	assertTreeUnchanged(t, root, before)
 }
 
-func TestMarshalEmptyStateWritesExplicitRecordsArray(t *testing.T) {
+func TestMarshalEmptyStateWritesExplicitLinksArray(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	snapshot, err := corestate.New(home)
 	if err != nil {
@@ -148,7 +149,7 @@ func TestMarshalEmptyStateWritesExplicitRecordsArray(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 	want := fmt.Sprintf(
-		"{\n  \"version\": 3,\n  \"home\": %q,\n  \"records\": []\n}\n",
+		"{\n  \"version\": 5,\n  \"home\": %q,\n  \"links\": []\n}\n",
 		home,
 	)
 	if string(data) != want {

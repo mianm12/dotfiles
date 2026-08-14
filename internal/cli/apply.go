@@ -15,7 +15,7 @@ func newApplyCommand(env environment) *cobra.Command {
 			return runApply(command, dryRun, env)
 		},
 	}
-	command.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "print the plan without mutation")
+	command.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "print the loop without mutation")
 	return command
 }
 
@@ -32,7 +32,7 @@ func runApply(
 	if dryRun {
 		report, err := converge.Analyze(context.environment())
 		if err != nil {
-			return withCoreRecovery(err)
+			return err
 		}
 		return printDryRunAnalysis(command, report)
 	}

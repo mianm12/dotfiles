@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"syscall"
 )
 
 type actualKind uint8
@@ -27,6 +28,9 @@ func observeLocal(path string) (bool, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
+	if errors.Is(err, syscall.ENOTDIR) {
+		return true, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("inspect local target %q: %w", path, err)
 	}
@@ -37,6 +41,9 @@ func observeLink(path string) (actual, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return actual{kind: actualAbsent}, nil
+	}
+	if errors.Is(err, syscall.ENOTDIR) {
+		return actual{kind: actualSpecial}, nil
 	}
 	if err != nil {
 		return actual{}, fmt.Errorf("inspect target %q: %w", path, err)
