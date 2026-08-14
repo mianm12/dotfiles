@@ -2,13 +2,12 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/mianm12/dotfiles/internal/core/converge"
 	"github.com/spf13/cobra"
 )
 
-var errDryRunBlocked = errors.New("dry-run blocked")
+var errAnalysisBlocked = errors.New("analysis blocked")
 
 func printDryRunAnalysis(
 	command *cobra.Command,
@@ -17,8 +16,8 @@ func printDryRunAnalysis(
 	if err := printOperationReport(command, report); err != nil {
 		return err
 	}
-	if !report.Plan.Executable() {
-		return errDryRunBlocked
+	if report.HasSkip() {
+		return errAnalysisBlocked
 	}
 	return nil
 }
@@ -30,55 +29,21 @@ func finishMutation(
 	rerun string,
 ) error {
 	if runErr != nil {
-		// Core warnings are input diagnostics. Never project the plan or
-		// completed forget results from a failed mutation.
-		if warningErr := printWarnings(command, result.Report.Warnings); warningErr != nil {
-			return errors.Join(runErr, warningErr)
-		}
-		if errors.Is(runErr, converge.ErrPartial) {
-			return fmt.Errorf("%w; rerun %s", runErr, rerun)
-		}
-		if hasControlProblem(result.Report.Plan) {
-			return fmt.Errorf("%w; run `dot paths`", runErr)
-		}
-		return withCoreRecovery(runErr)
+		warningErr := printStateWarning(command, result.Report.StateWarning)
+		printErr := printCompletedLines(command, result.Done)
+		return errors.Join(runErr, warningErr, printErr)
 	}
-	return printMutationResult(
+	if result.Report.HasSkip() {
+		if err := printOperationReport(command, result.Report); err != nil {
+			return err
+		}
+		return errAnalysisBlocked
+	}
+	warningErr := printStateWarning(command, result.Report.StateWarning)
+	resultErr := printMutationResult(
 		command,
 		result,
 		rerun,
 	)
-}
-
-func finishSelectionMutation(runErr error, rerun string) error {
-	if runErr == nil {
-		return nil
-	}
-	if errors.Is(runErr, converge.ErrPartial) {
-		return fmt.Errorf("%w; rerun %s", runErr, rerun)
-	}
-	return withCoreRecovery(runErr)
-}
-
-func withCoreRecovery(err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, converge.ErrUninitialized):
-		return fmt.Errorf("%w; run `dot init`", err)
-	case errors.Is(err, converge.ErrControl), errors.Is(err, converge.ErrState):
-		return fmt.Errorf("%w; run `dot paths`", err)
-	default:
-		return err
-	}
-}
-
-func hasControlProblem(plan converge.Plan) bool {
-	for _, problem := range plan.Problems() {
-		if problem.Code == converge.ProblemCodeControlTopology ||
-			problem.Code == converge.ProblemCodeControlBoundary {
-			return true
-		}
-	}
-	return false
+	return errors.Join(warningErr, resultErr)
 }

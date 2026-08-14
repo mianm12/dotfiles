@@ -14,7 +14,6 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/mianm12/dotfiles/internal/core/config"
-	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/mianm12/dotfiles/internal/storage"
 )
@@ -357,15 +356,56 @@ func assertSnapshotUnchanged(t *testing.T, before filesystemSnapshot) {
 		}
 		after = snapshotExactPaths(t, paths...)
 	}
-	if len(after) != len(before.entries) {
+	assertSnapshotEntriesEqual(t, before.entries, after)
+}
+
+func assertOnlyLockBookkeepingChanged(
+	t *testing.T,
+	before filesystemSnapshot,
+	fixture *cliTestEnv,
+) {
+	t.Helper()
+	after := snapshotTree(t, before.root).entries
+	stateRoot := filepath.Dir(fixture.state)
+	ignore := func(entry pathSnapshot) bool {
+		if entry.path == fixture.lock {
+			return true
+		}
+		fromHome, err := filepath.Rel(fixture.home, entry.path)
+		if err != nil || fromHome == ".." ||
+			strings.HasPrefix(fromHome, ".."+string(filepath.Separator)) {
+			return false
+		}
+		toStateRoot, err := filepath.Rel(entry.path, stateRoot)
+		return err == nil && toStateRoot != ".." &&
+			!strings.HasPrefix(toStateRoot, ".."+string(filepath.Separator))
+	}
+	filter := func(entries []pathSnapshot) []pathSnapshot {
+		filtered := make([]pathSnapshot, 0, len(entries))
+		for _, entry := range entries {
+			if !ignore(entry) {
+				filtered = append(filtered, entry)
+			}
+		}
+		return filtered
+	}
+	assertSnapshotEntriesEqual(t, filter(before.entries), filter(after))
+	if info, err := os.Lstat(fixture.lock); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("lock bookkeeping = (%v, %v), want regular file", info, err)
+	}
+}
+
+func assertSnapshotEntriesEqual(t *testing.T, before, after []pathSnapshot) {
+	t.Helper()
+	if len(after) != len(before) {
 		t.Fatalf(
 			"filesystem entry count changed: before=%d after=%d",
-			len(before.entries),
+			len(before),
 			len(after),
 		)
 	}
-	for index := range before.entries {
-		oldEntry := before.entries[index]
+	for index := range before {
+		oldEntry := before[index]
 		newEntry := after[index]
 		if oldEntry.path != newEntry.path ||
 			oldEntry.mode != newEntry.mode ||
@@ -402,9 +442,8 @@ func assertApplyNoMutation(
 
 func assertCLINoMutationResult(t *testing.T, stdout string) {
 	t.Helper()
-	const noMutation = "targets_changed=false state_changed=false"
-	if !strings.Contains(stdout, noMutation) {
-		t.Fatalf("stdout = %q, want %q", stdout, noMutation)
+	if !strings.Contains(stdout, "converged") {
+		t.Fatalf("stdout = %q, want converged", stdout)
 	}
 }
 
@@ -433,24 +472,15 @@ func writeLinkState(
 ) {
 	t.Helper()
 	relative, err := filepath.Rel(fixture.home, target)
-	if err != nil {
-		t.Fatalf("filepath.Rel(target) error = %v", err)
-	}
-	resolved, err := corepaths.ResolveTarget(
-		fixture.home,
-		"~/"+filepath.ToSlash(relative),
-	)
-	if err != nil {
-		t.Fatalf("ResolveTarget(target) error = %v", err)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		t.Fatalf("target %q is outside HOME %q", target, fixture.home)
 	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "app", PlacementID: "config"}: {
-				Kind:            state.KindLink,
-				Target:          target,
-				ResolvedTarget:  resolved.Resolved(),
-				LinkDestination: destination,
+				Target: filepath.ToSlash(relative),
+				Dest:   destination,
 			},
 		},
 	})

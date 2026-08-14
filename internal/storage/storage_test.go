@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestEnsureRoot_CreatesAndCorrectsPrivateDirectory(t *testing.T) {
+func TestEnsureRootCreatesButDoesNotRepairPrivateDirectory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state", "dot")
 
 	if err := EnsureRoot(root); err != nil {
@@ -23,7 +23,7 @@ func TestEnsureRoot_CreatesAndCorrectsPrivateDirectory(t *testing.T) {
 	if err := EnsureRoot(root); err != nil {
 		t.Fatalf("EnsureRoot(%q) after broad mode error = %v", root, err)
 	}
-	assertMode(t, root, PrivateDirectoryMode)
+	assertMode(t, root, 0o755)
 
 	if err := os.Chmod(root, PrivateDirectoryMode|fs.ModeSticky); err != nil {
 		t.Fatalf("os.Chmod(%q) sticky error = %v", root, err)
@@ -31,11 +31,15 @@ func TestEnsureRoot_CreatesAndCorrectsPrivateDirectory(t *testing.T) {
 	if err := EnsureRoot(root); err != nil {
 		t.Fatalf("EnsureRoot(%q) after sticky mode error = %v", root, err)
 	}
+	assertMode(t, root, PrivateDirectoryMode|fs.ModeSticky)
+	changed, err := SetPrivateMode(root, PrivateDirectoryMode)
+	if err != nil || !changed {
+		t.Fatalf("SetPrivateMode(root) = (%t, %v), want changed", changed, err)
+	}
 	assertMode(t, root, PrivateDirectoryMode)
 }
 
-func TestChmodPrivateIfNeededSkipsExactModeAndCorrectsMismatch(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "missing")
+func TestPrivateModeMatches(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		current fs.FileMode
@@ -73,12 +77,14 @@ func TestChmodPrivateIfNeededSkipsExactModeAndCorrectsMismatch(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := chmodPrivateIfNeeded(missing, test.current, test.want)
-			if test.match && err != nil {
-				t.Fatalf("chmodPrivateIfNeeded(exact mode) error = %v", err)
-			}
-			if !test.match && err == nil {
-				t.Fatal("chmodPrivateIfNeeded(mismatched mode) error = nil, want chmod attempt")
+			if got := PrivateModeMatches(test.current, test.want); got != test.match {
+				t.Fatalf(
+					"PrivateModeMatches(%v, %v) = %t, want %t",
+					test.current,
+					test.want,
+					got,
+					test.match,
+				)
 			}
 		})
 	}
@@ -245,7 +251,7 @@ func TestValidatePrivateFile_IsReadOnly(t *testing.T) {
 	assertMode(t, abnormal, 0o755)
 }
 
-func TestEnsurePrivateFile_CreatesAndCorrectsMode(t *testing.T) {
+func TestEnsurePrivateFileCreatesButDoesNotRepairMode(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	if err := EnsureRoot(root); err != nil {
 		t.Fatalf("EnsureRoot(%q) error = %v", root, err)
@@ -263,7 +269,16 @@ func TestEnsurePrivateFile_CreatesAndCorrectsMode(t *testing.T) {
 	if err := EnsurePrivateFile(path); err != nil {
 		t.Fatalf("EnsurePrivateFile(%q) after broad mode error = %v", path, err)
 	}
+	assertMode(t, path, 0o644)
+	changed, err := SetPrivateMode(path, PrivateFileMode)
+	if err != nil || !changed {
+		t.Fatalf("SetPrivateMode(lock) = (%t, %v), want changed", changed, err)
+	}
 	assertMode(t, path, PrivateFileMode)
+	changed, err = SetPrivateMode(path, PrivateFileMode)
+	if err != nil || changed {
+		t.Fatalf("SetPrivateMode(private lock) = (%t, %v), want no-op", changed, err)
+	}
 }
 
 func TestEnsurePrivateFile_RejectsAbnormalObjects(t *testing.T) {
@@ -371,7 +386,7 @@ func TestPublishPrivateFileCreatesAndReplacesPrivately(t *testing.T) {
 	if err != nil || !changed {
 		t.Fatalf("PublishPrivateFile(second) = (%t, %v), want changed", changed, err)
 	}
-	assertMode(t, root, PrivateDirectoryMode)
+	assertMode(t, root, 0o755)
 	assertMode(t, path, PrivateFileMode)
 	if data, err := os.ReadFile(path); err != nil || string(data) != "second" {
 		t.Fatalf("published data = (%q, %v), want second", data, err)
@@ -411,7 +426,7 @@ func TestPublishPrivateFileIdenticalContentIsStrictNoOp(t *testing.T) {
 		},
 	)
 	if err != nil || changed {
-		t.Fatalf("publishPrivateFile(identical) = (%t, %v), want no-op", changed, err)
+		t.Fatalf("publishPrivateFile(identical content, open modes) = (%t, %v), want strict no-op", changed, err)
 	}
 
 	afterRoot, err := os.Stat(root)
@@ -431,6 +446,27 @@ func TestPublishPrivateFileIdenticalContentIsStrictNoOp(t *testing.T) {
 		beforeFile.Mode() != afterFile.Mode() ||
 		!beforeFile.ModTime().Equal(afterFile.ModTime()) {
 		t.Fatalf("identical publish changed file metadata: before=%v after=%v", beforeFile, afterFile)
+	}
+	assertMode(t, root, 0o755)
+	assertMode(t, path, 0o644)
+}
+
+func TestPublishPrivateFileReportsChangedWhenCleanupFailsAfterPublish(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "control")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(root) error = %v", err)
+	}
+	path := filepath.Join(root, "state.json")
+	cleanupErr := errors.New("injected cleanup failure")
+	pending := failingPendingPrivateFile{cleanupErr: cleanupErr}
+
+	changed, err := publishPrivateFile(
+		path,
+		[]byte("state"),
+		func(string) (pendingPrivateFile, error) { return &pending, nil },
+	)
+	if !changed || !errors.Is(err, cleanupErr) {
+		t.Fatalf("publishPrivateFile() = (%t, %v), want changed cleanup error", changed, err)
 	}
 }
 

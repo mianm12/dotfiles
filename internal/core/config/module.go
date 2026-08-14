@@ -437,27 +437,7 @@ func materializePlacements(
 	module, moduleRoot, root string,
 	placements placementSet,
 ) ([]Link, []Local, error) {
-	resolvedModuleRoot, err := filepath.EvalSymlinks(moduleRoot)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"%w: module %q resolve module root %q: %w",
-			ErrInvalidConfiguration,
-			module,
-			moduleRoot,
-			err,
-		)
-	}
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"%w: module %q resolve selected root %q: %w",
-			ErrInvalidConfiguration,
-			module,
-			root,
-			err,
-		)
-	}
-	if !pathWithin(resolvedModuleRoot, resolvedRoot) {
+	if !pathWithin(moduleRoot, root) {
 		return nil, nil, fmt.Errorf(
 			"%w: module %q selected root %q escapes module root",
 			ErrInvalidConfiguration,
@@ -465,7 +445,7 @@ func materializePlacements(
 			root,
 		)
 	}
-	info, err := os.Stat(resolvedRoot)
+	info, err := os.Stat(root)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"%w: module %q inspect selected root %q: %w",
@@ -487,7 +467,7 @@ func materializePlacements(
 	links := make([]Link, len(placements.links))
 	for index, declared := range placements.links {
 		sourcePath := filepath.Join(root, filepath.FromSlash(declared.Source))
-		if err := validateLinkSource(module, declared.ID, resolvedRoot, sourcePath); err != nil {
+		if err := validateLinkSource(module, declared.ID, root, sourcePath); err != nil {
 			return nil, nil, err
 		}
 		links[index] = Link{
@@ -500,7 +480,7 @@ func materializePlacements(
 	locals := make([]Local, len(placements.locals))
 	for index, declared := range placements.locals {
 		examplePath := filepath.Join(root, filepath.FromSlash(declared.Example))
-		if err := validateLocalExample(module, declared.ID, resolvedRoot, examplePath); err != nil {
+		if err := validateLocalExample(module, declared.ID, root, examplePath); err != nil {
 			return nil, nil, err
 		}
 		locals[index] = Local{
@@ -513,6 +493,15 @@ func materializePlacements(
 }
 
 func validateLinkSource(module, placement, root, source string) error {
+	if !pathWithin(root, source) {
+		return fmt.Errorf(
+			"%w: module %q link %q source %q escapes selected root",
+			ErrInvalidConfiguration,
+			module,
+			placement,
+			source,
+		)
+	}
 	info, err := os.Lstat(source)
 	if err != nil {
 		return fmt.Errorf(
@@ -542,30 +531,19 @@ func validateLinkSource(module, placement, root, source string) error {
 			source,
 		)
 	}
-	resolvedSource, err := filepath.EvalSymlinks(source)
-	if err != nil {
-		return fmt.Errorf(
-			"%w: module %q link %q resolve source %q: %w",
-			ErrInvalidConfiguration,
-			module,
-			placement,
-			source,
-			err,
-		)
-	}
-	if !pathWithin(root, resolvedSource) {
-		return fmt.Errorf(
-			"%w: module %q link %q source %q escapes selected root",
-			ErrInvalidConfiguration,
-			module,
-			placement,
-			source,
-		)
-	}
 	return nil
 }
 
 func validateLocalExample(module, placement, root, example string) error {
+	if !pathWithin(root, example) {
+		return fmt.Errorf(
+			"%w: module %q local %q example %q escapes selected root",
+			ErrInvalidConfiguration,
+			module,
+			placement,
+			example,
+		)
+	}
 	info, err := os.Lstat(example)
 	if err != nil {
 		return fmt.Errorf(
@@ -580,26 +558,6 @@ func validateLocalExample(module, placement, root, example string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf(
 			"%w: module %q local %q example %q is not a regular file",
-			ErrInvalidConfiguration,
-			module,
-			placement,
-			example,
-		)
-	}
-	resolvedExample, err := filepath.EvalSymlinks(example)
-	if err != nil {
-		return fmt.Errorf(
-			"%w: module %q local %q resolve example %q: %w",
-			ErrInvalidConfiguration,
-			module,
-			placement,
-			example,
-			err,
-		)
-	}
-	if !pathWithin(root, resolvedExample) {
-		return fmt.Errorf(
-			"%w: module %q local %q example %q escapes selected root",
 			ErrInvalidConfiguration,
 			module,
 			placement,

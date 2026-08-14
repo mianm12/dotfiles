@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mianm12/dotfiles/internal/core/identifier"
 )
 
 const (
@@ -48,11 +50,11 @@ func OpenRepository(root string) (Repository, error) {
 		)
 	}
 	root = filepath.Clean(root)
-	info, err := os.Stat(root)
+	info, err := os.Lstat(root)
 	if err != nil {
 		return Repository{}, fmt.Errorf("inspect repository %q: %w", root, err)
 	}
-	if !info.IsDir() {
+	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
 		return Repository{}, fmt.Errorf("%w: repository %q is not a directory", ErrInvalidConfiguration, root)
 	}
 
@@ -95,7 +97,7 @@ func (repository Repository) ProfileModules(profiles []string) ([]string, error)
 	if !repository.valid {
 		return nil, fmt.Errorf("%w: repository is invalid", ErrInvalidConfiguration)
 	}
-	if err := validateIDs("profile", profiles); err != nil {
+	if err := validateUniqueIDs("profile", profiles); err != nil {
 		return nil, err
 	}
 
@@ -214,7 +216,7 @@ func discoverModules(root string) (map[string]moduleFile, map[string]error, []st
 	ids := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		id := entry.Name()
-		if !entry.IsDir() || !idPattern.MatchString(id) {
+		if !entry.IsDir() || !identifier.Valid(id) {
 			continue
 		}
 		moduleRoot := filepath.Join(root, id)

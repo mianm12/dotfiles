@@ -10,6 +10,8 @@ import (
 
 	"github.com/mianm12/dotfiles/internal/buildinfo"
 	"github.com/mianm12/dotfiles/internal/core/config"
+	"github.com/mianm12/dotfiles/internal/core/converge"
+	"github.com/mianm12/dotfiles/internal/core/state"
 	"github.com/spf13/cobra"
 )
 
@@ -69,7 +71,7 @@ func run(args []string, env environment) int {
 		return output.finish(exitUsage)
 	}
 	if err := root.Execute(); err != nil {
-		if errors.Is(err, errDryRunBlocked) {
+		if errors.Is(err, errAnalysisBlocked) {
 			return output.finish(exitError)
 		}
 		code := exitError
@@ -77,10 +79,29 @@ func run(args []string, env environment) int {
 		if errors.As(err, &usage) {
 			code = exitUsage
 		}
-		root.PrintErrf("error: %v\n", err)
+		root.PrintErrf("error: %v%s\n", err, recoveryInstruction(err))
 		return output.finish(code)
 	}
 	return output.finish(exitOK)
+}
+
+func recoveryInstruction(err error) string {
+	switch {
+	case errors.Is(err, converge.ErrMachineUninitialized):
+		return "; run `dot init`"
+	case errors.Is(err, converge.ErrControlPaths):
+		return "; run `dot paths`"
+	case errors.Is(err, state.ErrInvalid),
+		errors.Is(err, state.ErrLegacyVersion),
+		errors.Is(err, state.ErrHomeMismatch):
+		return "; locate state with `dot paths`, then archive or remove it outside dot"
+	case errors.Is(err, state.ErrTooNew):
+		return "; preserve state and use a newer `dot` version that supports it"
+	case converge.FailureMayHaveChanged(err):
+		return "; rerun the complete command"
+	default:
+		return ""
+	}
 }
 
 func newRootCommand(env environment) *cobra.Command {

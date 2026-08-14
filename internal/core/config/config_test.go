@@ -54,6 +54,7 @@ extra_modules = ["tmux"]
 		{name: "unknown field", content: "version = 1\nrepository = \"/repo\"\nunknown = true\n"},
 		{name: "wrong version", content: "version = 2\nrepository = \"/repo\"\n"},
 		{name: "relative repository", content: "version = 1\nrepository = \"repo\"\n"},
+		{name: "duplicate profile", content: "version = 1\nrepository = \"/repo\"\nprofiles = [\"base\", \"base\"]\n"},
 		{name: "invalid extra", content: "version = 1\nrepository = \"/repo\"\nextra_modules = [\"Bad\"]\n"},
 	}
 	for _, test := range tests {
@@ -134,6 +135,22 @@ func TestOpenRepositoryRejectsInvalidUTF8Root(t *testing.T) {
 	}
 }
 
+func TestOpenRepositoryRejectsFinalSymlink(t *testing.T) {
+	root := t.TempDir()
+	repository := writeRepository(t, root, "version = 1\n[profiles]\n")
+	alias := filepath.Join(root, "repository-alias")
+	if err := os.Symlink(repository, alias); err != nil {
+		t.Fatalf("os.Symlink(repository) error = %v", err)
+	}
+
+	if _, err := coreconfig.OpenRepository(alias); !errors.Is(
+		err,
+		coreconfig.ErrInvalidConfiguration,
+	) {
+		t.Fatalf("OpenRepository(final symlink) error = %v, want ErrInvalidConfiguration", err)
+	}
+}
+
 func TestProfileModules_ValidatesOnlySelectedProfileReferences(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
@@ -162,7 +179,7 @@ inactive = ["deleted"]
 	}
 }
 
-func TestProfileModules_TreatsProfilesAsSet(t *testing.T) {
+func TestProfileModulesRejectsDuplicateProfiles(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -175,11 +192,12 @@ base = ["app"]
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
 	modules, err := loaded.ProfileModules([]string{"base", "base"})
-	if err != nil {
-		t.Fatalf("ProfileModules() error = %v", err)
-	}
-	if !reflect.DeepEqual(modules, []string{"app"}) {
-		t.Fatalf("ProfileModules() = %v, want [app]", modules)
+	if modules != nil || !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
+		t.Fatalf(
+			"ProfileModules(duplicate profiles) = (%v, %v), want invalid configuration",
+			modules,
+			err,
+		)
 	}
 }
 
@@ -356,7 +374,7 @@ target = "~/.config/app/config.local"
 	}
 }
 
-func TestInspectModule_RejectsVariantRootSymlinkEscape(t *testing.T) {
+func TestInspectModule_AcceptsVariantRootSymlink(t *testing.T) {
 	root := t.TempDir()
 	repository := writeRepository(t, root, `
 version = 1
@@ -381,11 +399,18 @@ os = ["linux"]
 	if err != nil {
 		t.Fatalf("OpenRepository() error = %v", err)
 	}
-	if _, _, _, err := loaded.InspectModule(
+	module, exists, applicability, err := loaded.InspectModule(
 		"app",
 		testPlatform("linux", "", ""),
-	); !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
-		t.Fatalf("InspectModule() error = %v, want ErrInvalidConfiguration", err)
+	)
+	if err != nil || !exists || applicability.State != coreconfig.ApplicabilityApplicable {
+		t.Fatalf(
+			"InspectModule() = (%#v, exists=%t, applicability=%#v, err=%v), want applicable",
+			module,
+			exists,
+			applicability,
+			err,
+		)
 	}
 }
 

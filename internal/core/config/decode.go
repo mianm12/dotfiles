@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"regexp"
 	"strings"
 
+	"github.com/mianm12/dotfiles/internal/core/identifier"
 	"github.com/pelletier/go-toml/v2"
 )
-
-var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // ValidateModuleID validates one module identifier without constructing a
 // machine configuration or consulting the repository.
@@ -53,7 +51,7 @@ func decodeStrictManifest(path string, destination any) error {
 }
 
 func validateID(kind, value string) error {
-	if !idPattern.MatchString(value) {
+	if !identifier.Valid(value) {
 		return fmt.Errorf("%w: invalid %s ID %q", ErrInvalidConfiguration, kind, value)
 	}
 	return nil

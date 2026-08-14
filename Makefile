@@ -7,6 +7,7 @@ GO ?= go
 override GOWORK := off
 export GOWORK
 BINARY ?= bin/dot
+INSTALL_DIR ?= $(if $(strip $(HOME)),$(HOME)/.local/bin)
 FUZZ_TIME ?= 30s
 GO_TOOL = $(GO) tool -modfile=tools/go.mod
 
@@ -30,12 +31,13 @@ LDFLAGS = -X '$(BUILDINFO_PACKAGE).Version=$(VERSION)' \
 	-X '$(BUILDINFO_PACKAGE).Commit=$(COMMIT)' \
 	-X '$(BUILDINFO_PACKAGE).BuildTime=$(BUILD_TIME)'
 
-.PHONY: help build run version fmt fmt-check tidy tidy-check mod-verify lint \
-	test test-race fuzz vuln check
+.PHONY: help build install run version fmt fmt-check tidy tidy-check mod-verify \
+	lint test test-race test-bootstrap fuzz vuln check
 
 help:
 	@printf '%s\n' \
 		'make build              构建 bin/dot 并注入构建信息' \
+		'make install            安装独立 binary 到 INSTALL_DIR（默认 ~/.local/bin）' \
 		'make run ARGS=version   直接运行开发构建' \
 		'make version            构建并运行 dot version' \
 		'make fmt                格式化 Go 代码' \
@@ -50,6 +52,33 @@ help:
 build:
 	@mkdir -p "$(dir $(BINARY))"
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o "$(BINARY)" ./cmd/dot
+
+install: build
+	@install_dir="$(INSTALL_DIR)"; \
+	case "$$install_dir" in \
+		/*) ;; \
+		*) printf 'INSTALL_DIR must be a non-empty absolute path: %s\n' "$$install_dir" >&2; exit 1 ;; \
+	esac; \
+	if test -e "$$install_dir" && ! test -d "$$install_dir"; then \
+		printf 'INSTALL_DIR is not a directory: %s\n' "$$install_dir" >&2; \
+		exit 1; \
+	fi; \
+	if ! test -d "$$install_dir"; then \
+		mkdir -p "$$install_dir"; \
+		chmod 0755 "$$install_dir"; \
+	fi; \
+	if test -d "$$install_dir/dot"; then \
+		printf 'install destination is a directory: %s\n' "$$install_dir/dot" >&2; \
+		exit 1; \
+	fi; \
+	tmp=$$(mktemp "$$install_dir/.dot.tmp.XXXXXX"); \
+	trap 'rm -f "$$tmp"' 0 1 2 3 15; \
+	cp "$(BINARY)" "$$tmp"; \
+	chmod 0755 "$$tmp"; \
+	mv -f "$$tmp" "$$install_dir/dot"; \
+	tmp=; \
+	trap - 0 1 2 3 15; \
+	printf 'installed %s\n' "$$install_dir/dot"
 
 run:
 	$(GO) run -trimpath -ldflags "$(LDFLAGS)" ./cmd/dot $(ARGS)
@@ -81,9 +110,14 @@ lint:
 
 test:
 	$(GO) test ./...
+	$(MAKE) test-bootstrap
 
 test-race:
 	$(GO) test -race ./...
+	$(MAKE) test-bootstrap
+
+test-bootstrap:
+	./tests/bootstrap_test.sh
 
 fuzz:
 	$(GO) test ./internal/core/state -run '^$$' -fuzz '^FuzzDecode$$' -fuzztime '$(FUZZ_TIME)'

@@ -1,6 +1,7 @@
 # 0001: Convergence V3 使用单一状态转换模型
 
-状态：Accepted
+状态：Superseded
+替代：[ADR 0002](0002-convergence-v4.md)
 日期：2026-08-12
 
 ## 背景

@@ -50,7 +50,7 @@ func validateMachine(machine Machine) error {
 			ErrInvalidConfiguration,
 		)
 	}
-	if err := validateIDs("profile", machine.Profiles); err != nil {
+	if err := validateUniqueIDs("profile", machine.Profiles); err != nil {
 		return err
 	}
 	if err := validateIDs("extra module", machine.ExtraModules); err != nil {

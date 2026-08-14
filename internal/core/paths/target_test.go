@@ -2,477 +2,89 @@ package paths
 
 import (
 	"errors"
-	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
-	"syscall"
 	"testing"
 )
 
-func TestResolveTarget_ExpandsAndCleansBelowHome(t *testing.T) {
+func TestResolveTargetKeepsOneRelativeIdentity(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(home) error = %v", err)
-	}
 	target, err := ResolveTarget(home, "~/.config/app/../tool/config")
 	if err != nil {
 		t.Fatalf("ResolveTarget() error = %v", err)
 	}
-	wantLexical := filepath.Join(home, ".config", "tool", "config")
-	resolvedHome, err := filepath.EvalSymlinks(home)
+	if got, want := target.Relative(), filepath.Join(".config", "tool", "config"); got != want {
+		t.Fatalf("Relative() = %q, want %q", got, want)
+	}
+	absolute, err := target.Absolute(home)
 	if err != nil {
-		t.Fatalf("filepath.EvalSymlinks(home) error = %v", err)
+		t.Fatalf("Absolute() error = %v", err)
 	}
-	wantResolved := filepath.Join(resolvedHome, ".config", "tool", "config")
-	if target.Lexical() != wantLexical || target.Resolved() != wantResolved {
-		t.Fatalf(
-			"ResolveTarget() = (%q, %q), want (%q, %q)",
-			target.Lexical(),
-			target.Resolved(),
-			wantLexical,
-			wantResolved,
-		)
+	if want := filepath.Join(home, ".config", "tool", "config"); absolute != want {
+		t.Fatalf("Absolute() = %q, want %q", absolute, want)
 	}
 }
 
-func TestResolveAbsoluteTargetRequiresStrictHomeDescendant(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(home) error = %v", err)
-	}
-	inside := filepath.Join(home, ".config", "tool")
-	target, err := ResolveAbsoluteTarget(home, inside)
-	if err != nil {
-		t.Fatalf("ResolveAbsoluteTarget(inside) error = %v", err)
-	}
-	if got := target.Lexical(); got != inside {
-		t.Fatalf("ResolveAbsoluteTarget(inside).Lexical() = %q, want %q", got, inside)
-	}
-
-	tests := []struct {
-		name   string
-		home   string
-		target string
-	}{
-		{name: "HOME itself", home: home, target: home},
-		{name: "HOME parent", home: home, target: root},
-		{name: "sibling with HOME prefix", home: home, target: filepath.Join(root, "home-other")},
-		{name: "relative HOME", home: "home", target: inside},
-		{name: "relative target", home: home, target: ".config/tool"},
-		{name: "target containing NUL", home: home, target: inside + "\x00"},
-		{
-			name:   "HOME containing invalid UTF-8",
-			home:   filepath.Join(string(filepath.Separator), "home-"+string([]byte{0xff})),
-			target: inside,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := ResolveAbsoluteTarget(test.home, test.target)
-			if !errors.Is(err, ErrInvalidPath) {
-				t.Fatalf("ResolveAbsoluteTarget() error = %v, want ErrInvalidPath", err)
-			}
-			if class, ok := ClassifyResolutionError(err); ok {
-				t.Fatalf(
-					"ClassifyResolutionError() = (%v, true), want unclassified invalid input",
-					class,
-				)
-			}
-		})
-	}
-}
-
-func TestResolveTargetRejectsInvalidUTF8ResolvedAncestor(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	resolvedParent := filepath.Join(root, "resolved-"+string([]byte{0xff}))
-	for _, directory := range []string{home, resolvedParent} {
-		if err := os.Mkdir(directory, 0o700); err != nil {
-			if runtime.GOOS == "darwin" &&
-				directory == resolvedParent &&
-				(errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EILSEQ)) {
-				t.Skip("the current Darwin filesystem rejects invalid UTF-8 entry names")
-			}
-			t.Fatalf("os.Mkdir(%q) error = %v", directory, err)
-		}
-	}
-	if err := os.Symlink(resolvedParent, filepath.Join(home, "alias")); err != nil {
-		t.Fatalf("os.Symlink(alias) error = %v", err)
-	}
-
-	target, err := ResolveTarget(home, "~/alias/config")
-	if !errors.Is(err, ErrInvalidPath) {
-		t.Fatalf("ResolveTarget() = (%#v, %v), want ErrInvalidPath", target, err)
-	}
-	if target != (Target{}) {
-		t.Fatalf("ResolveTarget(error) = %#v, want zero target", target)
-	}
-}
-
-func TestResolveAbsoluteTargetPreservesAncestorAndLeafSemantics(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	outside := filepath.Join(root, "outside")
-	destination := filepath.Join(root, "destination")
-	for _, directory := range []string{home, outside, destination} {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
-		}
-	}
+func TestResolveTargetDoesNotResolveAncestorSymlink(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(home, "alias")); err != nil {
-		t.Fatalf("os.Symlink(ancestor) error = %v", err)
+		t.Fatal(err)
 	}
-	if err := os.Symlink(destination, filepath.Join(outside, "leaf")); err != nil {
-		t.Fatalf("os.Symlink(leaf) error = %v", err)
-	}
-	resolvedOutside, err := filepath.EvalSymlinks(outside)
-	if err != nil {
-		t.Fatalf("filepath.EvalSymlinks(outside) error = %v", err)
-	}
-
-	absolute := filepath.Join(home, "alias", "leaf")
-	target, err := ResolveAbsoluteTarget(home, absolute)
-	if err != nil {
-		t.Fatalf("ResolveAbsoluteTarget() error = %v", err)
-	}
-	if got := target.Lexical(); got != absolute {
-		t.Fatalf("Lexical() = %q, want %q", got, absolute)
-	}
-	if got, want := target.Resolved(), filepath.Join(resolvedOutside, "leaf"); got != want {
-		t.Fatalf("Resolved() = %q, want target entry %q", got, want)
-	}
-	if target.Resolved() == destination {
-		t.Fatal("ResolveAbsoluteTarget() followed the target leaf symlink")
-	}
-}
-
-func TestResolveTarget_RejectsUnsupportedOrEscapingExpressions(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(home) error = %v", err)
-	}
-	for _, expression := range []string{
-		"",
-		"relative",
-		"~",
-		"~/",
-		"~/../outside",
-		"~/$HOME/config",
-		"~/*.toml",
-		"~/$(command)",
-		"~/`command`",
-	} {
-		t.Run(expression, func(t *testing.T) {
-			_, err := ResolveTarget(home, expression)
-			if !errors.Is(err, ErrInvalidPath) {
-				t.Fatalf("ResolveTarget(%q) error = %v, want ErrInvalidPath", expression, err)
-			}
-			if class, ok := ClassifyResolutionError(err); ok {
-				t.Fatalf(
-					"ClassifyResolutionError(%q) = (%v, true), want unclassified invalid input",
-					expression,
-					class,
-				)
-			}
-		})
-	}
-}
-
-func TestValidateTargetExpression_DoesNotConsultFilesystem(t *testing.T) {
-	for _, expression := range []string{"~/config", "~/.config/app/config", "~/missing/../config"} {
-		if err := ValidateTargetExpression(expression); err != nil {
-			t.Fatalf("ValidateTargetExpression(%q) error = %v", expression, err)
-		}
-	}
-	for _, expression := range []string{"", "~", "~/", "~/../../outside", "~/$HOME/config"} {
-		if err := ValidateTargetExpression(expression); !errors.Is(err, ErrInvalidPath) {
-			t.Fatalf(
-				"ValidateTargetExpression(%q) error = %v, want ErrInvalidPath",
-				expression,
-				err,
-			)
-		}
-	}
-}
-
-func TestResolveTarget_RejectsBlockedAndDanglingAncestors(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(home) error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, "file"), []byte("data"), 0o600); err != nil {
-		t.Fatalf("os.WriteFile(file) error = %v", err)
-	}
-	if err := os.Symlink("missing", filepath.Join(home, "dangling")); err != nil {
-		t.Fatalf("os.Symlink(dangling) error = %v", err)
-	}
-	if err := os.Symlink("file", filepath.Join(home, "file-alias")); err != nil {
-		t.Fatalf("os.Symlink(file alias) error = %v", err)
-	}
-	if err := os.Symlink("loop", filepath.Join(home, "loop")); err != nil {
-		t.Fatalf("os.Symlink(loop) error = %v", err)
-	}
-
-	for _, expression := range []string{
-		"~/file/child",
-		"~/file-alias/child",
-		"~/dangling/child",
-		"~/loop/child",
-	} {
-		t.Run(expression, func(t *testing.T) {
-			_, err := ResolveTarget(home, expression)
-			if !errors.Is(err, ErrPathBlocked) {
-				t.Fatalf("ResolveTarget(%q) error = %v, want ErrPathBlocked", expression, err)
-			}
-			wrapped := fmt.Errorf("outer resolution context: %w", err)
-			class, ok := ClassifyResolutionError(wrapped)
-			if !ok || class != ResolutionObstructed {
-				t.Fatalf(
-					"ClassifyResolutionError(%q) = (%v, %t), want (%v, true)",
-					expression,
-					class,
-					ok,
-					ResolutionObstructed,
-				)
-			}
-		})
-	}
-}
-
-func TestResolveTarget_AllowsMissingSuffix(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(home) error = %v", err)
-	}
-
-	target, err := ResolveTarget(home, "~/missing/child/config")
-	if err != nil {
-		t.Fatalf("ResolveTarget(missing suffix) error = %v", err)
-	}
-	resolvedHome, err := filepath.EvalSymlinks(home)
-	if err != nil {
-		t.Fatalf("filepath.EvalSymlinks(home) error = %v", err)
-	}
-	if got, want := target.Resolved(), filepath.Join(resolvedHome, "missing", "child", "config"); got != want {
-		t.Fatalf("Resolved() = %q, want %q", got, want)
-	}
-}
-
-func TestResolveTarget_ClassifiesUnavailableFilesystemObservation(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	blocked := filepath.Join(home, "blocked")
-	if err := os.MkdirAll(blocked, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(blocked) error = %v", err)
-	}
-	if err := os.Chmod(blocked, 0); err != nil {
-		t.Skipf("os.Chmod(blocked) error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chmod(blocked, 0o700); err != nil {
-			t.Errorf("restore blocked directory mode: %v", err)
-		}
-	})
-
-	_, err := ResolveTarget(home, "~/blocked/child/config")
-	if err == nil {
-		t.Skip("filesystem did not enforce directory search permission")
-	}
-	if !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("ResolveTarget(permission denied) error = %v, want fs.ErrPermission", err)
-	}
-	wrapped := fmt.Errorf("outer resolution context: %w", err)
-	class, ok := ClassifyResolutionError(wrapped)
-	if !ok || class != ResolutionUnavailable {
-		t.Fatalf(
-			"ClassifyResolutionError(permission denied) = (%v, %t), want (%v, true)",
-			class,
-			ok,
-			ResolutionUnavailable,
-		)
-	}
-}
-
-func TestFilesystemResolutionClass(t *testing.T) {
-	tests := []struct {
-		name  string
-		err   error
-		class ResolutionClass
-	}{
-		{name: "missing", err: fs.ErrNotExist, class: ResolutionObstructed},
-		{name: "not a directory", err: syscall.ENOTDIR, class: ResolutionObstructed},
-		{name: "symlink loop", err: syscall.ELOOP, class: ResolutionObstructed},
-		{name: "permission", err: fs.ErrPermission, class: ResolutionUnavailable},
-		{name: "other I/O", err: errors.New("synthetic I/O error"), class: ResolutionUnavailable},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := filesystemResolutionClass(test.err); got != test.class {
-				t.Fatalf(
-					"filesystemResolutionClass(%v) = %v, want %v",
-					test.err,
-					got,
-					test.class,
-				)
-			}
-		})
-	}
-}
-
-func TestResolveTarget_DoesNotFollowTargetLeafSymlink(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	destination := filepath.Join(root, "destination")
-	for _, directory := range []string{home, destination} {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
-		}
-	}
-	leaf := filepath.Join(home, "leaf")
-	if err := os.Symlink(destination, leaf); err != nil {
-		t.Fatalf("os.Symlink(leaf) error = %v", err)
-	}
-	resolvedHome, err := filepath.EvalSymlinks(home)
-	if err != nil {
-		t.Fatalf("filepath.EvalSymlinks(home) error = %v", err)
-	}
-
-	target, err := ResolveTarget(home, "~/leaf")
+	target, err := ResolveTarget(home, "~/alias/config")
 	if err != nil {
 		t.Fatalf("ResolveTarget() error = %v", err)
 	}
-	if got, want := target.Resolved(), filepath.Join(resolvedHome, "leaf"); got != want {
-		t.Fatalf("Resolved() = %q, want target entry %q", got, want)
+	if got, want := target.Relative(), filepath.Join("alias", "config"); got != want {
+		t.Fatalf("Relative() = %q, want lexical %q", got, want)
 	}
-	if target.Resolved() == destination {
-		t.Fatal("ResolveTarget() followed the target leaf symlink")
+	absolute, err := target.Absolute(home)
+	if err != nil {
+		t.Fatalf("Absolute() error = %v", err)
+	}
+	if want := filepath.Join(home, "alias", "config"); absolute != want {
+		t.Fatalf("Absolute() = %q, want lexical %q", absolute, want)
 	}
 }
 
-func TestTargetParentTraversesLinkDistinguishesResolutionChain(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	destination := filepath.Join(root, "destination")
-	for _, directory := range []string{home, destination} {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatalf("os.MkdirAll(%q) error = %v", directory, err)
-		}
+func TestResolveStoredTargetRequiresCanonicalRelativeIdentity(t *testing.T) {
+	valid := filepath.Join(".config", "app")
+	target, err := ResolveStoredTarget(valid)
+	if err != nil || target.Relative() != valid {
+		t.Fatalf("ResolveStoredTarget(valid) = (%q, %v)", target.Relative(), err)
 	}
-
-	owned := filepath.Join(home, "owned")
-	throughOwned := filepath.Join(home, "through-owned")
-	throughAlias := filepath.Join(home, "through-alias")
-	throughDotDot := filepath.Join(home, "through-dotdot")
-	directDestination := filepath.Join(home, "direct-destination")
-	if err := os.Symlink(destination, owned); err != nil {
-		t.Fatalf("os.Symlink(owned) error = %v", err)
-	}
-	if err := os.Symlink(filepath.Base(owned), throughOwned); err != nil {
-		t.Fatalf("os.Symlink(through owned) error = %v", err)
-	}
-	if err := os.Symlink(filepath.Base(throughOwned), throughAlias); err != nil {
-		t.Fatalf("os.Symlink(through alias) error = %v", err)
-	}
-	if err := os.Symlink("owned/../destination", throughDotDot); err != nil {
-		t.Fatalf("os.Symlink(through dot-dot) error = %v", err)
-	}
-	if err := os.Symlink(destination, directDestination); err != nil {
-		t.Fatalf("os.Symlink(direct destination) error = %v", err)
-	}
-
-	ownedTarget, err := ResolveAbsoluteTarget(home, owned)
-	if err != nil {
-		t.Fatalf("ResolveAbsoluteTarget(owned) error = %v", err)
-	}
-	tests := []struct {
-		name       string
-		expression string
-		want       bool
-	}{
-		{name: "direct descendant", expression: "~/owned/child", want: true},
-		{name: "one alias", expression: "~/through-owned/child", want: true},
-		{name: "multiple aliases", expression: "~/through-alias/child", want: true},
-		{name: "dot-dot after owned link", expression: "~/through-dotdot/child", want: true},
-		{
-			name:       "independent alias to same destination",
-			expression: "~/direct-destination/child",
-			want:       false,
-		},
-		{name: "owned target leaf", expression: "~/owned", want: false},
-		{name: "unrelated target", expression: "~/unrelated/child", want: false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			target, resolveErr := ResolveTarget(home, test.expression)
-			if resolveErr != nil {
-				t.Fatalf("ResolveTarget(%q) error = %v", test.expression, resolveErr)
-			}
-			got, traverseErr := TargetParentTraversesLink(
-				target,
-				ownedTarget.Resolved(),
-			)
-			if traverseErr != nil {
-				t.Fatalf("TargetParentTraversesLink() error = %v", traverseErr)
-			}
-			if got != test.want {
-				t.Fatalf(
-					"TargetParentTraversesLink(%q) = %t, want %t",
-					test.expression,
-					got,
-					test.want,
-				)
+	for _, value := range []string{"", ".", "..", "../app", "~/app", "/tmp/app", "app/../other", "app/./file"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := ResolveStoredTarget(value); !errors.Is(err, ErrInvalidPath) {
+				t.Fatalf("ResolveStoredTarget(%q) error = %v, want ErrInvalidPath", value, err)
 			}
 		})
 	}
 }
 
-func TestValidate_DoesNotInventCaseUnicodeOrHardLinkAliases(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(home) error = %v", err)
-	}
-	first := filepath.Join(home, "first")
-	second := filepath.Join(home, "second")
-	if err := os.WriteFile(first, []byte("same inode"), 0o600); err != nil {
-		t.Fatalf("os.WriteFile(first) error = %v", err)
-	}
-	if err := os.Link(first, second); err != nil {
-		t.Fatalf("os.Link(second) error = %v", err)
-	}
-
-	placements := []Placement{
-		{Label: "case-upper", Target: "~/Missing/Config"},
-		{Label: "case-lower", Target: "~/missing/config"},
-		{Label: "unicode-composed", Target: "~/missing/\u00e9"},
-		{Label: "unicode-decomposed", Target: "~/missing/e\u0301"},
-		{Label: "hard-link-first", Target: "~/first"},
-		{Label: "hard-link-second", Target: "~/second"},
-	}
-	controls, err := ResolveControls(controlsOutsideFixture(root))
-	if err != nil {
-		t.Fatalf("ResolveControls() error = %v", err)
-	}
-	resolved, err := controls.Validate(home, placements)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(resolved) != len(placements) {
-		t.Fatalf("Validate() returned %d placements, want %d", len(resolved), len(placements))
+func TestResolveTargetRejectsUnsupportedExpressions(t *testing.T) {
+	home := t.TempDir()
+	for _, expression := range []string{"", "~", ".config/app", "~/../outside", "~/$HOME/app", "~/app/*"} {
+		t.Run(expression, func(t *testing.T) {
+			if _, err := ResolveTarget(home, expression); !errors.Is(err, ErrInvalidPath) {
+				t.Fatalf("ResolveTarget(%q) error = %v, want ErrInvalidPath", expression, err)
+			}
+		})
 	}
 }
 
-func controlsOutsideFixture(root string) Controls {
-	return Controls{
-		Repository: filepath.Join(root, "repository"),
-		Config:     filepath.Join(root, "config-control", "config.toml"),
-		State:      filepath.Join(root, "state-control", "state.json"),
-		Lock:       filepath.Join(root, "state-control", "lock"),
+func TestTargetsConflictIsRelativeAndLexicalOnly(t *testing.T) {
+	home := t.TempDir()
+	parent, _ := ResolveTarget(home, "~/.config/app")
+	child, _ := ResolveTarget(home, "~/.config/app/child")
+	other, _ := ResolveTarget(home, "~/.other")
+	if !TargetsConflict(parent, child) || !TargetsConflict(child, parent) {
+		t.Fatal("parent and child must conflict")
+	}
+	if TargetsConflict(parent, other) {
+		t.Fatal("disjoint targets must not conflict")
+	}
+	if !TargetsEqual(parent, parent) || TargetStrictlyContains(other, parent) {
+		t.Fatal("target relations are inconsistent")
 	}
 }

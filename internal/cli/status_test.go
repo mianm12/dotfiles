@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestStatusReportsExistingLocalWithoutProvenanceAsPending(t *testing.T) {
+func TestStatusReportsExistingLocalWithoutStateAction(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `
 [[locals]]
@@ -24,19 +24,18 @@ target = "~/.app.local"
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
-		!strings.Contains(stdout, "action kind=keep module=app placement=local") ||
+		strings.Contains(stdout, "action kind=") ||
 		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("status before provenance = (%d, %q, %q), want pending", code, stdout, stderr)
+		t.Fatalf("status before empty state = (%d, %q, %q), want local no-op", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, beforeStatus)
 	assertCLIMissing(t, fixture.state)
 	assertCLIMissing(t, fixture.lock)
 
 	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK ||
-		!strings.Contains(stdout, "state_changed=true") ||
+	if code != exitOK || !strings.Contains(stdout, "converged") ||
 		!strings.Contains(stderr, "state is missing") {
-		t.Fatalf("apply local provenance = (%d, %q, %q), want state-only mutation", code, stdout, stderr)
+		t.Fatalf("apply local = (%d, %q, %q), want empty state initialization", code, stdout, stderr)
 	}
 	if data, err := os.ReadFile(target); err != nil || string(data) != "personal" {
 		t.Fatalf("local after apply = (%q, %v), want preserved", data, err)
@@ -45,9 +44,9 @@ target = "~/.app.local"
 	beforeRepeat := snapshotPaths(t, fixture.config, fixture.state, fixture.lock, target)
 	code, stdout, stderr = fixture.run("status")
 	if code != exitOK || stderr != "" ||
-		!strings.Contains(stdout, "fact module=app selection=profile state=present") ||
+		!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
 		strings.Contains(stdout, "action kind=") {
-		t.Fatalf("status after provenance = (%d, %q, %q), want converged", code, stdout, stderr)
+		t.Fatalf("status after empty state = (%d, %q, %q), want local no-op", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, beforeRepeat)
 	assertApplyNoMutation(t, fixture, fixture.run)
@@ -106,16 +105,15 @@ target = "~/current/config"
 	code, stdout, stderr := fixture.run("status")
 	if code != exitOK || stderr != "" ||
 		!strings.Contains(stdout, "fact module=app selection=profile state=present") ||
-		!strings.Contains(stdout, "action kind=keep module=app placement=config") {
-		t.Fatalf("status before state refresh = (%d, %q, %q), want pending", code, stdout, stderr)
+		strings.Contains(stdout, "record ") ||
+		strings.Contains(stdout, "skip ") {
+		t.Fatalf("status after parent rebind = (%d, %q, %q), want silent lexical match", code, stdout, stderr)
 	}
 	assertSnapshotUnchanged(t, beforeStatus)
 
 	code, stdout, stderr = fixture.run("apply")
-	if code != exitOK ||
-		stderr != "" ||
-		!strings.Contains(stdout, "targets_changed=false state_changed=true") {
-		t.Fatalf("state refresh apply = (%d, %q, %q)", code, stdout, stderr)
+	if code != exitOK || stderr != "" || !strings.Contains(stdout, "converged") {
+		t.Fatalf("apply after parent rebind = (%d, %q, %q), want no-op", code, stdout, stderr)
 	}
 	assertApplyNoMutation(t, fixture, fixture.run)
 }
@@ -148,8 +146,8 @@ target = "~/.pending"
 		!strings.Contains(stdout, "fact module=first selection=profile") ||
 		!strings.Contains(stdout, "fact module=second selection=profile") ||
 		!strings.Contains(stdout, "fact module=pending selection=profile") ||
-		!strings.Contains(stdout, "problem kind=blocked module=first placement=config") ||
-		!strings.Contains(stdout, "problem kind=blocked module=second placement=config") ||
+		!strings.Contains(stdout, "skip module=first placement=config") ||
+		!strings.Contains(stdout, "skip module=second placement=config") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"status = (%d, %q, %q), want conflict plus independent pending status",
@@ -160,34 +158,6 @@ target = "~/.pending"
 	}
 	assertSnapshotUnchanged(t, before)
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
-}
-
-func TestStatusReportsCrossModuleUpdatePruneConflict(t *testing.T) {
-	topology := newParentUpdateStaleCLIEnv(t, "new")
-	fixture := topology.fixture
-	before := snapshotTree(t, fixture.root)
-
-	code, stdout, stderr := fixture.run("status")
-
-	if code != exitOK ||
-		stderr != "" ||
-		!strings.Contains(stdout, "fact module=stale selection=none state=present") ||
-		!strings.Contains(stdout, "problem kind=conflict module=stale placement=child") ||
-		!strings.Contains(
-			stdout,
-			"cleanup would be invalidated by active link update",
-		) {
-		t.Fatalf(
-			"status = (%d, %q, %q), want cross-module update/prune conflict",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertSnapshotUnchanged(t, before)
-	assertCLILink(t, topology.parentTarget, topology.oldSource)
-	assertCLILink(t, topology.staleActual, topology.staleSource)
 	assertCLIMissing(t, fixture.lock)
 }
 
@@ -242,8 +212,8 @@ target = "~/.second"
 
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=app selection=profile state=absent") ||
-		!strings.Contains(stdout, "problem kind=conflict module=app placement=first target="+strconv.Quote(first)) ||
-		!strings.Contains(stdout, "problem kind=conflict module=app placement=second target="+strconv.Quote(second)) ||
+		!strings.Contains(stdout, "skip module=app placement=first target="+strconv.Quote(first)) ||
+		!strings.Contains(stdout, "skip module=app placement=second target="+strconv.Quote(second)) ||
 		strings.Count(stdout, `reason="actual target is regular file"`) != 2 ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
@@ -276,7 +246,7 @@ target = "~/.app"
 
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=app selection=profile state=absent applicability=applicable variant=portable") ||
-		!strings.Contains(stdout, "action kind=create-link module=app placement=config") ||
+		!strings.Contains(stdout, "link module=app placement=config") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf(
 			"status named portable variant = (%d, %q, %q), want explicit variant",

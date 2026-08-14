@@ -25,3 +25,18 @@ func TestMarshalMachineRejectsInvalidUTF8Repository(t *testing.T) {
 		)
 	}
 }
+
+func TestMarshalMachineRejectsDuplicateProfiles(t *testing.T) {
+	data, err := coreconfig.MarshalMachine(coreconfig.Machine{
+		Version:    1,
+		Repository: "/absolute/repository",
+		Profiles:   []string{"base", "base"},
+	})
+	if data != nil || !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
+		t.Fatalf(
+			"MarshalMachine(duplicate profiles) = (%q, %v), want ErrInvalidConfiguration",
+			data,
+			err,
+		)
+	}
+}

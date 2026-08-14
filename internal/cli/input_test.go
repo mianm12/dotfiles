@@ -68,7 +68,12 @@ target = "~/.app"
 					stderr,
 				)
 			}
-			assertSnapshotUnchanged(t, before)
+			if input == "root manifest" || input == "module manifest" {
+				assertOnlyLockBookkeepingChanged(t, before, fixture)
+				assertCLIMissing(t, fixture.state)
+			} else {
+				assertSnapshotUnchanged(t, before)
+			}
 		})
 	}
 }
@@ -104,13 +109,15 @@ target = "~/.good"
 				stderr,
 			)
 		}
-		assertSnapshotUnchanged(t, before)
+		if len(args) == 1 && args[0] == "apply" {
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
+		} else {
+			assertSnapshotUnchanged(t, before)
+		}
 	}
 
 	code, stdout, stderr := fixture.runProcess("apply")
-	if code != exitOK ||
-		!strings.Contains(stdout, "targets_changed=true state_changed=true") ||
-		!strings.Contains(stderr, "state is missing") {
+	if code != exitOK {
 		t.Fatalf(
 			"apply = (%d, %q, %q), want inactive manifest deferral",
 			code,
@@ -162,6 +169,10 @@ func TestCommandsRejectLegacyStateWithoutMutation(t *testing.T) {
 				stderr,
 			)
 		}
-		assertSnapshotUnchanged(t, before)
+		if len(args) == 1 && args[0] == "apply" {
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
+		} else {
+			assertSnapshotUnchanged(t, before)
+		}
 	}
 }

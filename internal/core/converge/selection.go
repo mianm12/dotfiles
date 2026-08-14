@@ -1,211 +1,207 @@
 package converge
 
 import (
-	"bytes"
 	"fmt"
+	"path/filepath"
 	"slices"
 
 	"github.com/mianm12/dotfiles/internal/core/config"
-	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/storage"
 )
 
-type checkedSelection struct {
-	result      SelectionResult
-	controls    corepaths.ResolvedControls
-	fingerprint []byte
-}
+const defaultProfileID = "default"
 
 // Initialize creates the first machine selection without converging targets.
 func Initialize(
 	environment Environment,
 	repository string,
 	profiles []string,
-) (result SelectionResult, err error) {
-	environment, err = normalizeEnvironment(environment)
+) (SelectionResult, error) {
+	environment, err := normalizeEnvironment(environment)
 	if err != nil {
-		return SelectionResult{}, err
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
 	repository, err = cleanAbsolute("repository", repository)
 	if err != nil {
-		return SelectionResult{}, err
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
+	profiles = canonicalProfiles(profiles)
 	machine := config.Machine{
 		Version:      1,
 		Repository:   repository,
-		Profiles:     append([]string(nil), profiles...),
+		Profiles:     profiles,
 		ExtraModules: []string{},
 	}
-	preflight, err := checkInitialize(environment, machine)
-	if err != nil {
-		return SelectionResult{}, err
+	if _, err := config.MarshalMachine(machine); err != nil {
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
-	release, err := acquire(preflight.controls)
-	if err != nil {
-		return SelectionResult{}, err
-	}
-	defer func() { err = joinReleaseError(err, release()) }()
-
-	locked, err := checkInitialize(environment, machine)
-	if err != nil {
-		return SelectionResult{}, err
-	}
-	return publishSelection(environment.ConfigPath, locked.result)
+	return runSelectionMutation(environment, func() (SelectionResult, error) {
+		return checkInitialize(environment, machine)
+	})
 }
 
 // SelectAdd adds one direct module selection without converging targets.
-func SelectAdd(environment Environment, moduleID string) (result SelectionResult, err error) {
-	environment, err = normalizeEnvironment(environment)
+func SelectAdd(environment Environment, moduleID string) (SelectionResult, error) {
+	environment, err := normalizeEnvironment(environment)
 	if err != nil {
-		return SelectionResult{}, err
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
 	if err := config.ValidateModuleID(moduleID); err != nil {
-		return SelectionResult{}, err
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
-	preflight, err := checkSelectAdd(environment, moduleID)
-	if err != nil {
-		return SelectionResult{}, err
-	}
-	release, err := acquire(preflight.controls)
-	if err != nil {
-		return SelectionResult{}, err
-	}
-	defer func() { err = joinReleaseError(err, release()) }()
-
-	locked, err := checkSelectAdd(environment, moduleID)
-	if err != nil {
-		return SelectionResult{}, err
-	}
-	if err := verifySelectionFingerprint(preflight, locked); err != nil {
-		return SelectionResult{}, err
-	}
-	return publishSelection(environment.ConfigPath, locked.result)
+	return runSelectionMutation(environment, func() (SelectionResult, error) {
+		return checkSelectAdd(environment, moduleID)
+	})
 }
 
 // SelectRemove removes one direct module selection without converging targets.
-func SelectRemove(environment Environment, moduleID string) (result SelectionResult, err error) {
-	environment, err = normalizeEnvironment(environment)
+func SelectRemove(environment Environment, moduleID string) (SelectionResult, error) {
+	environment, err := normalizeEnvironment(environment)
 	if err != nil {
-		return SelectionResult{}, err
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
 	if err := config.ValidateModuleID(moduleID); err != nil {
-		return SelectionResult{}, err
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
-	preflight, err := checkSelectRemove(environment, moduleID)
-	if err != nil {
-		return SelectionResult{}, err
-	}
-	release, err := acquire(preflight.controls)
-	if err != nil {
-		return SelectionResult{}, err
-	}
-	defer func() { err = joinReleaseError(err, release()) }()
-
-	locked, err := checkSelectRemove(environment, moduleID)
-	if err != nil {
-		return SelectionResult{}, err
-	}
-	if err := verifySelectionFingerprint(preflight, locked); err != nil {
-		return SelectionResult{}, err
-	}
-	return publishSelection(environment.ConfigPath, locked.result)
+	return runSelectionMutation(environment, func() (SelectionResult, error) {
+		return checkSelectRemove(environment, moduleID)
+	})
 }
 
-func verifySelectionFingerprint(preflight, locked checkedSelection) error {
-	if bytes.Equal(preflight.fingerprint, locked.fingerprint) {
-		return nil
+func runSelectionMutation(
+	environment Environment,
+	check func() (SelectionResult, error),
+) (result SelectionResult, err error) {
+	if err := validateLockBoundary(environment); err != nil {
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
-	return fmt.Errorf(
-		"%w: machine config changed while waiting for the mutation lock",
-		ErrBlocked,
-	)
+	release, err := acquireLock(filepath.Dir(environment.LockPath), environment.LockPath)
+	if err != nil {
+		return SelectionResult{}, newFailure(false, nil, err)
+	}
+	return runSelectionMutationLocked(environment, release, check)
+}
+
+func runSelectionMutationLocked(
+	environment Environment,
+	release func() error,
+	check func() (SelectionResult, error),
+) (result SelectionResult, err error) {
+	defer func() { err = joinReleaseFailure(err, release(), result.Changed) }()
+
+	locked, err := check()
+	if err != nil {
+		return SelectionResult{}, newFailure(false, nil, err)
+	}
+	return publishSelection(environment.ConfigPath, locked)
 }
 
 func checkInitialize(
 	environment Environment,
 	machine config.Machine,
-) (checkedSelection, error) {
-	if _, err := config.MarshalMachine(machine); err != nil {
-		return checkedSelection{}, err
-	}
+) (SelectionResult, error) {
 	controls := environmentControls(environment, machine.Repository)
-	resolvedControls, err := validateControls(controls)
+	_, err := validateControls(controls)
 	if err != nil {
-		return checkedSelection{}, err
+		return SelectionResult{}, err
 	}
-	_, exists, err := config.LoadMachine(environment.ConfigPath)
+	current, exists, err := config.LoadMachine(environment.ConfigPath)
 	if err != nil {
-		return checkedSelection{}, err
+		return SelectionResult{}, err
 	}
-	if exists {
-		return checkedSelection{}, fmt.Errorf(
-			"machine is already initialized at %q",
+	if exists && (current.Repository != machine.Repository ||
+		!sameProfileSet(current.Profiles, machine.Profiles)) {
+		return SelectionResult{}, fmt.Errorf(
+			"machine is already initialized at %q with repository %q and profiles %v",
 			environment.ConfigPath,
+			current.Repository,
+			current.Profiles,
 		)
 	}
 	repository, err := config.OpenRepository(machine.Repository)
 	if err != nil {
-		return checkedSelection{}, err
+		return SelectionResult{}, err
 	}
 	if _, err := repository.ProfileModules(machine.Profiles); err != nil {
-		return checkedSelection{}, err
+		return SelectionResult{}, err
 	}
-	return checkedSelection{
-		result:   SelectionResult{Machine: cloneMachine(machine), Changed: true},
-		controls: resolvedControls,
-	}, nil
+	if exists {
+		return SelectionResult{Machine: cloneMachine(current)}, nil
+	}
+	return SelectionResult{Machine: cloneMachine(machine), Changed: true}, nil
 }
 
-func checkSelectAdd(environment Environment, moduleID string) (checkedSelection, error) {
+func canonicalProfiles(profiles []string) []string {
+	if len(profiles) == 0 {
+		return []string{defaultProfileID}
+	}
+	canonical := append([]string(nil), profiles...)
+	slices.Sort(canonical)
+	return canonical
+}
+
+func sameProfileSet(left, right []string) bool {
+	left = append([]string(nil), left...)
+	right = append([]string(nil), right...)
+	slices.Sort(left)
+	slices.Sort(right)
+	return slices.Equal(left, right)
+}
+
+func checkSelectAdd(environment Environment, moduleID string) (SelectionResult, error) {
 	checked, repository, err := checkCurrentSelection(environment, moduleID)
 	if err != nil {
-		return checkedSelection{}, err
+		return SelectionResult{}, err
 	}
-	if checked.result.ProfileSelected ||
-		slices.Contains(checked.result.Machine.ExtraModules, moduleID) {
+	if checked.ProfileSelected ||
+		slices.Contains(checked.Machine.ExtraModules, moduleID) {
 		return checked, nil
 	}
-	_, exists, applicability, err := repository.InspectModule(moduleID, environment.Platform)
+	platform, err := resolvePlatform(environment)
 	if err != nil {
-		return checkedSelection{}, err
+		return SelectionResult{}, err
+	}
+	_, exists, applicability, err := repository.InspectModule(moduleID, platform)
+	if err != nil {
+		return SelectionResult{}, err
 	}
 	if !exists {
-		return checkedSelection{}, fmt.Errorf("unknown module %q", moduleID)
+		return SelectionResult{}, fmt.Errorf("unknown module %q", moduleID)
 	}
 	switch applicability.State {
 	case config.ApplicabilityApplicable:
 	case config.ApplicabilityNotApplicable:
-		return checkedSelection{}, fmt.Errorf("module %q is not applicable", moduleID)
+		return SelectionResult{}, fmt.Errorf("module %q is not applicable", moduleID)
 	case config.ApplicabilityIndeterminate:
-		return checkedSelection{}, fmt.Errorf(
+		return SelectionResult{}, fmt.Errorf(
 			"module %q applicability is indeterminate: %s",
 			moduleID,
 			applicability.Diagnostic,
 		)
 	default:
-		return checkedSelection{}, fmt.Errorf(
+		return SelectionResult{}, fmt.Errorf(
 			"module %q returned invalid applicability %q",
 			moduleID,
 			applicability.State,
 		)
 	}
-	checked.result.Machine.ExtraModules = append(
-		checked.result.Machine.ExtraModules,
+	checked.Machine.ExtraModules = append(
+		checked.Machine.ExtraModules,
 		moduleID,
 	)
-	slices.Sort(checked.result.Machine.ExtraModules)
-	checked.result.Changed = true
+	slices.Sort(checked.Machine.ExtraModules)
+	checked.Changed = true
 	return checked, nil
 }
 
-func checkSelectRemove(environment Environment, moduleID string) (checkedSelection, error) {
+func checkSelectRemove(environment Environment, moduleID string) (SelectionResult, error) {
 	checked, _, err := checkCurrentSelection(environment, moduleID)
 	if err != nil {
-		return checkedSelection{}, err
+		return SelectionResult{}, err
 	}
-	checked.result.Changed = slices.Contains(checked.result.Machine.ExtraModules, moduleID)
-	checked.result.Machine.ExtraModules = slices.DeleteFunc(
-		checked.result.Machine.ExtraModules,
+	checked.Changed = slices.Contains(checked.Machine.ExtraModules, moduleID)
+	checked.Machine.ExtraModules = slices.DeleteFunc(
+		checked.Machine.ExtraModules,
 		func(candidate string) bool { return candidate == moduleID },
 	)
 	return checked, nil
@@ -214,38 +210,27 @@ func checkSelectRemove(environment Environment, moduleID string) (checkedSelecti
 func checkCurrentSelection(
 	environment Environment,
 	moduleID string,
-) (checkedSelection, config.Repository, error) {
-	if err := validateEnvironmentControls(environment); err != nil {
-		return checkedSelection{}, config.Repository{}, err
-	}
+) (SelectionResult, config.Repository, error) {
 	machine, err := requireMachine(environment.ConfigPath)
 	if err != nil {
-		return checkedSelection{}, config.Repository{}, err
+		return SelectionResult{}, config.Repository{}, err
 	}
 	controls := environmentControls(environment, machine.Repository)
-	resolvedControls, err := resolveControls(controls)
+	_, err = validateControls(controls)
 	if err != nil {
-		return checkedSelection{}, config.Repository{}, err
+		return SelectionResult{}, config.Repository{}, err
 	}
 	repository, err := config.OpenRepository(machine.Repository)
 	if err != nil {
-		return checkedSelection{}, config.Repository{}, err
+		return SelectionResult{}, config.Repository{}, err
 	}
 	profileModules, err := repository.ProfileModules(machine.Profiles)
 	if err != nil {
-		return checkedSelection{}, config.Repository{}, err
+		return SelectionResult{}, config.Repository{}, err
 	}
-	fingerprint, err := machineFingerprint(machine)
-	if err != nil {
-		return checkedSelection{}, config.Repository{}, err
-	}
-	return checkedSelection{
-		result: SelectionResult{
-			Machine:         cloneMachine(machine),
-			ProfileSelected: slices.Contains(profileModules, moduleID),
-		},
-		controls:    resolvedControls,
-		fingerprint: fingerprint,
+	return SelectionResult{
+		Machine:         cloneMachine(machine),
+		ProfileSelected: slices.Contains(profileModules, moduleID),
 	}, repository, nil
 }
 
@@ -255,15 +240,16 @@ func publishSelection(path string, result SelectionResult) (SelectionResult, err
 	}
 	data, err := config.MarshalMachine(result.Machine)
 	if err != nil {
-		return SelectionResult{}, err
+		return SelectionResult{}, newFailure(false, nil, err)
 	}
 	changed, err := storage.PublishPrivateFile(path, data)
 	result.Changed = changed
 	if err != nil {
-		if changed {
-			err = fmt.Errorf("%w: %w", ErrPartial, err)
-		}
-		return result, fmt.Errorf("publish machine config %q: %w", path, err)
+		return result, newFailure(
+			changed,
+			nil,
+			fmt.Errorf("publish machine config %q: %w", path, err),
+		)
 	}
 	return result, nil
 }

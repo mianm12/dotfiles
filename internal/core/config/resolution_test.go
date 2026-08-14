@@ -42,22 +42,6 @@ target = "~/.config/example/config"
 			},
 		},
 		{
-			name: "link source ancestor escapes selected root",
-			manifest: `
-[[links]]
-id = "config"
-source = "alias/config"
-target = "~/.config/example/config"
-`,
-			setup: func(t *testing.T, moduleRoot string) {
-				outside := filepath.Join(moduleRoot, "..", "..", "outside")
-				writeFile(t, filepath.Join(outside, "config"), "content")
-				if err := os.Symlink(outside, filepath.Join(moduleRoot, "alias")); err != nil {
-					t.Fatalf("os.Symlink(alias ancestor) error = %v", err)
-				}
-			},
-		},
-		{
 			name: "missing local example",
 			manifest: `
 [[locals]]
@@ -132,6 +116,49 @@ base = ["app"]
 			}
 			assertTreeUnchanged(t, root, before)
 		})
+	}
+}
+
+func TestInspectModuleAcceptsSourceAncestorSymlink(t *testing.T) {
+	root := t.TempDir()
+	repository := writeRepository(t, root, `
+version = 1
+
+[profiles]
+base = ["app"]
+`)
+	moduleRoot := writeModule(t, repository, "app", `
+[[links]]
+id = "config"
+source = "alias/config"
+target = "~/.config/example/config"
+`)
+	outside := filepath.Join(root, "outside")
+	writeFile(t, filepath.Join(outside, "config"), "content")
+	if err := os.Symlink(outside, filepath.Join(moduleRoot, "alias")); err != nil {
+		t.Fatalf("os.Symlink(alias ancestor) error = %v", err)
+	}
+
+	loaded, err := coreconfig.OpenRepository(repository)
+	if err != nil {
+		t.Fatalf("OpenRepository() error = %v", err)
+	}
+	module, exists, applicability, err := loaded.InspectModule(
+		"app",
+		testPlatform("linux", "ubuntu", "x86_64"),
+	)
+	if err != nil || !exists || applicability.State != coreconfig.ApplicabilityApplicable {
+		t.Fatalf(
+			"InspectModule() = (%#v, exists=%t, applicability=%#v, err=%v), want applicable",
+			module,
+			exists,
+			applicability,
+			err,
+		)
+	}
+	wantSource := filepath.Join(moduleRoot, "alias", "config")
+	if len(module.Links) != 1 || module.Links[0].SourcePath != wantSource {
+		t.Fatalf("links = %#v, want lexical source %q", module.Links, wantSource)
 	}
 }
 

@@ -29,7 +29,7 @@
 | ownership 或持久 state | [state 规范](../spec/state-and-ownership.md) | `core/state`、planning/execution 测试 |
 | action eligibility 或冲突判定 | [planning 规范](../spec/planning.md) | converge planning 与 CLI analysis 测试 |
 | mutation 顺序、锁、提交或恢复 | [mutation 规范](../spec/mutation-and-recovery.md) | converge execution/recovery 与 CLI 测试 |
-| 内部 package 或依赖方向 | [架构概览](../architecture/overview.md) | 架构测试与 imports |
+| 内部 package 或依赖方向 | [架构概览](../architecture/overview.md) | Production imports、编译与 diff 审查 |
 | 开发流程、CI 或交付方式 | [贡献约定](../../CONTRIBUTING.md) | Makefile、workflow 与 PR 证据 |
 | 纯教学或导航问题 | [知识库首页](../README.md) | 链接检查、事实核对与人工可读性审查 |
 
@@ -48,8 +48,8 @@
 | `internal/core/converge` | Selection、analysis、planning、lock、mutation 与 commit |
 | `internal/storage` | 私有控制文件的原子发布原语 |
 
-这只是导航摘要；允许依赖边和第三方依赖 owner 以
-[架构概览](../architecture/overview.md)为准，并由架构测试机械约束。
+这只是导航摘要；当前依赖形状见[架构概览](../architecture/overview.md)，实际依赖以 production
+imports 与 `go.mod` 为准。
 
 ## 开发循环
 

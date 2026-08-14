@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 	"github.com/mianm12/dotfiles/internal/core/state"
 )
 
@@ -99,7 +98,12 @@ target = "~/.good"
 					stderr,
 				)
 			}
-			assertSnapshotUnchanged(t, before)
+			if len(args) == 1 && args[0] == "apply" {
+				assertOnlyLockBookkeepingChanged(t, before, fixture)
+				assertCLIMissing(t, fixture.state)
+			} else {
+				assertSnapshotUnchanged(t, before)
+			}
 		})
 	}
 }
@@ -129,15 +133,16 @@ target = "~/.selected"
 	before := snapshotTree(t, fixture.root)
 	code, stdout, stderr := fixture.run("apply")
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "target paths conflict") {
-		t.Fatalf("full apply = (%d, %q, %q), want target conflict", code, stdout, stderr)
+		!strings.Contains(stdout, "skip") ||
+		!strings.Contains(stdout, "skip") ||
+		!strings.Contains(stderr, "state is missing") ||
+		strings.Contains(stderr, "error:") {
+		t.Fatalf("full apply = (%d, %q, %q), want blocked target conflict", code, stdout, stderr)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	assertCLIMissing(t, filepath.Join(fixture.home, ".selected"))
 	assertCLIMissing(t, filepath.Join(fixture.home, ".shared"))
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
 }
 
 func TestFullApplyRejectsTargetRelationshipBeforeMutation(t *testing.T) {
@@ -162,9 +167,7 @@ target = "~/.tree/child"
 	if code != exitOK ||
 		!strings.Contains(stdout, "fact module=effective selection=profile") ||
 		!strings.Contains(stdout, "fact module=selected selection=extra") ||
-		!strings.Contains(stdout, "problem kind=blocked module=effective") ||
-		!strings.Contains(stdout, "problem kind=blocked module=selected") ||
-		!strings.Contains(stdout, "target paths conflict") ||
+		!strings.Contains(stdout, "skip module=effective") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf("full status = (%d, %q, %q), want target conflict report", code, stdout, stderr)
 	}
@@ -172,7 +175,7 @@ target = "~/.tree/child"
 
 	code, stdout, stderr = fixture.run("apply", "--dry-run")
 	if code != exitError ||
-		!strings.Contains(stdout, "target paths conflict") ||
+		!strings.Contains(stdout, "skip") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf("full dry-run = (%d, %q, %q), want target conflict report", code, stdout, stderr)
 	}
@@ -181,175 +184,23 @@ target = "~/.tree/child"
 	code, stdout, stderr = fixture.run("apply")
 
 	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "target paths conflict") {
-		t.Fatalf("full apply = (%d, %q, %q), want target conflict", code, stdout, stderr)
+		!strings.Contains(stdout, "skip") ||
+		!strings.Contains(stdout, "skip") ||
+		!strings.Contains(stderr, "state is missing") ||
+		strings.Contains(stderr, "error:") {
+		t.Fatalf("full apply = (%d, %q, %q), want blocked target conflict", code, stdout, stderr)
 	}
-	assertSnapshotUnchanged(t, before)
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
 	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "selected" {
 		t.Fatalf("extra_modules = %v, want unchanged [selected]", extras)
 	}
 	assertCLIMissing(t, fixture.state)
-	assertCLIMissing(t, fixture.lock)
 	if content, err := os.ReadFile(filepath.Join(fixture.home, ".tree")); err != nil || string(content) != "user" {
 		t.Fatalf("ordinary parent changed: content=%q error=%v", content, err)
 	}
 }
 
-func TestFullApplyRejectsStateOwnedParentLinkBeforeMutation(t *testing.T) {
-	fixture := newCLITestEnv(t, `base = []`)
-	fixture.writeModule(t, "active", `
-[[links]]
-id = "child"
-source = "config"
-target = "~/.shared/child"
-`, map[string]string{"config": "active"})
-	fixture.writeMachine(t, []string{"base"}, []string{"active"})
-
-	oldTree := filepath.Join(fixture.root, "old-repository", "modules", "stale", "tree")
-	if err := os.MkdirAll(oldTree, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(%q) error = %v", oldTree, err)
-	}
-	parentTarget := filepath.Join(fixture.home, ".shared")
-	if err := os.Symlink(oldTree, parentTarget); err != nil {
-		t.Fatalf("os.Symlink(%q, %q) error = %v", oldTree, parentTarget, err)
-	}
-	resolvedParent, err := corepaths.ResolveAbsoluteTarget(fixture.home, parentTarget)
-	if err != nil {
-		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
-	}
-	fixture.writeState(t, state.Snapshot{
-		Home: fixture.home,
-		Records: map[state.Key]state.Record{
-			{ModuleID: "stale", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
-				Target:          parentTarget,
-				ResolvedTarget:  resolvedParent.Resolved(),
-				LinkDestination: oldTree,
-			},
-		},
-	})
-	before := snapshotTree(t, fixture.root)
-
-	code, stdout, stderr := fixture.run("apply")
-
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "traverses state-owned link") {
-		t.Fatalf(
-			"full apply = (%d, %q, %q), want parent ownership conflict",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertSnapshotUnchanged(t, before)
-	if extras := fixture.loadMachine(t).ExtraModules; len(extras) != 1 || extras[0] != "active" {
-		t.Fatalf("extra_modules = %v, want unchanged [active]", extras)
-	}
-	assertCLIMissing(t, filepath.Join(oldTree, "child"))
-	assertCLIMissing(t, fixture.lock)
-}
-
-func TestFullApplyRejectsParentUpdateTraversedByEffectiveChild(t *testing.T) {
-	fixture := newCLITestEnv(t, `base = ["parent", "child"]`)
-	fixture.writeModule(t, "parent", `
-[[links]]
-id = "tree"
-source = "new"
-target = "~/owned"
-`, map[string]string{
-		"old/keep": "old",
-		"new/keep": "new",
-	})
-	fixture.writeModule(t, "child", `
-[[links]]
-id = "config"
-source = "config"
-target = "~/access/child"
-`, map[string]string{"config": "child"})
-	fixture.writeMachine(t, []string{"base"}, nil)
-
-	parentRoot := filepath.Join(fixture.repository, "modules", "parent")
-	oldSource := filepath.Join(parentRoot, "old")
-	newSource := filepath.Join(parentRoot, "new")
-	outside := filepath.Join(fixture.root, "outside")
-	if err := os.MkdirAll(outside, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(%q) error = %v", outside, err)
-	}
-	if err := os.Symlink(outside, filepath.Join(oldSource, "out")); err != nil {
-		t.Fatalf("os.Symlink(parent internal link) error = %v", err)
-	}
-	parentTarget := filepath.Join(fixture.home, "owned")
-	if err := os.Symlink(oldSource, parentTarget); err != nil {
-		t.Fatalf("os.Symlink(parent target) error = %v", err)
-	}
-	if err := os.Symlink(
-		filepath.Join(parentTarget, "out"),
-		filepath.Join(fixture.home, "access"),
-	); err != nil {
-		t.Fatalf("os.Symlink(access) error = %v", err)
-	}
-	childSource := filepath.Join(fixture.repository, "modules", "child", "config")
-	childTarget := filepath.Join(outside, "child")
-	if err := os.Symlink(childSource, childTarget); err != nil {
-		t.Fatalf("os.Symlink(child target) error = %v", err)
-	}
-	resolvedParent, err := corepaths.ResolveAbsoluteTarget(
-		fixture.home,
-		parentTarget,
-	)
-	if err != nil {
-		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
-	}
-	lexicalChild := filepath.Join(fixture.home, "access", "child")
-	resolvedChild, err := corepaths.ResolveAbsoluteTarget(
-		fixture.home,
-		lexicalChild,
-	)
-	if err != nil {
-		t.Fatalf("ResolveAbsoluteTarget(child) error = %v", err)
-	}
-	fixture.writeState(t, state.Snapshot{
-		Home: fixture.home,
-		Records: map[state.Key]state.Record{
-			{ModuleID: "parent", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
-				Target:          parentTarget,
-				ResolvedTarget:  resolvedParent.Resolved(),
-				LinkDestination: oldSource,
-			},
-			{ModuleID: "child", PlacementID: "config"}: {
-				Kind:            state.KindLink,
-				Target:          lexicalChild,
-				ResolvedTarget:  resolvedChild.Resolved(),
-				LinkDestination: childSource,
-			},
-		},
-	})
-	before := snapshotTree(t, fixture.root)
-
-	code, stdout, stderr := fixture.run("apply")
-
-	if code != exitError ||
-		stdout != "" ||
-		(!strings.Contains(stderr, "active link cannot be owned or changed while traversed") &&
-			!strings.Contains(stderr, "target traverses state-owned link")) {
-		t.Fatalf(
-			"full parent update = (%d, %q, %q), want traversal conflict",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	assertSnapshotUnchanged(t, before)
-	assertCLILink(t, parentTarget, oldSource)
-	assertCLILink(t, childTarget, childSource)
-	assertCLIMissing(t, filepath.Join(newSource, "out"))
-	assertCLIMissing(t, fixture.lock)
-}
-
-func TestFullApplyThroughDriftedParentConvergesAndForgetsStaleState(
+func TestFullApplyRequiresTwoStagesForDriftedStaleParentAndDesiredChild(
 	t *testing.T,
 ) {
 	fixture := newCLITestEnv(t, `base = ["active"]`)
@@ -372,95 +223,45 @@ target = "~/.shared/child"
 	if err := os.Symlink(userTree, parentTarget); err != nil {
 		t.Fatalf("os.Symlink(%q, %q) error = %v", userTree, parentTarget, err)
 	}
-	resolvedParent, err := corepaths.ResolveAbsoluteTarget(fixture.home, parentTarget)
-	if err != nil {
-		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
-	}
 	fixture.writeState(t, state.Snapshot{
 		Home: fixture.home,
-		Records: map[state.Key]state.Record{
+		Links: map[state.Key]state.LinkRecord{
 			{ModuleID: "stale", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
-				Target:          parentTarget,
-				ResolvedTarget:  resolvedParent.Resolved(),
-				LinkDestination: recordedTree,
-			},
-		},
-	})
-
-	code, stdout, stderr := fixture.run("apply")
-
-	if code != exitOK ||
-		!strings.Contains(stderr, "forgot ownership") ||
-		!strings.Contains(stdout, "targets_changed=true state_changed=true") {
-		t.Fatalf(
-			"full apply through drifted parent = (%d, %q, %q)",
-			code,
-			stdout,
-			stderr,
-		)
-	}
-	destination := filepath.Join(fixture.repository, "modules", "active", "config")
-	assertCLILink(t, filepath.Join(userTree, "child"), destination)
-	loaded := loadTestState(t, fixture)
-	if _, exists := loaded.Records[state.Key{ModuleID: "stale", PlacementID: "tree"}]; exists {
-		t.Fatal("full apply retained stale state")
-	}
-	if _, exists := loaded.Records[state.Key{ModuleID: "active", PlacementID: "child"}]; !exists {
-		t.Fatal("full apply did not record active child")
-	}
-
-	assertApplyNoMutation(t, fixture, fixture.run)
-}
-
-func TestFullApplyRejectsStaleOwnedParentUsedByActiveDesired(t *testing.T) {
-	fixture := newCLITestEnv(t, `base = ["active"]`)
-	fixture.writeModule(t, "active", `
-[[links]]
-id = "child"
-source = "config"
-target = "~/.shared/child"
-`, map[string]string{"config": "active"})
-	fixture.writeMachine(t, []string{"base"}, nil)
-
-	oldTree := filepath.Join(fixture.root, "old-repository", "tree")
-	if err := os.MkdirAll(oldTree, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(%q) error = %v", oldTree, err)
-	}
-	parentTarget := filepath.Join(fixture.home, ".shared")
-	if err := os.Symlink(oldTree, parentTarget); err != nil {
-		t.Fatalf("os.Symlink(%q, %q) error = %v", oldTree, parentTarget, err)
-	}
-	resolvedParent, err := corepaths.ResolveAbsoluteTarget(fixture.home, parentTarget)
-	if err != nil {
-		t.Fatalf("ResolveAbsoluteTarget(parent) error = %v", err)
-	}
-	fixture.writeState(t, state.Snapshot{
-		Home: fixture.home,
-		Records: map[state.Key]state.Record{
-			{ModuleID: "stale", PlacementID: "tree"}: {
-				Kind:            state.KindLink,
-				Target:          parentTarget,
-				ResolvedTarget:  resolvedParent.Resolved(),
-				LinkDestination: oldTree,
+				Target: ".shared",
+				Dest:   recordedTree,
 			},
 		},
 	})
 	before := snapshotTree(t, fixture.root)
 
-	code, stdout, stderr := fixture.run("apply")
-
-	if code != exitError ||
-		stdout != "" ||
-		!strings.Contains(stderr, "traverses state-owned link") {
+	code, stdout, stderr := fixture.run("status")
+	if code != exitOK || strings.Count(stdout, "skip ") != 2 || stderr != "" {
 		t.Fatalf(
-			"full apply = (%d, %q, %q), want dependency conflict",
+			"status with related stale target = (%d, %q, %q)",
 			code,
 			stdout,
 			stderr,
 		)
 	}
 	assertSnapshotUnchanged(t, before)
-	assertCLIMissing(t, filepath.Join(oldTree, "child"))
-	assertCLIMissing(t, fixture.lock)
+
+	code, stdout, stderr = fixture.run("apply", "--dry-run")
+	if code != exitError || strings.Count(stdout, "skip ") != 2 || stderr != "" {
+		t.Fatalf("dry-run = (%d, %q, %q), want two-stage refusal", code, stdout, stderr)
+	}
+	assertSnapshotUnchanged(t, before)
+
+	code, stdout, stderr = fixture.run("apply")
+	if code != exitError || strings.Count(stdout, "skip ") != 2 || stderr != "" {
+		t.Fatalf("apply = (%d, %q, %q), want two-stage refusal", code, stdout, stderr)
+	}
+	assertOnlyLockBookkeepingChanged(t, before, fixture)
+	if destination, err := os.Readlink(parentTarget); err != nil || destination != userTree {
+		t.Fatalf("stale parent = (%q, %v), want preserved", destination, err)
+	}
+	assertCLIMissing(t, filepath.Join(userTree, "child"))
+	loaded := loadTestState(t, fixture)
+	if got, exists := loaded.Links[state.Key{ModuleID: "stale", PlacementID: "tree"}]; !exists || got.Target != ".shared" || got.Dest != recordedTree {
+		t.Fatalf("stale state = (%#v, %t), want preserved", got, exists)
+	}
 }

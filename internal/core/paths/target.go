@@ -1,164 +1,87 @@
-// Package paths resolves target locations for dot.
-//
-// It intentionally models only the specified lexical normalization, existing
-// ancestor symlinks, target-set uniqueness, and control path boundaries. It
-// does not infer filesystem name aliases or inode identity.
+// Package paths owns lexical HOME targets and control-path prefixes.
 package paths
 
 import (
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 )
 
-var (
-	// ErrInvalidPath reports a target or control path outside the supported syntax.
-	ErrInvalidPath = errors.New("invalid path")
-	// ErrPathBlocked reports an ancestor that cannot be resolved as a directory.
-	ErrPathBlocked = errors.New("path is blocked")
-)
+// ErrInvalidPath reports a target or control path outside the supported syntax.
+var ErrInvalidPath = errors.New("invalid path")
 
-// ResolutionClass describes why filesystem path resolution failed.
-type ResolutionClass uint8
-
-const (
-	// ResolutionObstructed means the current namespace definitely cannot
-	// resolve the requested path, for example because an ancestor is not a
-	// directory, is dangling, or contains a symlink loop.
-	ResolutionObstructed ResolutionClass = iota + 1
-	// ResolutionUnavailable means filesystem observation failed without proving
-	// that the requested path is obstructed.
-	ResolutionUnavailable
-)
-
-type resolutionError struct {
-	class ResolutionClass
-	err   error
-}
-
-func (err *resolutionError) Error() string {
-	return err.err.Error()
-}
-
-func (err *resolutionError) Unwrap() error {
-	return err.err
-}
-
-// ClassifyResolutionError returns the paths-owned classification of a
-// filesystem resolution failure. Invalid path input and unrelated errors are
-// not classified.
-func ClassifyResolutionError(err error) (ResolutionClass, bool) {
-	var classified *resolutionError
-	if !errors.As(err, &classified) {
-		return 0, false
-	}
-	return classified.class, true
-}
-
-// Target is one target expression after HOME expansion and ancestor resolution.
-// Lexical is the cleaned logical-HOME path. Resolved follows existing ancestor
-// symlinks but never follows the target leaf itself.
+// Target is one canonical HOME-relative lexical placement identity.
 type Target struct {
-	lexical  string
-	resolved string
+	relative string
 }
 
-// Lexical returns the cleaned path under the logical HOME.
-func (target Target) Lexical() string {
-	return target.lexical
+// Relative returns the canonical HOME-relative identity without a ~/ prefix.
+func (target Target) Relative() string {
+	return target.relative
 }
 
-// Resolved returns the target path after resolving existing ancestor symlinks.
-func (target Target) Resolved() string {
-	return target.resolved
-}
-
-// TargetParentTraversesLink reports whether resolving target's parent follows
-// the symlink entry at linkEntry. It distinguishes the actual resolution chain
-// from an independent alias that happens to reach the same final destination.
-func TargetParentTraversesLink(target Target, linkEntry string) (bool, error) {
-	watched, err := cleanAbsolute("link entry", linkEntry)
+// Absolute derives the filesystem path used for observation and mutation.
+func (target Target) Absolute(home string) (string, error) {
+	cleanHome, err := cleanAbsolute("HOME", home)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	return pathTraversesLink(filepath.Dir(target.lexical), watched)
+	if _, err := ResolveStoredTarget(target.relative); err != nil {
+		return "", err
+	}
+	absolute := filepath.Join(cleanHome, target.relative)
+	if !strictDescendant(cleanHome, absolute) {
+		return "", fmt.Errorf(
+			"%w: target %q escapes HOME %q",
+			ErrInvalidPath,
+			target.relative,
+			home,
+		)
+	}
+	return absolute, nil
 }
 
-// ResolveTarget expands a ~/ target against an absolute logical HOME.
+// ResolveTarget normalizes one ~/ declaration into its HOME-relative identity.
 func ResolveTarget(home, expression string) (Target, error) {
 	cleanHome, err := cleanAbsolute("HOME", home)
 	if err != nil {
 		return Target{}, err
 	}
-	lexical, err := expandTarget(cleanHome, expression)
+	relative, err := targetRelative(expression)
 	if err != nil {
 		return Target{}, err
 	}
-
-	resolved, err := resolveEntry(lexical)
-	if err != nil {
-		return Target{}, fmt.Errorf("resolve target %q parent: %w", expression, err)
+	target := Target{relative: relative}
+	if _, err := target.Absolute(cleanHome); err != nil {
+		return Target{}, err
 	}
-	info, err := os.Stat(filepath.Dir(resolved))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		detail := fmt.Errorf(
-			"inspect target %q parent %q: %w",
-			expression,
-			filepath.Dir(resolved),
-			err,
-		)
-		return Target{}, classifyFilesystemResolutionError(err, detail)
-	}
-	if err == nil && !info.IsDir() {
-		return Target{}, obstructedResolutionError(fmt.Errorf(
-			"%w: target %q parent %q is not a directory",
-			ErrPathBlocked,
-			expression,
-			filepath.Dir(resolved),
-		))
-	}
-
-	return Target{
-		lexical:  lexical,
-		resolved: resolved,
-	}, nil
+	return target, nil
 }
 
-// ResolveAbsoluteTarget resolves an absolute target that must be a strict
-// lexical descendant of HOME.
-func ResolveAbsoluteTarget(home, target string) (Target, error) {
-	cleanHome, err := cleanAbsolute("HOME", home)
-	if err != nil {
-		return Target{}, err
-	}
-	cleanTarget, err := cleanAbsolute("target", target)
-	if err != nil {
-		return Target{}, err
-	}
-	if !strictDescendant(cleanHome, cleanTarget) {
+// ResolveStoredTarget validates the canonical identity persisted in state.
+func ResolveStoredTarget(relative string) (Target, error) {
+	if relative == "" || filepath.IsAbs(relative) ||
+		strings.HasPrefix(relative, "~/") ||
+		strings.ContainsRune(relative, '\x00') || !utf8.ValidString(relative) {
 		return Target{}, fmt.Errorf(
-			"%w: target %q must be below HOME %q",
+			"%w: stored target %q must be a non-empty HOME-relative UTF-8 path",
 			ErrInvalidPath,
-			target,
-			home,
+			relative,
 		)
 	}
-	relative, err := filepath.Rel(cleanHome, cleanTarget)
-	if err != nil {
+	cleaned := filepath.Clean(relative)
+	if cleaned == "." || cleaned == ".." ||
+		strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) ||
+		cleaned != relative {
 		return Target{}, fmt.Errorf(
-			"%w: compare target %q with HOME %q: %w",
+			"%w: stored target %q must be canonical and below HOME",
 			ErrInvalidPath,
-			target,
-			home,
-			err,
+			relative,
 		)
 	}
-	return ResolveTarget(cleanHome, "~/"+filepath.ToSlash(relative))
+	return Target{relative: relative}, nil
 }
 
 // ValidateTargetExpression validates the target syntax without consulting the
@@ -166,19 +89,6 @@ func ResolveAbsoluteTarget(home, target string) (Target, error) {
 func ValidateTargetExpression(expression string) error {
 	_, err := targetRelative(expression)
 	return err
-}
-
-func expandTarget(home, expression string) (string, error) {
-	relative, err := targetRelative(expression)
-	if err != nil {
-		return "", err
-	}
-
-	lexical := filepath.Clean(filepath.Join(home, relative))
-	if !strictDescendant(home, lexical) {
-		return "", fmt.Errorf("%w: target %q escapes HOME %q", ErrInvalidPath, expression, home)
-	}
-	return lexical, nil
 }
 
 func targetRelative(expression string) (string, error) {
@@ -191,6 +101,9 @@ func targetRelative(expression string) (string, error) {
 	}
 	if strings.ContainsRune(relative, '\x00') {
 		return "", fmt.Errorf("%w: target %q contains NUL", ErrInvalidPath, expression)
+	}
+	if !utf8.ValidString(relative) {
+		return "", fmt.Errorf("%w: target %q contains invalid UTF-8", ErrInvalidPath, expression)
 	}
 	if strings.ContainsAny(relative, "$*?[`") {
 		return "", fmt.Errorf(
@@ -221,227 +134,6 @@ func cleanAbsolute(label, path string) (string, error) {
 	return filepath.Clean(path), nil
 }
 
-func resolveEntry(path string) (string, error) {
-	parent, err := resolvePath(filepath.Dir(path))
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(parent, filepath.Base(path)), nil
-}
-
-func pathTraversesLink(path, watched string) (bool, error) {
-	currentPath, err := cleanAbsolute("path", path)
-	if err != nil {
-		return false, err
-	}
-
-	rootLength := absoluteRootLength(currentPath)
-	resolved := currentPath[:rootLength]
-	linksWalked := 0
-	start := rootLength
-	for start < len(currentPath) {
-		for start < len(currentPath) && os.IsPathSeparator(currentPath[start]) {
-			start++
-		}
-		end := start
-		for end < len(currentPath) && !os.IsPathSeparator(currentPath[end]) {
-			end++
-		}
-		if end == start {
-			break
-		}
-
-		component := currentPath[start:end]
-		switch component {
-		case ".":
-			start = end
-			continue
-		case "..":
-			resolved = filepath.Dir(resolved)
-			start = end
-			continue
-		}
-		resolved = filepath.Join(resolved, component)
-
-		info, inspectErr := os.Lstat(resolved)
-		if errors.Is(inspectErr, fs.ErrNotExist) {
-			return false, nil
-		}
-		if inspectErr != nil {
-			detail := fmt.Errorf(
-				"inspect target parent component %q: %w",
-				resolved,
-				inspectErr,
-			)
-			return false, classifyFilesystemResolutionError(inspectErr, detail)
-		}
-		if info.Mode()&fs.ModeSymlink == 0 {
-			if !info.IsDir() {
-				return false, obstructedResolutionError(fmt.Errorf(
-					"%w: target parent component %q is not a directory",
-					ErrPathBlocked,
-					resolved,
-				))
-			}
-			start = end
-			continue
-		}
-		if filepath.Clean(resolved) == watched {
-			return true, nil
-		}
-
-		linksWalked++
-		if linksWalked > 255 {
-			return false, obstructedResolutionError(fmt.Errorf(
-				"%w: resolve target parent %q: too many symlinks",
-				ErrPathBlocked,
-				path,
-			))
-		}
-		destination, readErr := os.Readlink(resolved)
-		if readErr != nil {
-			return false, fmt.Errorf(
-				"read target parent symlink %q: %w",
-				resolved,
-				readErr,
-			)
-		}
-		currentPath = destination + currentPath[end:]
-		if filepath.IsAbs(destination) {
-			rootLength = absoluteRootLength(destination)
-			resolved = destination[:rootLength]
-			end = rootLength
-		} else {
-			resolved = filepath.Dir(resolved)
-			end = 0
-		}
-		start = end
-	}
-	return false, nil
-}
-
-func absoluteRootLength(path string) int {
-	rootLength := len(filepath.VolumeName(path))
-	if rootLength < len(path) && os.IsPathSeparator(path[rootLength]) {
-		rootLength++
-	}
-	return rootLength
-}
-
-// resolvePath follows every existing symlink in path. If a suffix is missing,
-// it resolves the closest existing directory and appends the missing names
-// literally. No directory scan or name canonicalization is performed.
-func resolvePath(path string) (string, error) {
-	cleanPath, err := cleanAbsolute("path", path)
-	if err != nil {
-		return "", err
-	}
-
-	current := cleanPath
-	missing := make([]string, 0)
-	for {
-		info, inspectErr := os.Lstat(current)
-		if inspectErr == nil {
-			resolved, resolveErr := filepath.EvalSymlinks(current)
-			if resolveErr != nil {
-				detail := fmt.Errorf(
-					"%w: resolve existing path %q: %w",
-					ErrPathBlocked,
-					current,
-					resolveErr,
-				)
-				return "", classifySymlinkResolutionError(current, resolveErr, detail)
-			}
-			if len(missing) > 0 {
-				resolvedInfo, statErr := os.Stat(resolved)
-				if statErr != nil {
-					detail := fmt.Errorf("inspect resolved ancestor %q: %w", resolved, statErr)
-					return "", classifyFilesystemResolutionError(statErr, detail)
-				}
-				if !resolvedInfo.IsDir() {
-					return "", obstructedResolutionError(fmt.Errorf(
-						"%w: ancestor %q is not a directory",
-						ErrPathBlocked,
-						current,
-					))
-				}
-			} else if info.Mode()&fs.ModeSymlink != 0 {
-				if _, statErr := os.Stat(resolved); statErr != nil {
-					detail := fmt.Errorf(
-						"%w: inspect symlink destination %q: %w",
-						ErrPathBlocked,
-						resolved,
-						statErr,
-					)
-					return "", classifyFilesystemResolutionError(statErr, detail)
-				}
-			}
-			for index := len(missing) - 1; index >= 0; index-- {
-				resolved = filepath.Join(resolved, missing[index])
-			}
-			return cleanAbsolute("resolved path", resolved)
-		}
-		if !errors.Is(inspectErr, fs.ErrNotExist) {
-			detail := fmt.Errorf(
-				"%w: inspect ancestor %q: %w",
-				ErrPathBlocked,
-				current,
-				inspectErr,
-			)
-			return "", classifyFilesystemResolutionError(inspectErr, detail)
-		}
-
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", obstructedResolutionError(fmt.Errorf(
-				"%w: no existing ancestor for %q",
-				ErrPathBlocked,
-				cleanPath,
-			))
-		}
-		missing = append(missing, filepath.Base(current))
-		current = parent
-	}
-}
-
-func obstructedResolutionError(err error) error {
-	return &resolutionError{
-		class: ResolutionObstructed,
-		err:   err,
-	}
-}
-
-func classifyFilesystemResolutionError(cause, detail error) error {
-	return &resolutionError{
-		class: filesystemResolutionClass(cause),
-		err:   detail,
-	}
-}
-
-func classifySymlinkResolutionError(path string, cause, detail error) error {
-	class := filesystemResolutionClass(cause)
-	if class == ResolutionUnavailable {
-		// EvalSymlinks reports its link-count limit as an opaque error. Stat
-		// recovers the OS classification without exposing that detail to callers.
-		if _, statErr := os.Stat(path); statErr != nil {
-			class = filesystemResolutionClass(statErr)
-		}
-	}
-	return &resolutionError{
-		class: class,
-		err:   detail,
-	}
-}
-
-func filesystemResolutionClass(cause error) ResolutionClass {
-	if errors.Is(cause, fs.ErrNotExist) ||
-		errors.Is(cause, syscall.ENOTDIR) ||
-		errors.Is(cause, syscall.ELOOP) {
-		return ResolutionObstructed
-	}
-	return ResolutionUnavailable
-}
-
 func strictDescendant(parent, candidate string) bool {
 	relative, err := filepath.Rel(parent, candidate)
 	return err == nil &&
@@ -453,4 +145,21 @@ func strictDescendant(parent, candidate string) bool {
 
 func sameOrDescendant(parent, candidate string) bool {
 	return parent == candidate || strictDescendant(parent, candidate)
+}
+
+// TargetsEqual reports lexical equality.
+func TargetsEqual(left, right Target) bool {
+	return left.relative == right.relative
+}
+
+// TargetStrictlyContains reports lexical ancestry.
+func TargetStrictlyContains(parent, child Target) bool {
+	return strictDescendant(parent.relative, child.relative)
+}
+
+// TargetsConflict reports lexical equality or nesting.
+func TargetsConflict(left, right Target) bool {
+	return TargetsEqual(left, right) ||
+		TargetStrictlyContains(left, right) ||
+		TargetStrictlyContains(right, left)
 }

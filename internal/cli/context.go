@@ -19,7 +19,7 @@ type controlContext struct {
 
 type commandContext struct {
 	controlContext
-	platform config.Platform
+	platform func() config.Platform
 }
 
 func resolveControlContext(env environment) (controlContext, error) {
@@ -58,7 +58,7 @@ func resolveContext(env environment) (commandContext, error) {
 	}
 	return commandContext{
 		controlContext: control,
-		platform:       env.platform(),
+		platform:       env.platform,
 	}, nil
 }
 

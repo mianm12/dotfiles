@@ -85,7 +85,8 @@ func TestSelectAddRejectsUnknownAndUnavailableModulesWithoutMutation(t *testing.
 			if code != exitError || stdout != "" || !strings.Contains(stderr, test.want) {
 				t.Fatalf("select add = (%d, %q, %q), want %q", code, stdout, stderr, test.want)
 			}
-			assertSnapshotUnchanged(t, before)
+			assertOnlyLockBookkeepingChanged(t, before, fixture)
+			assertCLIMissing(t, fixture.state)
 		})
 	}
 }
@@ -118,7 +119,7 @@ target = "~/.extra"
 		t.Fatalf("cleanup apply = (%d, %q)", code, stderr)
 	}
 	assertCLIMissing(t, target)
-	if records := loadTestState(t, fixture).Records; len(records) != 0 {
+	if records := loadTestState(t, fixture).Links; len(records) != 0 {
 		t.Fatalf("state records = %#v, want empty", records)
 	}
 }
