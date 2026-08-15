@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,5 +175,49 @@ func TestCommandsRejectLegacyStateWithoutMutation(t *testing.T) {
 		} else {
 			assertSnapshotUnchanged(t, before)
 		}
+	}
+}
+
+func TestCommandsRejectDuplicateExtraModulesWithoutBusinessMutation(t *testing.T) {
+	fixture := newCLITestEnv(t, `base = []`)
+	writeCLIFile(t, fixture.config, fmt.Sprintf(`version = 1
+repository = %q
+profiles = ["base"]
+extra_modules = ["app", "app"]
+`, fixture.repository))
+
+	tests := []struct {
+		name     string
+		args     []string
+		lockOnly bool
+	}{
+		{name: "status", args: []string{"status"}},
+		{name: "apply", args: []string{"apply"}, lockOnly: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := snapshotTree(t, fixture.root)
+
+			code, stdout, stderr := fixture.runInjected(test.args...)
+
+			if code != exitError || stdout != "" ||
+				!strings.Contains(stderr, "duplicate extra module ID") {
+				t.Fatalf(
+					"%v = (%d, %q, %q), want duplicate extra-module error",
+					test.args,
+					code,
+					stdout,
+					stderr,
+				)
+			}
+			if test.lockOnly {
+				assertOnlyLockBookkeepingChanged(t, before, fixture)
+			} else {
+				assertSnapshotUnchanged(t, before)
+			}
+			if _, err := os.Lstat(fixture.state); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("state error = %v, want missing", err)
+			}
+		})
 	}
 }

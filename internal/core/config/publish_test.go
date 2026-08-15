@@ -40,3 +40,18 @@ func TestMarshalMachineRejectsDuplicateProfiles(t *testing.T) {
 		)
 	}
 }
+
+func TestMarshalMachineRejectsDuplicateExtraModules(t *testing.T) {
+	data, err := coreconfig.MarshalMachine(coreconfig.Machine{
+		Version:      1,
+		Repository:   "/absolute/repository",
+		ExtraModules: []string{"tmux", "tmux"},
+	})
+	if data != nil || !errors.Is(err, coreconfig.ErrInvalidConfiguration) {
+		t.Fatalf(
+			"MarshalMachine(duplicate extra modules) = (%q, %v), want ErrInvalidConfiguration",
+			data,
+			err,
+		)
+	}
+}

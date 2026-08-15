@@ -55,6 +55,8 @@ extra_modules = ["tmux"]
 - Machine config 中的 active profile 列表可以为空。Profiles 使用集合语义：顺序不改变
   selection，重复 profile 必须拒绝。`init` 新写入配置时按 profile ID 字节序保存；读取已有配置
   时不要求其原始顺序已经规范化。
+- `extra_modules` 同样使用集合语义，重复 module ID 必须拒绝；读取无效配置时不得自动去重或
+  重写 machine config。
 - `init` 省略 `--profile` 时选择唯一默认 profile `default`；repository 未声明 `default` 时失败。
   一旦显式传入一个或多个 `--profile`，只选择这些 profiles，不再隐式加入 `default`。
 - `init` 写入 profiles；`select add MODULE` 和 `select remove MODULE` 确定性重写

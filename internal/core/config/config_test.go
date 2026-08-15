@@ -30,7 +30,7 @@ func TestLoadMachine_StrictValidation(t *testing.T) {
 version = 1
 repository = "/absolute/repository"
 profiles = ["base"]
-extra_modules = ["tmux"]
+extra_modules = ["tmux", "starship"]
 `)
 	machine, exists, err := coreconfig.LoadMachine(validPath)
 	if err != nil || !exists {
@@ -38,7 +38,7 @@ extra_modules = ["tmux"]
 	}
 	if machine.Repository != "/absolute/repository" ||
 		!reflect.DeepEqual(machine.Profiles, []string{"base"}) ||
-		!reflect.DeepEqual(machine.ExtraModules, []string{"tmux"}) {
+		!reflect.DeepEqual(machine.ExtraModules, []string{"tmux", "starship"}) {
 		t.Fatalf("machine = %#v", machine)
 	}
 
@@ -56,6 +56,7 @@ extra_modules = ["tmux"]
 		{name: "relative repository", content: "version = 1\nrepository = \"repo\"\n"},
 		{name: "duplicate profile", content: "version = 1\nrepository = \"/repo\"\nprofiles = [\"base\", \"base\"]\n"},
 		{name: "invalid extra", content: "version = 1\nrepository = \"/repo\"\nextra_modules = [\"Bad\"]\n"},
+		{name: "duplicate extra", content: "version = 1\nrepository = \"/repo\"\nextra_modules = [\"tmux\", \"tmux\"]\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

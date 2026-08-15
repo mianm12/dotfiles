@@ -71,15 +71,6 @@ func validateUniqueIDs(kind string, values []string) error {
 	return nil
 }
 
-func validateIDs(kind string, values []string) error {
-	for _, value := range values {
-		if err := validateID(kind, value); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func validateLowerTokens(kind string, values []string) error {
 	for _, value := range values {
 		if value == "" || strings.ToLower(value) != value {

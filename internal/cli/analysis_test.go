@@ -60,7 +60,7 @@ target = "~/.app"
 	fixture.writeMachine(
 		t,
 		[]string{"base"},
-		[]string{"app", "app"},
+		[]string{"app"},
 	)
 	context, err := resolveContext(fixture.env)
 	if err != nil {
