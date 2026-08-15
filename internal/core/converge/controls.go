@@ -16,7 +16,7 @@ type controlEntry struct {
 	directory bool
 }
 
-func planControlModes(paths corepaths.Controls) ([]planned, error) {
+func controlModeLines(paths corepaths.Controls) ([]loopLine, error) {
 	entries := []controlEntry{
 		{name: "config-root", path: filepath.Dir(paths.Config), want: storage.PrivateDirectoryMode, directory: true},
 		{name: "config", path: paths.Config, want: storage.PrivateFileMode},
@@ -24,7 +24,7 @@ func planControlModes(paths corepaths.Controls) ([]planned, error) {
 		{name: "state", path: paths.State, want: storage.PrivateFileMode},
 		{name: "lock", path: paths.Lock, want: storage.PrivateFileMode},
 	}
-	lines := make([]planned, 0, len(entries))
+	lines := make([]loopLine, 0, len(entries))
 	for _, entry := range entries {
 		mode, exists, err := inspectControlEntry(entry)
 		if err != nil {
@@ -33,7 +33,7 @@ func planControlModes(paths corepaths.Controls) ([]planned, error) {
 		if !exists || storage.PrivateModeMatches(mode, entry.want) {
 			continue
 		}
-		lines = append(lines, planned{
+		lines = append(lines, loopLine{
 			Line: Line{
 				Op:      OpChmod,
 				Control: entry.name,

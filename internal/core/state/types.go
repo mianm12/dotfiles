@@ -2,10 +2,7 @@
 // persistence format.
 package state
 
-import (
-	"errors"
-	"maps"
-)
+import "errors"
 
 const (
 	// Version is the only supported state format version.
@@ -61,10 +58,4 @@ func New(home string) (Snapshot, error) {
 		Home:  cleanHome,
 		Links: make(map[Key]LinkRecord),
 	}, nil
-}
-
-// Equal reports whether two snapshots contain the same HOME binding and link
-// ownership facts.
-func Equal(left, right Snapshot) bool {
-	return left.Home == right.Home && maps.Equal(left.Links, right.Links)
 }

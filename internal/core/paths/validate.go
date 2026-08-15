@@ -8,12 +8,8 @@ import (
 	"path/filepath"
 )
 
-var (
-	// ErrControlBoundary reports a target overlapping a protected prefix.
-	ErrControlBoundary = errors.New("target overlaps a control path")
-	// ErrControlTopology reports control prefixes that are not isolated.
-	ErrControlTopology = errors.New("control paths conflict")
-)
+// ErrControlTopology reports control prefixes that are not isolated.
+var ErrControlTopology = errors.New("control paths conflict")
 
 // Controls contains the protected paths named by the placement specification.
 type Controls struct {
@@ -23,39 +19,39 @@ type Controls struct {
 	Lock       string
 }
 
-// ResolvedControls is one cleaned control-path snapshot.
-type ResolvedControls struct {
+// LexicalControls is one cleaned and validated lexical control-path snapshot.
+type LexicalControls struct {
 	paths Controls
 	valid bool
 }
 
-// Placement is the path information needed before planner construction.
+// Placement is the path information needed to build the convergence loop.
 type Placement struct {
 	Label  string
 	Target string
 }
 
-// ResolvedPlacement is a validated placement with a lexical target.
-type ResolvedPlacement struct {
+// LexicalPlacement is a validated placement with a lexical target.
+type LexicalPlacement struct {
 	Label  string
 	Target Target
 }
 
-// ResolveControls cleans and validates one control-prefix snapshot without
+// NormalizeControls cleans and validates one control-prefix snapshot without
 // observing placement targets.
-func ResolveControls(controls Controls) (ResolvedControls, error) {
+func NormalizeControls(controls Controls) (LexicalControls, error) {
 	repository, err := cleanAbsolute("repository", controls.Repository)
 	if err != nil {
-		return ResolvedControls{}, err
+		return LexicalControls{}, err
 	}
 	paths, err := cleanCoordinationPaths(controls.Config, controls.State, controls.Lock)
 	if err != nil {
-		return ResolvedControls{}, err
+		return LexicalControls{}, err
 	}
 	if err := validateControlPrefixes(repository, paths.configRoot, paths.stateRoot); err != nil {
-		return ResolvedControls{}, err
+		return LexicalControls{}, err
 	}
-	return ResolvedControls{
+	return LexicalControls{
 		paths: Controls{
 			Repository: repository,
 			Config:     paths.config,
@@ -85,7 +81,7 @@ func ValidateLockBoundary(config, state, lock string) error {
 }
 
 // Paths returns the cleaned lexical paths captured by this snapshot.
-func (controls ResolvedControls) Paths() (Controls, error) {
+func (controls LexicalControls) Paths() (Controls, error) {
 	if err := controls.validate(); err != nil {
 		return Controls{}, err
 	}
@@ -93,10 +89,10 @@ func (controls ResolvedControls) Paths() (Controls, error) {
 }
 
 // Expand resolves placement target expressions without consulting the filesystem.
-func (controls ResolvedControls) Expand(
+func (controls LexicalControls) Expand(
 	home string,
 	placements []Placement,
-) ([]ResolvedPlacement, error) {
+) ([]LexicalPlacement, error) {
 	if err := controls.validate(); err != nil {
 		return nil, err
 	}
@@ -104,7 +100,7 @@ func (controls ResolvedControls) Expand(
 	if err != nil {
 		return nil, err
 	}
-	resolved := make([]ResolvedPlacement, len(placements))
+	expanded := make([]LexicalPlacement, len(placements))
 	for index, placement := range placements {
 		if placement.Label == "" {
 			return nil, fmt.Errorf("%w: placement %d has an empty label", ErrInvalidPath, index)
@@ -113,13 +109,13 @@ func (controls ResolvedControls) Expand(
 		if expandErr != nil {
 			return nil, fmt.Errorf("resolve placement %q: %w", placement.Label, expandErr)
 		}
-		resolved[index] = ResolvedPlacement{Label: placement.Label, Target: target}
+		expanded[index] = LexicalPlacement{Label: placement.Label, Target: target}
 	}
-	return resolved, nil
+	return expanded, nil
 }
 
 // TargetOverlaps reports whether target intersects a protected control prefix.
-func (controls ResolvedControls) TargetOverlaps(home string, target Target) (bool, error) {
+func (controls LexicalControls) TargetOverlaps(home string, target Target) (bool, error) {
 	if err := controls.validate(); err != nil {
 		return false, err
 	}
@@ -135,9 +131,9 @@ func (controls ResolvedControls) TargetOverlaps(home string, target Target) (boo
 	return false, nil
 }
 
-func (controls ResolvedControls) validate() error {
+func (controls LexicalControls) validate() error {
 	if !controls.valid {
-		return fmt.Errorf("%w: control snapshot is unresolved", ErrControlTopology)
+		return fmt.Errorf("%w: control snapshot is uninitialized", ErrControlTopology)
 	}
 	return nil
 }

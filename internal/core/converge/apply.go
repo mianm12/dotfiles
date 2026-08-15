@@ -57,7 +57,7 @@ func applyLocked(environment Environment) (ApplyResult, error) {
 	}
 	execution, runErr := executeLines(
 		controlPaths.State,
-		locked.planned,
+		locked.lines,
 		locked.loaded,
 		commitState,
 	)
@@ -138,19 +138,19 @@ func environmentControls(environment Environment, repository string) corepaths.C
 	}
 }
 
-func validateControls(controls corepaths.Controls) (corepaths.ResolvedControls, error) {
-	resolved, err := resolveControls(controls)
+func validateControls(controls corepaths.Controls) (corepaths.LexicalControls, error) {
+	normalized, err := normalizeControls(controls)
 	if err != nil {
-		return corepaths.ResolvedControls{}, err
+		return corepaths.LexicalControls{}, err
 	}
-	paths, err := resolved.Paths()
+	paths, err := normalized.Paths()
 	if err != nil {
-		return corepaths.ResolvedControls{}, err
+		return corepaths.LexicalControls{}, err
 	}
 	if err := validateControlEntries(paths.Config, paths.State, paths.Lock); err != nil {
-		return corepaths.ResolvedControls{}, err
+		return corepaths.LexicalControls{}, err
 	}
-	return resolved, nil
+	return normalized, nil
 }
 
 func validateLockBoundary(environment Environment) error {
@@ -168,12 +168,12 @@ func validateLockBoundary(environment Environment) error {
 	)
 }
 
-func resolveControls(controls corepaths.Controls) (corepaths.ResolvedControls, error) {
-	resolved, err := corepaths.ResolveControls(controls)
+func normalizeControls(controls corepaths.Controls) (corepaths.LexicalControls, error) {
+	normalized, err := corepaths.NormalizeControls(controls)
 	if err != nil {
-		return corepaths.ResolvedControls{}, controlError{cause: err}
+		return corepaths.LexicalControls{}, controlError{cause: err}
 	}
-	return resolved, nil
+	return normalized, nil
 }
 
 func validateControlEntries(configPath, statePath, lockPath string) error {

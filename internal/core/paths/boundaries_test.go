@@ -15,19 +15,19 @@ func TestExpandKeepsLexicalNestingForTheLoop(t *testing.T) {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(home) error = %v", err)
 	}
-	controls, err := corepaths.ResolveControls(controlsOutsideHome(root))
+	controls, err := corepaths.NormalizeControls(controlsOutsideHome(root))
 	if err != nil {
-		t.Fatalf("ResolveControls() error = %v", err)
+		t.Fatalf("NormalizeControls() error = %v", err)
 	}
-	resolved, err := controls.Expand(home, []corepaths.Placement{
+	placements, err := controls.Expand(home, []corepaths.Placement{
 		{Label: "parent", Target: "~/.config/app"},
 		{Label: "child", Target: "~/.config/app/child"},
 	})
 	if err != nil {
 		t.Fatalf("Expand() error = %v", err)
 	}
-	if len(resolved) != 2 || !corepaths.TargetsConflict(resolved[0].Target, resolved[1].Target) {
-		t.Fatalf("Expand() = %#v, want two lexically nested targets", resolved)
+	if len(placements) != 2 || !corepaths.TargetsConflict(placements[0].Target, placements[1].Target) {
+		t.Fatalf("Expand() = %#v, want two lexically nested targets", placements)
 	}
 }
 
@@ -37,14 +37,14 @@ func TestTargetOverlapsUsesLexicalPrefixes(t *testing.T) {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(home) error = %v", err)
 	}
-	controls, err := corepaths.ResolveControls(corepaths.Controls{
+	controls, err := corepaths.NormalizeControls(corepaths.Controls{
 		Repository: filepath.Join(root, "repository"),
 		Config:     filepath.Join(home, ".config", "dot", "config.toml"),
 		State:      filepath.Join(home, ".local", "state", "dot", "state.json"),
 		Lock:       filepath.Join(home, ".local", "state", "dot", "lock"),
 	})
 	if err != nil {
-		t.Fatalf("ResolveControls() error = %v", err)
+		t.Fatalf("NormalizeControls() error = %v", err)
 	}
 	inside, err := corepaths.ResolveTarget(home, "~/.config/dot/extra")
 	if err != nil {
@@ -64,17 +64,17 @@ func TestTargetOverlapsUsesLexicalPrefixes(t *testing.T) {
 	}
 }
 
-func TestResolveControlsRejectsLexicalPrefixOverlap(t *testing.T) {
+func TestNormalizeControlsRejectsLexicalPrefixOverlap(t *testing.T) {
 	root := t.TempDir()
 	stateRoot := filepath.Join(root, "state")
-	_, err := corepaths.ResolveControls(corepaths.Controls{
+	_, err := corepaths.NormalizeControls(corepaths.Controls{
 		Repository: filepath.Join(root, "repo"),
 		Config:     filepath.Join(root, "repo", "config.toml"),
 		State:      filepath.Join(stateRoot, "state.json"),
 		Lock:       filepath.Join(stateRoot, "lock"),
 	})
 	if !errors.Is(err, corepaths.ErrControlTopology) {
-		t.Fatalf("ResolveControls(repo/config overlap) error = %v, want ErrControlTopology", err)
+		t.Fatalf("NormalizeControls(repo/config overlap) error = %v, want ErrControlTopology", err)
 	}
 }
 
@@ -114,8 +114,8 @@ func TestValidateLockBoundaryAcceptsMissingRoots(t *testing.T) {
 	}
 }
 
-func TestZeroResolvedControlsRejectsUse(t *testing.T) {
-	var controls corepaths.ResolvedControls
+func TestZeroLexicalControlsRejectsUse(t *testing.T) {
+	var controls corepaths.LexicalControls
 	if _, err := controls.Paths(); !errors.Is(err, corepaths.ErrControlTopology) {
 		t.Fatalf("Paths() error = %v, want ErrControlTopology", err)
 	}

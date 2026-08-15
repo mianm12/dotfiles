@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"testing"
 
@@ -53,9 +54,13 @@ func TestMarshalDecodeRoundTripsV5Deterministically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if !corestate.Equal(decoded, snapshot) {
+	if !snapshotsEqual(decoded, snapshot) {
 		t.Fatalf("Decode(Marshal(snapshot)) = %#v, want %#v", decoded, snapshot)
 	}
+}
+
+func snapshotsEqual(left, right corestate.Snapshot) bool {
+	return left.Home == right.Home && maps.Equal(left.Links, right.Links)
 }
 
 func TestDecodeClassifiesVersionBeforeStrictV5(t *testing.T) {

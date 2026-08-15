@@ -85,12 +85,6 @@ func (repository Repository) ModuleIDs() []string {
 	return append([]string(nil), repository.ids...)
 }
 
-// HasModule reports whether discovery recognized a module.
-func (repository Repository) HasModule(id string) bool {
-	_, exists := repository.modules[id]
-	return repository.valid && exists
-}
-
 // ProfileModules returns the sorted module union selected by profiles without
 // decoding module manifests.
 func (repository Repository) ProfileModules(profiles []string) ([]string, error) {
@@ -160,7 +154,7 @@ func (repository Repository) InspectModule(
 }
 
 func (repository Repository) inspectModule(id string) (bool, error) {
-	if repository.HasModule(id) {
+	if _, exists := repository.modules[id]; exists {
 		return true, nil
 	}
 	if err, exists := repository.moduleErrors[id]; exists {

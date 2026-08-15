@@ -24,8 +24,6 @@ target = "~/.extra"
 	code, stdout, stderr := fixture.runInjected("status")
 	if code != exitOK ||
 		stdout != "fact module=extra selection=none state=absent\n" ||
-		strings.Contains(stdout, "add-extra") ||
-		strings.Contains(stdout, "create-link") ||
 		!strings.Contains(stderr, "state is missing") {
 		t.Fatalf("status = (%d, %q, %q), want current inventory", code, stdout, stderr)
 	}
@@ -35,7 +33,6 @@ target = "~/.extra"
 		code, stdout, stderr = fixture.runInjected("apply", dryRunFlag)
 		if code != exitOK ||
 			stdout != "converged\n" ||
-			strings.Contains(stdout, "create-link") ||
 			!strings.Contains(stderr, "state is missing") {
 			t.Fatalf(
 				"apply %s = (%d, %q, %q), want empty current selection",
@@ -287,7 +284,7 @@ target = "~/.app"
 	assertApplyNoMutation(t, fixture, fixture.runInjected)
 }
 
-func TestStatusDoesNotClaimConvergenceWhenPlanningIsBlocked(t *testing.T) {
+func TestStatusDoesNotClaimConvergenceWhenLoopHasSkip(t *testing.T) {
 	for _, withState := range []bool{false, true} {
 		name := "without state"
 		if withState {

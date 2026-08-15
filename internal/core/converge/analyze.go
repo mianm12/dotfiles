@@ -23,9 +23,9 @@ func (source selectionSource) label() string {
 
 type analysis struct {
 	report   Report
-	planned  []planned
+	lines    []loopLine
 	loaded   state.Loaded
-	controls corepaths.ResolvedControls
+	controls corepaths.LexicalControls
 }
 
 // Analyze reloads every convergence input and returns one complete read-only
@@ -64,7 +64,7 @@ func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
-	controlLines, err := planControlModes(paths)
+	controlLines, err := controlModeLines(paths)
 	if err != nil {
 		return analysis{}, err
 	}
@@ -84,7 +84,7 @@ func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
-	planned, err := buildAnalysisLines(
+	lines, err := buildAnalysisLines(
 		environment.Home,
 		controls,
 		selection.modules,
@@ -95,8 +95,8 @@ func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 	if err != nil {
 		return analysis{}, err
 	}
-	planned = append(controlLines, planned...)
-	sortPlanned(planned)
+	lines = append(controlLines, lines...)
+	sortLoopLines(lines)
 	report := Report{
 		Facts: newReportFacts(
 			loaded.Snapshot,
@@ -104,12 +104,12 @@ func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 			selection.observations,
 			statusModuleIDs(repository, machine, loaded.Snapshot),
 		),
-		Lines:        publicLines(planned),
+		Lines:        publicLines(lines),
 		StateWarning: loaded.Warning,
 	}
 	return analysis{
 		report:   report,
-		planned:  planned,
+		lines:    lines,
 		loaded:   loaded,
 		controls: controls,
 	}, nil
@@ -117,24 +117,24 @@ func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 
 func buildAnalysisLines(
 	home string,
-	controls corepaths.ResolvedControls,
-	resolvedModules []config.Module,
+	controls corepaths.LexicalControls,
+	modules []config.Module,
 	snapshot state.Snapshot,
-	skips []planned,
+	skips []loopLine,
 	incompleteModules map[string]struct{},
-) ([]planned, error) {
-	loopLines, err := buildLines(planRequest{
+) ([]loopLine, error) {
+	loopLines, err := buildLines(loopRequest{
 		Home:              home,
 		Controls:          controls,
-		Modules:           resolvedModules,
+		Modules:           modules,
 		State:             snapshot,
 		IncompleteModules: incompleteModules,
 	})
 	if err != nil {
 		return nil, err
 	}
-	lines := append(append([]planned(nil), skips...), loopLines...)
-	sortPlanned(lines)
+	lines := append(append([]loopLine(nil), skips...), loopLines...)
+	sortLoopLines(lines)
 	return lines, nil
 }
 

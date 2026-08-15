@@ -176,7 +176,7 @@ func PrivateModeMatches(current, want fs.FileMode) bool {
 	return current&privateModeMask == want
 }
 
-// SetPrivateMode rechecks the final entry type and applies one planned mode repair.
+// SetPrivateMode rechecks the final entry type and applies one requested mode repair.
 // It reports whether this call actually changed the entry.
 func SetPrivateMode(path string, want fs.FileMode) (bool, error) {
 	cleanPath, err := cleanAbsolute(path)

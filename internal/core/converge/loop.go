@@ -48,8 +48,8 @@ type loopInput struct {
 	incompleteModules map[string]struct{}
 }
 
-func buildLines(request planRequest) ([]planned, error) {
-	home, err := validatePlanRequest(request)
+func buildLines(request loopRequest) ([]loopLine, error) {
+	home, err := validateLoopRequest(request)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func buildLines(request planRequest) ([]planned, error) {
 }
 
 func observeLoopInput(
-	controls corepaths.ResolvedControls,
+	controls corepaths.LexicalControls,
 	desired []desiredPlacement,
 	snapshot state.Snapshot,
 	incompleteModules map[string]struct{},
@@ -147,11 +147,11 @@ func observeLoopInput(
 	return input, nil
 }
 
-func decide(input loopInput) []planned {
+func decide(input loopInput) []loopLine {
 	used := recordUsage(input.desired, input.state)
 	activeSkips := make(map[int]string)
 	staleSkips := make(map[state.Key]string)
-	var lines []planned
+	var lines []loopLine
 
 	markActiveSkip := func(index int, reason string) {
 		if _, exists := activeSkips[index]; !exists {
@@ -229,7 +229,7 @@ func decide(input loopInput) []planned {
 		lines = append(lines, decideStale(input, key))
 	}
 
-	sortPlanned(lines)
+	sortLoopLines(lines)
 	return lines
 }
 
@@ -238,7 +238,7 @@ func decideActive(
 	observed activeObservation,
 	record state.LinkRecord,
 	hasState bool,
-) (*planned, *Line) {
+) (*loopLine, *Line) {
 	subject := subjectForDesired(desired)
 	if desired.kind == placementLocal {
 		switch observed.local {
@@ -276,7 +276,7 @@ func decideActive(
 	return nil, skipPtr(subject, "actual symlink is not explained by desired or state")
 }
 
-func decideStale(input loopInput, key state.Key) planned {
+func decideStale(input loopInput, key state.Key) loopLine {
 	record := input.state.Links[key]
 	observed := input.stateLinks[key]
 	subject := subjectForState(key, observed)
@@ -322,7 +322,7 @@ func stateLinkOwned(record state.LinkRecord, observed stateLinkObservation) bool
 
 func resolveDesired(
 	home string,
-	controls corepaths.ResolvedControls,
+	controls corepaths.LexicalControls,
 	modules []config.Module,
 ) ([]desiredPlacement, error) {
 	pathInputs := make([]corepaths.Placement, 0)
@@ -340,16 +340,16 @@ func resolveDesired(
 			})
 		}
 	}
-	resolved, err := controls.Expand(home, pathInputs)
+	expanded, err := controls.Expand(home, pathInputs)
 	if err != nil {
 		return nil, err
 	}
-	targets := make(map[string]corepaths.Target, len(resolved))
-	for _, placement := range resolved {
+	targets := make(map[string]corepaths.Target, len(expanded))
+	for _, placement := range expanded {
 		targets[placement.Label] = placement.Target
 	}
 
-	desired := make([]desiredPlacement, 0, len(resolved))
+	desired := make([]desiredPlacement, 0, len(expanded))
 	for _, module := range modules {
 		for _, link := range module.Links {
 			target := targets[placementLabel(module.ID, link.ID)]
@@ -395,14 +395,14 @@ func compareDesired(left, right desiredPlacement) int {
 	return strings.Compare(left.target.Relative(), right.target.Relative())
 }
 
-func validatePlanRequest(request planRequest) (string, error) {
+func validateLoopRequest(request loopRequest) (string, error) {
 	if request.Home == "" || !filepath.IsAbs(request.Home) {
-		return "", fmt.Errorf("planner HOME must be a non-empty absolute path")
+		return "", fmt.Errorf("loop HOME must be a non-empty absolute path")
 	}
 	home := filepath.Clean(request.Home)
 	if request.State.Home != home {
 		return "", fmt.Errorf(
-			"planner state HOME %q does not match %q",
+			"loop state HOME %q does not match %q",
 			request.State.Home,
 			home,
 		)
@@ -435,8 +435,8 @@ func subjectForState(key state.Key, observed stateLinkObservation) placementSubj
 	}
 }
 
-func skipLine(subject placementSubject, reason string) planned {
-	return planned{Line: Line{
+func skipLine(subject placementSubject, reason string) loopLine {
+	return loopLine{Line: Line{
 		Op:          OpSkip,
 		ModuleID:    subject.moduleID,
 		PlacementID: subject.placementID,
@@ -450,9 +450,9 @@ func skipPtr(subject placementSubject, reason string) *Line {
 	return &line
 }
 
-func fileLine(desired desiredPlacement) planned {
+func fileLine(desired desiredPlacement) loopLine {
 	subject := subjectForDesired(desired)
-	return planned{
+	return loopLine{
 		Line: Line{
 			Op:          OpFile,
 			ModuleID:    subject.moduleID,
@@ -463,9 +463,9 @@ func fileLine(desired desiredPlacement) planned {
 	}
 }
 
-func linkLine(desired desiredPlacement) planned {
+func linkLine(desired desiredPlacement) loopLine {
 	subject := subjectForDesired(desired)
-	return planned{
+	return loopLine{
 		Line: Line{
 			Op:          OpLink,
 			ModuleID:    subject.moduleID,
@@ -477,9 +477,9 @@ func linkLine(desired desiredPlacement) planned {
 	}
 }
 
-func recordLine(desired desiredPlacement) planned {
+func recordLine(desired desiredPlacement) loopLine {
 	subject := subjectForDesired(desired)
-	return planned{
+	return loopLine{
 		Line: Line{
 			Op:          OpRecord,
 			ModuleID:    subject.moduleID,
@@ -491,9 +491,9 @@ func recordLine(desired desiredPlacement) planned {
 	}
 }
 
-func replaceLine(desired desiredPlacement, record state.LinkRecord) planned {
+func replaceLine(desired desiredPlacement, record state.LinkRecord) loopLine {
 	subject := subjectForDesired(desired)
-	return planned{
+	return loopLine{
 		Line: Line{
 			Op:          OpReplace,
 			ModuleID:    subject.moduleID,
@@ -506,8 +506,8 @@ func replaceLine(desired desiredPlacement, record state.LinkRecord) planned {
 	}
 }
 
-func removeLine(subject placementSubject, record state.LinkRecord) planned {
-	return planned{
+func removeLine(subject placementSubject, record state.LinkRecord) loopLine {
+	return loopLine{
 		Line: Line{
 			Op:          OpRemove,
 			ModuleID:    subject.moduleID,
@@ -519,8 +519,8 @@ func removeLine(subject placementSubject, record state.LinkRecord) planned {
 	}
 }
 
-func forgetLine(subject placementSubject, record state.LinkRecord, reason string) planned {
-	return planned{
+func forgetLine(subject placementSubject, record state.LinkRecord, reason string) loopLine {
+	return loopLine{
 		Line: Line{
 			Op:          OpForget,
 			ModuleID:    subject.moduleID,
@@ -540,8 +540,8 @@ func recordForDesired(desired desiredPlacement) state.LinkRecord {
 	}
 }
 
-func sortPlanned(lines []planned) {
-	slices.SortStableFunc(lines, func(left, right planned) int {
+func sortLoopLines(lines []loopLine) {
+	slices.SortStableFunc(lines, func(left, right loopLine) int {
 		if byPhase := linePhase(left.Op) - linePhase(right.Op); byPhase != 0 {
 			return byPhase
 		}
@@ -600,7 +600,7 @@ func placementLabel(moduleID, placementID string) string {
 	return moduleID + "/" + placementID
 }
 
-func publicLines(lines []planned) []Line {
+func publicLines(lines []loopLine) []Line {
 	result := make([]Line, len(lines))
 	for index, line := range lines {
 		result[index] = line.Line

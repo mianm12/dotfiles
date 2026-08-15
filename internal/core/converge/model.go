@@ -20,7 +20,7 @@ type Environment struct {
 	Platform   func() config.Platform
 }
 
-// ModuleFact contains only observed or resolved facts for one inventory module.
+// ModuleFact contains only selection and observation facts for one inventory module.
 type ModuleFact struct {
 	ID             string
 	Selection      string
@@ -75,7 +75,7 @@ func (report Report) HasSkip() bool {
 	return false
 }
 
-// ApplyResult reports one complete apply outcome.
+// ApplyResult reports one complete apply result.
 type ApplyResult struct {
 	Report          Report
 	Done            []Line
@@ -91,15 +91,15 @@ type SelectionResult struct {
 	ProfileSelected bool
 }
 
-type planRequest struct {
+type loopRequest struct {
 	Home              string
-	Controls          corepaths.ResolvedControls
+	Controls          corepaths.LexicalControls
 	Modules           []config.Module
 	State             state.Snapshot
 	IncompleteModules map[string]struct{}
 }
 
-type planned struct {
+type loopLine struct {
 	Line
 	source     string
 	dest       string

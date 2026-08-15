@@ -117,7 +117,7 @@ target = "~/.config/example/config"
 
 | 结果 | 含义 | 应怎样处理 |
 | --- | --- | --- |
-| applicable | 所有受约束且所需的已知字段匹配 | 进入当前 desired 与 planning |
+| applicable | 所有受约束且所需的已知字段匹配 | 进入当前 desired 与收敛循环 |
 | not-applicable | 至少一个已知字段确定不匹配 | 检查这是预期平台排除，还是 match 写错 |
 | indeterminate | 没有已知 mismatch，但至少一个必要字段无法确定 | 修复平台证据或收缩直接 selection，不要当作“不适用”跳过 |
 

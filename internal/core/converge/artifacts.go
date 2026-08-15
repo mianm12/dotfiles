@@ -17,7 +17,7 @@ type stateCommitter func(string, state.Snapshot) (bool, error)
 
 func executeLines(
 	statePath string,
-	lines []planned,
+	lines []loopLine,
 	loaded state.Loaded,
 	commit stateCommitter,
 ) (executionResult, error) {

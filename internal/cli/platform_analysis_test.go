@@ -20,7 +20,7 @@ source = "config"
 target = "~/.gated"
 `
 
-func TestIndeterminateProfileBlocksMutationWithoutPruningOwnership(t *testing.T) {
+func TestIndeterminateProfileBlocksMutationWithoutRemovingOwnership(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["gated"]`)
 	fixture.writeModule(
 		t,

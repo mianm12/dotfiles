@@ -36,8 +36,8 @@ func TestLoopRecordsExistingCorrectLink(t *testing.T) {
 	if err := os.Symlink(source, fixture.target(".app")); err != nil {
 		t.Fatalf("os.Symlink() error = %v", err)
 	}
-	plan := fixture.build(t, []config.Module{linkModule("app", "config", source, "~/.app")}, fixture.emptyState())
-	assertOps(t, plan, OpRecord)
+	lines := fixture.build(t, []config.Module{linkModule("app", "config", source, "~/.app")}, fixture.emptyState())
+	assertOps(t, lines, OpRecord)
 }
 
 func TestLoopSkipsRegularFileAndNestedDesired(t *testing.T) {
@@ -66,8 +66,8 @@ func TestLoopMovesCreateThenRemoveWhenNotNested(t *testing.T) {
 		Target: ".old",
 		Dest:   source,
 	}
-	plan := fixture.build(t, []config.Module{linkModule("app", "config", source, "~/.new")}, owned)
-	assertOps(t, plan, OpLink, OpRemove)
+	lines := fixture.build(t, []config.Module{linkModule("app", "config", source, "~/.new")}, owned)
+	assertOps(t, lines, OpLink, OpRemove)
 }
 
 func TestLoopForgetsDriftedStaleLink(t *testing.T) {
@@ -81,9 +81,9 @@ func TestLoopForgetsDriftedStaleLink(t *testing.T) {
 		Target: ".stale",
 		Dest:   filepath.Join(fixture.root, "original"),
 	}
-	plan := fixture.build(t, nil, owned)
-	assertOps(t, plan, OpForget)
-	if plan[0].Reason == "" {
+	lines := fixture.build(t, nil, owned)
+	assertOps(t, lines, OpForget)
+	if lines[0].Reason == "" {
 		t.Fatal("forget line must include a reason")
 	}
 }
@@ -140,7 +140,7 @@ func TestLoopIncompleteModuleStateIsNotStale(t *testing.T) {
 		}
 		source := fixture.file("repo/modules/ready/config", "ready")
 
-		lines, err := buildLines(planRequest{
+		lines, err := buildLines(loopRequest{
 			Home:              fixture.home,
 			Controls:          fixture.controls,
 			Modules:           []config.Module{linkModule("ready", "config", source, "~/.ready")},
@@ -163,7 +163,7 @@ func TestLoopIncompleteModuleStateIsNotStale(t *testing.T) {
 		}
 		source := fixture.file("repo/modules/ready/config", "ready")
 
-		lines, err := buildLines(planRequest{
+		lines, err := buildLines(loopRequest{
 			Home:              fixture.home,
 			Controls:          fixture.controls,
 			Modules:           []config.Module{linkModule("ready", "config", source, "~/.shared")},
@@ -506,7 +506,7 @@ type loopFixture struct {
 	root       string
 	home       string
 	repository string
-	controls   corepaths.ResolvedControls
+	controls   corepaths.LexicalControls
 }
 
 func newLoopFixture(t *testing.T) loopFixture {
@@ -516,14 +516,14 @@ func newLoopFixture(t *testing.T) loopFixture {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(home) error = %v", err)
 	}
-	controls, err := corepaths.ResolveControls(corepaths.Controls{
+	controls, err := corepaths.NormalizeControls(corepaths.Controls{
 		Repository: filepath.Join(root, "repo"),
 		Config:     filepath.Join(root, "config", "config.toml"),
 		State:      filepath.Join(root, "state", "state.json"),
 		Lock:       filepath.Join(root, "state", "lock"),
 	})
 	if err != nil {
-		t.Fatalf("ResolveControls() error = %v", err)
+		t.Fatalf("NormalizeControls() error = %v", err)
 	}
 	return loopFixture{root: root, home: home, repository: filepath.Join(root, "repo"), controls: controls}
 }
@@ -550,9 +550,9 @@ func (fixture loopFixture) file(relative, content string) string {
 	return path
 }
 
-func (fixture loopFixture) build(t *testing.T, modules []config.Module, snapshot state.Snapshot) []planned {
+func (fixture loopFixture) build(t *testing.T, modules []config.Module, snapshot state.Snapshot) []loopLine {
 	t.Helper()
-	lines, err := buildLines(planRequest{
+	lines, err := buildLines(loopRequest{
 		Home:     fixture.home,
 		Controls: fixture.controls,
 		Modules:  modules,
@@ -575,7 +575,7 @@ func linkModule(id, placement, source, target string) config.Module {
 	}
 }
 
-func assertOps(t *testing.T, lines []planned, want ...Op) {
+func assertOps(t *testing.T, lines []loopLine, want ...Op) {
 	t.Helper()
 	got := make([]Op, len(lines))
 	for index, line := range lines {

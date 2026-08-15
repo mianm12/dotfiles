@@ -50,7 +50,7 @@ dot apply --dry-run
 4. 判断已有数据由谁维护、是否含秘密、是否需要仓库外备份；
 5. 人工解决归属后重新 status/dry-run。
 
-不要添加 force、自动 backup 或 adopt arbitrary file 的 fallback；这些能力不在当前产品范围。
+不要添加 force、自动 backup 或把任意现有文件记为 owned 的 fallback；这些能力不在当前产品范围。
 完整决策顺序见 [planning 规范](../spec/planning.md#link)。
 
 ## Selection 看起来不对

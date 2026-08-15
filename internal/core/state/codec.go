@@ -32,11 +32,6 @@ type versionEnvelope struct {
 	Version json.RawMessage `json:"version"`
 }
 
-// Decode strictly decodes state v5 and binds it to expectedHome.
-func Decode(data []byte, expectedHome string) (Snapshot, error) {
-	return decode(data, expectedHome)
-}
-
 func decode(data []byte, expectedHome string) (Snapshot, error) {
 	home, err := cleanExpectedHome(expectedHome)
 	if err != nil {

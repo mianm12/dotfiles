@@ -32,7 +32,7 @@ func FuzzDecode(f *testing.F) {
 		if err != nil {
 			t.Fatalf("Decode(Marshal(snapshot)) error = %v", err)
 		}
-		if !corestate.Equal(roundTrip, decoded) {
+		if !snapshotsEqual(roundTrip, decoded) {
 			t.Fatalf("round trip = %#v, want %#v", roundTrip, decoded)
 		}
 	})

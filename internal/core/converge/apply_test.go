@@ -212,7 +212,7 @@ target = "~/.app"
 	}
 }
 
-func TestApplyReturnsBlockedOutcomeAfterLockWithoutBusinessMutation(t *testing.T) {
+func TestApplyReturnsSkipResultAfterLockWithoutBusinessMutation(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	machine := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, machine)
@@ -234,7 +234,7 @@ target = "~/.app"
 	if err != nil || !result.Report.HasSkip() ||
 		len(result.Report.Lines) == 0 ||
 		result.TargetsChanged || result.StateChanged {
-		t.Fatalf("Apply(ordinary file) = (%#v, %v), want blocked outcome", result, err)
+		t.Fatalf("Apply(ordinary file) = (%#v, %v), want skip result", result, err)
 	}
 	if contents, readErr := os.ReadFile(target); readErr != nil || string(contents) != "private" {
 		t.Fatalf("ordinary target = (%q, %v), want unchanged", contents, readErr)
@@ -355,7 +355,7 @@ target = "~/.good"
 	assertApplyBookkeepingPresent(t, fixture)
 }
 
-func TestApplyReturnsTargetTopologyBlockedOutcomeAfterLock(t *testing.T) {
+func TestApplyReturnsTargetTopologySkipResultAfterLock(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	machine := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, machine)
@@ -385,12 +385,12 @@ target = "~/.config/app/child"
 	if err != nil || !result.Report.HasSkip() ||
 		len(result.Report.Lines) == 0 ||
 		result.TargetsChanged || result.StateChanged {
-		t.Fatalf("Apply(target topology) = (%#v, %v), want blocked outcome", result, err)
+		t.Fatalf("Apply(target topology) = (%#v, %v), want skip result", result, err)
 	}
 	assertApplyBookkeepingPresent(t, fixture)
 }
 
-func TestApplyReturnsRepositoryControlTopologyBlockedOutcomeAfterLock(t *testing.T) {
+func TestApplyReturnsRepositoryControlTopologySkipResultAfterLock(t *testing.T) {
 	fixture := newMutationFixture(t, "base = []")
 	fixture.controls.Config = filepath.Join(
 		fixture.repository,
@@ -408,7 +408,7 @@ func TestApplyReturnsRepositoryControlTopologyBlockedOutcomeAfterLock(t *testing
 	assertApplyBookkeepingPresent(t, fixture)
 }
 
-func TestApplyReturnsIndeterminateSelectionBlockedOutcomeAfterLock(t *testing.T) {
+func TestApplyReturnsIndeterminateSelectionSkipResultAfterLock(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	machine := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, machine)
@@ -426,7 +426,7 @@ distro = ["ubuntu"]
 	if err != nil || !result.Report.HasSkip() ||
 		result.TargetsChanged || result.StateChanged ||
 		!reportHasSkipReason(result.Report, "indeterminate") {
-		t.Fatalf("Apply(indeterminate selection) = (%#v, %v), want blocked outcome", result, err)
+		t.Fatalf("Apply(indeterminate selection) = (%#v, %v), want skip result", result, err)
 	}
 	assertApplyBookkeepingPresent(t, fixture)
 }
@@ -484,7 +484,7 @@ func TestAnalysisAndSelectionRejectSymlinkedConfigRootBeforeReadingMachine(t *te
 	}
 }
 
-func TestApplyLockedUsesLatestMachineWithoutPreflightFingerprint(t *testing.T) {
+func TestApplyLockedUsesLatestMachineAfterLock(t *testing.T) {
 	fixture := newMutationFixture(t, `base = ["app"]`)
 	initial := fixture.machine([]string{"base"}, nil)
 	publishMutationMachine(t, fixture.controls.Config, initial)
@@ -565,7 +565,7 @@ func TestApplyResolvesPlatformOnceInsideOwnedLock(t *testing.T) {
 
 	result, err := Apply(environment)
 	if err != nil || result.Report.HasSkip() {
-		t.Fatalf("Apply() = (%#v, %v), want applied outcome", result, err)
+		t.Fatalf("Apply() = (%#v, %v), want successful result", result, err)
 	}
 	if platformCalls != 1 {
 		t.Fatalf("platform resolver calls = %d, want one locked analysis", platformCalls)
@@ -638,7 +638,7 @@ target = "~/.app"
 	}
 }
 
-func TestJoinReleaseFailureOverridesOutcomeWithTypedPartialFailure(t *testing.T) {
+func TestJoinReleaseFailureOverridesResultWithTypedPartialFailure(t *testing.T) {
 	runErr := errors.New("synthetic apply failure")
 	releaseErr := errors.New("synthetic release failure")
 
@@ -785,8 +785,8 @@ func assertMutationMode(t *testing.T, path string, want os.FileMode) {
 }
 
 func reportHasSkipReason(report Report, fragment string) bool {
-	for _, issue := range report.Lines {
-		if strings.Contains(issue.Reason, fragment) {
+	for _, line := range report.Lines {
+		if strings.Contains(line.Reason, fragment) {
 			return true
 		}
 	}

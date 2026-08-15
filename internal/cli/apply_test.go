@@ -67,7 +67,7 @@ target = "~/.gated"
 		!strings.Contains(stdout, "not applicable") ||
 		!strings.Contains(stderr, "state is missing") ||
 		strings.Contains(stderr, "error:") {
-		t.Fatalf("extra apply = (%d, %q, %q), want blocked outcome", code, stdout, stderr)
+		t.Fatalf("extra apply = (%d, %q, %q), want skip result", code, stdout, stderr)
 	}
 	assertOnlyLockBookkeepingChanged(t, before, explicit)
 	assertCLIMissing(t, explicit.state)
