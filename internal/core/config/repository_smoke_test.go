@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -13,9 +14,18 @@ func TestTrackedRepositoryConfiguration(t *testing.T) {
 	if !ok {
 		t.Fatal("runtime.Caller() did not return the test filename")
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
-	if !filepath.IsAbs(root) {
-		t.Fatalf("tracked repository root %q is not absolute", root)
+	checkout := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
+	if !filepath.IsAbs(checkout) {
+		t.Fatalf("tracked repository root %q is not absolute", checkout)
+	}
+
+	root := t.TempDir()
+	for _, relative := range []string{
+		"dot.toml",
+		filepath.Join("modules", "starship", "module.toml"),
+		filepath.Join("modules", "starship", "starship.toml"),
+	} {
+		copyTrackedRepositoryFile(t, checkout, root, relative)
 	}
 
 	repository, err := coreconfig.OpenRepository(root)
@@ -23,8 +33,8 @@ func TestTrackedRepositoryConfiguration(t *testing.T) {
 		t.Fatalf("OpenRepository(tracked root) error = %v", err)
 	}
 	moduleIDs := repository.ModuleIDs()
-	if len(moduleIDs) == 0 {
-		t.Fatal("tracked repository contains no recognized modules")
+	if len(moduleIDs) != 1 || moduleIDs[0] != "starship" {
+		t.Fatalf("tracked repository modules = %q, want [starship]", moduleIDs)
 	}
 
 	platforms := []struct {
@@ -86,5 +96,20 @@ func TestTrackedRepositoryConfiguration(t *testing.T) {
 		if !applicable[moduleID] {
 			t.Fatalf("tracked module %q is not applicable on any supported smoke platform", moduleID)
 		}
+	}
+}
+
+func copyTrackedRepositoryFile(t *testing.T, checkout, root, relative string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(checkout, relative))
+	if err != nil {
+		t.Fatalf("read tracked fixture %q: %v", relative, err)
+	}
+	target := filepath.Join(root, relative)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatalf("create fixture parent for %q: %v", relative, err)
+	}
+	if err := os.WriteFile(target, data, 0o600); err != nil {
+		t.Fatalf("write tracked fixture %q: %v", relative, err)
 	}
 }
