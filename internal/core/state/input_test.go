@@ -80,8 +80,7 @@ func TestLoadRequiresDirectRegularFile(t *testing.T) {
 			if !errors.Is(err, corestate.ErrInvalid) {
 				t.Fatalf("Load() = (%#v, %v), want invalid direct file", loaded, err)
 			}
-			if loaded.Missing ||
-				loaded.Warning != "" ||
+			if loaded.Warning != "" ||
 				loaded.Snapshot.Home != "" ||
 				loaded.Snapshot.Links != nil {
 				t.Fatalf("Load(error) returned partial result %#v", loaded)
@@ -122,7 +121,7 @@ func TestLoadReadsFlatLinksWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if loaded.Missing || loaded.Warning != "" {
+	if loaded.Warning != "" {
 		t.Fatalf("Load() = %#v, want present state without warning", loaded)
 	}
 	if !snapshotsEqual(loaded.Snapshot, want) {

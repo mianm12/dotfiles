@@ -86,7 +86,7 @@ type ApplyResult struct {
 
 // SelectionResult reports one config-only selection mutation.
 type SelectionResult struct {
-	Machine         config.Machine
+	machine         config.Machine
 	Changed         bool
 	ProfileSelected bool
 }

@@ -44,7 +44,6 @@ type LinkRecord struct {
 // empty Snapshot and a warning instead of an error.
 type Loaded struct {
 	Snapshot Snapshot
-	Missing  bool
 	Warning  string
 }
 

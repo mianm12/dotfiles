@@ -98,11 +98,11 @@ func analyzePreparedEnvironment(environment Environment) (analysis, error) {
 	lines = append(controlLines, lines...)
 	sortLoopLines(lines)
 	report := Report{
-		Facts: newReportFacts(
-			loaded.Snapshot,
+		Facts: buildModuleFacts(
+			statusModuleIDs(repository, machine, loaded.Snapshot),
 			selection.sources,
 			selection.observations,
-			statusModuleIDs(repository, machine, loaded.Snapshot),
+			loaded.Snapshot,
 		),
 		Lines:        publicLines(lines),
 		StateWarning: loaded.Warning,
@@ -136,15 +136,6 @@ func buildAnalysisLines(
 	lines := append(append([]loopLine(nil), skips...), loopLines...)
 	sortLoopLines(lines)
 	return lines, nil
-}
-
-func newReportFacts(
-	snapshot state.Snapshot,
-	sources map[string]selectionSource,
-	observations map[string]moduleObservation,
-	moduleIDs []string,
-) []ModuleFact {
-	return buildModuleFacts(moduleIDs, sources, observations, snapshot)
 }
 
 func buildModuleFacts(

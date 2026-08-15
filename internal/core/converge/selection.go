@@ -126,9 +126,9 @@ func checkInitialize(
 		return SelectionResult{}, err
 	}
 	if exists {
-		return SelectionResult{Machine: cloneMachine(current)}, nil
+		return SelectionResult{machine: cloneMachine(current)}, nil
 	}
-	return SelectionResult{Machine: cloneMachine(machine), Changed: true}, nil
+	return SelectionResult{machine: cloneMachine(machine), Changed: true}, nil
 }
 
 func canonicalProfiles(profiles []string) []string {
@@ -154,7 +154,7 @@ func checkSelectAdd(environment Environment, moduleID string) (SelectionResult, 
 		return SelectionResult{}, err
 	}
 	if checked.ProfileSelected ||
-		slices.Contains(checked.Machine.ExtraModules, moduleID) {
+		slices.Contains(checked.machine.ExtraModules, moduleID) {
 		return checked, nil
 	}
 	platform, err := resolvePlatform(environment)
@@ -185,11 +185,11 @@ func checkSelectAdd(environment Environment, moduleID string) (SelectionResult, 
 			applicability.State,
 		)
 	}
-	checked.Machine.ExtraModules = append(
-		checked.Machine.ExtraModules,
+	checked.machine.ExtraModules = append(
+		checked.machine.ExtraModules,
 		moduleID,
 	)
-	slices.Sort(checked.Machine.ExtraModules)
+	slices.Sort(checked.machine.ExtraModules)
 	checked.Changed = true
 	return checked, nil
 }
@@ -199,9 +199,9 @@ func checkSelectRemove(environment Environment, moduleID string) (SelectionResul
 	if err != nil {
 		return SelectionResult{}, err
 	}
-	checked.Changed = slices.Contains(checked.Machine.ExtraModules, moduleID)
-	checked.Machine.ExtraModules = slices.DeleteFunc(
-		checked.Machine.ExtraModules,
+	checked.Changed = slices.Contains(checked.machine.ExtraModules, moduleID)
+	checked.machine.ExtraModules = slices.DeleteFunc(
+		checked.machine.ExtraModules,
 		func(candidate string) bool { return candidate == moduleID },
 	)
 	return checked, nil
@@ -229,7 +229,7 @@ func checkCurrentSelection(
 		return SelectionResult{}, config.Repository{}, err
 	}
 	return SelectionResult{
-		Machine:         cloneMachine(machine),
+		machine:         cloneMachine(machine),
 		ProfileSelected: slices.Contains(profileModules, moduleID),
 	}, repository, nil
 }
@@ -238,7 +238,7 @@ func publishSelection(path string, result SelectionResult) (SelectionResult, err
 	if !result.Changed {
 		return result, nil
 	}
-	data, err := config.MarshalMachine(result.Machine)
+	data, err := config.MarshalMachine(result.machine)
 	if err != nil {
 		return SelectionResult{}, newFailure(false, nil, err)
 	}
