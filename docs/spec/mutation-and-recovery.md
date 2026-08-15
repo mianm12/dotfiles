@@ -11,7 +11,7 @@ normalize invocation paths and validate lock acquisition boundary
   -> resolve selection, check control prefixes and desired
   -> observe actual and emit the same loop lines as status/dry-run
   -> any skip: print the lines, write no business mutation, release lock
-  -> chmod controls, then apply target lines in planning order
+  -> chmod controls, then apply target lines in loop order
   -> atomically commit the resulting ownership state
   -> only now complete record / forget rows
   -> release mutation lock
@@ -84,8 +84,8 @@ config、state、placement parent、target 或 local temporary file。
 
 `init`、`select add` 与 `select remove` 使用同一 lock-first 边界：纯参数与安全取锁校验 →
 acquire 一次 advisory lock → 锁内一次加载/解析/决策 → 原子发布 machine config → release。
-它们不执行锁前 repository/selection 观察，不比较 fingerprint，不读取 state，也不观察或修改
-target。内容变化时原子发布的新 machine config 自带 `0600`；内容相同不借发布函数隐藏 chmod，
+它们不执行锁前 repository/selection 观察，不读取 state，也不观察或修改 target。内容变化时
+原子发布的新 machine config 自带 `0600`；内容相同不借发布函数隐藏 chmod，
 控制权限由 artifact convergence 的显式 `chmod` 行收敛。
 
 并发的 `dot` selection/artifact mutations 由同一 lock 串行化；后取得 lock 的操作读取最新

@@ -53,7 +53,7 @@ func TestUnknownLineDoesNotMutate(t *testing.T) {
 		t.Fatalf("state.New() error = %v", err)
 	}
 	run := mutationRun{}
-	_, _, err = run.apply([]planned{{Line: Line{Op: Op("unknown"), Target: filepath.Join(home, "x")}}}, &ownership)
+	_, _, err = run.apply([]loopLine{{Line: Line{Op: Op("unknown"), Target: filepath.Join(home, "x")}}}, &ownership)
 	if err == nil {
 		t.Fatal("apply(unknown) error = nil")
 	}
@@ -67,15 +67,15 @@ func TestStateCommitFailureReportsOnlyCompletedDiskLines(t *testing.T) {
 	commitErr := errors.New("injected state commit failure")
 	for _, test := range []struct {
 		name           string
-		line           func(*testing.T, string, string) planned
+		line           func(*testing.T, string, string) loopLine
 		seedOwnership  bool
 		wantDone       []Op
 		wantDiskChange bool
 	}{
 		{
 			name: "link remains completed",
-			line: func(_ *testing.T, target, destination string) planned {
-				return planned{
+			line: func(_ *testing.T, target, destination string) loopLine {
+				return loopLine{
 					Line: Line{Op: OpLink, ModuleID: "app", PlacementID: "config", Target: target},
 					dest: destination, targetID: ".app",
 				}
@@ -85,11 +85,11 @@ func TestStateCommitFailureReportsOnlyCompletedDiskLines(t *testing.T) {
 		},
 		{
 			name: "record is not completed",
-			line: func(t *testing.T, target, destination string) planned {
+			line: func(t *testing.T, target, destination string) loopLine {
 				if err := os.Symlink(destination, target); err != nil {
 					t.Fatalf("os.Symlink(record) error = %v", err)
 				}
-				return planned{
+				return loopLine{
 					Line: Line{Op: OpRecord, ModuleID: "app", PlacementID: "config", Target: target},
 					dest: destination, targetID: ".app",
 				}
@@ -98,11 +98,11 @@ func TestStateCommitFailureReportsOnlyCompletedDiskLines(t *testing.T) {
 		{
 			name:          "remove remains completed",
 			seedOwnership: true,
-			line: func(t *testing.T, target, destination string) planned {
+			line: func(t *testing.T, target, destination string) loopLine {
 				if err := os.Symlink(destination, target); err != nil {
 					t.Fatalf("os.Symlink(remove) error = %v", err)
 				}
-				return planned{
+				return loopLine{
 					Line:       Line{Op: OpRemove, ModuleID: "app", PlacementID: "config", Target: target},
 					beforeDest: destination, targetID: ".app",
 				}
@@ -113,8 +113,8 @@ func TestStateCommitFailureReportsOnlyCompletedDiskLines(t *testing.T) {
 		{
 			name:          "forget is not completed",
 			seedOwnership: true,
-			line: func(_ *testing.T, target, destination string) planned {
-				return planned{
+			line: func(_ *testing.T, target, destination string) loopLine {
+				return loopLine{
 					Line:       Line{Op: OpForget, ModuleID: "app", PlacementID: "config", Target: target},
 					beforeDest: destination, targetID: ".app",
 				}
@@ -142,7 +142,7 @@ func TestStateCommitFailureReportsOnlyCompletedDiskLines(t *testing.T) {
 			line := test.line(t, target, destination)
 			result, err := executeLines(
 				filepath.Join(root, "state.json"),
-				[]planned{line},
+				[]loopLine{line},
 				state.Loaded{Snapshot: ownership},
 				func(string, state.Snapshot) (bool, error) { return false, commitErr },
 			)
@@ -171,14 +171,14 @@ func TestStatePublishCleanupFailureDoesNotCompleteStateOnlyLine(t *testing.T) {
 		t.Fatalf("state.New() error = %v", err)
 	}
 	cleanupErr := errors.New("cleanup after publish")
-	line := planned{
+	line := loopLine{
 		Line:     Line{Op: OpRecord, ModuleID: "app", PlacementID: "config", Target: filepath.Join(home, ".app")},
 		dest:     filepath.Join(root, "source"),
 		targetID: ".app",
 	}
 	result, err := executeLines(
 		filepath.Join(root, "state.json"),
-		[]planned{line},
+		[]loopLine{line},
 		state.Loaded{Snapshot: ownership},
 		func(string, state.Snapshot) (bool, error) { return true, cleanupErr },
 	)
@@ -212,7 +212,7 @@ func TestLocalCleanupFailureKeepsCompletedFileLine(t *testing.T) {
 			return cleanupErr
 		},
 	}
-	done, stateOnly, err := run.apply([]planned{{
+	done, stateOnly, err := run.apply([]loopLine{{
 		Line: Line{
 			Op:          OpFile,
 			ModuleID:    "app",
@@ -252,13 +252,13 @@ func TestReplaceAndRemoveRecheckRawDestinationBeforeMutation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("state.New() error = %v", err)
 			}
-			line := planned{
+			line := loopLine{
 				Line:       Line{Op: op, ModuleID: "app", PlacementID: "config", Target: target},
 				dest:       filepath.Join(root, "new"),
 				beforeDest: filepath.Join(root, "expected"),
 				targetID:   ".app",
 			}
-			done, stateOnly, err := (&mutationRun{}).apply([]planned{line}, &ownership)
+			done, stateOnly, err := (&mutationRun{}).apply([]loopLine{line}, &ownership)
 			if err == nil || !strings.Contains(err.Error(), "destination changed") {
 				t.Fatalf("apply(%s) error = %v, want raw destination drift", op, err)
 			}

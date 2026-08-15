@@ -125,14 +125,14 @@ func TestLoadReadsFlatLinksWithoutMutation(t *testing.T) {
 	if loaded.Missing || loaded.Warning != "" {
 		t.Fatalf("Load() = %#v, want present state without warning", loaded)
 	}
-	if !corestate.Equal(loaded.Snapshot, want) {
+	if !snapshotsEqual(loaded.Snapshot, want) {
 		t.Fatalf("Load() snapshot = %#v, want %#v", loaded.Snapshot, want)
 	}
 	decoded, err := corestate.Decode([]byte(document), home)
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if !corestate.Equal(decoded, want) {
+	if !snapshotsEqual(decoded, want) {
 		t.Fatalf("Decode() = %#v, want %#v", decoded, want)
 	}
 	assertTreeUnchanged(t, root, before)

@@ -90,6 +90,6 @@ placements。Module 不存在、not-applicable、indeterminate 和 variant 选�
 [`planning.md`](planning.md#通用决策规则)。
 
 Selection mutation 在同一 advisory lock 内读取最新输入并只改变 machine config，不同步修改
-target 或 state；它不执行锁前 planning 或 fingerprint 比较。`dot apply` 始终收敛当前
+target 或 state；它不在锁前做 convergence analysis。`dot apply` 始终收敛当前
 完整 effective selection，而不是隐式记住某次 select 命令的单个 module。公开命令行为见
 [`cli.md`](cli.md#select)与[`cli.md`](cli.md#apply)。

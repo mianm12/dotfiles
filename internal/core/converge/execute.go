@@ -20,7 +20,7 @@ type mutationRun struct {
 }
 
 func (run *mutationRun) apply(
-	lines []planned,
+	lines []loopLine,
 	ownership *state.Snapshot,
 ) ([]Line, []Line, error) {
 	done := make([]Line, 0, len(lines))
@@ -44,7 +44,7 @@ func (run *mutationRun) apply(
 	return done, stateOnly, nil
 }
 
-func (run *mutationRun) applyLine(line planned, ownership *state.Snapshot) (bool, error) {
+func (run *mutationRun) applyLine(line loopLine, ownership *state.Snapshot) (bool, error) {
 	switch line.Op {
 	case OpChmod:
 		changed, err := storage.SetPrivateMode(line.Path, line.mode)
@@ -95,7 +95,7 @@ func (run *mutationRun) applyLine(line planned, ownership *state.Snapshot) (bool
 	}
 }
 
-func setOwnership(ownership *state.Snapshot, line planned) {
+func setOwnership(ownership *state.Snapshot, line loopLine) {
 	ownership.Links[state.Key{
 		ModuleID:    line.ModuleID,
 		PlacementID: line.PlacementID,
@@ -105,7 +105,7 @@ func setOwnership(ownership *state.Snapshot, line planned) {
 	}
 }
 
-func deleteOwnershipIfMatches(ownership *state.Snapshot, line planned) {
+func deleteOwnershipIfMatches(ownership *state.Snapshot, line loopLine) {
 	key := state.Key{
 		ModuleID:    line.ModuleID,
 		PlacementID: line.PlacementID,

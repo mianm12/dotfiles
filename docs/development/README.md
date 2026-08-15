@@ -8,7 +8,7 @@
 按以下顺序阅读，通常不需要先通读整个仓库：
 
 1. [根 README](../../README.md)：项目范围与当前已实现入口；
-2. [工作模型](../concepts/mental-model.md)：repository、selection、state、filesystem 与 plan；
+2. [工作模型](../concepts/mental-model.md)：repository、selection、state、filesystem 与同一条收敛循环；
 3. [产品规范索引](../spec/README.md)：找到本次行为的唯一规则 owner；
 4. [架构概览](../architecture/overview.md)：确认 package 职责与依赖方向；
 5. [测试架构](../architecture/testing.md)：确定回归测试和门禁归属；
@@ -26,8 +26,8 @@
 | repository、profile、machine selection | [selection 规范](../spec/selection.md) | `core/config`、`core/converge` 与 CLI 跨层测试 |
 | module 发现、applicability、variants | [modules 规范](../spec/modules-and-platforms.md) | `core/config`、`core/converge` 与 CLI 跨层测试 |
 | source、target 或路径关系 | [placements 规范](../spec/placements.md) | `core/paths` 与 safety/placement 测试 |
-| ownership 或持久 state | [state 规范](../spec/state-and-ownership.md) | `core/state`、planning/execution 测试 |
-| action eligibility 或冲突判定 | [planning 规范](../spec/planning.md) | converge planning 与 CLI analysis 测试 |
+| ownership 或持久 state | [state 规范](../spec/state-and-ownership.md) | `core/state`、loop/execution 测试 |
+| action eligibility 或冲突判定 | [planning 规范](../spec/planning.md) | converge loop 与 CLI analysis 测试 |
 | mutation 顺序、锁、提交或恢复 | [mutation 规范](../spec/mutation-and-recovery.md) | converge execution/recovery 与 CLI 测试 |
 | 内部 package 或依赖方向 | [架构概览](../architecture/overview.md) | Production imports、编译与 diff 审查 |
 | 开发流程、CI 或交付方式 | [贡献约定](../../CONTRIBUTING.md) | Makefile、workflow 与 PR 证据 |
@@ -45,7 +45,7 @@
 | `internal/core/config` | Repository、machine、module 配置加载与解析 |
 | `internal/core/paths` | HOME target、source 与 control topology 边界 |
 | `internal/core/state` | Ownership state 模型与编解码 |
-| `internal/core/converge` | Selection、analysis、planning、lock、mutation 与 commit |
+| `internal/core/converge` | Selection、analysis、同一条循环、lock、mutation 与 commit |
 | `internal/storage` | 私有控制文件的原子发布原语 |
 
 这只是导航摘要；当前依赖形状见[架构概览](../architecture/overview.md)，实际依赖以 production

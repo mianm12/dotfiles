@@ -104,7 +104,7 @@ target = "~/.app"
 		if code != exitOK ||
 			!strings.Contains(stdout, "forget") && !strings.Contains(stdout, "record") ||
 			stderr != "" {
-			t.Fatalf("repair-state apply = (%d, %q, %q)", code, stdout, stderr)
+			t.Fatalf("record apply = (%d, %q, %q)", code, stdout, stderr)
 		}
 		record := loadTestState(t, fixture).Links[state.Key{ModuleID: "app", PlacementID: "config"}]
 		if record.Dest != newDestination {
@@ -141,7 +141,7 @@ target = "~/.app"
 		assertApplyNoMutation(t, fixture, fixture.run)
 	})
 
-	t.Run("prune completed before state commit", func(t *testing.T) {
+	t.Run("remove completed before state commit", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = ["app"]`)
 		fixture.writeModule(t, "app", "", map[string]string{"old": "old"})
 		fixture.writeMachine(t, []string{"base"}, nil)

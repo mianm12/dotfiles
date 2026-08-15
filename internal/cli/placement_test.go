@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-func TestApplyAddsPlacementsAndPrunesOnlyOwnedUnchangedLinks(t *testing.T) {
-	t.Run("add and safe prune", func(t *testing.T) {
+func TestApplyAddsPlacementsAndRemovesOnlyOwnedUnchangedLinks(t *testing.T) {
+	t.Run("add and safe remove", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = ["app"]`)
 		fixture.writeModule(t, "app", `
 [[links]]
@@ -169,7 +169,7 @@ target = "~/.app/local"
 	assertApplyNoMutation(t, fixture, fixture.run)
 }
 
-func TestApplyCreatesNewTargetBeforePruningOldTarget(t *testing.T) {
+func TestApplyCreatesNewTargetBeforeRemovingOldTarget(t *testing.T) {
 	fixture := newCLITestEnv(t, `base = ["app"]`)
 	fixture.writeModule(t, "app", `
 [[links]]
@@ -387,8 +387,8 @@ target = "~/.blocked/local"
 	}
 }
 
-func TestApplyAdoptsMatchingLinkAndRequiresExplicitKindMigration(t *testing.T) {
-	t.Run("adopt then reject drift", func(t *testing.T) {
+func TestApplyRecordsMatchingLinkAndRequiresExplicitKindMigration(t *testing.T) {
+	t.Run("record then reject drift", func(t *testing.T) {
 		fixture := newCLITestEnv(t, `base = ["app"]`)
 		fixture.writeModule(t, "app", `
 [[links]]
@@ -406,7 +406,7 @@ target = "~/.app"
 
 		code, stdout, stderr := fixture.run("apply")
 		if code != exitOK || !strings.Contains(stdout, "record") {
-			t.Fatalf("adopt apply = (%d, %q, %q)", code, stdout, stderr)
+			t.Fatalf("record apply = (%d, %q, %q)", code, stdout, stderr)
 		}
 		assertSnapshotUnchanged(t, beforeTarget)
 		assertApplyNoMutation(t, fixture, fixture.run)

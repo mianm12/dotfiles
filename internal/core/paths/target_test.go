@@ -84,7 +84,7 @@ func TestTargetsConflictIsRelativeAndLexicalOnly(t *testing.T) {
 	if TargetsConflict(parent, other) {
 		t.Fatal("disjoint targets must not conflict")
 	}
-	if !TargetsEqual(parent, parent) || TargetStrictlyContains(other, parent) {
-		t.Fatal("target relations are inconsistent")
+	if !TargetsConflict(parent, parent) {
+		t.Fatal("equal targets must conflict")
 	}
 }

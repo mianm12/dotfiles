@@ -50,8 +50,8 @@ dot help [COMMAND]
   Binary 先写同目录临时文件再 rename，不能把仓库内 binary 的 symlink 暴露为安装结果；最终
   `dot` 路径已是目录（含 symlink-to-directory）时必须拒绝，不能把临时文件移进该目录后假成功。
 - Repository 根目录的 `bootstrap.sh` 是薄工作流：它从已 clone 的自身 checkout 依次运行
-  `make install`、已安装 binary 的 `dot init <repository>` 和 `dot apply`。它不解析 placements、
-  state 或 plan，不复制 convergence 逻辑。
+  `make install`、已安装 binary 的 `dot init <repository>` 和 `dot apply`。它不解析 placements
+  或 state，也不自行实现收敛循环。
 - `bootstrap.sh --preview-apply` 仍会安装 binary 并执行幂等 init，只把最后一步改为
   `dot apply --dry-run`；该名称明确不承诺整段脚本只读。除这个可选参数外，其他参数在任何
   mutation 前作为用法错误拒绝。
@@ -68,7 +68,7 @@ dot help [COMMAND]
 - `dot select add MODULE` 和 `dot select remove MODULE` 只修改 machine config 中的
   `extra_modules`，不读取 state、不规划或修改 target，也不执行 convergence。
 - 两个命令都先获取 mutation advisory lock，再在锁内只加载和验证一次最新 machine config 与
-  repository；不执行锁前 selection planning 或 fingerprint 比较。成功后提示运行 `dot apply`。
+  repository；不在锁前做 convergence analysis。成功后提示运行 `dot apply`。
 - `select add` 要求 module 存在、配置有效且当前平台 applicability 为 applicable。Module 已由
   active profile 或 `extra_modules` 选择时成功 no-op，不写入冗余 extra。
 - `select remove` 只删除直接 extra selection。直接 selection 不存在时成功 no-op；若 active

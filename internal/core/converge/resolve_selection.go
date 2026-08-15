@@ -24,7 +24,7 @@ type selectionResolution struct {
 	modules           []config.Module
 	sources           map[string]selectionSource
 	observations      map[string]moduleObservation
-	skips             []planned
+	skips             []loopLine
 	incompleteModules map[string]struct{}
 }
 

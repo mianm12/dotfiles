@@ -147,19 +147,9 @@ func sameOrDescendant(parent, candidate string) bool {
 	return parent == candidate || strictDescendant(parent, candidate)
 }
 
-// TargetsEqual reports lexical equality.
-func TargetsEqual(left, right Target) bool {
-	return left.relative == right.relative
-}
-
-// TargetStrictlyContains reports lexical ancestry.
-func TargetStrictlyContains(parent, child Target) bool {
-	return strictDescendant(parent.relative, child.relative)
-}
-
 // TargetsConflict reports lexical equality or nesting.
 func TargetsConflict(left, right Target) bool {
-	return TargetsEqual(left, right) ||
-		TargetStrictlyContains(left, right) ||
-		TargetStrictlyContains(right, left)
+	return left.relative == right.relative ||
+		strictDescendant(left.relative, right.relative) ||
+		strictDescendant(right.relative, left.relative)
 }
