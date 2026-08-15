@@ -97,7 +97,7 @@ func TestSelectionMutationsOwnConfigOnlyChanges(t *testing.T) {
 		return testPlatform()
 	}
 	result, err = SelectAdd(environment, "app")
-	if err != nil || !result.Changed || len(result.Machine.ExtraModules) != 1 {
+	if err != nil || !result.Changed || len(result.machine.ExtraModules) != 1 {
 		t.Fatalf("SelectAdd() = (%#v, %v), want app selected", result, err)
 	}
 	if platformCalls != 1 {
@@ -178,7 +178,7 @@ func TestSelectRemoveDoesNotDecodeTargetManifest(t *testing.T) {
 	)
 
 	result, err := SelectRemove(fixture.environment(), "broken")
-	if err != nil || !result.Changed || len(result.Machine.ExtraModules) != 0 {
+	if err != nil || !result.Changed || len(result.machine.ExtraModules) != 0 {
 		t.Fatalf("SelectRemove(malformed) = (%#v, %v)", result, err)
 	}
 }
@@ -670,11 +670,11 @@ func TestSelectionMutationLockedReportsReleaseFailureAfterPublication(t *testing
 			return releaseErr
 		},
 		func() (SelectionResult, error) {
-			return SelectionResult{Machine: wantMachine, Changed: true}, nil
+			return SelectionResult{machine: wantMachine, Changed: true}, nil
 		},
 	)
 
-	if !result.Changed || result.Machine.Repository != wantMachine.Repository {
+	if !result.Changed || result.machine.Repository != wantMachine.Repository {
 		t.Fatalf("runSelectionMutationLocked() result = %#v, want published selection", result)
 	}
 	if !publishedBeforeRelease {

@@ -53,7 +53,7 @@ func validateMachine(machine Machine) error {
 	if err := validateUniqueIDs("profile", machine.Profiles); err != nil {
 		return err
 	}
-	if err := validateIDs("extra module", machine.ExtraModules); err != nil {
+	if err := validateUniqueIDs("extra module", machine.ExtraModules); err != nil {
 		return err
 	}
 	return nil

@@ -25,7 +25,7 @@ func TestLoadStateMissingWarnsAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(missing) error = %v", err)
 	}
-	if !loaded.Missing || loaded.Warning == "" {
+	if loaded.Warning != corestate.MissingWarning {
 		t.Fatalf("Load(missing) = %#v, want missing with warning", loaded)
 	}
 	if loaded.Snapshot.Home != home || len(loaded.Snapshot.Links) != 0 {
@@ -132,7 +132,7 @@ func TestLoadInvalidLegacyAndTooNewStateRejectReadOnly(t *testing.T) {
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Load() = (%#v, %v), want %v", loaded, err, test.want)
 			}
-			if loaded.Missing || loaded.Warning != "" ||
+			if loaded.Warning != "" ||
 				loaded.Snapshot.Home != "" || loaded.Snapshot.Links != nil {
 				t.Fatalf("Load(error) returned partial result %#v", loaded)
 			}

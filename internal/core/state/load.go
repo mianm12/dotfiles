@@ -27,7 +27,6 @@ func Load(path, home string) (Loaded, error) {
 		if statePathMissing(path, err) {
 			return Loaded{
 				Snapshot: empty,
-				Missing:  true,
 				Warning:  MissingWarning,
 			}, nil
 		}
