@@ -1,6 +1,7 @@
 package converge
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,7 +97,7 @@ func TestLoopLocalAbsentCreatesExistingIsSilent(t *testing.T) {
 		Locals: []config.Local{{
 			ID:          "local",
 			ExamplePath: example,
-			Target:      "~/.local",
+			Target:      mustTestTarget("~/.local"),
 		}},
 	}
 	first := fixture.build(t, []config.Module{module}, fixture.emptyState())
@@ -115,7 +116,7 @@ func TestLoopLocalUnreachableIsSkip(t *testing.T) {
 		Locals: []config.Local{{
 			ID:          "local",
 			ExamplePath: example,
-			Target:      "~/.blocked/local",
+			Target:      mustTestTarget("~/.blocked/local"),
 		}},
 	}
 
@@ -194,7 +195,7 @@ func TestLoopLinkLocalKindTransitionsAreRefused(t *testing.T) {
 			Locals: []config.Local{{
 				ID:          "config",
 				ExamplePath: example,
-				Target:      "~/.app",
+				Target:      mustTestTarget("~/.app"),
 			}},
 		}
 		assertOps(t, fixture.build(t, []config.Module{module}, owned), OpSkip)
@@ -230,12 +231,12 @@ func TestLoopOwnedLinkHiddenByLocalStillBlocksAnotherPlacement(t *testing.T) {
 		Locals: []config.Local{{
 			ID:          "local",
 			ExamplePath: example,
-			Target:      "~/.new-local",
+			Target:      mustTestTarget("~/.new-local"),
 		}},
 		Links: []config.Link{{
 			ID:         "new",
 			SourcePath: source,
-			Target:     "~/.old",
+			Target:     mustTestTarget("~/.old"),
 		}},
 	}
 
@@ -502,6 +503,38 @@ func TestLoopStaleParentAndDesiredChildAlwaysRequireTwoStages(t *testing.T) {
 	}
 }
 
+func TestLoopRejectsZeroControlsWithoutPlacements(t *testing.T) {
+	home := t.TempDir()
+	snapshot, err := state.New(home)
+	if err != nil {
+		t.Fatalf("state.New() error = %v", err)
+	}
+	_, err = buildLines(loopRequest{Home: home, State: snapshot})
+	if !errors.Is(err, corepaths.ErrControlTopology) {
+		t.Fatalf("buildLines() error = %v, want ErrControlTopology", err)
+	}
+}
+
+func TestLoopRejectsZeroTargetWithPlacementContext(t *testing.T) {
+	fixture := newLoopFixture(t)
+	source := fixture.file("repo/modules/app/config", "data")
+	_, err := buildLines(loopRequest{
+		Home:     fixture.home,
+		Controls: fixture.controls,
+		Modules: []config.Module{{
+			ID: "app",
+			Links: []config.Link{{
+				ID:         "config",
+				SourcePath: source,
+			}},
+		}},
+		State: fixture.emptyState(),
+	})
+	if !errors.Is(err, corepaths.ErrInvalidPath) || !strings.Contains(err.Error(), "app/config") {
+		t.Fatalf("buildLines(zero target) error = %v, want placement-scoped ErrInvalidPath", err)
+	}
+}
+
 type loopFixture struct {
 	root       string
 	home       string
@@ -570,9 +603,17 @@ func linkModule(id, placement, source, target string) config.Module {
 		Links: []config.Link{{
 			ID:         placement,
 			SourcePath: source,
-			Target:     target,
+			Target:     mustTestTarget(target),
 		}},
 	}
+}
+
+func mustTestTarget(expression string) corepaths.Target {
+	target, err := corepaths.ParseTarget(expression)
+	if err != nil {
+		panic(err)
+	}
+	return target
 }
 
 func assertOps(t *testing.T, lines []loopLine, want ...Op) {

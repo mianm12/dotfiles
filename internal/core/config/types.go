@@ -3,6 +3,8 @@ package config
 
 import (
 	"errors"
+
+	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 )
 
 // ErrInvalidConfiguration reports a malformed or inconsistent config.
@@ -70,12 +72,12 @@ type Module struct {
 type Link struct {
 	ID         string
 	SourcePath string
-	Target     string
+	Target     corepaths.Target
 }
 
 // Local is one validated local-file placement.
 type Local struct {
 	ID          string
 	ExamplePath string
-	Target      string
+	Target      corepaths.Target
 }

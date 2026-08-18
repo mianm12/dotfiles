@@ -28,8 +28,8 @@ func (target Target) Absolute(home string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := ResolveStoredTarget(target.relative); err != nil {
-		return "", err
+	if target.relative == "" {
+		return "", fmt.Errorf("%w: target is uninitialized", ErrInvalidPath)
 	}
 	absolute := filepath.Join(cleanHome, target.relative)
 	if !strictDescendant(cleanHome, absolute) {
@@ -43,25 +43,21 @@ func (target Target) Absolute(home string) (string, error) {
 	return absolute, nil
 }
 
-// ResolveTarget normalizes one ~/ declaration into its HOME-relative identity.
-func ResolveTarget(home, expression string) (Target, error) {
-	cleanHome, err := cleanAbsolute("HOME", home)
-	if err != nil {
-		return Target{}, err
-	}
+// ParseTarget normalizes one ~/ declaration into its HOME-relative identity.
+func ParseTarget(expression string) (Target, error) {
 	relative, err := targetRelative(expression)
 	if err != nil {
 		return Target{}, err
 	}
-	target := Target{relative: relative}
-	if _, err := target.Absolute(cleanHome); err != nil {
-		return Target{}, err
-	}
-	return target, nil
+	return targetFromCanonicalRelative(relative)
 }
 
 // ResolveStoredTarget validates the canonical identity persisted in state.
 func ResolveStoredTarget(relative string) (Target, error) {
+	return targetFromCanonicalRelative(relative)
+}
+
+func targetFromCanonicalRelative(relative string) (Target, error) {
 	if relative == "" || filepath.IsAbs(relative) ||
 		strings.HasPrefix(relative, "~/") ||
 		strings.ContainsRune(relative, '\x00') || !utf8.ValidString(relative) {
@@ -82,13 +78,6 @@ func ResolveStoredTarget(relative string) (Target, error) {
 		)
 	}
 	return Target{relative: relative}, nil
-}
-
-// ValidateTargetExpression validates the target syntax without consulting the
-// filesystem or requiring a concrete HOME.
-func ValidateTargetExpression(expression string) error {
-	_, err := targetRelative(expression)
-	return err
 }
 
 func targetRelative(expression string) (string, error) {

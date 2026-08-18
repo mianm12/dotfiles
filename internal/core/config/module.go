@@ -45,8 +45,20 @@ type moduleDocument struct {
 }
 
 type placementSet struct {
-	links  []linkDocument
-	locals []localDocument
+	links  []validatedLink
+	locals []validatedLocal
+}
+
+type validatedLink struct {
+	id     string
+	source string
+	target corepaths.Target
+}
+
+type validatedLocal struct {
+	id      string
+	example string
+	target  corepaths.Target
 }
 
 type selectedModule struct {
@@ -332,8 +344,8 @@ func validatePlacements(
 	locals []localDocument,
 ) (placementSet, error) {
 	ids := make(map[string]struct{}, len(links)+len(locals))
-	for index := range links {
-		link := &links[index]
+	validatedLinks := make([]validatedLink, 0, len(links))
+	for _, link := range links {
 		if err := validatePlacementID(module, location, "link", link.ID, ids); err != nil {
 			return placementSet{}, err
 		}
@@ -347,7 +359,8 @@ func validatePlacements(
 				err,
 			)
 		}
-		if err := corepaths.ValidateTargetExpression(link.Target); err != nil {
+		target, err := corepaths.ParseTarget(link.Target)
+		if err != nil {
 			return placementSet{}, fmt.Errorf(
 				"%w: module %q %s link %q target: %w",
 				ErrInvalidConfiguration,
@@ -357,10 +370,14 @@ func validatePlacements(
 				err,
 			)
 		}
-		link.Source = source
+		validatedLinks = append(validatedLinks, validatedLink{
+			id:     link.ID,
+			source: source,
+			target: target,
+		})
 	}
-	for index := range locals {
-		local := &locals[index]
+	validatedLocals := make([]validatedLocal, 0, len(locals))
+	for _, local := range locals {
 		if err := validatePlacementID(module, location, "local", local.ID, ids); err != nil {
 			return placementSet{}, err
 		}
@@ -374,7 +391,8 @@ func validatePlacements(
 				err,
 			)
 		}
-		if err := corepaths.ValidateTargetExpression(local.Target); err != nil {
+		target, err := corepaths.ParseTarget(local.Target)
+		if err != nil {
 			return placementSet{}, fmt.Errorf(
 				"%w: module %q %s local %q target: %w",
 				ErrInvalidConfiguration,
@@ -384,11 +402,15 @@ func validatePlacements(
 				err,
 			)
 		}
-		local.Example = example
+		validatedLocals = append(validatedLocals, validatedLocal{
+			id:      local.ID,
+			example: example,
+			target:  target,
+		})
 	}
 	return placementSet{
-		links:  append([]linkDocument(nil), links...),
-		locals: append([]localDocument(nil), locals...),
+		links:  validatedLinks,
+		locals: validatedLocals,
 	}, nil
 }
 
@@ -466,27 +488,27 @@ func materializePlacements(
 
 	links := make([]Link, len(placements.links))
 	for index, declared := range placements.links {
-		sourcePath := filepath.Join(root, filepath.FromSlash(declared.Source))
-		if err := validateLinkSource(module, declared.ID, root, sourcePath); err != nil {
+		sourcePath := filepath.Join(root, filepath.FromSlash(declared.source))
+		if err := validateLinkSource(module, declared.id, root, sourcePath); err != nil {
 			return nil, nil, err
 		}
 		links[index] = Link{
-			ID:         declared.ID,
+			ID:         declared.id,
 			SourcePath: sourcePath,
-			Target:     declared.Target,
+			Target:     declared.target,
 		}
 	}
 
 	locals := make([]Local, len(placements.locals))
 	for index, declared := range placements.locals {
-		examplePath := filepath.Join(root, filepath.FromSlash(declared.Example))
-		if err := validateLocalExample(module, declared.ID, root, examplePath); err != nil {
+		examplePath := filepath.Join(root, filepath.FromSlash(declared.example))
+		if err := validateLocalExample(module, declared.id, root, examplePath); err != nil {
 			return nil, nil, err
 		}
 		locals[index] = Local{
-			ID:          declared.ID,
+			ID:          declared.id,
 			ExamplePath: examplePath,
-			Target:      declared.Target,
+			Target:      declared.target,
 		}
 	}
 	return links, locals, nil

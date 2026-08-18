@@ -323,7 +323,7 @@ base = ["app"]
 [[links]]
 id = "file"
 source = "config"
-target = "~/.config/app/config"
+target = "~/.config/app/../tool/config"
 [[links]]
 id = "directory"
 source = "tree"
@@ -335,7 +335,7 @@ target = "~/.config/app/root"
 [[locals]]
 id = "local"
 example = "config.local.example"
-target = "~/.config/app/config.local"
+target = "~/.config/app/../tool/config.local"
 `)
 	writeFile(t, filepath.Join(moduleRoot, "config"), "config")
 	if err := os.Mkdir(filepath.Join(moduleRoot, "tree"), 0o700); err != nil {
@@ -369,6 +369,14 @@ target = "~/.config/app/config.local"
 	if directoryLink := module.Links[1]; directoryLink.SourcePath !=
 		filepath.Join(moduleRoot, "tree") {
 		t.Fatalf("directory link = %#v, want source path under module root", directoryLink)
+	}
+	if fileLink := module.Links[0]; fileLink.Target.Relative() !=
+		filepath.Join(".config", "tool", "config") {
+		t.Fatalf("file link target = %q, want canonical typed target", fileLink.Target.Relative())
+	}
+	if local := module.Locals[0]; local.Target.Relative() !=
+		filepath.Join(".config", "tool", "config.local") {
+		t.Fatalf("local target = %q, want canonical typed target", local.Target.Relative())
 	}
 	if rootLink := module.Links[2]; rootLink.SourcePath != moduleRoot {
 		t.Fatalf("root directory link = %#v, want source path %q", rootLink, moduleRoot)

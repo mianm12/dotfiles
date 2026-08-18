@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-func TestResolveTargetKeepsOneRelativeIdentity(t *testing.T) {
+func TestParseTargetKeepsOneRelativeIdentity(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
-	target, err := ResolveTarget(home, "~/.config/app/../tool/config")
+	target, err := ParseTarget("~/.config/app/../tool/config")
 	if err != nil {
-		t.Fatalf("ResolveTarget() error = %v", err)
+		t.Fatalf("ParseTarget() error = %v", err)
 	}
 	if got, want := target.Relative(), filepath.Join(".config", "tool", "config"); got != want {
 		t.Fatalf("Relative() = %q, want %q", got, want)
@@ -25,15 +25,15 @@ func TestResolveTargetKeepsOneRelativeIdentity(t *testing.T) {
 	}
 }
 
-func TestResolveTargetDoesNotResolveAncestorSymlink(t *testing.T) {
+func TestParseTargetDoesNotResolveAncestorSymlink(t *testing.T) {
 	home := t.TempDir()
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(home, "alias")); err != nil {
 		t.Fatal(err)
 	}
-	target, err := ResolveTarget(home, "~/alias/config")
+	target, err := ParseTarget("~/alias/config")
 	if err != nil {
-		t.Fatalf("ResolveTarget() error = %v", err)
+		t.Fatalf("ParseTarget() error = %v", err)
 	}
 	if got, want := target.Relative(), filepath.Join("alias", "config"); got != want {
 		t.Fatalf("Relative() = %q, want lexical %q", got, want)
@@ -62,22 +62,33 @@ func TestResolveStoredTargetRequiresCanonicalRelativeIdentity(t *testing.T) {
 	}
 }
 
-func TestResolveTargetRejectsUnsupportedExpressions(t *testing.T) {
-	home := t.TempDir()
-	for _, expression := range []string{"", "~", ".config/app", "~/../outside", "~/$HOME/app", "~/app/*"} {
-		t.Run(expression, func(t *testing.T) {
-			if _, err := ResolveTarget(home, expression); !errors.Is(err, ErrInvalidPath) {
-				t.Fatalf("ResolveTarget(%q) error = %v, want ErrInvalidPath", expression, err)
+func TestParseTargetRejectsUnsupportedExpressions(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		expression string
+	}{
+		{name: "empty"},
+		{name: "bare tilde", expression: "~"},
+		{name: "relative", expression: ".config/app"},
+		{name: "escape", expression: "~/../outside"},
+		{name: "expansion", expression: "~/$HOME/app"},
+		{name: "glob", expression: "~/app/*"},
+		{name: "nested declaration", expression: "~/~/app"},
+		{name: "NUL", expression: "~/bad\x00name"},
+		{name: "invalid UTF-8", expression: string([]byte{'~', '/', 0xff})},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ParseTarget(test.expression); !errors.Is(err, ErrInvalidPath) {
+				t.Fatalf("ParseTarget(%q) error = %v, want ErrInvalidPath", test.expression, err)
 			}
 		})
 	}
 }
 
 func TestTargetsConflictIsRelativeAndLexicalOnly(t *testing.T) {
-	home := t.TempDir()
-	parent, _ := ResolveTarget(home, "~/.config/app")
-	child, _ := ResolveTarget(home, "~/.config/app/child")
-	other, _ := ResolveTarget(home, "~/.other")
+	parent, _ := ParseTarget("~/.config/app")
+	child, _ := ParseTarget("~/.config/app/child")
+	other, _ := ParseTarget("~/.other")
 	if !TargetsConflict(parent, child) || !TargetsConflict(child, parent) {
 		t.Fatal("parent and child must conflict")
 	}
@@ -86,5 +97,12 @@ func TestTargetsConflictIsRelativeAndLexicalOnly(t *testing.T) {
 	}
 	if !TargetsConflict(parent, parent) {
 		t.Fatal("equal targets must conflict")
+	}
+}
+
+func TestZeroTargetCannotBecomeAbsolute(t *testing.T) {
+	var target Target
+	if _, err := target.Absolute(t.TempDir()); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("Absolute() error = %v, want ErrInvalidPath", err)
 	}
 }

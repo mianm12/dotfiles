@@ -23,10 +23,7 @@ func FuzzTargetExpression(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, expression string) {
-		if err := ValidateTargetExpression(expression); err != nil {
-			return
-		}
-		target, err := ResolveTarget(home, expression)
+		target, err := ParseTarget(expression)
 		if err != nil {
 			return
 		}

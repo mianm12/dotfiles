@@ -25,18 +25,6 @@ type LexicalControls struct {
 	valid bool
 }
 
-// Placement is the path information needed to build the convergence loop.
-type Placement struct {
-	Label  string
-	Target string
-}
-
-// LexicalPlacement is a validated placement with a lexical target.
-type LexicalPlacement struct {
-	Label  string
-	Target Target
-}
-
 // NormalizeControls cleans and validates one control-prefix snapshot without
 // observing placement targets.
 func NormalizeControls(controls Controls) (LexicalControls, error) {
@@ -86,32 +74,6 @@ func (controls LexicalControls) Paths() (Controls, error) {
 		return Controls{}, err
 	}
 	return controls.paths, nil
-}
-
-// Expand resolves placement target expressions without consulting the filesystem.
-func (controls LexicalControls) Expand(
-	home string,
-	placements []Placement,
-) ([]LexicalPlacement, error) {
-	if err := controls.validate(); err != nil {
-		return nil, err
-	}
-	cleanHome, err := cleanAbsolute("HOME", home)
-	if err != nil {
-		return nil, err
-	}
-	expanded := make([]LexicalPlacement, len(placements))
-	for index, placement := range placements {
-		if placement.Label == "" {
-			return nil, fmt.Errorf("%w: placement %d has an empty label", ErrInvalidPath, index)
-		}
-		target, expandErr := ResolveTarget(cleanHome, placement.Target)
-		if expandErr != nil {
-			return nil, fmt.Errorf("resolve placement %q: %w", placement.Label, expandErr)
-		}
-		expanded[index] = LexicalPlacement{Label: placement.Label, Target: target}
-	}
-	return expanded, nil
 }
 
 // TargetOverlaps reports whether target intersects a protected control prefix.
