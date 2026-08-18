@@ -26,9 +26,6 @@ func (run *mutationRun) apply(
 	done := make([]Line, 0, len(lines))
 	stateOnly := make([]Line, 0, len(lines))
 	for _, line := range lines {
-		if line.Op == OpSkip {
-			return done, stateOnly, fmt.Errorf("refusing to execute skip line")
-		}
 		completed, err := run.applyLine(line, ownership)
 		if completed {
 			if line.Op == OpRecord || line.Op == OpForget {
