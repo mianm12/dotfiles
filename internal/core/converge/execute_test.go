@@ -63,6 +63,64 @@ func TestUnknownLineDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestExecuteLinesRejectsSkipBeforeAnyMutation(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatalf("os.Mkdir(home) error = %v", err)
+	}
+	ownership, err := state.New(home)
+	if err != nil {
+		t.Fatalf("state.New() error = %v", err)
+	}
+	target := filepath.Join(home, ".app")
+	committed := false
+	result, err := executeLines(
+		filepath.Join(root, "state.json"),
+		[]loopLine{
+			{
+				Line: Line{
+					Op:          OpLink,
+					ModuleID:    "app",
+					PlacementID: "config",
+					Target:      target,
+				},
+				dest:     filepath.Join(root, "source"),
+				targetID: ".app",
+			},
+			{Line: Line{
+				Op:          OpSkip,
+				ModuleID:    "blocked",
+				PlacementID: "config",
+				Target:      filepath.Join(home, ".blocked"),
+			}},
+		},
+		state.Loaded{Snapshot: ownership},
+		func(string, state.Snapshot) (bool, error) {
+			committed = true
+			return true, nil
+		},
+	)
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Line == nil || failure.Line.Op != OpSkip ||
+		failure.MayHaveChanged || failure.Cause == nil ||
+		failure.Cause.Error() != "internal invariant: executor received skip line" {
+		t.Fatalf("executeLines(skip) error = %#v, want unchanged skip invariant failure", err)
+	}
+	if len(result.Done) != 0 || result.TargetsChanged || result.StateChanged || result.ControlsChanged {
+		t.Fatalf("executeLines(skip) result = %#v, want zero result", result)
+	}
+	if committed {
+		t.Fatal("executeLines(skip) called state committer")
+	}
+	if _, statErr := os.Lstat(target); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("target error = %v, want no mutation", statErr)
+	}
+	if len(ownership.Links) != 0 {
+		t.Fatalf("input ownership = %#v, want unchanged", ownership)
+	}
+}
+
 func TestStateCommitFailureReportsOnlyCompletedDiskLines(t *testing.T) {
 	commitErr := errors.New("injected state commit failure")
 	for _, test := range []struct {

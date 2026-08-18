@@ -23,7 +23,11 @@ func executeLines(
 ) (executionResult, error) {
 	for _, line := range lines {
 		if line.Op == OpSkip {
-			return executionResult{}, nil
+			return executionResult{}, newFailure(
+				false,
+				&line.Line,
+				fmt.Errorf("internal invariant: executor received skip line"),
+			)
 		}
 	}
 

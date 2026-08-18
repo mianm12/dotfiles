@@ -9,25 +9,17 @@ import (
 	corepaths "github.com/mianm12/dotfiles/internal/core/paths"
 )
 
-func TestExpandKeepsLexicalNestingForTheLoop(t *testing.T) {
-	root := t.TempDir()
-	home := filepath.Join(root, "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(home) error = %v", err)
-	}
-	controls, err := corepaths.NormalizeControls(controlsOutsideHome(root))
+func TestParsedTargetsKeepLexicalNestingForTheLoop(t *testing.T) {
+	parent, err := corepaths.ParseTarget("~/.config/app")
 	if err != nil {
-		t.Fatalf("NormalizeControls() error = %v", err)
+		t.Fatalf("ParseTarget(parent) error = %v", err)
 	}
-	placements, err := controls.Expand(home, []corepaths.Placement{
-		{Label: "parent", Target: "~/.config/app"},
-		{Label: "child", Target: "~/.config/app/child"},
-	})
+	child, err := corepaths.ParseTarget("~/.config/app/child")
 	if err != nil {
-		t.Fatalf("Expand() error = %v", err)
+		t.Fatalf("ParseTarget(child) error = %v", err)
 	}
-	if len(placements) != 2 || !corepaths.TargetsConflict(placements[0].Target, placements[1].Target) {
-		t.Fatalf("Expand() = %#v, want two lexically nested targets", placements)
+	if !corepaths.TargetsConflict(parent, child) {
+		t.Fatal("parsed parent and child must remain lexically nested")
 	}
 }
 
@@ -46,13 +38,13 @@ func TestTargetOverlapsUsesLexicalPrefixes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NormalizeControls() error = %v", err)
 	}
-	inside, err := corepaths.ResolveTarget(home, "~/.config/dot/extra")
+	inside, err := corepaths.ParseTarget("~/.config/dot/extra")
 	if err != nil {
-		t.Fatalf("ResolveTarget(inside) error = %v", err)
+		t.Fatalf("ParseTarget(inside) error = %v", err)
 	}
-	outside, err := corepaths.ResolveTarget(home, "~/.zshrc")
+	outside, err := corepaths.ParseTarget("~/.zshrc")
 	if err != nil {
-		t.Fatalf("ResolveTarget(outside) error = %v", err)
+		t.Fatalf("ParseTarget(outside) error = %v", err)
 	}
 	overlaps, err := controls.TargetOverlaps(home, inside)
 	if err != nil || !overlaps {
@@ -119,16 +111,11 @@ func TestZeroLexicalControlsRejectsUse(t *testing.T) {
 	if _, err := controls.Paths(); !errors.Is(err, corepaths.ErrControlTopology) {
 		t.Fatalf("Paths() error = %v, want ErrControlTopology", err)
 	}
-	if _, err := controls.Expand("/tmp/home", nil); !errors.Is(err, corepaths.ErrControlTopology) {
-		t.Fatalf("Expand() error = %v, want ErrControlTopology", err)
+	target, err := corepaths.ParseTarget("~/.app")
+	if err != nil {
+		t.Fatalf("ParseTarget() error = %v", err)
 	}
-}
-
-func controlsOutsideHome(root string) corepaths.Controls {
-	return corepaths.Controls{
-		Repository: filepath.Join(root, "repository"),
-		Config:     filepath.Join(root, "config-control", "config.toml"),
-		State:      filepath.Join(root, "state-control", "state.json"),
-		Lock:       filepath.Join(root, "state-control", "lock"),
+	if _, err := controls.TargetOverlaps("/tmp/home", target); !errors.Is(err, corepaths.ErrControlTopology) {
+		t.Fatalf("TargetOverlaps() error = %v, want ErrControlTopology", err)
 	}
 }

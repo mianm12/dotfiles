@@ -2,7 +2,6 @@ package converge
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -53,7 +52,7 @@ func buildLines(request loopRequest) ([]loopLine, error) {
 	if err != nil {
 		return nil, err
 	}
-	desired, err := resolveDesired(home, request.Controls, request.Modules)
+	desired, err := resolveDesired(home, request.Modules)
 	if err != nil {
 		return nil, err
 	}
@@ -322,40 +321,19 @@ func stateLinkOwned(record state.LinkRecord, observed stateLinkObservation) bool
 
 func resolveDesired(
 	home string,
-	controls corepaths.LexicalControls,
 	modules []config.Module,
 ) ([]desiredPlacement, error) {
-	pathInputs := make([]corepaths.Placement, 0)
+	var desired []desiredPlacement
 	for _, module := range modules {
 		for _, link := range module.Links {
-			pathInputs = append(pathInputs, corepaths.Placement{
-				Label:  placementLabel(module.ID, link.ID),
-				Target: link.Target,
-			})
-		}
-		for _, local := range module.Locals {
-			pathInputs = append(pathInputs, corepaths.Placement{
-				Label:  placementLabel(module.ID, local.ID),
-				Target: local.Target,
-			})
-		}
-	}
-	expanded, err := controls.Expand(home, pathInputs)
-	if err != nil {
-		return nil, err
-	}
-	targets := make(map[string]corepaths.Target, len(expanded))
-	for _, placement := range expanded {
-		targets[placement.Label] = placement.Target
-	}
-
-	desired := make([]desiredPlacement, 0, len(expanded))
-	for _, module := range modules {
-		for _, link := range module.Links {
-			target := targets[placementLabel(module.ID, link.ID)]
+			target := link.Target
 			path, err := target.Absolute(home)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf(
+					"resolve placement %q: %w",
+					placementLabel(module.ID, link.ID),
+					err,
+				)
 			}
 			desired = append(desired, desiredPlacement{
 				key:         state.Key{ModuleID: module.ID, PlacementID: link.ID},
@@ -367,10 +345,14 @@ func resolveDesired(
 			})
 		}
 		for _, local := range module.Locals {
-			target := targets[placementLabel(module.ID, local.ID)]
+			target := local.Target
 			path, err := target.Absolute(home)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf(
+					"resolve placement %q: %w",
+					placementLabel(module.ID, local.ID),
+					err,
+				)
 			}
 			desired = append(desired, desiredPlacement{
 				key:    state.Key{ModuleID: module.ID, PlacementID: local.ID},
@@ -396,16 +378,19 @@ func compareDesired(left, right desiredPlacement) int {
 }
 
 func validateLoopRequest(request loopRequest) (string, error) {
-	if request.Home == "" || !filepath.IsAbs(request.Home) {
-		return "", fmt.Errorf("loop HOME must be a non-empty absolute path")
+	home, err := cleanAbsolute("loop HOME", request.Home)
+	if err != nil {
+		return "", err
 	}
-	home := filepath.Clean(request.Home)
 	if request.State.Home != home {
 		return "", fmt.Errorf(
 			"loop state HOME %q does not match %q",
 			request.State.Home,
 			home,
 		)
+	}
+	if _, err := request.Controls.Paths(); err != nil {
+		return "", err
 	}
 	return home, nil
 }
