@@ -1,0 +1,59 @@
+# font
+font-family = "JetBrainsMono Nerd Font Mono"
+font-family = "Maple Mono CN" # 回退字体
+font-family = "Sarasa Mono SC" # 回退字体
+font-size = 16
+# theme
+theme = light:Catppuccin Latte,dark:Catppuccin Frappe
+# cursor
+cursor-style = block
+# window
+background-opacity = 0.75
+background-blur = true
+unfocused-split-opacity = 0.95
+window-padding-x = 5
+window-padding-y = 2
+initial-window = false
+# quick terminal
+quick-terminal-position = center
+# shell integration
+shell-integration-features = no-cursor,ssh-env,ssh-terminfo
+# macos options
+macos-option-as-alt = left
+# keybindings
+# Toggle quick terminal
+keybind = global:alt+space=toggle_quick_terminal
+# Creating split
+keybind = ctrl+a>\=new_split:right
+keybind = ctrl+a>、=new_split:right
+keybind = ctrl+a>-=new_split:down
+# Navigating splits
+keybind = ctrl+a>h=goto_split:left
+keybind = ctrl+a>j=goto_split:bottom
+keybind = ctrl+a>k=goto_split:top
+keybind = ctrl+a>l=goto_split:right
+# Resizing split
+keybind = ctrl+a>up=resize_split:up,50
+keybind = ctrl+a>down=resize_split:down,50
+keybind = ctrl+a>left=resize_split:left,50
+keybind = ctrl+a>right=resize_split:right,50
+# Zooming split
+keybind = ctrl+a>z=toggle_split_zoom
+# Creating tab
+keybind = ctrl+a>t=new_tab
+# Navigating tabs
+keybind = performable:alt+one=goto_tab:1
+keybind = performable:alt+two=goto_tab:2
+keybind = performable:alt+three=goto_tab:3
+keybind = performable:alt+four=goto_tab:4
+keybind = performable:alt+five=goto_tab:5
+keybind = performable:alt+six=goto_tab:6
+keybind = performable:alt+seven=goto_tab:7
+keybind = performable:alt+eight=goto_tab:8
+keybind = performable:alt+nine=goto_tab:9
+keybind = ctrl+a>p=previous_tab
+keybind = ctrl+a>n=next_tab
+keybind = ctrl+a>w=toggle_tab_overview
+# Close the current "surface", whether that is a window, tab, split, etc. This only closes ONE surface.
+keybind = ctrl+a>x=close_surface
+keybind = shift+enter=text:\x1b\r

@@ -1,0 +1,235 @@
+#!/bin/sh
+
+# Link the repository's shared configuration into the current user's home.
+# Private local files are seeded once and remain user-owned afterwards.
+
+set -u
+
+usage() {
+  printf 'Usage: %s\n' "$0"
+}
+
+case "${1-}" in
+  "") ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+if [ -z "${HOME:-}" ]; then
+  printf 'ERROR: HOME is not set.\n' >&2
+  exit 1
+fi
+
+dot_script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -P) || {
+  printf 'ERROR: cannot resolve the script directory.\n' >&2
+  exit 1
+}
+dot_repo_root=$(CDPATH='' cd "$dot_script_dir/.." && pwd -P) || {
+  printf 'ERROR: cannot resolve the repository root.\n' >&2
+  exit 1
+}
+
+dot_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+dot_codex_home=${CODEX_HOME:-$HOME/.codex}
+
+dot_linked=0
+dot_seeded=0
+dot_skipped=0
+dot_warnings=0
+dot_errors=0
+
+info() {
+  printf 'INFO: %s\n' "$*"
+}
+
+warn() {
+  dot_warnings=$((dot_warnings + 1))
+  printf 'WARN: %s\n' "$*" >&2
+}
+
+error() {
+  dot_errors=$((dot_errors + 1))
+  printf 'ERROR: %s\n' "$*" >&2
+}
+
+link_config() {
+  dot_link_label=$1
+  dot_link_source=$2
+  dot_link_target=$3
+
+  if [ ! -f "$dot_link_source" ]; then
+    error "$dot_link_label source is missing: $dot_link_source"
+    return
+  fi
+
+  if [ -L "$dot_link_target" ] && [ "$dot_link_target" -ef "$dot_link_source" ]; then
+    dot_skipped=$((dot_skipped + 1))
+    info "$dot_link_label is already linked correctly: $dot_link_target"
+    return
+  fi
+
+  if [ -e "$dot_link_target" ] || [ -L "$dot_link_target" ]; then
+    dot_skipped=$((dot_skipped + 1))
+    warn "$dot_link_label target already exists and was left unchanged: $dot_link_target"
+    return
+  fi
+
+  dot_link_parent=$(dirname "$dot_link_target")
+  if ! mkdir -p "$dot_link_parent"; then
+    error "$dot_link_label parent directory could not be created: $dot_link_parent"
+    return
+  fi
+
+  if ln -s "$dot_link_source" "$dot_link_target"; then
+    dot_linked=$((dot_linked + 1))
+    info "$dot_link_label linked: $dot_link_target -> $dot_link_source"
+    return
+  fi
+
+  if [ -e "$dot_link_target" ] || [ -L "$dot_link_target" ]; then
+    dot_skipped=$((dot_skipped + 1))
+    warn "$dot_link_label target appeared during linking and was left unchanged: $dot_link_target"
+  else
+    error "$dot_link_label could not be linked: $dot_link_target"
+  fi
+}
+
+seed_local() {
+  dot_seed_label=$1
+  dot_seed_source=$2
+  dot_seed_target=$3
+
+  if [ ! -f "$dot_seed_source" ]; then
+    error "$dot_seed_label source is missing: $dot_seed_source"
+    return
+  fi
+
+  # Existing local files are user-owned. Do not read, compare, overwrite, or
+  # change their permissions; only ensure that a filesystem entry exists.
+  if [ -e "$dot_seed_target" ] || [ -L "$dot_seed_target" ]; then
+    dot_skipped=$((dot_skipped + 1))
+    info "$dot_seed_label already exists and was left unchanged: $dot_seed_target"
+    return
+  fi
+
+  dot_seed_parent=$(dirname "$dot_seed_target")
+  if ! mkdir -p "$dot_seed_parent"; then
+    error "$dot_seed_label parent directory could not be created: $dot_seed_parent"
+    return
+  fi
+
+  dot_seed_tmp=$(mktemp "$dot_seed_parent/.dot-local.XXXXXX") || {
+    error "$dot_seed_label temporary file could not be created in: $dot_seed_parent"
+    return
+  }
+
+  if ! cp "$dot_seed_source" "$dot_seed_tmp"; then
+    rm -f "$dot_seed_tmp"
+    error "$dot_seed_label template could not be copied."
+    return
+  fi
+
+  if ! chmod 600 "$dot_seed_tmp"; then
+    rm -f "$dot_seed_tmp"
+    error "$dot_seed_label temporary file permissions could not be set."
+    return
+  fi
+
+  # The hard-link publication is atomic and refuses to replace an entry that
+  # appeared after the existence check. The temporary file is in the same
+  # directory, so it is on the same filesystem as the final target.
+  if ln "$dot_seed_tmp" "$dot_seed_target"; then
+    if ! rm -f "$dot_seed_tmp"; then
+      error "$dot_seed_label was created, but its temporary name remains: $dot_seed_tmp"
+      return
+    fi
+    dot_seeded=$((dot_seeded + 1))
+    info "$dot_seed_label created once with mode 0600: $dot_seed_target"
+    return
+  fi
+
+  if ! rm -f "$dot_seed_tmp"; then
+    error "$dot_seed_label temporary file could not be removed: $dot_seed_tmp"
+    return
+  fi
+
+  if [ -e "$dot_seed_target" ] || [ -L "$dot_seed_target" ]; then
+    dot_skipped=$((dot_skipped + 1))
+    info "$dot_seed_label appeared during creation and was left unchanged: $dot_seed_target"
+  else
+    error "$dot_seed_label could not be created: $dot_seed_target"
+  fi
+}
+
+dot_uname=$(uname -s 2>/dev/null || printf 'Unknown')
+case "$dot_uname" in
+  Darwin)
+    dot_platform=macos
+    ;;
+  Linux)
+    dot_platform=linux
+    ;;
+  *)
+    dot_platform=other
+    warn "unsupported operating system '$dot_uname'; applying only platform-neutral configuration."
+    ;;
+esac
+
+link_config \
+  "zsh" \
+  "$dot_repo_root/packages/zsh/zshrc" \
+  "$HOME/.zshrc"
+
+seed_local \
+  "zsh local configuration" \
+  "$dot_repo_root/packages/zsh/zshrc.local.tmpl" \
+  "$HOME/.zshrc.local"
+
+link_config \
+  "Starship" \
+  "$dot_repo_root/packages/starship/starship.toml" \
+  "$dot_config_home/starship.toml"
+
+if [ "$dot_platform" = macos ]; then
+  link_config \
+    "Ghostty" \
+    "$dot_repo_root/packages/ghostty/config" \
+    "$dot_config_home/ghostty/config"
+else
+  dot_skipped=$((dot_skipped + 1))
+  info "Ghostty skipped: this package is macOS-only."
+fi
+
+link_config \
+  "Zed settings" \
+  "$dot_repo_root/packages/zed/settings.json" \
+  "$dot_config_home/zed/settings.json"
+
+link_config \
+  "Zed keymap" \
+  "$dot_repo_root/packages/zed/keymap.json" \
+  "$dot_config_home/zed/keymap.json"
+
+link_config \
+  "Codex instructions" \
+  "$dot_repo_root/packages/codex/AGENTS.md" \
+  "$dot_codex_home/AGENTS.md"
+
+printf '\nSummary: linked=%s seeded=%s skipped=%s warnings=%s errors=%s\n' \
+  "$dot_linked" \
+  "$dot_seeded" \
+  "$dot_skipped" \
+  "$dot_warnings" \
+  "$dot_errors"
+
+if [ "$dot_errors" -ne 0 ]; then
+  exit 1
+fi
+
+exit 0

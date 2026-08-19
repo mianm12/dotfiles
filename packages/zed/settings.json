@@ -1,0 +1,147 @@
+// Zed settings
+//
+// For information on how to configure Zed, see the Zed
+// documentation: https://zed.dev/docs/configuring-zed
+//
+// To see all of Zed's default settings without changing your
+// custom settings, run `zed: open default settings` from the
+// command palette (cmd-shift-p / ctrl-shift-p)
+{
+  // General
+  "edit_predictions": {
+    "provider": "zed",
+    "ollama": {
+      "model": "qwen2.5-coder:7b-base"
+    }
+  },
+  "cli_default_open_behavior": "existing_window",
+  "autosave": {
+    "after_delay": {
+      "milliseconds": 1000,
+    },
+  },
+  "format_on_save": "on",
+
+  // Editor
+  "show_edit_predictions": true,
+  "auto_signature_help": true,
+  "code_lens": "on",
+  "inlay_hints": {
+    "enabled": true,
+  },
+  "use_smartcase_search": true,
+  "show_whitespaces": "boundary",
+  "wrap_guides": [80, 100],
+
+  // Languages
+  "languages": {
+    "Markdown": {
+      "preferred_line_length": 100,
+      "soft_wrap": "bounded",
+    },
+  },
+
+  // Vim
+  "base_keymap": "VSCode",
+  "vim_mode": true,
+  "relative_line_numbers": "enabled",
+  "vim": {
+    "toggle_relative_line_numbers": false,
+  },
+  "gutter": {
+    "line_numbers": true,
+  },
+
+  // Appearance
+  "buffer_font_family": "JetBrainsMono Nerd Font Mono",
+  "buffer_font_fallbacks": [
+    "JetBrainsMono Nerd Font",
+    "Maple Mono CN",
+    "Consolas",
+    "Courier New",
+    "monospace",
+  ],
+  "icon_theme": {
+    "mode": "system",
+    "light": "Catppuccin Latte",
+    "dark": "Catppuccin Macchiato",
+  },
+  "theme": {
+    "mode": "system",
+    "light": "Catppuccin Latte",
+    "dark": "Catppuccin Macchiato",
+  },
+
+  // Tabs and panels
+  "tabs": {
+    "git_status": true,
+    "file_icons": true,
+  },
+  "project_panel": {
+    "dock": "right",
+  },
+  "outline_panel": {
+    "dock": "right",
+  },
+  "collaboration_panel": {
+    "dock": "right",
+  },
+  "git_panel": {
+    "tree_view": false,
+    "dock": "right",
+  },
+
+  // Git
+  "git": {
+    "inline_blame": {
+      "delay_ms": 700,
+      "show_commit_summary": true,
+    },
+  },
+
+  // Terminal
+  "terminal": {
+    "font_family": "JetBrainsMono Nerd Font Mono",
+  },
+
+  // Agent
+  "agent": {
+    "default_model": {
+      "speed": "standard",
+      "provider": "openai-subscribed",
+      "model": "gpt-5.6-sol",
+      "enable_thinking": true,
+      "effort": "medium"
+    },
+    "flexible": true,
+    "default_width": 470.0,
+    "dock": "left",
+    "favorite_models": [],
+    "model_parameters": [],
+  },
+  "agent_servers": {
+    "pi-acp": {
+      "default_config_options": {
+        "model": "deepseek/deepseek-v4-pro",
+      },
+      "type": "registry",
+    },
+    "codex-acp": {
+      "default_config_options": {
+        "fast-mode": true,
+        "collaboration_mode": "plan",
+        "reasoning_effort": "high",
+      },
+      "type": "registry",
+    },
+  },
+
+  // Privacy and trust
+  "telemetry": {
+    "diagnostics": false,
+    "metrics": false,
+  },
+  "session": {
+    "trust_all_worktrees": false,
+  },
+}
