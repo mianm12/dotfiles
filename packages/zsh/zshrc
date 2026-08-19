@@ -70,6 +70,20 @@ fi
 if [[ -o interactive ]]; then
 
   # ---------------------------------------------------------------------------
+  # Platform Integrations
+  # ---------------------------------------------------------------------------
+
+  # Bridge the WSL SSH client to the Windows OpenSSH Agent when the helper is
+  # installed. Resolve it through PATH because the Arch package installs it in
+  # /usr/bin; /usr/sbin should not be hard-coded here.
+  if [[ "${ZSHRC_ENABLE_WSL2_SSH_AGENT:-1}" == 1 &&
+    "$OSTYPE" == linux* &&
+    (-n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}") ]] &&
+    _zshrc_command_exists wsl2-ssh-agent; then
+    eval "$(command wsl2-ssh-agent)"
+  fi
+
+  # ---------------------------------------------------------------------------
   # Zsh Behavior
   # ---------------------------------------------------------------------------
 
@@ -86,8 +100,6 @@ if [[ -o interactive ]]; then
 
   setopt extended_history     # 记录时间戳和命令耗时
   setopt share_history        # 多终端共享历史
-  setopt append_history       # shell 退出时追加到历史文件
-  setopt inc_append_history   # 命令执行后立即追加到历史
   setopt hist_ignore_dups     # 忽略连续重复命令
   setopt hist_ignore_all_dups # 删除历史中旧的重复项
   setopt hist_find_no_dups    # 搜索历史时不显示重复项
@@ -105,11 +117,11 @@ if [[ -o interactive ]]; then
   setopt interactive_comments # 交互 shell 支持 # 注释
   setopt no_beep              # 禁止蜂鸣
 
-  # ---- Completion ------------------------------------------------------------
+  # ---- Completion and ZLE ----------------------------------------------------
 
   zstyle ':completion:*' menu select                               # 进入补全菜单后用 Tab 选择
   zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'        # 大小写不敏感
-  zstyle ':completion:*' group-name ''                             # 不显示补全项分组名称，按补全类型分组
+  zstyle ':completion:*' group-name ''                             # 使用 completion tag 对候选项分组
   zstyle ':completion:*' special-dirs true                         # 包含特殊目录 . and .. 以便 cd 补全
   zstyle ':completion:*' squeeze-slashes true                      # 将多个连续斜杠压缩为一个，避免补全时出现重复斜杠
   zstyle ':completion:*' use-cache true                            # 启用补全缓存
@@ -145,66 +157,6 @@ if [[ -o interactive ]]; then
   zmodload -i zsh/complist 2> /dev/null
   zmodload -i zsh/terminfo 2> /dev/null
 
-  # ---- Key bindings ----------------------------------------------------------
-
-  bindkey -e
-
-  # ---------------------------------------------------------------------------
-  # Functions
-  # ---------------------------------------------------------------------------
-
-  y() {
-    local cwd tmp
-
-    _zshrc_command_exists yazi || return 127
-    tmp="$(mktemp -t yazi-cwd.XXXXXX)" || return 1
-    command yazi "$@" --cwd-file="$tmp"
-    IFS= read -r -d '' cwd < "$tmp"
-    [[ -n "$cwd" && "$cwd" != "$PWD" ]] && builtin cd -- "$cwd"
-    rm -f -- "$tmp"
-  }
-
-  # ---------------------------------------------------------------------------
-  # Aliases
-  # ---------------------------------------------------------------------------
-
-  if [[ "$OSTYPE" == linux* ]]; then
-    alias ls='ls --color=auto -h -F'
-    alias diff='diff --color=auto'
-    alias grep='grep --color=auto'
-
-    alias chmod='chmod -c --preserve-root'
-    alias chown='chown -c --preserve-root'
-    alias chgrp='chgrp -c --preserve-root'
-    alias rm='rm -Iv --preserve-root=all'
-  elif [[ "$OSTYPE" == darwin* ]]; then
-    alias ls='ls -G -h -F'
-
-    alias rm='rm -Iv'
-  fi
-
-  alias cp='cp -iv'
-  alias mv='mv -iv'
-  alias ln='ln -iv'
-  alias mkdir='mkdir -pv'
-  alias cd..='cd ..'
-  alias ..='cd ..'
-  alias ...='cd ../..'
-  alias ....='cd ../../..'
-  alias l='ls -C'
-  alias la='ls -A'
-  alias ll='ls -l'
-  alias lla='ls -al'
-  alias l.='ls -ld .*'
-  alias path='print -rl -- ${(s.:.)PATH}'
-  alias now='date "+%Y-%m-%d %H:%M:%S.%s"'
-
-  cd.() { builtin cd -P . || return; } # Go to real dir (resolve symlinks; portable on macOS)
-
-  # ---------------------------------------------------------------------------
-  # Completion and ZLE Plugins
-  # ---------------------------------------------------------------------------
-
   typeset -U fpath FPATH
   if [[ -n "${HOMEBREW_PREFIX:-}" && -d "$HOMEBREW_PREFIX/share/zsh-completions" ]]; then
     fpath=("$HOMEBREW_PREFIX/share/zsh-completions" "${fpath[@]}")
@@ -213,6 +165,10 @@ if [[ -o interactive ]]; then
   autoload -Uz compinit
   compinit -d "$_zshrc_cache_dir/zcompdump-${ZSH_VERSION}"
   unset _zshrc_state_dir _zshrc_cache_dir _zshrc_completion_cache_dir
+
+  # ---- Key bindings ----------------------------------------------------------
+
+  bindkey -e
 
   # Tab / Shift+Tab 先进入补全菜单。
   bindkey '^I' menu-select
@@ -230,10 +186,11 @@ if [[ -o interactive ]]; then
   bindkey -M menuselect '^[[D' .backward-char '^[OD' .backward-char 2> /dev/null
   bindkey -M menuselect '^[[C' .forward-char '^[OC' .forward-char 2> /dev/null
 
+  # ---- ZLE plugins -----------------------------------------------------------
+
   if [[ "${ZSHRC_ENABLE_FZF:-1}" == 1 ]] && _zshrc_command_exists fzf; then
-    if command fzf --zsh > /dev/null 2>&1; then
-      # shellcheck disable=SC1090
-      source <(command fzf --zsh)
+    if _zshrc_fzf_init="$(command fzf --zsh 2> /dev/null)"; then
+      eval "$_zshrc_fzf_init"
     else
       # fzf before 0.48 ships integration as package-managed shell files.
       _zshrc_source_first_readable \
@@ -245,18 +202,223 @@ if [[ -o interactive ]]; then
         "/usr/share/doc/fzf/examples/completion.zsh" \
         "/usr/share/fzf/completion.zsh" || :
     fi
+    unset _zshrc_fzf_init
   fi
 
-  # 默认使用原生补全配合 zsh-autosuggestions。
   if [[ "${ZSHRC_ENABLE_AUTOSUGGESTIONS:-1}" == 1 ]]; then
-    # shellcheck disable=SC2034
-    ZSH_AUTOSUGGEST_STRATEGY=(history)
-    ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE="${ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE:-20}"
     _zshrc_source_first_readable \
       "${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh}" \
       "/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh" \
       "/usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh" || :
   fi
+
+  # ---------------------------------------------------------------------------
+  # Functions
+  # ---------------------------------------------------------------------------
+
+  # ---- Navigation -----------------------------------------------------------
+
+  y() {
+    local cwd tmp
+
+    _zshrc_command_exists yazi || return 127
+    tmp="$(mktemp -t yazi-cwd.XXXXXX)" || return 1
+    command yazi "$@" --cwd-file="$tmp"
+    IFS= read -r -d '' cwd < "$tmp"
+    [[ -n "$cwd" && "$cwd" != "$PWD" ]] && builtin cd -- "$cwd"
+    rm -f -- "$tmp"
+  }
+
+  cd.() { builtin cd -P . || return; } # Go to real dir (resolve symlinks; portable on macOS)
+
+  # Create one directory and enter it.
+  mkcd() {
+    (( $# == 1 )) || {
+      print -u2 -- 'usage: mkcd DIRECTORY'
+      return 2
+    }
+
+    command mkdir -p -- "$1" && builtin cd -- "$1"
+  }
+
+  # Jump to the root directory of the current Git worktree.
+  croot() {
+    _zshrc_command_exists git || {
+      print -u2 -- 'croot: git is not installed'
+      return 127
+    }
+
+    local root
+    root="$(command git rev-parse --show-toplevel 2> /dev/null)" || {
+      print -u2 -- 'croot: not inside a Git worktree'
+      return 1
+    }
+
+    builtin cd -- "$root"
+  }
+
+  # ---- Clipboard ------------------------------------------------------------
+
+  # Copy arguments joined by spaces, or copy stdin when no arguments are given.
+  # Backends: macOS pbcopy, WSL clip.exe, Wayland wl-copy, or X11 xclip/xsel.
+  clipcopy() {
+    local -a clipboard_command
+
+    if [[ "$OSTYPE" == darwin* ]] && _zshrc_command_exists pbcopy; then
+      clipboard_command=(pbcopy)
+    elif [[ "$OSTYPE" == linux* &&
+      (-n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}") ]] &&
+      _zshrc_command_exists clip.exe; then
+      clipboard_command=(clip.exe)
+    elif [[ -n "${WAYLAND_DISPLAY:-}" ]] && _zshrc_command_exists wl-copy; then
+      clipboard_command=(wl-copy)
+    elif [[ -n "${DISPLAY:-}" ]] && _zshrc_command_exists xclip; then
+      clipboard_command=(xclip -selection clipboard -in)
+    elif [[ -n "${DISPLAY:-}" ]] && _zshrc_command_exists xsel; then
+      clipboard_command=(xsel --clipboard --input)
+    else
+      print -u2 -- 'clipcopy: no backend found (pbcopy, clip.exe, wl-copy, xclip, or xsel)'
+      return 127
+    fi
+
+    if (( $# )); then
+      print -rn -- "$*" | command "${clipboard_command[@]}"
+    else
+      command "${clipboard_command[@]}"
+    fi
+  }
+
+  # Print the text currently stored in the system clipboard.
+  # WSL uses PowerShell so multiline clipboard content is returned as one value.
+  clippaste() {
+    (( $# == 0 )) || {
+      print -u2 -- 'usage: clippaste'
+      return 2
+    }
+
+    local -a clipboard_command
+
+    if [[ "$OSTYPE" == darwin* ]] && _zshrc_command_exists pbpaste; then
+      clipboard_command=(pbpaste)
+    elif [[ "$OSTYPE" == linux* &&
+      (-n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}") ]] &&
+      _zshrc_command_exists powershell.exe; then
+      clipboard_command=(
+        powershell.exe -NoLogo -NoProfile -NonInteractive -Command
+        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::Out.Write((Get-Clipboard -Raw))'
+      )
+    elif [[ -n "${WAYLAND_DISPLAY:-}" ]] && _zshrc_command_exists wl-paste; then
+      clipboard_command=(wl-paste --no-newline)
+    elif [[ -n "${DISPLAY:-}" ]] && _zshrc_command_exists xclip; then
+      clipboard_command=(xclip -selection clipboard -out)
+    elif [[ -n "${DISPLAY:-}" ]] && _zshrc_command_exists xsel; then
+      clipboard_command=(xsel --clipboard --output)
+    else
+      print -u2 -- 'clippaste: no backend found (pbpaste, PowerShell, wl-paste, xclip, or xsel)'
+      return 127
+    fi
+
+    command "${clipboard_command[@]}"
+  }
+
+  # ---------------------------------------------------------------------------
+  # Aliases
+  # ---------------------------------------------------------------------------
+
+  # ---- Shell and navigation -------------------------------------------------
+
+  alias reloadzsh='exec zsh' # 在全新进程中重新加载 zsh，避免重复 source 累积状态
+  alias d='dirs -v'          # 显示由 AUTO_PUSHD 维护的带编号目录栈
+
+  # ---- Git inspection -------------------------------------------------------
+
+  if _zshrc_command_exists git; then
+    alias gst='git status --short --branch'              # 简洁显示仓库与分支状态
+    alias gd='git diff'                                  # 查看未暂存修改
+    alias gds='git diff --staged'                        # 查看已暂存修改
+    alias glog='git log --oneline --decorate --graph'    # 图形化显示当前分支历史
+    alias gloga='git log --oneline --decorate --graph --all' # 图形化显示所有引用历史
+  fi
+
+  # ---- Diagnostics and data -------------------------------------------------
+
+  if _zshrc_command_exists lsof; then
+    alias ports='lsof -nP -iTCP -sTCP:LISTEN' # 列出监听 TCP 端口的进程
+  fi
+
+  if _zshrc_command_exists jq; then
+    alias json='jq .' # 格式化来自文件或标准输入的 JSON
+  fi
+
+  if _zshrc_command_exists python3; then
+    # 仅用于在可信目录中临时开发；Python http.server 会跟随符号链接。
+    alias httpserve='python3 -m http.server --bind 127.0.0.1' # 仅监听本机地址
+  fi
+
+  # ---- Docker ---------------------------------------------------------------
+
+  if _zshrc_command_exists docker; then
+    alias dps='docker ps'                    # 列出正在运行的容器
+    alias dpa='docker ps --all'              # 列出全部容器
+    alias di='docker image ls'               # 列出本地镜像
+    alias dlogs='docker logs --follow'       # 持续查看指定容器日志
+    alias dco='docker compose'               # Docker Compose 命令前缀；保留系统 dc 计算器
+    alias dcops='docker compose ps'          # 列出当前 Compose 项目的容器
+    alias dcologs='docker compose logs --follow' # 持续查看 Compose 服务日志
+  fi
+
+  if [[ "$OSTYPE" == linux* ]]; then
+    alias ls='ls --color=auto -h -F'
+    alias diff='diff --color=auto'
+    alias grep='grep --color=auto'
+
+    alias chmod='chmod -c --preserve-root'
+    alias chown='chown -c --preserve-root'
+    alias chgrp='chgrp -c --preserve-root'
+    alias rm='rm -Iv --preserve-root=all'
+
+    if _zshrc_command_exists pacman; then
+      # Arch supports full system upgrades; do not add a partial-upgrade (-Sy)
+      # shortcut here.
+      alias pacin='sudo pacman -S --needed' # 安装指定包，跳过已是最新版本的包
+      alias pacup='sudo pacman -Syu'        # 同步软件包数据库并执行完整系统升级
+      alias pacrm='sudo pacman -R'          # 删除指定包，不递归清理依赖
+      alias pacss='pacman -Ss'              # 搜索同步仓库中的包
+      alias pacsi='pacman -Si'              # 显示同步仓库中包的详细信息（包括未安装包）
+      alias pacqs='pacman -Qs'              # 搜索已安装的包
+      alias pacqi='pacman -Qi'              # 显示已安装包的详细信息
+      alias pacqo='pacman -Qo'              # 查询文件属于哪个已安装包
+      alias pacql='pacman -Ql'              # 列出已安装包提供的文件
+      alias pacqe='pacman -Qe'              # 列出显式安装的包
+      alias pacqm='pacman -Qm'              # 列出同步仓库外的包（通常为 AUR 或手动安装）
+      alias pacorphans='pacman -Qdtq'       # 列出不再被需要的孤儿依赖包名
+    fi
+
+    if _zshrc_command_exists yay; then
+      alias yayin='yay -S --needed' # 从官方仓库或 AUR 安装包，跳过已是最新版本的包
+      alias yayss='yay -Ss'         # 搜索官方仓库与 AUR 中的包
+      alias yaysi='yay -Si'         # 显示官方仓库或 AUR 包的详细信息
+    fi
+  elif [[ "$OSTYPE" == darwin* ]]; then
+    alias ls='ls -G -h -F'
+
+    alias rm='rm -Iv'
+  fi
+
+  alias cp='cp -iv'
+  alias mv='mv -iv'
+  alias md='mkdir -p' # 按需递归创建目录，不改变 mkdir 的默认失败语义
+  alias cd..='cd ..'
+  alias ..='cd ..'
+  alias ...='cd ../..'
+  alias ....='cd ../../..'
+  alias l='ls -C'
+  alias la='ls -A'
+  alias ll='ls -l'
+  alias lla='ls -al'
+  alias l.='ls -ld .*'
+  alias path='print -rl -- ${(s.:.)PATH}'
+  alias now='date "+%Y-%m-%d %H:%M:%S.%s"'
 
   if _zshrc_command_exists zoxide; then
     eval "$(zoxide init zsh)"
