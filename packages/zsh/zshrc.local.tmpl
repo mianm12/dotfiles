@@ -1,12 +1,12 @@
 # shellcheck shell=bash
-# Local zsh overrides. Do not commit this file.
+# 本文件用于本机 zsh 覆盖配置，请勿提交。
 
 # -----------------------------------------------------------------------------
 # Private Environment
 # -----------------------------------------------------------------------------
 
-#export DEEPSEEK_API_KEY=""
-#export DEEPLX_ENDPOINT=""
+# export DEEPSEEK_API_KEY=""
+# export DEEPLX_ENDPOINT=""
 
 # -----------------------------------------------------------------------------
 # Machine Paths
@@ -31,22 +31,22 @@
 # export ALL_PROXY="socks5://127.0.0.1:7890"
 # export NO_PROXY="localhost,127.0.0.1,::1"
 
-#proxy_on() {
-#	export HTTP_PROXY="http://127.0.0.1:7890"
-#	export HTTPS_PROXY="$HTTP_PROXY"
-#	export ALL_PROXY="socks5://127.0.0.1:7890"
-#	export NO_PROXY="localhost,127.0.0.1,::1"
-#}
+# proxy_on() {
+#   export HTTP_PROXY="http://127.0.0.1:7890"
+#   export HTTPS_PROXY="$HTTP_PROXY"
+#   export ALL_PROXY="socks5://127.0.0.1:7890"
+#   export NO_PROXY="localhost,127.0.0.1,::1"
+# }
 
-#proxy_off() {
-#	unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
-#}
+# proxy_off() {
+#   unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
+# }
 
 # -----------------------------------------------------------------------------
 # Dotfiles Feature Switches
 # -----------------------------------------------------------------------------
 
-# These features default to 1. Set one to 0 to disable it locally.
+# 这些功能默认启用（1）；如需在本机禁用，请设为 0。
 # export ZSHRC_ENABLE_WSL2_SSH_AGENT=0
 # export ZSHRC_ENABLE_FZF=0
 # export ZSHRC_ENABLE_AUTOSUGGESTIONS=0
@@ -66,11 +66,11 @@
 # Language / Runtime Overrides
 # -----------------------------------------------------------------------------
 
-# rust
-#export RUSTUP_DIST_SERVER="https://rsproxy.cn"
-#export RUSTUP_UPDATE_ROOT="https://rsproxy.cn/rustup"
-# go
-#export GOPROXY=https://goproxy.io,direct
+# Rust
+# export RUSTUP_DIST_SERVER="https://rsproxy.cn"
+# export RUSTUP_UPDATE_ROOT="https://rsproxy.cn/rustup"
+# Go
+# export GOPROXY=https://goproxy.io,direct
 
 # -----------------------------------------------------------------------------
 # Local Aliases

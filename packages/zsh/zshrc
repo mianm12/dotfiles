@@ -1,4 +1,4 @@
-# Managed by dotfiles: zsh module
+# 由 dotfiles 管理：zsh 模块
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -46,11 +46,10 @@ export PATH
 export EDITOR="${EDITOR:-nvim}"
 export VISUAL="${VISUAL:-$EDITOR}"
 export SUDO_EDITOR="${SUDO_EDITOR:-$EDITOR}"
-# Set color for man pages
+# 为 man page 配置彩色输出。
 export MANPAGER="${MANPAGER:-less -R --use-color -Dk+r -Dd+c -Ds+yb -Du+g}"
 export MANROFFOPT="${MANROFFOPT:--P -c}"
-# Disable Conda's automatic prompt modification, since Starship already handles
-# the prompt.
+# 禁用 Conda 对 prompt 的自动修改，由 Starship 统一管理 prompt。
 export CONDA_CHANGEPS1="${CONDA_CHANGEPS1:-false}"
 
 if [[ -t 0 ]]; then
@@ -73,9 +72,8 @@ if [[ -o interactive ]]; then
   # Platform Integrations
   # ---------------------------------------------------------------------------
 
-  # Bridge the WSL SSH client to the Windows OpenSSH Agent when the helper is
-  # installed. Resolve it through PATH because the Arch package installs it in
-  # /usr/bin; /usr/sbin should not be hard-coded here.
+  # 安装 wsl2-ssh-agent 后，将 WSL 中的 SSH client 桥接到 Windows OpenSSH Agent。
+  # 通过 PATH 查找命令；Arch 软件包安装到 /usr/bin，因此不硬编码 /usr/sbin。
   if [[ "${ZSHRC_ENABLE_WSL2_SSH_AGENT:-1}" == 1 &&
     "$OSTYPE" == linux* &&
     (-n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}") ]] &&
@@ -107,7 +105,7 @@ if [[ -o interactive ]]; then
   setopt hist_verify          # 使用 ! 历史展开时先显示，不直接执行
   setopt hist_ignore_space    # 空格开头的命令不进历史
 
-  # ---- General shell behavior ------------------------------------------------
+  # ---- General Shell Behavior ------------------------------------------------
 
   setopt auto_cd           # 输入目录名直接 cd
   setopt auto_pushd        # cd 时自动 pushd
@@ -152,7 +150,7 @@ if [[ -o interactive ]]; then
   # kill 补全显示进程信息
   zstyle ':completion:*:*:*:*:processes' command 'ps -u $USER -o pid,user,comm,args'
 
-  # ---- Zsh modules -----------------------------------------------------------
+  # ---- Zsh Modules -----------------------------------------------------------
 
   zmodload -i zsh/complist 2> /dev/null
   zmodload -i zsh/terminfo 2> /dev/null
@@ -166,7 +164,7 @@ if [[ -o interactive ]]; then
   compinit -d "$_zshrc_cache_dir/zcompdump-${ZSH_VERSION}"
   unset _zshrc_state_dir _zshrc_cache_dir _zshrc_completion_cache_dir
 
-  # ---- Key bindings ----------------------------------------------------------
+  # ---- Key Bindings ----------------------------------------------------------
 
   bindkey -e
 
@@ -186,13 +184,13 @@ if [[ -o interactive ]]; then
   bindkey -M menuselect '^[[D' .backward-char '^[OD' .backward-char 2> /dev/null
   bindkey -M menuselect '^[[C' .forward-char '^[OC' .forward-char 2> /dev/null
 
-  # ---- ZLE plugins -----------------------------------------------------------
+  # ---- ZLE Plugins -----------------------------------------------------------
 
   if [[ "${ZSHRC_ENABLE_FZF:-1}" == 1 ]] && _zshrc_command_exists fzf; then
     if _zshrc_fzf_init="$(command fzf --zsh 2> /dev/null)"; then
       eval "$_zshrc_fzf_init"
     else
-      # fzf before 0.48 ships integration as package-managed shell files.
+      # fzf 0.48 之前的版本通过包管理器提供的 shell 文件加载集成。
       _zshrc_source_first_readable \
         "${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/opt/fzf/shell/key-bindings.zsh}" \
         "/usr/share/doc/fzf/examples/key-bindings.zsh" \
@@ -229,9 +227,9 @@ if [[ -o interactive ]]; then
     rm -f -- "$tmp"
   }
 
-  cd.() { builtin cd -P . || return; } # Go to real dir (resolve symlinks; portable on macOS)
+  cd.() { builtin cd -P . || return; } # 进入当前目录解析后的真实路径（解析 symlink，兼容 macOS）
 
-  # Create one directory and enter it.
+  # 创建一个目录并进入。
   mkcd() {
     (( $# == 1 )) || {
       print -u2 -- 'usage: mkcd DIRECTORY'
@@ -241,7 +239,7 @@ if [[ -o interactive ]]; then
     command mkdir -p -- "$1" && builtin cd -- "$1"
   }
 
-  # Jump to the root directory of the current Git worktree.
+  # 跳转到当前 Git worktree 的根目录。
   croot() {
     _zshrc_command_exists git || {
       print -u2 -- 'croot: git is not installed'
@@ -259,8 +257,8 @@ if [[ -o interactive ]]; then
 
   # ---- Clipboard ------------------------------------------------------------
 
-  # Copy arguments joined by spaces, or copy stdin when no arguments are given.
-  # Backends: macOS pbcopy, WSL clip.exe, Wayland wl-copy, or X11 xclip/xsel.
+  # 将参数以空格连接后复制；无参数时从 stdin 读取。
+  # 支持 macOS pbcopy、WSL clip.exe、Wayland wl-copy 和 X11 xclip/xsel。
   clipcopy() {
     local -a clipboard_command
 
@@ -288,8 +286,8 @@ if [[ -o interactive ]]; then
     fi
   }
 
-  # Print the text currently stored in the system clipboard.
-  # WSL uses PowerShell so multiline clipboard content is returned as one value.
+  # 输出系统剪贴板中的文本。
+  # WSL 通过 PowerShell 读取，确保多行内容作为一个整体返回。
   clippaste() {
     (( $# == 0 )) || {
       print -u2 -- 'usage: clippaste'
@@ -325,12 +323,12 @@ if [[ -o interactive ]]; then
   # Aliases
   # ---------------------------------------------------------------------------
 
-  # ---- Shell and navigation -------------------------------------------------
+  # ---- Shell and Navigation -------------------------------------------------
 
   alias reloadzsh='exec zsh' # 在全新进程中重新加载 zsh，避免重复 source 累积状态
   alias d='dirs -v'          # 显示由 AUTO_PUSHD 维护的带编号目录栈
 
-  # ---- Git inspection -------------------------------------------------------
+  # ---- Git Inspection -------------------------------------------------------
 
   if _zshrc_command_exists git; then
     alias gst='git status --short --branch'              # 简洁显示仓库与分支状态
@@ -340,7 +338,7 @@ if [[ -o interactive ]]; then
     alias gloga='git log --oneline --decorate --graph --all' # 图形化显示所有引用历史
   fi
 
-  # ---- Diagnostics and data -------------------------------------------------
+  # ---- Diagnostics and Data -------------------------------------------------
 
   if _zshrc_command_exists lsof; then
     alias ports='lsof -nP -iTCP -sTCP:LISTEN' # 列出监听 TCP 端口的进程
@@ -378,8 +376,7 @@ if [[ -o interactive ]]; then
     alias rm='rm -Iv --preserve-root=all'
 
     if _zshrc_command_exists pacman; then
-      # Arch supports full system upgrades; do not add a partial-upgrade (-Sy)
-      # shortcut here.
+      # Arch 要求执行完整系统升级，因此不提供仅同步数据库的 -Sy 快捷命令。
       alias pacin='sudo pacman -S --needed' # 安装指定包，跳过已是最新版本的包
       alias pacup='sudo pacman -Syu'        # 同步软件包数据库并执行完整系统升级
       alias pacrm='sudo pacman -R'          # 删除指定包，不递归清理依赖
