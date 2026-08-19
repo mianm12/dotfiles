@@ -13,7 +13,7 @@ _zshrc_source_first_readable() {
   local file
 
   for file in "$@"; do
-    [[ -r "$file" ]] || continue
+    [[ -n "$file" && -r "$file" ]] || continue
     # shellcheck disable=SC1090
     source "$file"
     return 0
@@ -231,16 +231,31 @@ if [[ -o interactive ]]; then
   bindkey -M menuselect '^[[C' .forward-char '^[OC' .forward-char 2> /dev/null
 
   if [[ "${ZSHRC_ENABLE_FZF:-1}" == 1 ]] && _zshrc_command_exists fzf; then
-    source <(fzf --zsh)
+    if command fzf --zsh > /dev/null 2>&1; then
+      # shellcheck disable=SC1090
+      source <(command fzf --zsh)
+    else
+      # fzf before 0.48 ships integration as package-managed shell files.
+      _zshrc_source_first_readable \
+        "${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/opt/fzf/shell/key-bindings.zsh}" \
+        "/usr/share/doc/fzf/examples/key-bindings.zsh" \
+        "/usr/share/fzf/key-bindings.zsh" || :
+      _zshrc_source_first_readable \
+        "${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/opt/fzf/shell/completion.zsh}" \
+        "/usr/share/doc/fzf/examples/completion.zsh" \
+        "/usr/share/fzf/completion.zsh" || :
+    fi
   fi
 
   # 默认使用原生补全配合 zsh-autosuggestions。
-  if [[ "${ZSHRC_ENABLE_AUTOSUGGESTIONS:-1}" == 1 && -n "${HOMEBREW_PREFIX:-}" ]]; then
+  if [[ "${ZSHRC_ENABLE_AUTOSUGGESTIONS:-1}" == 1 ]]; then
     # shellcheck disable=SC2034
     ZSH_AUTOSUGGEST_STRATEGY=(history)
     ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE="${ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE:-20}"
     _zshrc_source_first_readable \
-      "$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
+      "${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh}" \
+      "/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh" \
+      "/usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh" || :
   fi
 
   if _zshrc_command_exists zoxide; then
@@ -274,8 +289,10 @@ if [[ -o interactive ]]; then
   fi
 
   # zsh-syntax-highlighting 必须最后加载，避免后续 ZLE widget 覆盖高亮 hook。
-  if [[ "${ZSHRC_ENABLE_SYNTAX_HIGHLIGHTING:-1}" == 1 && -n "${HOMEBREW_PREFIX:-}" ]]; then
+  if [[ "${ZSHRC_ENABLE_SYNTAX_HIGHLIGHTING:-1}" == 1 ]]; then
     _zshrc_source_first_readable \
-      "$HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+      "${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh}" \
+      "/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" \
+      "/usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" || :
   fi
 fi

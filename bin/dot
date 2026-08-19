@@ -35,7 +35,8 @@ dot_repo_root=$(CDPATH='' cd "$dot_script_dir/.." && pwd -P) || {
   exit 1
 }
 
-dot_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+dot_default_config_home=$HOME/.config
+dot_config_home=${XDG_CONFIG_HOME:-$dot_default_config_home}
 dot_codex_home=${CODEX_HOME:-$HOME/.codex}
 
 dot_linked=0
@@ -167,6 +168,32 @@ seed_local() {
   fi
 }
 
+is_wsl() {
+  if [ -n "${WSL_INTEROP:-}" ] || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+    return 0
+  fi
+
+  if [ ! -r /proc/sys/kernel/osrelease ]; then
+    return 1
+  fi
+
+  dot_kernel_release=
+  if ! IFS= read -r dot_kernel_release < /proc/sys/kernel/osrelease; then
+    return 1
+  fi
+
+  case "$dot_kernel_release" in
+    *[Mm][Ii][Cc][Rr][Oo][Ss][Oo][Ff][Tt]* | *[Ww][Ss][Ll]*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+dot_environment=native
+dot_zed_config_home=$dot_default_config_home
 dot_uname=$(uname -s 2>/dev/null || printf 'Unknown')
 case "$dot_uname" in
   Darwin)
@@ -174,6 +201,10 @@ case "$dot_uname" in
     ;;
   Linux)
     dot_platform=linux
+    dot_zed_config_home=$dot_config_home
+    if is_wsl; then
+      dot_environment=wsl
+    fi
     ;;
   *)
     dot_platform=other
@@ -194,7 +225,7 @@ seed_local \
 link_config \
   "Starship" \
   "$dot_repo_root/packages/starship/starship.toml" \
-  "$dot_config_home/starship.toml"
+  "$dot_default_config_home/starship.toml"
 
 if [ "$dot_platform" = macos ]; then
   link_config \
@@ -206,15 +237,20 @@ else
   info "Ghostty skipped: this package is macOS-only."
 fi
 
-link_config \
-  "Zed settings" \
-  "$dot_repo_root/packages/zed/settings.json" \
-  "$dot_config_home/zed/settings.json"
+if [ "$dot_environment" = wsl ]; then
+  dot_skipped=$((dot_skipped + 2))
+  info "Zed settings and keymap skipped: the Zed UI runs on Windows for WSL projects."
+else
+  link_config \
+    "Zed settings" \
+    "$dot_repo_root/packages/zed/settings.json" \
+    "$dot_zed_config_home/zed/settings.json"
 
-link_config \
-  "Zed keymap" \
-  "$dot_repo_root/packages/zed/keymap.json" \
-  "$dot_config_home/zed/keymap.json"
+  link_config \
+    "Zed keymap" \
+    "$dot_repo_root/packages/zed/keymap.json" \
+    "$dot_zed_config_home/zed/keymap.json"
+fi
 
 link_config \
   "Codex instructions" \
